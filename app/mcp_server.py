@@ -9,7 +9,9 @@ Auth:
 """
 from __future__ import annotations
 
+import base64
 import logging
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -17,6 +19,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
+from app.storage import (
+    input_path, new_file_id, save_bytes, public_url, write_meta,
+)
 from app.tools import (
     convert as t_convert,
     delete_pages as t_delete_pages,
@@ -51,6 +56,54 @@ mcp = FastMCP(
         enable_dns_rebinding_protection=False,
     ),
 )
+
+
+@mcp.tool()
+async def upload_file(filename: str, content_base64: str) -> dict:
+    """
+    Upload a file to the editor and get back a `file_id`.
+
+    Use this FIRST when you have a local file you want to process — without
+    a file_id, no other tool can act on your file. The returned file_id is
+    then passed to convert, find_replace, edit_with_instruction, etc.
+
+    Args:
+      filename: original name (used for the human-readable label, e.g.
+                "report.docx", "page28.jpeg"). Extension is preserved as
+                the file_id's extension.
+      content_base64: the file's bytes encoded as base64 (RFC 4648). For a
+                local file in your sandbox: read it as bytes and call
+                base64.b64encode(data).decode('ascii').
+
+    Returns:
+      {file_id, url, size_kb, original_name}
+
+    Examples:
+      • OCR a photo:  upload_file("scan.jpg", b64) → file_id → edit_with_instruction(file_id, "extract text and write to a clean DOCX")
+      • Convert PDF: upload_file("report.pdf", b64) → file_id → convert(file_id=..., target_format="docx")
+    """
+    try:
+        data = base64.b64decode(content_base64, validate=True)
+    except Exception as e:
+        raise ValueError(f"content_base64 is not valid base64: {e}")
+    if not data:
+        raise ValueError("content_base64 decoded to empty bytes")
+
+    ext = Path(filename).suffix.lstrip(".") or "bin"
+    fid = new_file_id(ext)
+    await save_bytes(input_path(fid), data)
+    write_meta(
+        fid,
+        original_filename=filename,
+        label=filename,
+        operation="upload",
+    )
+    return {
+        "file_id": fid,
+        "url": public_url(fid),
+        "size_kb": len(data) // 1024,
+        "original_name": filename,
+    }
 
 
 @mcp.tool()
