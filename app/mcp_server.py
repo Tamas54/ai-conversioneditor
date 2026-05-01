@@ -14,6 +14,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
 from app.tools import (
@@ -36,11 +37,19 @@ log = logging.getLogger("aice.mcp")
 # carries its own context. Required for serverless-style deploys (Railway)
 # where memory state can be lost between containers.
 # json_response=True — return JSON instead of SSE for simpler clients.
+# transport_security: disable DNS-rebinding host validation. Without this,
+# FastMCP returns "421 Invalid Host header" for ANY request on a deployed
+# domain (Railway, Fly, Render, etc.) that wasn't explicitly whitelisted.
+# We're publicly hosted with our own auth (or none, deliberately), so the
+# DNS-rebinding protection is irrelevant and only breaks things.
 mcp = FastMCP(
     "ai-conversioneditor",
     streamable_http_path="/",
     stateless_http=True,
     json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
 )
 
 
