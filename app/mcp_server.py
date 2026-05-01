@@ -62,6 +62,114 @@ mcp = FastMCP(
 )
 
 
+_CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
+
+
+@mcp.tool()
+async def upload_from_url(url: str, filename: Optional[str] = None) -> dict:
+    """
+    Upload a file by fetching its public URL — the SERVER does the GET,
+    so you avoid the base64 round-trip entirely. Best when:
+      • you can put the file somewhere reachable (gist, S3, transfer.sh,
+        another Railway service, anywhere with HTTP/HTTPS)
+      • the file is already online (article PDF, github raw, etc.)
+
+    Args:
+      url: full HTTP/HTTPS URL the server can GET.
+      filename: optional override for the human label. If omitted, taken
+                from the URL's last path segment.
+
+    Returns: same shape as upload_file: {file_id, url, size_kb, original_name}.
+    """
+    import httpx
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        data = r.content
+    if not filename:
+        filename = url.rstrip("/").split("/")[-1].split("?")[0] or "downloaded.bin"
+    ext = Path(filename).suffix.lstrip(".") or "bin"
+    fid = new_file_id(ext)
+    await save_bytes(input_path(fid), data)
+    write_meta(
+        fid, original_filename=filename, label=filename,
+        operation="upload_from_url", extra={"source_url": url},
+    )
+    return {
+        "file_id": fid,
+        "url": public_url(fid),
+        "size_kb": len(data) // 1024,
+        "original_name": filename,
+    }
+
+
+@mcp.tool()
+async def upload_chunk(
+    upload_id: str,
+    chunk_index: int,
+    total_chunks: int,
+    filename: str,
+    content_base64: str,
+) -> dict:
+    """
+    Upload a large file as multiple base64 chunks across separate tool
+    calls — bypasses the per-tool-call input size limit.
+
+    Workflow:
+      1. Pick any upload_id (e.g. 'page28-' + uuid). Use the SAME id for
+         every chunk of the same file.
+      2. Split the file's bytes into N pieces of ≤200KB each (raw bytes;
+         after base64 each piece is ≤270KB — fits in tool input).
+      3. For each chunk, base64-encode and call:
+           upload_chunk(upload_id, chunk_index=i, total_chunks=N,
+                        filename='page28.jpeg', content_base64=...)
+      4. The LAST chunk's response contains the final file_id. Earlier
+         chunks return {pending: i+1/N, received_bytes: ...}.
+
+    Order does NOT matter — chunks can be sent in any order. The file is
+    assembled when all `total_chunks` are present.
+    """
+    if total_chunks < 1:
+        raise ValueError("total_chunks must be >= 1")
+    if not (0 <= chunk_index < total_chunks):
+        raise ValueError(f"chunk_index out of range: {chunk_index} not in [0,{total_chunks})")
+    try:
+        data = base64.b64decode(content_base64, validate=True)
+    except Exception as e:
+        raise ValueError(f"content_base64 is not valid base64: {e}")
+
+    buf = _CHUNK_BUFFERS.setdefault(upload_id, {})
+    buf[chunk_index] = data
+
+    if len(buf) < total_chunks:
+        return {
+            "pending": True,
+            "chunks_received": len(buf),
+            "total_chunks": total_chunks,
+            "received_bytes": sum(len(v) for v in buf.values()),
+        }
+
+    # All chunks present — assemble in index order and finalize
+    full = b"".join(buf[i] for i in range(total_chunks))
+    _CHUNK_BUFFERS.pop(upload_id, None)
+
+    ext = Path(filename).suffix.lstrip(".") or "bin"
+    fid = new_file_id(ext)
+    await save_bytes(input_path(fid), full)
+    write_meta(
+        fid, original_filename=filename, label=filename,
+        operation="upload_chunked",
+        extra={"upload_id": upload_id, "n_chunks": total_chunks},
+    )
+    return {
+        "file_id": fid,
+        "url": public_url(fid),
+        "size_kb": len(full) // 1024,
+        "original_name": filename,
+        "chunks_assembled": total_chunks,
+    }
+
+
 @mcp.tool()
 async def upload_file(filename: str, content_base64: str) -> dict:
     """
