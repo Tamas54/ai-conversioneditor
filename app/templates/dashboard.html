@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<title>ai-conversioneditor — dashboard</title>
+<style>
+  :root {
+    --bg: #f4e7c5;            /* vajszín */
+    --panel: #fbf3dc;         /* világosabb vaj */
+    --panel-2: #ebdcb1;       /* hover */
+    --border: #b8860b;        /* arany */
+    --border-soft: #d4af37;   /* halványabb arany szegély */
+    --text: #2e1f06;          /* sötét umbra */
+    --muted: #6b5a2c;         /* tompa arany-barna */
+    --accent: #a8841a;        /* mély arany */
+    --accent-2: #5d7a1a;      /* olíva (success) */
+    --warn: #b35a00;          /* meleg narancs */
+    --err: #8b1f1f;           /* mély bordó */
+    --input-bg: #fffaeb;      /* legvilágosabb krém */
+    --shadow: 0 0 0 1px var(--border-soft) inset, 0 1px 2px rgba(60,40,0,0.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; min-height: 100%; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
+  body {
+    /* Külső arany keret a teljes app körül */
+    padding: 8px;
+    background:
+      repeating-linear-gradient(45deg,
+        rgba(184,134,11,0.06) 0 6px,
+        transparent 6px 14px),
+      var(--bg);
+  }
+  .frame {
+    border: 3px double var(--border);
+    box-shadow: 0 0 0 1px var(--border-soft), 0 8px 24px rgba(60,40,0,0.18);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg);
+    height: calc(100vh - 16px);
+    display: flex; flex-direction: column;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button, select, input, textarea {
+    background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+    padding: 4px 8px; border-radius: 4px; font: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover { background: var(--panel-2); }
+  button.primary { background: var(--accent); color: var(--input-bg); border-color: var(--accent); font-weight: 700; }
+  button.primary:hover { background: var(--border); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  header {
+    background: linear-gradient(180deg, var(--panel) 0%, #f0deb0 100%);
+    border-bottom: 2px double var(--border);
+    padding: 8px 16px; display: flex; align-items: center; gap: 14px;
+  }
+  header h1 {
+    margin: 0; font-size: 15px; font-weight: 800; letter-spacing: 0.04em;
+    color: var(--accent);
+    text-shadow: 0 1px 0 #fff8e0;
+  }
+  header h1::before { content: "❦ "; color: var(--border); }
+  header .status { color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  header .pill {
+    background: var(--input-bg); padding: 2px 10px; border-radius: 12px;
+    border: 1px solid var(--border-soft); font-size: 11px;
+  }
+  header .pill.ok { color: var(--accent-2); border-color: var(--accent-2); }
+  header .pill.err { color: var(--err); border-color: var(--err); }
+  header .toolbar {
+    display: flex; gap: 8px; align-items: center;
+    padding: 4px 8px; border-radius: 8px;
+    border: 1px solid var(--border-soft); background: var(--input-bg);
+  }
+  header .toolbar .selected-name {
+    font-size: 12px; color: var(--muted); padding: 0 6px;
+    max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  header .toolbar .selected-name.has {
+    color: var(--text); font-weight: 600;
+  }
+  header .toolbar .sep {
+    width: 1px; height: 22px; background: var(--border-soft);
+  }
+  header .icon-btn {
+    background: var(--input-bg); border: 1px solid var(--border-soft);
+    height: 36px; padding: 0 10px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 5px; cursor: pointer; font-size: 16px; color: var(--text);
+    transition: background 0.12s, border-color 0.12s, transform 0.06s;
+    text-decoration: none;
+  }
+  header .icon-btn .lbl {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  header .icon-btn:hover {
+    background: var(--panel-2); border-color: var(--accent);
+  }
+  header .icon-btn:active { transform: translateY(1px); }
+  header .icon-btn:disabled {
+    opacity: 0.3; cursor: not-allowed;
+  }
+  header .icon-btn.primary {
+    background: var(--accent); color: var(--input-bg);
+    border-color: var(--accent); font-weight: 700;
+  }
+  header .icon-btn.primary:hover {
+    background: var(--border); border-color: var(--border);
+  }
+  header .icon-btn.danger:hover {
+    border-color: var(--err); background: #faecec; color: var(--err);
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 300px 1fr 320px;
+    grid-template-rows: 1fr 180px;
+    grid-template-areas:
+      "files preview events"
+      "files chat   events";
+    flex: 1;
+    overflow: hidden;
+  }
+  .files { grid-area: files; border-right: 2px double var(--border); overflow: hidden;
+    display: flex; flex-direction: column; background: var(--panel); }
+  .preview { grid-area: preview; overflow: hidden; display: flex; flex-direction: column;
+    background: var(--bg); }
+  .events { grid-area: events; border-left: 2px double var(--border); overflow: hidden;
+    display: flex; flex-direction: column; background: var(--panel); }
+  .chat { grid-area: chat;
+    border-top: 2px double var(--border);
+    background: linear-gradient(180deg, #f0deb0 0%, var(--panel) 100%);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+
+  /* === Chat panel === */
+  .chat-log {
+    flex: 1; overflow-y: auto; padding: 8px 14px 4px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .chat-log:empty::before {
+    content: "Mondd Kiminek mit csináljon a kiválasztott fájllal — a tool-okat magától hívja.";
+    color: var(--muted); font-style: italic; font-size: 12px;
+    align-self: center; padding: 24px 12px; text-align: center;
+  }
+  .chat-msg {
+    padding: 6px 10px; border-radius: 6px; font-size: 12.5px;
+    max-width: 88%; word-wrap: break-word; line-height: 1.4;
+  }
+  .chat-msg.user {
+    background: var(--accent); color: var(--input-bg);
+    align-self: flex-end; border-bottom-right-radius: 2px;
+  }
+  .chat-msg.bot {
+    background: var(--input-bg); border: 1px solid var(--border-soft);
+    align-self: flex-start; border-bottom-left-radius: 2px;
+  }
+  .chat-msg.bot.tool {
+    background: transparent; border: none; padding: 1px 10px;
+    color: var(--muted); font-size: 11.5px; max-width: 100%;
+  }
+  .chat-msg.bot.tool::before { content: "↳ "; color: var(--accent); font-weight: 700; }
+  .chat-msg.bot.status {
+    background: transparent; border: none; padding: 1px 10px;
+    color: var(--accent-2); font-size: 11px; max-width: 100%; font-style: italic;
+  }
+  .chat-msg.bot.error {
+    background: #faecec; border-color: var(--err); color: var(--err);
+  }
+  .chat-input-row {
+    display: flex; gap: 6px; padding: 8px 12px 10px;
+    border-top: 1px solid var(--border-soft); background: var(--panel);
+    align-items: flex-end;
+  }
+  .chat-input-row textarea {
+    flex: 1; resize: none; min-height: 36px; max-height: 100px;
+    font-size: 13px; line-height: 1.4; padding: 8px 10px;
+  }
+  .chat-input-row button {
+    height: 36px; padding: 0 14px; font-weight: 700;
+  }
+  .chat-typing {
+    display: inline-block; color: var(--accent-2); font-size: 11px;
+    font-style: italic; padding: 2px 10px;
+  }
+
+  /* === Left sidebar — file cards === */
+  .files .group-header {
+    padding: 10px 14px 6px; color: var(--accent);
+    font-size: 10px; letter-spacing: 0.16em; font-weight: 800;
+    text-transform: uppercase; display: flex; justify-content: space-between;
+    align-items: baseline; border-bottom: 1px solid var(--border-soft);
+    background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
+  }
+  .files .group-header .count {
+    font-weight: 600; color: var(--muted); font-size: 11px;
+    letter-spacing: 0; background: var(--input-bg);
+    padding: 1px 7px; border-radius: 8px; border: 1px solid var(--border-soft);
+  }
+  .files .group-empty {
+    padding: 14px 16px; color: var(--muted); font-size: 11px;
+    font-style: italic; text-align: center;
+  }
+  .file-card {
+    display: grid; grid-template-columns: 44px 1fr;
+    gap: 10px; padding: 10px 12px;
+    border-bottom: 1px solid #e8d8a8; cursor: pointer;
+    background: var(--input-bg); transition: background 0.12s;
+    align-items: center;
+  }
+  .file-card:hover { background: var(--panel-2); }
+  .file-card.active {
+    background: #fff3c8; box-shadow: inset 4px 0 0 var(--border);
+  }
+  .file-card .ficon {
+    width: 44px; height: 44px; display: flex; align-items: center;
+    justify-content: center; background: var(--panel);
+    border: 1px solid var(--border-soft); border-radius: 6px;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .file-card .ficon.emoji { font-size: 24px; line-height: 1; }
+  .file-card .ficon img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+  }
+  .file-card.active .ficon { border-color: var(--accent); box-shadow: 0 0 0 2px var(--input-bg) inset; }
+  .file-card .fbody { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .file-card .fname {
+    font-size: 13px; color: var(--text); font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .file-card .flineage {
+    font-size: 11px; color: var(--muted); cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 0 3px; border-radius: 3px; align-self: flex-start;
+    max-width: 100%;
+  }
+  .file-card .flineage:hover { background: var(--panel); color: var(--accent); }
+  .file-card .flineage::before { content: "↳ "; color: var(--accent); }
+  .file-card .fmeta {
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    color: var(--muted); font-size: 10.5px;
+  }
+  .file-card .ftag {
+    background: var(--panel); color: var(--accent);
+    padding: 0 5px; border-radius: 3px; font-weight: 700;
+    border: 1px solid var(--border-soft); font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+  .file-card.input .ftag { color: var(--warn); border-color: var(--warn); }
+  .file-card .fop {
+    color: var(--accent-2); font-style: italic; font-size: 10.5px;
+  }
+  .file-card .fop::before { content: "· "; color: var(--muted); font-style: normal; }
+  .file-card.flash {
+    animation: flash-source 1.6s ease-out;
+  }
+  @keyframes flash-source {
+    0%   { background: #fff3c8; box-shadow: inset 0 0 0 2px var(--border); }
+    60%  { background: #fff3c8; box-shadow: inset 0 0 0 2px var(--border); }
+    100% { background: var(--input-bg); box-shadow: none; }
+  }
+
+  .files .group-title, .events .title, .preview .title {
+    color: var(--accent); padding: 8px 12px; border-bottom: 1px solid var(--border-soft);
+    text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; font-weight: 700;
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--panel-2);
+  }
+  .files .scroll { overflow-y: auto; flex: 1; }
+  .file-item {
+    padding: 7px 12px; border-bottom: 1px solid #e0cfa0;
+    cursor: pointer; display: flex; flex-direction: column;
+    background: var(--input-bg);
+  }
+  .file-item:hover { background: var(--panel-2); }
+  .file-item.active {
+    background: #fff3c8;
+    box-shadow: inset 3px 0 0 var(--border);
+  }
+  .file-item .name { word-break: break-word; font-size: 12px; color: var(--text); font-weight: 600; }
+  .file-item .meta { color: var(--muted); font-size: 11px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .file-item .ext { color: var(--accent); font-weight: 700; text-transform: uppercase; }
+  .file-item.input .ext { color: var(--warn); }
+  .file-item .op {
+    background: var(--input-bg); border: 1px solid var(--border-soft);
+    border-radius: 8px; padding: 1px 6px; color: var(--accent);
+    font-size: 10px; letter-spacing: 0.02em;
+  }
+  .file-item .lineage {
+    color: var(--muted); font-size: 11px; cursor: pointer;
+    padding: 1px 4px; border-radius: 3px;
+  }
+  .file-item .lineage:hover { background: var(--panel-2); color: var(--accent); }
+  .file-item .uuid {
+    color: #b5a06a; font-size: 10px; font-family: ui-monospace, monospace;
+    word-break: break-all;
+  }
+  .file-item.flash {
+    animation: flash-source 1.6s ease-out;
+  }
+  @keyframes flash-source {
+    0%   { background: #fff3c8; box-shadow: inset 0 0 0 2px var(--border); }
+    60%  { background: #fff3c8; box-shadow: inset 0 0 0 2px var(--border); }
+    100% { background: var(--input-bg); box-shadow: none; }
+  }
+
+  .preview .title .name { color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .preview-frame {
+    flex: 1; background: #fff; padding: 0; margin: 6px;
+    border: 1px solid var(--border-soft); box-shadow: var(--shadow);
+    position: relative;  /* anchor for overlay badge */
+  }
+  .preview-frame iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+  .preview-frame .preview-badge {
+    position: absolute; top: 8px; right: 8px; z-index: 5;
+    background: rgba(46,31,6,0.82); color: #fff8e0;
+    padding: 4px 10px 4px 8px; border-radius: 14px; font-size: 11px;
+    border: 1px solid var(--border-soft);
+    box-shadow: 0 2px 6px rgba(60,40,0,0.25);
+    pointer-events: none; user-select: none;
+    display: none;  /* shown only for converted-preview formats via JS */
+  }
+  .preview-frame .preview-badge.show { display: block; }
+  .preview-frame .preview-badge::before {
+    content: "ⓘ "; color: var(--accent-2);
+  }
+  .preview-empty { flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-style: italic; }
+
+  .events .scroll { overflow-y: auto; flex: 1; padding: 6px; }
+  .event {
+    padding: 7px 9px; border-radius: 4px; margin-bottom: 5px; background: var(--input-bg);
+    border-left: 3px solid var(--border-soft); font-size: 12px;
+    box-shadow: 0 1px 2px rgba(60,40,0,0.06);
+  }
+  .event.tool_started { border-left-color: var(--accent); }
+  .event.tool_done { border-left-color: var(--accent-2); }
+  .event.tool_error { border-left-color: var(--err); background: #faecec; }
+  .event.uploaded { border-left-color: var(--warn); }
+  .event.agent_started { border-left-color: var(--accent); background: #fff8d8;
+    border: 1px dashed var(--accent); }
+  .event.agent_step { border-left-color: var(--border); background: #fff8d8;
+    margin-left: 10px; }
+  .event.agent_step .kind::before { content: "└ "; color: var(--muted); }
+  .event.agent_finished, .event.agent_done { border-left-color: var(--accent-2);
+    background: #f0f7d8; font-weight: 600; }
+  .event .head { display: flex; justify-content: space-between; gap: 8px; }
+  .event .kind { font-weight: 700; color: var(--text); }
+  .event .ts { color: var(--muted); font-size: 11px; }
+  .event details { margin-top: 4px; }
+  .event details summary { cursor: pointer; color: var(--accent); font-size: 11px; }
+  .event pre { font-size: 11px; white-space: pre-wrap; word-break: break-all;
+    margin: 4px 0 0; color: var(--muted); background: var(--bg); padding: 4px 6px;
+    border-radius: 3px; }
+
+  .actions .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .actions .row + .row { margin-top: 6px; }
+  .actions label { color: var(--muted); }
+  .actions input[type=text], .actions textarea { min-width: 180px; }
+  .actions textarea { width: 100%; min-height: 60px; resize: vertical; }
+  .selected-file { color: var(--accent); font-weight: 700; }
+  .selected-file.empty { color: var(--err); font-weight: 400; font-style: italic; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(46,31,6,0.45); display: none;
+    align-items: center; justify-content: center; z-index: 100;
+    backdrop-filter: blur(2px); }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: var(--panel); border: 3px double var(--border); border-radius: 8px;
+    padding: 18px; width: 480px; max-width: 90vw;
+    box-shadow: 0 0 0 1px var(--border-soft), 0 12px 32px rgba(60,40,0,0.35);
+  }
+  .modal h2 { margin: 0 0 12px; font-size: 14px; color: var(--accent);
+    border-bottom: 1px solid var(--border-soft); padding-bottom: 8px; }
+  .modal .field { margin-bottom: 10px; }
+  .modal .field label { display: block; color: var(--muted); margin-bottom: 4px; font-size: 11px; }
+  .modal .field input, .modal .field textarea, .modal .field select { width: 100%; }
+  .modal .actions-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel);
+    border: 2px solid var(--border); padding: 10px 14px; border-radius: 6px; max-width: 360px;
+    box-shadow: 0 4px 16px rgba(60,40,0,0.3); display: none; z-index: 200;
+    color: var(--text); }
+  .toast.show { display: block; }
+  .toast.err { border-color: var(--err); color: var(--err); background: #faecec; }
+  .toast.ok { border-color: var(--accent-2); color: var(--accent-2); background: #f3f7e8; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ai-conversioneditor</h1>
+  <div class="status">
+    <span class="pill" id="status-lo">lo: ?</span>
+    <span class="pill" id="status-chromium">chrome: ?</span>
+    <span class="pill" id="status-llm">llm: ?</span>
+    <span class="pill" id="status-events">events: …</span>
+  </div>
+  <span style="flex:1"></span>
+  <div class="toolbar">
+    <span class="selected-name" id="header-file-label">— válassz fájlt —</span>
+    <span class="sep"></span>
+    <input type="file" id="upload-input" style="display:none">
+    <button class="icon-btn" id="btn-upload" title="Fájl feltöltése">
+      <span>⬆</span><span class="lbl">Upload</span>
+    </button>
+    <a class="icon-btn primary" id="btn-download" title="Eredeti fájl letöltése"
+       href="#" download style="display:none">
+      <span>⬇</span><span class="lbl">Letöltés</span>
+    </a>
+    <button class="icon-btn danger" id="btn-delete" title="Aktuális fájl törlése" disabled>
+      <span>🗑</span>
+    </button>
+    <button class="icon-btn" id="btn-refresh" title="Lista frissítése">
+      <span>↻</span>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="files">
+    <div class="scroll" id="files-list"><div style="color:var(--muted);padding:12px">Töltés…</div></div>
+  </aside>
+
+  <main class="preview">
+    <div class="title">
+      <span>PREVIEW — <span class="name" id="preview-name">(válassz fájlt)</span></span>
+      <span>
+        <a id="preview-download" href="#" target="_blank" style="display:none">⬇ download</a>
+      </span>
+    </div>
+    <div id="preview-area" class="preview-empty">Válassz egy fájlt a bal oldali listából.</div>
+  </main>
+
+  <aside class="events">
+    <div class="title">
+      <span>AKTIVITÁS</span>
+      <button id="btn-clear-events" title="Töröl">×</button>
+    </div>
+    <div class="scroll" id="events-list"></div>
+  </aside>
+
+  <section class="chat">
+    <div class="chat-log" id="chat-log"></div>
+    <div class="chat-input-row">
+      <textarea id="chat-input" rows="1" placeholder="Mondd Kiminek mit csináljon a kiválasztott fájllal… (Ctrl+Enter küld)"></textarea>
+      <button id="chat-send" class="primary" disabled>Küld</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- Modals -->
+<div class="modal-bg" id="modal-fr">
+  <div class="modal">
+    <h2>Find / Replace</h2>
+    <div class="field"><label>Pattern</label><input type="text" id="fr-pattern"></div>
+    <div class="field"><label>Replacement</label><input type="text" id="fr-replacement"></div>
+    <div class="field"><label><input type="checkbox" id="fr-regex"> regex</label></div>
+    <div class="actions-row">
+      <button onclick="closeModal('modal-fr')">Mégse</button>
+      <button class="primary" id="fr-go">Futtat</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-ds">
+  <div class="modal">
+    <h2>Delete section</h2>
+    <div class="field"><label>Heading szövege</label><input type="text" id="ds-heading"></div>
+    <div class="field"><label>Level (üres = bármi)</label><input type="number" id="ds-level" min="1" max="6"></div>
+    <div class="actions-row">
+      <button onclick="closeModal('modal-ds')">Mégse</button>
+      <button class="primary" id="ds-go">Futtat</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-dp">
+  <div class="modal">
+    <h2>Delete PDF pages</h2>
+    <div class="field"><label>Range (pl. <code>3,5-7</code>)</label><input type="text" id="dp-range" placeholder="3,5-7"></div>
+    <div class="actions-row">
+      <button onclick="closeModal('modal-dp')">Mégse</button>
+      <button class="primary" id="dp-go">Futtat</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-ai">
+  <div class="modal">
+    <h2>AI edit — 1-shot tervezés (Kimi K2.6)</h2>
+    <div class="field"><label>Természetes nyelvű utasítás</label>
+      <textarea id="ai-instruction" rows="5" placeholder="pl. Töröld a 'Bevezetés' szekciót és a 'Konklúzió' címet írd át 'Összegzés'-re"></textarea>
+    </div>
+    <div class="field"><label><input type="checkbox" id="ai-confidence" checked> require confidence ≥ 0.7 (különben csak terv, nincs futtatás)</label></div>
+    <div class="field"><label>Visszaadás formátuma (üres = eredeti)</label>
+      <select id="ai-return-format">
+        <option value="">(eredeti)</option>
+        <option value="pdf">pdf</option>
+        <option value="docx">docx</option>
+        <option value="md">md</option>
+        <option value="html">html</option>
+      </select>
+    </div>
+    <div class="actions-row">
+      <button onclick="closeModal('modal-ai')">Mégse</button>
+      <button class="primary" id="ai-go">Futtat</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-agent">
+  <div class="modal" style="width:560px">
+    <h2>🤖 Autonomous edit — Kimi tool-use loop</h2>
+    <div class="field" style="color:var(--muted);font-size:11px;margin-bottom:10px">
+      Kimi K2.6 iteratívan dolgozik: olvas → szerkeszt → ellenőriz → folytat.
+      Kreatív feladatokat is elvállal (átírás, új szekciók generálása, tónus változtatás, összegzés).
+      Az aktivitás-panelen jobboldalt valós időben látod, hogy mit csinál.
+    </div>
+    <div class="field"><label>Természetes nyelvű utasítás (lehet komplex / kreatív)</label>
+      <textarea id="agent-instruction" rows="6" placeholder="pl. Modernizáld ennek a CV-nek a tónusát: tedd egy fokkal magabiztosabbá, írj 1 mondatos summary-t a tetejére, és a 'Skills' szekciót csoportosítsd kategóriákba (frontend / backend / devops)"></textarea>
+    </div>
+    <div class="field" style="display:flex;gap:14px">
+      <span><label>max iter</label> <input type="number" id="agent-max-iters" value="12" min="1" max="40" style="width:70px"></span>
+      <span><label>wall budget (s)</label> <input type="number" id="agent-budget" value="120" min="20" max="600" style="width:80px"></span>
+    </div>
+    <div class="actions-row">
+      <button onclick="closeModal('modal-agent')">Mégse</button>
+      <button class="primary" id="agent-go">🚀 Indít</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let selectedFileId = null;
+let selectedFileMeta = null;
+let agentRunning = false;
+
+// ----- toast -----
+function toast(msg, kind="") {
+  const t = $("toast");
+  t.className = "toast show " + kind;
+  t.textContent = msg;
+  setTimeout(() => t.className = "toast " + kind, 3500);
+}
+
+// ----- modal -----
+function openModal(id) { $(id).classList.add("show"); }
+function closeModal(id) { $(id).classList.remove("show"); }
+document.querySelectorAll(".modal-bg").forEach(m => {
+  m.addEventListener("click", e => { if (e.target === m) m.classList.remove("show"); });
+});
+
+// ----- status poll -----
+async function pollStatus() {
+  try {
+    const r = await fetch("/api/status");
+    const s = await r.json();
+    $("status-lo").textContent = `lo: ${s.lo_warm}`;
+    $("status-lo").className = "pill ok";
+    $("status-chromium").textContent = `chrome: ${s.chromium_ready ? "ok" : "off"}`;
+    $("status-chromium").className = "pill " + (s.chromium_ready ? "ok" : "err");
+    $("status-llm").textContent = `llm: ${s.siliconflow_configured ? s.model_primary.split('/').pop() : "no key"}`;
+    $("status-llm").className = "pill " + (s.siliconflow_configured ? "ok" : "err");
+  } catch (e) {
+    $("status-lo").className = "pill err"; $("status-lo").textContent = "lo: down";
+  }
+}
+setInterval(pollStatus, 4000); pollStatus();
+
+// ----- file list -----
+async function refreshFiles() {
+  const r = await fetch("/api/files", { cache: "no-store" });
+  const d = await r.json();
+  const root = $("files-list");
+  root.innerHTML = "";
+
+  function renderGroup(label, items) {
+    const g = document.createElement("div");
+    g.className = "group-header";
+    g.innerHTML = `<span>${label}</span><span class="count">${items.length}</span>`;
+    root.appendChild(g);
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "group-empty";
+      empty.textContent = "(üres)";
+      root.appendChild(empty);
+      return;
+    }
+    for (const f of items) {
+      const el = document.createElement("div");
+      el.className = "file-card " + (f.kind === "input" ? "input" : "output");
+      el.dataset.fileId = f.file_id;
+      if (f.file_id === selectedFileId) el.classList.add("active");
+      const dt = new Date(f.mtime * 1000).toLocaleTimeString("hu-HU");
+      const label = escapeHtml(f.label || f.file_id);
+      const opLine = f.operation
+        ? `<span class="fop">${escapeHtml(f.operation)}</span>` : "";
+      const lineage = f.source_file_id
+        ? `<div class="flineage" data-source="${f.source_file_id}" title="ugrás a forrásra">${escapeHtml(f.source_label || f.source_file_id)}</div>`
+        : "";
+      el.innerHTML = `
+        <div class="ficon ${iconKindFor(f)}">${renderIcon(f)}</div>
+        <div class="fbody">
+          <div class="fname" title="${f.file_id}">${label}</div>
+          ${lineage}
+          <div class="fmeta">
+            <span class="ftag">${f.ext.toUpperCase()}</span>
+            <span>${f.size_kb} kB</span>
+            <span>${dt}</span>
+            ${opLine}
+          </div>
+        </div>
+      `;
+      const lineageEl = el.querySelector(".flineage");
+      if (lineageEl) {
+        lineageEl.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          flashFile(lineageEl.dataset.source);
+        });
+      }
+      el.addEventListener("click", () => selectFile(f));
+      root.appendChild(el);
+    }
+  }
+
+  // Inputs first (user-uploaded; most relevant), outputs below.
+  renderGroup("INPUTS", d.inputs || []);
+  renderGroup("OUTPUTS", d.outputs || []);
+
+  if (!(d.inputs || []).length && !(d.outputs || []).length) {
+    root.innerHTML = '<div style="color:var(--muted);padding:12px">Üres. Tölts fel valamit lent ⬆</div>';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+const ICONS_BY_EXT = {
+  pdf: "📕", doc: "📄", docx: "📄", odt: "📄", rtf: "📄",
+  ppt: "📊", pptx: "📊",
+  xls: "📈", xlsx: "📈", csv: "📈",
+  md: "📃", txt: "📃", html: "🌐", htm: "🌐", json: "🪪",
+  zip: "🗜",
+};
+const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "bmp"]);
+
+function iconKindFor(f) {
+  return IMAGE_EXTS.has((f.ext || "").toLowerCase()) ? "img" : "emoji";
+}
+function renderIcon(f) {
+  const ext = (f.ext || "").toLowerCase();
+  if (IMAGE_EXTS.has(ext)) {
+    return `<img src="${f.url}" alt="" loading="lazy">`;
+  }
+  return ICONS_BY_EXT[ext] || "📦";
+}
+
+function flashFile(fileId) {
+  const el = document.querySelector(`.file-card[data-file-id="${CSS.escape(fileId)}"]`);
+  if (!el) { toast("forrás nem található (törölhették)", "err"); return; }
+  el.scrollIntoView({behavior: "smooth", block: "center"});
+  el.classList.remove("flash");
+  void el.offsetWidth;  // restart animation
+  el.classList.add("flash");
+}
+
+// Formats whose preview is browser-rendered as PDF (LO conversion). The
+// browser PDF viewer's "Save" button on these would download the rendered
+// PDF, NOT the source file — we surface a badge to make that clear.
+const RENDERED_AS_PDF = new Set(["docx","doc","odt","rtf","pptx","ppt","xlsx","xls"]);
+
+function selectFile(f) {
+  selectedFileId = f.file_id;
+  selectedFileMeta = f;
+  const labelText = f.label || f.file_id;
+  $("preview-name").textContent = labelText + " (" + f.ext + ")";
+  $("preview-download").href = f.url;
+  $("preview-download").style.display = "inline";
+  const area = $("preview-area");
+  area.className = "preview-frame";
+  const ext = (f.ext || "").toLowerCase();
+  const showBadge = RENDERED_AS_PDF.has(ext);
+  const badgeHtml = showBadge
+    ? `<div class="preview-badge show">PDF előnézet — eredeti <b>${ext.toUpperCase()}</b> letöltéséhez ⬇ Letöltés fent</div>`
+    : "";
+  area.innerHTML = `${badgeHtml}<iframe src="/preview/${f.file_id}"></iframe>`;
+  // Header toolbar: enable file-specific actions, prominent label.
+  $("header-file-label").textContent = labelText;
+  $("header-file-label").className = "selected-name has";
+  $("header-file-label").title = f.file_id;
+  $("btn-download").href = f.url;
+  $("btn-download").style.display = "inline-flex";
+  $("btn-download").title = `Letölt: ${labelText}`;
+  $("btn-delete").disabled = false;
+  $("btn-delete").title = `Töröl: ${labelText}`;
+  $("chat-send").disabled = !$("chat-input").value.trim();
+  $("chat-input").placeholder = `Mit csináljon Kimi ezzel: ${labelText}? (Ctrl+Enter küld)`;
+  refreshFiles();
+  if (f.source_file_id) setTimeout(() => flashFile(f.source_file_id), 200);
+}
+
+// ----- events SSE -----
+function eventLineHtml(evt) {
+  const t = new Date(evt.ts * 1000).toLocaleTimeString("hu-HU");
+  let title = evt.kind;
+  if (evt.kind === "agent_started") {
+    title = `🤖 agent indul (${evt.format || "?"}): "${(evt.instruction || "").slice(0,80)}${evt.instruction && evt.instruction.length > 80 ? "…" : ""}"`;
+  } else if (evt.kind === "agent_step") {
+    title = `${evt.tool}${evt.iter ? ` · iter ${evt.iter}` : ""}`;
+  } else if (evt.kind === "agent_finished") {
+    title = `🤖 finish: ${evt.summary || ""}` + (evt.confidence != null ? ` · conf ${evt.confidence}` : "");
+  } else if (evt.kind === "agent_done") {
+    title = `🤖 done · ${evt.iters} iters · ${evt.ms_elapsed}ms`;
+  } else if (evt.tool) {
+    title = `${evt.kind}: ${evt.tool}`;
+  }
+  let detail = "";
+  const detailObj = {...evt};
+  delete detailObj.id; delete detailObj.ts; delete detailObj.kind;
+  if (Object.keys(detailObj).length) {
+    detail = `<details><summary>részletek</summary><pre>${JSON.stringify(detailObj, null, 2)}</pre></details>`;
+  }
+  return `<div class="event ${evt.kind}">
+    <div class="head"><span class="kind">${title}</span><span class="ts">${t}</span></div>
+    ${detail}
+  </div>`;
+}
+
+function appendEvent(evt) {
+  const root = $("events-list");
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = eventLineHtml(evt);
+  root.insertBefore(wrapper.firstChild, root.firstChild);
+  while (root.children.length > 200) root.removeChild(root.lastChild);
+}
+
+let es = null;
+function startSSE() {
+  if (es) es.close();
+  es = new EventSource("/api/events");
+  // History events: hydrate the events panel only, NOT the chat
+  // (we don't want past sessions' chat-shaped logs replayed every reload).
+  es.addEventListener("history", e => appendEvent(JSON.parse(e.data)));
+  es.addEventListener("live", e => {
+    const evt = JSON.parse(e.data);
+    appendEvent(evt);
+    appendChatEvent(evt);
+    if (["tool_done", "uploaded", "file_deleted"].includes(evt.kind)) refreshFiles();
+  });
+  es.addEventListener("ping", () => {
+    $("status-events").textContent = "events: ok";
+    $("status-events").className = "pill ok";
+  });
+  es.onopen = () => { $("status-events").textContent = "events: ok"; $("status-events").className = "pill ok"; };
+  es.onerror = () => {
+    $("status-events").textContent = "events: reconnecting";
+    $("status-events").className = "pill err";
+    setTimeout(startSSE, 2000);
+  };
+}
+startSSE();
+
+// ----- header toolbar -----
+$("btn-upload").addEventListener("click", () => $("upload-input").click());
+$("upload-input").addEventListener("change", async e => {
+  const file = e.target.files[0]; if (!file) return;
+  const fd = new FormData(); fd.append("file", file);
+  const r = await fetch("/api/upload", { method: "POST", body: fd });
+  if (!r.ok) { toast("upload failed", "err"); return; }
+  const d = await r.json();
+  toast(`feltöltve: ${file.name} (${d.size_kb} kB)`, "ok");
+  e.target.value = "";
+  await refreshFiles();
+  // Auto-select the just-uploaded file
+  const list = await fetch("/api/files").then(r => r.json());
+  const found = (list.inputs || []).find(f => f.file_id === d.file_id);
+  if (found) selectFile(found);
+});
+
+$("btn-refresh").addEventListener("click", refreshFiles);
+
+$("btn-delete").addEventListener("click", async () => {
+  if (!selectedFileId) return;
+  const label = selectedFileMeta ? (selectedFileMeta.label || selectedFileId) : selectedFileId;
+  if (!confirm(`Tényleg törlöd?\n${label}`)) return;
+  const r = await fetch(`/api/files/${selectedFileId}`, { method: "DELETE" });
+  if (!r.ok) { toast("delete failed", "err"); return; }
+  toast("törölve", "ok");
+  selectedFileId = null; selectedFileMeta = null;
+  $("preview-name").textContent = "(válassz fájlt)";
+  $("preview-download").style.display = "none";
+  $("btn-download").style.display = "none";
+  $("btn-delete").disabled = true;
+  $("header-file-label").textContent = "— válassz fájlt —";
+  $("header-file-label").className = "selected-name";
+  $("preview-area").className = "preview-empty";
+  $("preview-area").innerHTML = "Válassz egy fájlt a bal oldali listából.";
+  await refreshFiles();
+});
+
+$("btn-clear-events").addEventListener("click", () => $("events-list").innerHTML = "");
+
+// ----- chat → Kimi agent -----
+function appendChatMsg(text, kind = "bot") {
+  const log = $("chat-log");
+  const el = document.createElement("div");
+  el.className = "chat-msg " + kind;
+  el.textContent = text;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+async function sendChat() {
+  const text = $("chat-input").value.trim();
+  if (!text) return;
+  if (!selectedFileId) { toast("Előbb válassz fájlt!", "err"); return; }
+  if (agentRunning) { toast("Még fut az előző kérés…", "err"); return; }
+
+  appendChatMsg(text, "user");
+  $("chat-input").value = "";
+  $("chat-input").style.height = "auto";
+  $("chat-send").disabled = true;
+  agentRunning = true;
+  appendChatMsg(`🤖 Kimi dolgozik a fájlon: ${selectedFileMeta?.label || selectedFileId}`, "bot status");
+
+  try {
+    const r = await fetch("/api/agent_edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_id: selectedFileId,
+        instruction: text,
+        max_iters: 12,
+        wall_budget_s: 180,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      appendChatMsg(`❌ ${d.detail || r.statusText}`, "bot error");
+    }
+    // The detailed flow (tool steps + summary) is mirrored from SSE events;
+    // here we just clear the busy state. If the response had a final file_id,
+    // auto-select it so the preview updates.
+    if (d.file_id) {
+      setTimeout(async () => {
+        await refreshFiles();
+        const list = await fetch("/api/files").then(r => r.json());
+        const found = [...(list.outputs || []), ...(list.inputs || [])]
+          .find(f => f.file_id === d.file_id);
+        if (found) selectFile(found);
+      }, 300);
+    }
+  } catch (e) {
+    appendChatMsg(`❌ ${e.message}`, "bot error");
+  } finally {
+    agentRunning = false;
+    $("chat-send").disabled = !$("chat-input").value.trim();
+  }
+}
+
+$("chat-send").addEventListener("click", sendChat);
+$("chat-input").addEventListener("input", () => {
+  $("chat-send").disabled = !$("chat-input").value.trim() || agentRunning;
+  // Auto-grow textarea up to 100px
+  $("chat-input").style.height = "auto";
+  $("chat-input").style.height = Math.min(100, $("chat-input").scrollHeight) + "px";
+});
+$("chat-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault(); sendChat();
+  }
+});
+
+// ----- SSE → chat mirror -----
+function appendChatEvent(evt) {
+  if (evt.kind === "agent_started") {
+    appendChatMsg(`🤖 indul (${evt.format || "?"})`, "bot status");
+  } else if (evt.kind === "agent_step") {
+    const params = evt.params ? Object.entries(evt.params)
+      .filter(([k]) => k !== "file_id" && k !== "instruction")
+      .map(([k, v]) => {
+        const s = typeof v === "string" ? (v.length > 50 ? v.slice(0, 50) + "…" : v) : JSON.stringify(v);
+        return `${k}=${s}`;
+      }).join(" ") : "";
+    appendChatMsg(`${evt.tool}${params ? "  " + params : ""}`, "bot tool");
+  } else if (evt.kind === "agent_finished") {
+    if (evt.summary) appendChatMsg(evt.summary, "bot");
+  } else if (evt.kind === "agent_done") {
+    appendChatMsg(`✓ ${evt.iters} iter · ${(evt.ms_elapsed/1000).toFixed(1)}s`, "bot status");
+  } else if (evt.kind === "tool_error" && agentRunning) {
+    appendChatMsg(`❌ ${evt.tool}: ${(evt.error || "").slice(0, 200)}`, "bot error");
+  }
+}
+
+// initial load
+refreshFiles();
+</script>
+</body>
+</html>
