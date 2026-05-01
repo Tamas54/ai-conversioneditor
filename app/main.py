@@ -44,16 +44,20 @@ async def lifespan(app: FastAPI):
         libreoffice_warm=settings.LO_WARM,
         chromium_warm=settings.CHROMIUM_WARM,
     )
-    await pool.start()
+    # Attach the pool BEFORE warming it up so /health and other endpoints
+    # can answer immediately. Warm-up runs in the background — first
+    # tool request may briefly wait if the pool isn't ready yet, but the
+    # health probe won't time out (Railway's 30-180s window).
     app.state.pool = pool
-
+    warmup_task = asyncio.create_task(pool.start())
     cleanup_task = asyncio.create_task(cleanup_loop())
-    log.info("Worker pool ready. Cleanup loop running.")
+    log.info("Worker pool warming in background; cleanup loop running.")
     try:
         yield
     finally:
         log.info("Shutting down…")
         cleanup_task.cancel()
+        warmup_task.cancel()
         await pool.stop()
 
 
