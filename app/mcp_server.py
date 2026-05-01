@@ -32,7 +32,16 @@ log = logging.getLogger("aice.mcp")
 
 # streamable_http_path="/" — so when this sub-app is mounted at "/mcp"
 # in main.py, the effective external URL is just `/mcp` (not `/mcp/mcp`).
-mcp = FastMCP("ai-conversioneditor", streamable_http_path="/")
+# stateless_http=True — no server-side session storage needed; each request
+# carries its own context. Required for serverless-style deploys (Railway)
+# where memory state can be lost between containers.
+# json_response=True — return JSON instead of SSE for simpler clients.
+mcp = FastMCP(
+    "ai-conversioneditor",
+    streamable_http_path="/",
+    stateless_http=True,
+    json_response=True,
+)
 
 
 @mcp.tool()

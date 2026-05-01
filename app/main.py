@@ -66,6 +66,11 @@ app = FastAPI(
     version="0.1.0",
     description="Universal document conversion + AI-driven editing MCP",
     lifespan=lifespan,
+    # Don't auto-redirect /mcp → /mcp/ — the redirect loses the request
+    # body for POST and confuses MCP clients that expect a direct response
+    # to their first POST. Mounted sub-apps handle their own trailing-slash
+    # logic, so this only affects FastAPI's own routes.
+    redirect_slashes=False,
 )
 
 app.include_router(health.router)
