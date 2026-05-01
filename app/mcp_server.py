@@ -32,7 +32,11 @@ from app.tools import (
     insert_after as t_insert_after,
     merge as t_merge,
     replace_heading as t_replace_heading,
+    insert_image as t_insert_image,
 )
+from app.tools import docx_builder, docx_revisions, pptx_builder
+from app.tools import vision_ops, chart_image, chart_redraw as chart_redraw_mod
+from app.tools.edits import docx_render_pages as t_docx_render_pages
 
 log = logging.getLogger("aice.mcp")
 
@@ -208,6 +212,332 @@ async def edit_with_instruction(
         instruction=instruction,
         require_confidence=require_confidence,
         return_format=return_format,
+    )
+
+
+# ============================================================
+# DOCX builder (build new documents from scratch)
+# ============================================================
+
+
+@mcp.tool()
+async def docx_create(title: Optional[str] = None) -> dict:
+    """Create a new empty DOCX with an optional centered title. Returns
+    file_id. Chain with docx_add_* tools to fill the document."""
+    return await docx_builder.docx_create(title=title)
+
+
+@mcp.tool()
+async def docx_add_heading(
+    file_id: str, text: str, level: int = 1,
+) -> dict:
+    """Append a heading to a DOCX. level 1-9 (1=biggest). Returns new file_id."""
+    return await docx_builder.docx_add_heading(file_id=file_id, text=text, level=level)
+
+
+@mcp.tool()
+async def docx_add_paragraph(
+    file_id: str, text: str,
+    bold: bool = False, italic: bool = False,
+    font_size: Optional[float] = None, alignment: Optional[str] = None,
+) -> dict:
+    """Append a paragraph to a DOCX. alignment ∈ {left,center,right,justify}.
+    Returns new file_id."""
+    return await docx_builder.docx_add_paragraph(
+        file_id=file_id, text=text, bold=bold, italic=italic,
+        font_size=font_size, alignment=alignment,
+    )
+
+
+@mcp.tool()
+async def docx_add_bulleted_list(file_id: str, items: list[str]) -> dict:
+    """Append a bulleted list to a DOCX. Returns new file_id."""
+    return await docx_builder.docx_add_bulleted_list(file_id=file_id, items=items)
+
+
+@mcp.tool()
+async def docx_add_numbered_list(file_id: str, items: list[str]) -> dict:
+    """Append a numbered list to a DOCX. Returns new file_id."""
+    return await docx_builder.docx_add_numbered_list(file_id=file_id, items=items)
+
+
+@mcp.tool()
+async def docx_add_table(
+    file_id: str, headers: list[str], rows: list[list[str]],
+    style: str = "Light Grid Accent 1",
+) -> dict:
+    """Append a table with headers + data rows. Returns new file_id."""
+    return await docx_builder.docx_add_table(
+        file_id=file_id, headers=headers, rows=rows, style=style,
+    )
+
+
+@mcp.tool()
+async def docx_add_page_break(file_id: str) -> dict:
+    """Insert a page break at the end of a DOCX. Returns new file_id."""
+    return await docx_builder.docx_add_page_break(file_id=file_id)
+
+
+@mcp.tool()
+async def docx_render_pages(file_id: str, dpi: int = 110) -> dict:
+    """Render DOCX pages to PNG via LO+PyMuPDF for visual verification.
+    Returns {pages: [{page_index, image_file_id, ...}]} usable with
+    describe_image / ocr_image. Use after building to catch overflow,
+    layout breaks, or wrong styling before declaring done."""
+    return await t_docx_render_pages(file_id, dpi=dpi)
+
+
+@mcp.tool()
+async def insert_image(
+    file_id: str, anchor: str, image_file_id: str,
+    width_inches: Optional[float] = None,
+    svg_file_id: Optional[str] = None,
+) -> dict:
+    """Insert an image into the working DOCX after the anchor paragraph.
+    image_file_id must point to an already-uploaded PNG/JPG. If svg_file_id
+    is also given, a vector SVG layer is attached (Word 2016+ / LO 7+
+    render the SVG as vector; older readers fall back to PNG). Combine with
+    chart_redraw(also_svg=true) for vector charts in the final PDF."""
+    return await t_insert_image(
+        file_id=file_id, anchor=anchor, image_file_id=image_file_id,
+        width_inches=width_inches, svg_file_id=svg_file_id,
+    )
+
+
+# ============================================================
+# DOCX revisions / comments (collaborative editing)
+# ============================================================
+
+
+@mcp.tool()
+async def docx_track_replace_paragraph(
+    file_id: str, anchor: str, new_text: str,
+    author: str = "Editor",
+) -> dict:
+    """Replace a paragraph as a TRACKED CHANGE: the original text becomes
+    a <w:del>, the new text a <w:ins>. Word reviewers see it as a tracked
+    edit they can accept/reject. Returns new file_id."""
+    return await docx_revisions.docx_track_replace_paragraph(
+        file_id=file_id, anchor=anchor, new_text=new_text, author=author,
+    )
+
+
+@mcp.tool()
+async def docx_accept_all_revisions(file_id: str) -> dict:
+    """Accept every <w:ins> / <w:del> in the document, producing a clean
+    DOCX with no tracked changes. Returns new file_id."""
+    return await docx_revisions.docx_accept_all_revisions(file_id=file_id)
+
+
+@mcp.tool()
+async def docx_reject_all_revisions(file_id: str) -> dict:
+    """Reject every <w:ins> / <w:del>: insertions removed, deletions
+    restored. Returns new file_id."""
+    return await docx_revisions.docx_reject_all_revisions(file_id=file_id)
+
+
+@mcp.tool()
+async def docx_list_revisions(file_id: str) -> dict:
+    """List every tracked-change in the DOCX (insertions + deletions)
+    with author and content. Read-only inspection, doesn't modify file."""
+    return await docx_revisions.docx_list_revisions(file_id=file_id)
+
+
+@mcp.tool()
+async def docx_add_comment(
+    file_id: str, anchor: str, text: str, author: str = "Editor",
+) -> dict:
+    """Add a comment anchored to the first paragraph matching `anchor`
+    text. Returns new file_id + comment_id."""
+    return await docx_revisions.docx_add_comment(
+        file_id=file_id, anchor=anchor, text=text, author=author,
+    )
+
+
+# ============================================================
+# PPTX builder
+# ============================================================
+
+
+@mcp.tool()
+async def pptx_create(title: str, subtitle: Optional[str] = None) -> dict:
+    """Create a new PPTX with a cover slide. Returns file_id. Chain with
+    pptx_add_* to fill in content slides, then pptx_apply_theme for chrome."""
+    return await pptx_builder.pptx_create(title=title, subtitle=subtitle)
+
+
+@mcp.tool()
+async def pptx_add_bullets_slide(
+    file_id: str, title: str, bullets: list[str],
+) -> dict:
+    """Add a bullets slide. Max 4-5 bullets, ≤70 chars each for readability.
+    Returns new file_id."""
+    return await pptx_builder.pptx_add_bullets_slide(
+        file_id=file_id, title=title, bullets=bullets,
+    )
+
+
+@mcp.tool()
+async def pptx_add_table_slide(
+    file_id: str, title: str, headers: list[str], rows: list[list[str]],
+) -> dict:
+    """Add a slide with a real PPTX table (better than bullets-pretending-
+    to-be-table). Best for 5-7 columns × 4-6 rows. Returns new file_id."""
+    return await pptx_builder.pptx_add_table_slide(
+        file_id=file_id, title=title, headers=headers, rows=rows,
+    )
+
+
+@mcp.tool()
+async def pptx_add_chart_slide(
+    file_id: str, title: str, chart_type: str,
+    categories: list[str], series: list[dict],
+) -> dict:
+    """Add a slide with a NATIVE PPTX chart (right-click → Edit Data works
+    in Word/PowerPoint). chart_type ∈ {column,bar,line,pie,doughnut,area}.
+    Each series: {name, values[]}. Returns new file_id."""
+    return await pptx_builder.pptx_add_chart_slide(
+        file_id=file_id, title=title, chart_type=chart_type,
+        categories=categories, series=series,
+    )
+
+
+@mcp.tool()
+async def pptx_apply_theme(
+    file_id: str,
+    accent_color: Optional[str] = None,
+    accent_position: str = "left",
+    footer_text: Optional[str] = None,
+    page_numbers: bool = True,
+) -> dict:
+    """Polish a deck with consistent visual chrome: accent bar, footer,
+    page numbers, harmonized title/body colors. accent_position ∈
+    {left,top,none}. REQUIRED for finished decks — without theme, decks
+    look amateur. Returns new file_id."""
+    return await pptx_builder.pptx_apply_theme(
+        file_id=file_id, accent_color=accent_color,
+        accent_position=accent_position, footer_text=footer_text,
+        page_numbers=page_numbers,
+    )
+
+
+@mcp.tool()
+async def pptx_render_slide(
+    file_id: str, slide_index: Optional[int] = None, dpi: int = 110,
+) -> dict:
+    """Render PPTX slide(s) to PNG so you can VISUALLY verify via
+    describe_image. slide_index=N for one slide; omit for all. Returns
+    image_file_id(s)."""
+    return await pptx_builder.pptx_render_slide(
+        _pool(), file_id=file_id, slide_index=slide_index, dpi=dpi,
+    )
+
+
+# ============================================================
+# Vision (Kimi K2.6 multimodal — read images)
+# ============================================================
+
+
+@mcp.tool()
+async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> dict:
+    """Read all visible text from an image (handwriting OK). language_hint
+    helps weak-light photos: 'Hungarian', 'English', etc."""
+    return await vision_ops.ocr_image(image_file_id, language_hint=language_hint)
+
+
+@mcp.tool()
+async def describe_image(image_file_id: str, question: Optional[str] = None) -> dict:
+    """Free-form Q&A on an image (Kimi K2.6 vision). Default: detailed
+    description. Pass `question` for targeted queries: 'is there overlap?',
+    'what colors dominate?', 'count the people', etc."""
+    return await vision_ops.describe_image(image_file_id, question=question)
+
+
+@mcp.tool()
+async def extract_table_from_image(image_file_id: str) -> dict:
+    """Extract a table from an image as structured rows. Returns
+    {headers: [...], rows: [[...], ...]}."""
+    return await vision_ops.extract_table_from_image(image_file_id)
+
+
+@mcp.tool()
+async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
+    """OCR a photographed table and save as a real XLSX (one shot).
+    Returns the new XLSX file_id."""
+    return await vision_ops.image_to_xlsx(image_file_id, sheet_name=sheet_name)
+
+
+@mcp.tool()
+async def generate_image(
+    prompt: str,
+    size: str = "1024x1024",
+    model: str = "black-forest-labs/FLUX.2-pro",
+) -> dict:
+    """Generate an image from text via SiliconFlow image-gen (FLUX.2-pro
+    by default). Useful for: missing figures, conceptual illustrations,
+    decorative covers. size ∈ {1024x1024, 1792x1024, 1024x1792}.
+    Returns image_file_id usable in insert_image / pptx slides."""
+    img_bytes = await vision_ops.generate_image(prompt, model=model, size=size)
+    # generate_image returns raw bytes; save as a file
+    from app.storage import new_file_id, output_path, public_url
+    fid = new_file_id("png")
+    output_path(fid).write_bytes(img_bytes)
+    return {
+        "image_file_id": fid,
+        "url": public_url(fid),
+        "size_bytes": len(img_bytes),
+    }
+
+
+# ============================================================
+# Charts
+# ============================================================
+
+
+@mcp.tool()
+async def generate_chart_image(
+    chart_type: str,
+    categories: list[str],
+    series: list[dict],
+    title: Optional[str] = None,
+    palette: Optional[list[str]] = None,
+    x_label: Optional[str] = None, y_label: Optional[str] = None,
+    show_data_labels: bool = False,
+    also_svg: bool = False,
+) -> dict:
+    """Render a chart from data into a PNG via matplotlib (200 DPI default).
+    chart_type ∈ {column,bar,line,line_markers,area,pie,doughnut,scatter}.
+    Pass also_svg=true to ALSO produce a vector SVG copy (svg_file_id).
+    Returns the PNG file_id, plus svg_file_id if also_svg."""
+    return await chart_image.generate_chart_image(
+        chart_type, categories, series,
+        title=title, palette=palette,
+        x_label=x_label, y_label=y_label,
+        show_data_labels=show_data_labels,
+        also_svg=also_svg,
+    )
+
+
+@mcp.tool()
+async def chart_redraw(
+    image_file_id: str,
+    palette: Optional[list[str]] = None,
+    brand: Optional[str] = None,
+    chart_type_override: Optional[str] = None,
+    title_override: Optional[str] = None,
+    also_svg: bool = False,
+) -> dict:
+    """Read an existing chart from an image via Kimi K2.6 vision (extracts
+    type, axes, categories, series, values), and re-render via matplotlib
+    with a new palette/brand. Returns new image_file_id. Pass also_svg=true
+    for a vector copy (use with insert_image's svg_file_id for vector
+    charts in DOCX/PDF)."""
+    return await chart_redraw_mod.chart_redraw(
+        image_file_id,
+        palette=palette, brand=brand,
+        chart_type_override=chart_type_override,
+        title_override=title_override,
+        also_svg=also_svg,
     )
 
 
