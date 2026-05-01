@@ -36,7 +36,7 @@ from app.tools import (
 )
 from app.tools import docx_builder, docx_revisions, pptx_builder
 from app.tools import vision_ops, chart_image, chart_redraw as chart_redraw_mod
-from app.tools.edits import docx_render_pages as t_docx_render_pages
+from app.tools.visual_feedback import docx_render_pages as t_docx_render_pages
 
 log = logging.getLogger("aice.mcp")
 
