@@ -82,4 +82,10 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
         log_level="info",
+        # Trust X-Forwarded-* from Railway's edge proxy so FastAPI knows
+        # the original scheme is HTTPS. Without this, auto-trailing-slash
+        # redirects produce `Location: http://…` and clients (like MCP
+        # over Streamable HTTP) downgrade or reject the connection.
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )

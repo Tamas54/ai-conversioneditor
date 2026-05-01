@@ -30,7 +30,9 @@ from app.tools import (
 
 log = logging.getLogger("aice.mcp")
 
-mcp = FastMCP("ai-conversioneditor")
+# streamable_http_path="/" — so when this sub-app is mounted at "/mcp"
+# in main.py, the effective external URL is just `/mcp` (not `/mcp/mcp`).
+mcp = FastMCP("ai-conversioneditor", streamable_http_path="/")
 
 
 @mcp.tool()
