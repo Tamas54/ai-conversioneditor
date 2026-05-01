@@ -279,12 +279,17 @@ async def docx_add_page_break(file_id: str) -> dict:
 
 
 @mcp.tool()
-async def docx_render_pages(file_id: str, dpi: int = 110) -> dict:
+async def docx_render_pages(
+    file_id: str, page_indices: Optional[list[int]] = None, dpi: int = 110,
+) -> dict:
     """Render DOCX pages to PNG via LO+PyMuPDF for visual verification.
-    Returns {pages: [{page_index, image_file_id, ...}]} usable with
-    describe_image / ocr_image. Use after building to catch overflow,
+    page_indices=[0,1,2] for specific pages, or omit for all. Returns
+    {pages: [{page_index, image_file_id, ...}]} — pass image_file_ids
+    to describe_image / ocr_image. Use after building to catch overflow,
     layout breaks, or wrong styling before declaring done."""
-    return await t_docx_render_pages(file_id, dpi=dpi)
+    return await t_docx_render_pages(
+        _pool(), file_id=file_id, page_indices=page_indices, dpi=dpi,
+    )
 
 
 @mcp.tool()
