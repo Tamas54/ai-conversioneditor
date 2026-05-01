@@ -13,3 +13,10 @@ data/
 build/
 dist/
 .DS_Store
+
+# Daily dev logs from 2026-05-02 onwards — local only, not pushed.
+# (devlog20260501.md is already committed and stays in tree.)
+devlog20260502.md
+devlog2026050[3-9].md
+devlog202605[1-3][0-9].md
+devlog2026[0-9][0-9][0-9][0-9].md
