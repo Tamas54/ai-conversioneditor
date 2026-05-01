@@ -25,7 +25,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from app.config import settings
-from app.mcp_server import mount_mcp
+from app.mcp_server import mcp as _mcp_instance, mount_mcp
 from app.routes import files, upload, health, dashboard, preview
 from app.storage.cleanup import cleanup_loop
 from app.workers.pool import WorkerPool
@@ -52,13 +52,21 @@ async def lifespan(app: FastAPI):
     warmup_task = asyncio.create_task(pool.start())
     cleanup_task = asyncio.create_task(cleanup_loop())
     log.info("Worker pool warming in background; cleanup loop running.")
-    try:
-        yield
-    finally:
-        log.info("Shutting down…")
-        cleanup_task.cancel()
-        warmup_task.cancel()
-        await pool.stop()
+
+    # CRITICAL: when mounting FastMCP's streamable_http_app inside another
+    # FastAPI app (instead of running it as the top-level app), its session
+    # manager's task group does NOT auto-init from the sub-app's lifespan.
+    # We must enter `mcp.session_manager.run()` from the parent lifespan
+    # ourselves. Without this every POST /mcp/ raises:
+    #   RuntimeError: Task group is not initialized. Make sure to use run().
+    async with _mcp_instance.session_manager.run():
+        try:
+            yield
+        finally:
+            log.info("Shutting down…")
+            cleanup_task.cancel()
+            warmup_task.cancel()
+            await pool.stop()
 
 
 app = FastAPI(
