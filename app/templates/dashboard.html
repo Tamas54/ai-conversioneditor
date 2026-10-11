@@ -402,6 +402,7 @@
 
 <header>
   <h1>ai-conversioneditor</h1>
+  <a class="pill ok" href="/app" title="A termék új felülete (Make · Files · Connect your AI)" style="text-decoration:none;white-space:nowrap;flex:none">→ új felület</a>
   <div class="status">
     <span class="pill" id="status-lo">lo: ?</span>
     <span class="pill" id="status-chromium">chrome: ?</span>
@@ -620,11 +621,11 @@ async function pollStatus() {
     $("status-llm").className = "pill " + (s.siliconflow_configured ? "ok" : "err");
     const cr = s.crafts || {};
     editorsReady = Object.fromEntries(Object.keys(EDITORS).map(a => [a, !!(cr[a] && cr[a].editor)]));
-    const short = { wordcraft: "W", photocraft: "P", vectorcraft: "V" };
-    const ok = Object.keys(EDITORS).filter(a => cr[a] && cr[a].cli && cr[a].editor);
-    $("status-wc").textContent = `crafts: ${ok.map(a => short[a]).join("") || "–"}${cr.cutout ? " +kivágás" : ""}`;
-    $("status-wc").title = "WordCraft / PhotoCraft / VectorCraft (CLI + szerkesztő), ISNet-kivágás";
-    $("status-wc").className = "pill " + (ok.length === 3 ? "ok" : "err");
+    const all = Object.keys(EDITORS);
+    const ok = all.filter(a => cr[a] && cr[a].cli && cr[a].editor);
+    $("status-wc").textContent = `crafts: ${ok.length}/${all.length}${cr.cutout ? " +kivágás" : ""}`;
+    $("status-wc").title = all.map(a => `${EDITORS[a].label}: ${ok.includes(a) ? "ok" : "HIÁNYZIK"}`).join("\n") + "\n(CLI + szerkesztő), ISNet-kivágás";
+    $("status-wc").className = "pill " + (ok.length === all.length ? "ok" : "err");
     updateEditButton();
   } catch (e) {
     $("status-lo").className = "pill err"; $("status-lo").textContent = "lo: down";
@@ -774,9 +775,14 @@ function selectFile(f) {
 // ----- ✏️ kézi szerkesztő (WordCraft WASM, /editor/) -----
 // A szerkesztő Mentése/Exportja új verzióként jön vissza (/api/editor/save), forrás-linkkel.
 // Fájltípus → szerkesztő (a Craft-motorok webes változata).
+// Sorrend számít: egy formátumnál az első kész szerkesztő nyílik (PDF → PDF-szerkesztő, nem a Vector).
 const EDITORS = {
   wordcraft:   { label: "Word",   exts: ["docx","doc","odt","rtf","md","html","htm","txt","tex"] },
+  deckcraft:   { label: "Deck",   exts: ["pptx","deckcraft"] },
+  pdfcraft:    { label: "PDF",    exts: ["pdf"] },
+  gridcraft:   { label: "Sheet",  exts: ["xlsx","csv","tsv"] },
   photocraft:  { label: "Photo",  exts: ["png","jpg","jpeg","webp","psd","psb","tif","tiff","bmp","gif","exr","pcraft"] },
+  designcraft: { label: "Layout", exts: ["designcraft","idml"] },
   vectorcraft: { label: "Vector", exts: ["svg","svgz","pdf","ai","eps","vectorcraft"] },
 };
 let editorsReady = {};   // app → van-e webes build (az /api/status-ból)
@@ -817,7 +823,7 @@ function openEditor(f) {
   const app = editorFor(f.ext);
   if (!app) return;
   setEditing(true);
-  $("preview-name").textContent = `✏️ ${EDITORS[app].label}Craft · ${label} — Mentés (Ctrl+S) / Export = új verzió a listában`;
+  $("preview-name").textContent = `✏️ ${EDITORS[app].label} · ${label} — Mentés (Ctrl+S) / Export = új verzió a listában`;
   const area = $("preview-area");
   area.className = "preview-frame";
   area.innerHTML = `<iframe src="/editor/${app}/?${qs}" allow="clipboard-read; clipboard-write; fullscreen"></iframe>`;
