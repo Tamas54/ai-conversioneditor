@@ -51,6 +51,25 @@
         <span class="label">Convert</span><span class="hint">Word, PDF, slides, sheets, images, e-books — any to any</span></button>
     </div>
   </div></section>
+  <section class="sheet intro">
+    <div class="how">
+      <div><b>1</b><h3>Pick a tool, or open a file</h3><p>Upload a manuscript, a scan, a deck, a photo or a PDF — or start from a short brief.</p></div>
+      <div><b>2</b><h3>Get a finished file</h3><p>Real Word, PowerPoint, PDF and Photoshop files. Fix anything by hand in the built-in editors.</p></div>
+      <div><b>3</b><h3>Ask for changes in plain words</h3><p>Every change is a new version — go back any time. Photos keep every step on its own layer.</p></div>
+    </div>
+    <h2 class="try-title">Things to try</h2>
+    <div class="try">
+      <button data-try="photo"><span>Photos</span>“Remove the blurry grass in front of the animal”</button>
+      <button data-try="photo"><span>Photos</span>“Put the Parliament behind it, crop to 4:5, headline at the top”</button>
+      <button data-try="photo"><span>Photos · restore</span>Photograph a whole album page — every old print is found, repaired and coloured</button>
+      <button data-try="scan"><span>Scan to text</span>Phone photos of an old book → Word, a new book PDF, a searchable PDF</button>
+      <button data-try="book"><span>Book · then ask</span>“On page 22 add a photo of the Colosseum” · “indent every paragraph after the third”</button>
+      <button data-try="deck"><span>Presentation</span>A brief → a designed deck; attach a pptx you like as the style example</button>
+      <button data-try="pdf"><span>PDF tools</span>Merge, black out names for good, number the pages, lock with a password</button>
+      <button data-try="scan"><span>Forms</span>Photo of a paper form → a fillable PDF; fill one, or a hundred from a spreadsheet</button>
+    </div>
+    <p class="muted small connect-note">Use it from your own AI too — Claude, ChatGPT, Cursor: <a href="#/connect">Connect your AI</a>. Without an account you can try everything that doesn't use AI.</p>
+  </section>
   <section class="sheet">
     <div class="row-head"><h2>Recent</h2><a class="small" href="#/files">All files</a></div>
     <div class="files" id="recent"></div>
@@ -200,6 +219,7 @@ const views = {
     const nums = $(".ruler-nums"), w = $(".mat").clientWidth;   // vonalzó-számok 40 px-enként (1 = 1 cm)
     nums.innerHTML = Array.from({ length: Math.floor(w / 40) }, (_, i) => i && i % 2 === 0 ? `<span style="left:${i * 40}px">${i / 2}</span>` : "").join("");
     document.querySelectorAll("[data-make]").forEach(b => b.addEventListener("click", () => openMaker(b.dataset.make)));
+    document.querySelectorAll("[data-try]").forEach(b => b.addEventListener("click", () => openMaker(b.dataset.try)));
     await loadFiles(); renderFiles($("#recent"), files.slice(0, 10));
   },
   async files() {
