@@ -13,7 +13,7 @@ log = logging.getLogger("aice.cleanup")
 
 async def cleanup_loop():
     interval = settings.CLEANUP_INTERVAL_MIN * 60
-    ttl = settings.FILE_TTL_HOURS * 3600
+    ttl = settings.FILE_RETENTION_DAYS * 86400  # megőrzés (a link-TTL külön: FILE_TTL_HOURS)
     while True:
         try:
             removed = _sweep(settings.DATA_DIR, ttl)
@@ -33,12 +33,16 @@ def _sweep(root: Path, ttl_seconds: int) -> int:
         d = root / sub
         if not d.exists():
             continue
+        limit = min(ttl_seconds, 86400) if sub == "temp" else ttl_seconds  # temp: legfeljebb 1 nap
         for p in d.iterdir():
             try:
-                if p.is_file() and (now - p.stat().st_mtime) > ttl_seconds:
+                if p.is_file() and (now - p.stat().st_mtime) > limit:
                     p.unlink()
                     removed += 1
-                elif p.is_dir() and (now - p.stat().st_mtime) > ttl_seconds:
+                    if sub != "temp" and not p.name.endswith(".meta.json"):
+                        from app import db
+                        db.mark_deleted_bg(p.name)
+                elif p.is_dir() and (now - p.stat().st_mtime) > limit:
                     import shutil
 
                     shutil.rmtree(p, ignore_errors=True)

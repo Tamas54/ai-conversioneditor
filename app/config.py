@@ -13,7 +13,9 @@ load_dotenv()
 class Settings(BaseModel):
     # --- Storage ---
     DATA_DIR: Path = Path(os.getenv("DATA_DIR", "/data"))
-    FILE_TTL_HOURS: int = int(os.getenv("FILE_TTL_HOURS", "24"))
+    FILE_TTL_HOURS: int = int(os.getenv("FILE_TTL_HOURS", "24"))   # aláírt letöltési link élettartama
+    # Fájlok megőrzése a köteten (szerkesztő + verziótörténet: nem 24 óra, mint a linkeké)
+    FILE_RETENTION_DAYS: int = int(os.getenv("FILE_RETENTION_DAYS", "30"))
     CLEANUP_INTERVAL_MIN: int = int(os.getenv("CLEANUP_INTERVAL_MIN", "60"))
 
     # --- Worker pool (pre-warm light: 2 LibreOffice + 1 Chromium) ---
@@ -38,6 +40,8 @@ class Settings(BaseModel):
     # MCP-side token so only authorized clients can hit the MCP endpoint.
     FILE_SIGNING_KEY: str = os.getenv("FILE_SIGNING_KEY", "change-me-in-railway")
     MCP_AUTH_TOKEN: str = os.getenv("MCP_AUTH_TOKEN", "")
+    # Postgres: verziótörténet + lektorálási kérések (Railway: ${{Postgres.DATABASE_URL}}); üres = nélküle fut
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     # Dashboard-belépés (üres = nyitott dashboard, csak helyi fejlesztéshez); a süti aláíró kulcsa.
     DASHBOARD_PASSWORD: str = os.getenv("DASHBOARD_PASSWORD", "")
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", os.getenv("FILE_SIGNING_KEY", "change-me-in-railway"))

@@ -28,7 +28,7 @@ log = logging.getLogger("aice.wordcraft")
 SAVE_FORMATS = {"docx", "pdf", "odt", "rtf", "html", "md", "tex", "txt", "json", "png"}
 OPEN_FORMATS = {"docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "html", "htm", "md", "tex", "txt", "json"}
 TEMPLATES = {"blank", "sample", "letter", "resume", "report"}
-READ_MODES = {"text", "info", "inspect", "commands"}
+READ_MODES = {"text", "info", "inspect", "commands", "review"}
 
 Command = Union[str, dict[str, Any]]
 
@@ -157,6 +157,9 @@ async def read(
         return {"count": len(cmds), "commands": page, "offset": offset, "next_offset": nxt}
     if not file_id:
         raise ValueError(f"read={mode} file_id-t kér")
+    if mode == "review":
+        from app.tools import review
+        return review.summary(file_id)
     out = await _cli(mode, str(_existing(file_id)))
     if mode == "text":
         chunk = out[offset:offset + max_chars]

@@ -32,6 +32,7 @@ from app.tools import vision_ops
 from app.tools.formats import detect_from_path
 from app.tools.wordcraft import available as wordcraft_available
 from app.routes.editor import editor_available, crafts_status
+from app.db import enabled as db_enabled
 from app.storage import (
     input_path, new_file_id, output_path, save_bytes, public_url,
     write_meta, read_meta, delete_meta, display_label, is_meta_path,
@@ -140,6 +141,8 @@ async def api_delete_file(file_id: str) -> dict[str, Any]:
     if not removed:
         raise HTTPException(404, "not found")
     delete_meta(file_id)
+    from app import db
+    db.mark_deleted_bg(file_id)
     events.emit("file_deleted", file_id=file_id)
     return {"deleted": removed}
 
@@ -461,4 +464,5 @@ async def api_status(request: Request) -> dict[str, Any]:
         "wordcraft_cli": wordcraft_available(),
         "wordcraft_editor": editor_available(),
         "crafts": crafts_status(),
+        "db": db_enabled(),
     }

@@ -375,6 +375,8 @@
     align-items: center; justify-content: center; z-index: 100;
     backdrop-filter: blur(2px); }
   .modal-bg.show { display: flex; }
+  .hist-row { padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+  .hist-row:hover { background: var(--panel-2); }
   .modal {
     background: var(--panel); border: 3px double var(--border); border-radius: 8px;
     padding: 18px; width: 480px; max-width: 90vw;
@@ -406,6 +408,7 @@
     <span class="pill" id="status-llm">llm: ?</span>
     <span class="pill" id="status-events">events: …</span>
     <span class="pill" id="status-wc" title="WordCraft (Rust Word-motor)">wordcraft: ?</span>
+    <span class="pill" id="status-inbox" title="Nyitott „vissza Claude-nak” kérések" style="cursor:pointer">📨 –</span>
   </div>
   <span style="flex:1"></span>
   <div class="toolbar">
@@ -417,6 +420,12 @@
     </button>
     <button class="icon-btn" id="btn-edit" title="Kézi szerkesztés (WordCraft)" style="display:none">
       <span>✏️</span><span class="lbl">Szerkesztés</span>
+    </button>
+    <button class="icon-btn" id="btn-review" title="Visszaküldés Claude-nak lektorálásra (megjegyzéssel)" disabled>
+      <span>📨</span><span class="lbl">Claude-nak</span>
+    </button>
+    <button class="icon-btn" id="btn-history" title="Verziótörténet (forráslánc és leszármazottak)" disabled>
+      <span>🕘</span>
     </button>
     <a class="icon-btn primary" id="btn-download" title="Eredeti fájl letöltése"
        href="#" download style="display:none">
@@ -545,6 +554,25 @@
       <button onclick="closeModal('modal-agent')">Mégse</button>
       <button class="primary" id="agent-go">🚀 Indít</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-review">
+  <div class="modal">
+    <h3>📨 Vissza Claude-nak</h3>
+    <div class="field"><label>Fájl</label><div id="rv-file" style="font-weight:600"></div></div>
+    <div class="field"><label>Mit nézzen át / mit csináljon?</label>
+      <textarea id="rv-note" rows="5" placeholder="pl. Átírtam a 2. fejezetet és megjegyzéseket hagytam — fogadd el, ami jó, a kommentekre válaszolj."></textarea></div>
+    <div class="actions"><button onclick="closeModal('modal-review')">Mégse</button>
+      <button class="primary" id="rv-go">Küldés</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-history">
+  <div class="modal">
+    <h3>🕘 Verziótörténet</h3>
+    <div id="hist-body" style="max-height:60vh;overflow:auto;font-size:13px"></div>
+    <div class="actions"><button onclick="closeModal('modal-history')">Bezár</button></div>
   </div>
 </div>
 
@@ -733,6 +761,8 @@ function selectFile(f) {
   $("btn-download").style.display = "inline-flex";
   $("btn-download").title = `Letölt: ${labelText}`;
   $("btn-delete").disabled = false;
+  $("btn-review").disabled = false;
+  $("btn-history").disabled = false;
   $("btn-delete").title = `Töröl: ${labelText}`;
   $("chat-send").disabled = !$("chat-input").value.trim();
   $("chat-input").placeholder = `Mit csináljon Kimi ezzel: ${labelText}? (Ctrl+Enter küld)`;
@@ -864,6 +894,7 @@ function startSSE() {
     appendEvent(evt);
     appendChatEvent(evt);
     if (["tool_done", "uploaded", "file_deleted"].includes(evt.kind)) refreshFiles();
+    if (["review_requested", "review_resolved"].includes(evt.kind)) refreshInbox();
   });
   es.addEventListener("ping", () => {
     $("status-events").textContent = "events: ok";
@@ -1019,6 +1050,69 @@ function syncHeaderHeight() {
 }
 window.addEventListener("resize", syncHeaderHeight);
 syncHeaderHeight();
+
+// ----- 📨 lektorálási kör + 🕘 verziótörténet (Postgres) -----
+async function refreshInbox() {
+  try {
+    const r = await fetch("/api/reviews?status=open");
+    if (!r.ok) { $("status-inbox").textContent = "📨 –"; return; }
+    const d = await r.json();
+    $("status-inbox").textContent = `📨 ${d.items.length}`;
+    $("status-inbox").className = "pill " + (d.items.length ? "ok" : "");
+    $("status-inbox").dataset.items = JSON.stringify(d.items);
+  } catch (e) { $("status-inbox").textContent = "📨 –"; }
+}
+$("btn-review").addEventListener("click", () => {
+  if (!selectedFileMeta) return;
+  $("rv-file").textContent = selectedFileMeta.label || selectedFileId;
+  $("rv-note").value = "";
+  openModal("modal-review");
+});
+$("rv-go").addEventListener("click", async () => {
+  const r = await fetch("/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_id: selectedFileId, note: $("rv-note").value }) });
+  closeModal("modal-review");
+  if (!r.ok) { toast("nem sikerült (" + r.status + ")", "err"); return; }
+  toast("elküldve Claude-nak — a history(inbox) tool-ban látja", "ok");
+  refreshInbox();
+});
+function histRow(v, cur) {
+  const t = v.created_at ? new Date(v.created_at).toLocaleString("hu-HU") : "";
+  const del = v.deleted_at ? ' <span style="color:var(--err)">(törölve)</span>' : "";
+  const me = v.file_id === cur ? ' style="font-weight:700"' : "";
+  return `<div${me} data-fid="${escapeHtml(v.file_id)}" class="hist-row" title="${escapeHtml(v.file_id)}">
+    ${escapeHtml(v.label || v.file_id)} <span class="fop">${escapeHtml(v.operation || "")}</span>
+    <span style="color:var(--muted)"> · ${t}</span>${del}</div>`;
+}
+$("btn-history").addEventListener("click", async () => {
+  if (!selectedFileId) return;
+  const r = await fetch(`/api/history/${encodeURIComponent(selectedFileId)}`);
+  if (!r.ok) { toast("nincs verziótörténet (" + r.status + ")", "err"); return; }
+  const d = await r.json();
+  const anc = d.ancestors.map(v => histRow(v, selectedFileId)).join('<div style="color:var(--muted);padding-left:8px">↓</div>');
+  const desc = d.descendants.length ? "<h4>Belőle készült</h4>" + d.descendants.map(v => histRow(v, selectedFileId)).join("") : "";
+  $("hist-body").innerHTML = (anc || "<i>Erről a fájlról nincs bejegyzés (a verziónapló 10-11 óta gyűjt).</i>") + desc;
+  $("hist-body").querySelectorAll(".hist-row").forEach(el => el.addEventListener("click", async () => {
+    const list = await fetch("/api/files").then(x => x.json());
+    const f = [...(list.inputs || []), ...(list.outputs || [])].find(x => x.file_id === el.dataset.fid);
+    if (f) { closeModal("modal-history"); selectFile(f); } else toast("ez a fájl már nincs meg", "err");
+  }));
+  openModal("modal-history");
+});
+$("status-inbox").addEventListener("click", async () => {
+  const items = JSON.parse($("status-inbox").dataset.items || "[]");
+  if (!items.length) { toast("nincs nyitott kérés", ""); return; }
+  $("hist-body").innerHTML = "<h4>Nyitott kérések Claude felé</h4>" + items.map(i =>
+    `<div class="hist-row" data-fid="${escapeHtml(i.file_id)}">#${i.id} · ${escapeHtml(i.file_label || i.file_id)}
+     <div style="color:var(--muted)">${escapeHtml(i.note || "")}</div></div>`).join("");
+  $("hist-body").querySelectorAll(".hist-row").forEach(el => el.addEventListener("click", async () => {
+    const list = await fetch("/api/files").then(x => x.json());
+    const f = [...(list.inputs || []), ...(list.outputs || [])].find(x => x.file_id === el.dataset.fid);
+    if (f) { closeModal("modal-history"); selectFile(f); }
+  }));
+  openModal("modal-history");
+});
+setInterval(refreshInbox, 15000); refreshInbox();
 
 // initial load
 refreshFiles();

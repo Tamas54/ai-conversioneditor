@@ -27,7 +27,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.mcp_server import mcp as _mcp_instance, mount_mcp
 from app.auth import auth_middleware, log_auth_state, router as auth_router
-from app.routes import files, upload, health, dashboard, preview, editor
+from app.routes import files, upload, health, dashboard, preview, editor, reviews
 from app.storage.cleanup import cleanup_loop
 from app.workers.pool import WorkerPool
 
@@ -42,6 +42,8 @@ log = logging.getLogger("aice.main")
 async def lifespan(app: FastAPI):
     log.info("Starting ai-conversioneditor — data_dir=%s", settings.DATA_DIR)
     log_auth_state()
+    from app import db
+    await db.start()
     pool = WorkerPool(
         libreoffice_warm=settings.LO_WARM,
         chromium_warm=settings.CHROMIUM_WARM,
@@ -69,6 +71,7 @@ async def lifespan(app: FastAPI):
             cleanup_task.cancel()
             warmup_task.cancel()
             await pool.stop()
+            await db.stop()
 
 
 app = FastAPI(
@@ -90,6 +93,7 @@ app.include_router(files.router)
 app.include_router(preview.router)
 app.include_router(dashboard.router)
 app.include_router(editor.router)
+app.include_router(reviews.router)
 mount_mcp(app)
 
 

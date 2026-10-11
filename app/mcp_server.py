@@ -294,7 +294,9 @@ async def wordcraft(
     save_format: docx (default) | pdf | odt | rtf | html | md | tex | txt | png.
 
     read instead of editing: "text" | "info" | "inspect" (structure JSON,
-    shows tracked-change runs) | "commands" (ids only; `query`, e.g. "table",
+    shows tracked-change runs) | "review" (compact list of tracked changes
+    and comments: who changed what, in which sentence — read a human's
+    edits back cheaply) | "commands" (ids only; `query`, e.g. "table",
     gives params). text/inspect/commands are paged: pass the returned
     `next_offset` as `offset` (chars for text, blocks for inspect);
     `max_chars` caps one reply (default 20000).
@@ -329,6 +331,43 @@ async def pptx_build(spec: dict) -> dict:
     """
     from app.tools import pptx_deck
     return await pptx_deck.build(spec)
+
+
+@mcp.tool()
+async def history(
+    action: str = "inbox",
+    file_id: Optional[str] = None,
+    review_id: Optional[int] = None,
+    resolution_file_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> dict:
+    """
+    Version history and the human review inbox (Postgres).
+      action="lineage" + file_id   → ancestors (source chain) and descendants
+                                     of a file: who made which version how.
+      action="inbox"               → open "back to Claude" requests a person
+                                     sent from the dashboard (file + note).
+      action="request" + file_id, note → ask a person to review a file.
+      action="resolve" + review_id (+ resolution_file_id, note) → close one.
+    Typical loop: inbox → wordcraft(read="review") on the file → edit with
+    tracked changes → resolve with the new file_id.
+    """
+    from app import db
+    if action == "lineage":
+        if not file_id:
+            raise ValueError("lineage file_id-t kér")
+        return await db.lineage(file_id)
+    if action == "inbox":
+        return {"open": await db.review_list("open", file_id=file_id)}
+    if action == "request":
+        if not file_id:
+            raise ValueError("request file_id-t kér")
+        return await db.review_create(file_id, note, "claude")
+    if action == "resolve":
+        if review_id is None:
+            raise ValueError("resolve review_id-t kér")
+        return await db.review_resolve(int(review_id), resolution_file_id, note)
+    raise ValueError("action: lineage | inbox | request | resolve")
 
 
 @mcp.tool()

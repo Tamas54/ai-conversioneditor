@@ -68,6 +68,8 @@ def write_meta(
         merged["updated_at"] = time.time()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(merged, ensure_ascii=False, indent=2), "utf-8")
+        from app import db
+        db.record_version_bg(file_id, merged)  # verziótörténet Postgresben (háttérben, hibatűrően)
     except Exception as e:
         log.warning("write_meta failed for %s: %s", file_id, e)
 

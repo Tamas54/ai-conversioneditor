@@ -55,6 +55,9 @@ pikepdf==10.13.0.post1
 Pillow==12.3.0
 playwright==1.47.0
 protobuf==7.36.2
+psycopg-binary==3.3.6
+psycopg-pool==3.3.3
+psycopg==3.3.6
 pycparser==3.11
 pydantic-core==2.50.0
 pydantic-settings==2.15.0
