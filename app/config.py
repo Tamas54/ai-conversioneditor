@@ -52,7 +52,19 @@ class Settings(BaseModel):
     )
 
 
+def _with_scheme(url: str) -> str:
+    """RAILWAY_PUBLIC_DOMAIN csak hosztnév (séma nélkül) — enélkül a fájl-URL-ek
+    relatívként oldódnak fel a böngészőben és az MCP-klienseknél."""
+    if not url:
+        return "http://localhost:8000"
+    if "://" in url:
+        return url
+    local = url.startswith(("localhost", "127.0.0.1", "0.0.0.0"))
+    return ("http://" if local else "https://") + url
+
+
 settings = Settings()
+settings.PUBLIC_BASE_URL = _with_scheme(settings.PUBLIC_BASE_URL)
 
 # Ensure dirs exist
 for sub in ("inputs", "outputs", "temp"):
