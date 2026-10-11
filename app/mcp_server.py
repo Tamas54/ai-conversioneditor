@@ -276,6 +276,9 @@ async def wordcraft(
        {"command": "select.text", "params": {"text": "old"}},
        {"command": "text.insert", "params": {"text": "new"}}]
     author: name on tracked changes and comments (e.g. "Claude (copyedit)").
+    Files in params: pass "file_id" instead of a path, e.g.
+      {"command": "insert.picture", "params": {"file_id": <image>, "width": 430}}.
+    Jump to the n-th paragraph (1-based) with edit.goto {"paragraph": n}.
     edit.replaceAll: ALWAYS pass "matchCase" explicitly. Find options carry
       over between commands (like Word's dialog), and a case-insensitive
       replace does not keep the found text's capitals ("az X" → "Az X").

@@ -81,6 +81,10 @@ def _cmd_arg(c: Command) -> str:
     if not cmd:
         raise ValueError(f"parancs id hiányzik: {c!r}")
     params = c.get("params")
+    if isinstance(params, dict) and params.get("file_id"):
+        # Feltöltött/generált fájl file_id-vel (pl. insert.picture): a szerver oldja fel útvonalra —
+        # az ügynök nem ismeri a szerver fájlrendszerét, base64-et pedig nem visz el a parancssor.
+        params = {k: v for k, v in params.items() if k != "file_id"} | {"path": str(_existing(params["file_id"]))}
     return f"{cmd}={json.dumps(params, ensure_ascii=False)}" if params else str(cmd)
 
 
