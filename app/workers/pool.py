@@ -96,11 +96,16 @@ class WorkerPool:
         # Pre-launch Chromium
         from playwright.async_api import async_playwright
 
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        log.info("Chromium launched (warm=%d)", self.chromium_warm)
+        # A start() háttér-taskban fut (main.py) — ami itt elszáll, azt senki nem olvassa ki,
+        # ezért a hibát magunk naplózzuk (különben a Chromium némán hiányzik).
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            log.info("Chromium launched (warm=%d)", self.chromium_warm)
+        except Exception:
+            log.exception("Chromium launch failed — HTML→PDF (use_browser) unavailable")
 
     async def stop(self):
         for w in self._lo_workers:

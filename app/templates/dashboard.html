@@ -125,10 +125,11 @@
       "files chat   events";
     flex: 1;
     overflow: hidden;
+    /* teljes ablakmagasság: body padding (2×8px) + a fejléc mért magassága */
+    height: calc(100vh - 16px - var(--header-h, 64px));
   }
   /* ✏️ szerkesztő mód: a WordCraft szalagjának kell a szélesség */
-  .layout.editing { grid-template-columns: 240px 1fr 0; grid-template-rows: 1fr 0;
-    height: calc(100vh - 16px - var(--header-h, 64px)); }
+  .layout.editing { grid-template-columns: 240px 1fr 0; grid-template-rows: 1fr 0; }
   .layout.editing .events, .layout.editing .chat { display: none; }
   .files { grid-area: files; border-right: 2px double var(--border); overflow: hidden;
     display: flex; flex-direction: column; background: var(--panel); }
@@ -750,8 +751,6 @@ function confirmLeaveEditor() {
 
 function setEditing(on) {
   editing = on;
-  const h = document.querySelector("header");
-  if (h) document.documentElement.style.setProperty("--header-h", h.getBoundingClientRect().height + "px");
   if (!on) editorDirty = false;
   $("layout").classList.toggle("editing", on);
 }
@@ -988,6 +987,14 @@ function appendChatEvent(evt) {
     appendChatMsg(`❌ ${evt.tool}: ${(evt.error || "").slice(0, 200)}`, "bot error");
   }
 }
+
+// A rács magassága a fejléchez igazodik (a fejléc tördelődhet keskeny ablakban).
+function syncHeaderHeight() {
+  const h = document.querySelector("header");
+  if (h) document.documentElement.style.setProperty("--header-h", h.getBoundingClientRect().height + "px");
+}
+window.addEventListener("resize", syncHeaderHeight);
+syncHeaderHeight();
 
 // initial load
 refreshFiles();
