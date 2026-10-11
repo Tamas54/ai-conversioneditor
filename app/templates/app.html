@@ -624,7 +624,7 @@ const MAKERS = {
     },
   },
   social: {
-    alt: "Make & edit", title: "New social post", sub: "Headline + picture → every size you tick, ready to post. “Make & edit” opens it in the design editor to fine-tune.",
+    alt: "Make & edit", altLoose: true, title: "New social post", sub: "Headline + picture → every size you tick, ready to post. “Make & edit” opens it in the design editor to fine-tune.",
     fields: () => `<label>Headline<input type="text" name="headline" required maxlength="120"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
@@ -637,6 +637,7 @@ const MAKERS = {
       ${swatches()}`,
     wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
     async submit(fd, form, opts = {}) {
+      if (!fd.get("headline")) { if (!opts.alt) throw new Error("Add a headline."); fd.set("headline", "Your headline here"); }
       const body = { headline: fd.get("headline"), subtitle: fd.get("subtitle"), handle: fd.get("handle"), sizes: fd.getAll("sizes"),
         image: await readPicker(form, "img"), accent: fd.get("accent"), editable: !!opts.alt };
       if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
@@ -735,7 +736,7 @@ const MAKERS = {
     },
   },
   print: {
-    alt: "Make & edit", title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. “Make & edit” opens it in the design editor.",
+    alt: "Make & edit", altLoose: true, title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. “Make & edit” opens it in the design editor.",
     fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
       <label>Title / name<input type="text" name="title" required maxlength="120"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
@@ -744,6 +745,7 @@ const MAKERS = {
       ${imagePicker("img")}${swatches()}`,
     wire(form) { wirePicker(form, "img"); },
     async submit(fd, form, opts = {}) {
+      if (!fd.get("title")) { if (!opts.alt) throw new Error("Add a title."); fd.set("title", t0(fd.get("template"))); }
       const t = fd.get("template"), img = await readPicker(form, "img");
       const data = t === "certificate"
         ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
@@ -911,6 +913,7 @@ function openFill(f, fields) {
   };
   openMaker("fill");
 }
+const t0 = tpl => tpl === "certificate" ? "Recipient name" : "Your title here";   // helyőrző, ha a szerkesztőben írja be
 // „Make & edit”: a natív (VectorCraft) dizájnfájl rögtön a dizájn-szerkesztőben nyílik
 function editNative(list, n) {
   const nat = (list || []).find(f => f.file_id.endsWith(".vectorcraft")) || list[0];
@@ -921,7 +924,7 @@ function openMaker(kind, opts = {}) {
   if (account?.guest && AI_MAKERS.has(kind)) return accountCta(m.title);
   form.innerHTML = `<h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
     <p class="status" id="make-status"></p>
-    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt">${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt"${m.altLoose ? " formnovalidate" : ""}>${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
   m.wire?.(form, opts);
   const [field, words] = MODES[kind] || [];
   if (field) {
@@ -947,6 +950,20 @@ function openMaker(kind, opts = {}) {
 }
 
 $("#drawer-x").addEventListener("click", () => $("#drawer").close());
+let invalidShown = false;
+$("#make-form").addEventListener("pointerdown", e => { if (e.target.closest(".actions")) invalidShown = false; }, true);
+$("#make-form").addEventListener("keydown", e => { if (e.key === "Enter") invalidShown = false; }, true);
+$("#make-form").addEventListener("invalid", e => {      // a böngésző buborékja gyorsan eltűnik — legyen jól látható
+  const el = e.target;
+  el.classList.add("needs");
+  el.addEventListener("input", () => el.classList.remove("needs"), { once: true });
+  el.addEventListener("change", () => el.classList.remove("needs"), { once: true });
+  if (invalidShown) return;
+  invalidShown = true;
+  const lab = el.closest("label"), name = lab ? (lab.firstChild?.textContent || "").trim() : "";
+  $("#make-status").textContent = name ? `Fill in “${name}” first.` : "Fill in the highlighted field first.";
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+}, true);
 $("#drawer").addEventListener("close", () => { if (location.hash.startsWith("#/make/")) history.replaceState(null, "", underMaker); });
 $("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
   if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();

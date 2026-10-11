@@ -309,3 +309,8 @@ label > .ai-badge { margin: -2px 0 2px; }
 .fa:hover { border-color: var(--graphite); }
 .fa:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
 .print-frame { position: fixed; right: 0; bottom: 0; width: 0; height: 0; border: 0; visibility: hidden; }
+
+/* kötelező, de üres mező a fiókban */
+.needs { border-color: var(--err) !important; box-shadow: 0 0 0 3px rgba(194, 54, 43, .2) !important; }
+input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; border-radius: 6px; }
+#make-status:not(:empty) { color: var(--ink); font-weight: 600; }
