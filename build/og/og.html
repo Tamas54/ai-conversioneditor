@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../app/static/product.css">
+<style>
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #1E4436; }
+  .og { position: relative; width: 1200px; height: 630px; color: #F3F7F4; overflow: hidden; background: var(--mat);
+        background-image: linear-gradient(rgba(255,255,255,.055) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.055) 1px, transparent 1px);
+        background-size: 40px 40px; }
+  .ruler { position: absolute; left: 0; right: 0; top: 0; height: 18px;
+           background: repeating-linear-gradient(90deg, rgba(255,255,255,.45) 0 1px, transparent 1px 8px) bottom / 100% 7px no-repeat,
+                       repeating-linear-gradient(90deg, rgba(255,255,255,.6) 0 1px, transparent 1px 40px) bottom / 100% 14px no-repeat; }
+  .left { position: absolute; left: 72px; top: 80px; width: 640px; }
+  .brand { display: flex; align-items: center; gap: 14px; font: 700 30px/1 var(--f-display); letter-spacing: -.01em; }
+  .brand img { width: 40px; height: 40px; }
+  h1 { font: 800 70px/1.0 var(--f-display); letter-spacing: -.035em; margin: 50px 0 28px; white-space: nowrap; }
+  p { font: 400 26px/1.38 var(--f-body); color: #C9DCD1; margin: 0; max-width: 30ch; }
+  .tag { position: absolute; left: 72px; bottom: 54px; font: 500 17px/1 var(--f-mono); color: #9FC2B1; letter-spacing: .02em; }
+  .tag b { color: #fff; background: var(--signal); padding: 7px 10px; border-radius: 6px; font-weight: 500; margin-right: 12px; }
+  .desk { position: absolute; right: 0; top: 0; width: 520px; height: 630px; }
+  .desk > * { position: absolute; transform-origin: center; }
+  .desk .paper { box-shadow: 0 22px 40px rgba(0,0,0,.35), 0 3px 8px rgba(0,0,0,.25); }
+</style></head><body>
+<div class="og"><div class="ruler"></div>
+  <div class="left">
+    <div class="brand"><img src="../../app/static/favicon.svg">{{PRODUCT}}</div>
+    <h1>Finished files.<br>Changed by asking.</h1>
+    <p>Documents, decks, old photos, scanned books, PDFs and forms — made for you, then fixed in plain words.</p>
+  </div>
+  <div class="tag"><b>Try it free</b>no sign-up for the non-AI tools</div>
+  <div class="desk">
+    <span class="paper o-deck" style="left:70px;top:70px;transform:rotate(-7deg) scale(1.85)"><i></i><i></i><i></i><b></b></span>
+    <span class="paper o-photo" style="left:300px;top:96px;transform:rotate(6deg) scale(1.7)"><div></div></span>
+    <span class="paper o-doc" style="left:140px;top:300px;transform:rotate(-4deg) scale(1.75)"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <span class="o-book paper" style="left:330px;top:330px;transform:rotate(5deg) scale(1.55)"><i></i><i></i></span>
+    <span class="paper o-pdf" style="left:20px;top:420px;transform:rotate(9deg) scale(1.3)"><i></i><i></i><i class="x"></i><i></i><i></i><b>PDF</b></span>
+  </div>
+</div></body></html>
