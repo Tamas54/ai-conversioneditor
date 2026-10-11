@@ -41,7 +41,7 @@
 
 <main id="view"></main>
 
-<dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><form id="make-form" method="dialog"></form></dialog>
+<dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><button type="button" class="x-close drawer-x" id="drawer-x" aria-label="Close" title="Close (Esc)">✕</button><form id="make-form" method="dialog"></form></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <template id="t-home">
@@ -140,12 +140,13 @@
 <template id="t-file">
   <section class="work">
     <div class="work-bar">
-      <a class="btn ghost" href="#/files" aria-label="Back to files">←</a>
+      <a class="btn ghost" id="btn-back" href="#/files" aria-label="Back">←</a>
       <h2 id="file-name"></h2>
       <span id="edit-btns"></span>
       <span class="convert-to" id="convert-to" hidden><select id="convert-fmt" aria-label="Convert to"></select><button class="btn ghost" id="btn-convert">Convert</button></span>
       <a class="btn" id="btn-download" download>Download</a>
       <button class="btn ghost" id="btn-delete">Delete</button>
+      <a class="btn ghost x-close" id="btn-close" href="#/files" aria-label="Close" title="Close">✕</a>
     </div>
     <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
     <form class="revise" id="revise" hidden>
@@ -345,6 +346,12 @@ const views = {
     const f = files.find(x => x.file_id === id);
     if (!f) { $("#file-name").textContent = "This file is gone"; return; }
     $("#file-name").textContent = f.label; $("#btn-download").href = f.url;
+    for (const id of ["#btn-back", "#btn-close"]) {      // kilépés oda, ahonnan jött (címlap vagy Files)
+      const a = $(id); a.href = lastPlace;
+      a.addEventListener("click", e => {
+        if (/\/editor\//.test($("#file-frame").getAttribute("src") || "") && !confirm("Close the editor? Changes you haven't saved will be lost.")) e.preventDefault();
+      });
+    }
     $("#file-frame").src = `/preview/${encodeURIComponent(f.file_id)}`;
     const box = $("#edit-btns");
     editorsFor(f.ext).forEach(([app, label], i) => {
@@ -387,8 +394,10 @@ const views = {
   },
 };
 function mount(id) { $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
+let lastPlace = "#/";          // ahová a fájlnézet „bezárás” gombja visz
 async function route() {
   const [, name = "", arg] = location.hash.match(/^#\/([a-z]*)\/?(.*)$/) || [];
+  if (name !== "file") lastPlace = location.hash || "#/";
   document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
   document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
   try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); }
@@ -794,6 +803,10 @@ function openMaker(kind) {
   $("#drawer").showModal();
 }
 
+$("#drawer-x").addEventListener("click", () => $("#drawer").close());
+$("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
+  if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();
+});
 loadAccount().catch(() => {}); route();
 </script>
 </body>

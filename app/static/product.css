@@ -291,3 +291,10 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 /* a rácsos címkében se nyúljon szét az AI-jelvény */
 .ai-badge { display: inline-block; width: max-content; justify-self: start; align-self: center; }
 label > .ai-badge { margin: -2px 0 2px; }
+
+/* bezárás: jól látható ✕ a fiók és a fájlnézet jobb felső sarkában */
+.x-close { font-size: 17px; line-height: 1; min-width: 40px; justify-content: center; }
+.drawer-x { position: absolute; top: 18px; right: 18px; z-index: 2; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--rule);
+  background: var(--paper); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.drawer-x:hover { background: var(--paper-2); }
+.drawer h2 { padding-right: 52px; }
