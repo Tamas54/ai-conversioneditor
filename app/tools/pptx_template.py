@@ -459,8 +459,10 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
                 for b in bodies:
                     if b._element.getparent() is not None:
                         _drop(b)
-                if imgs:
+                if imgs and imgs[0] is not None:
                     _picture(slide, imgs[0], rect)
+                elif s.get("caption") and s.get("title"):      # kép nélkül (pl. „no pictures”): a felirat szövegként
+                    _textbox(slide, _area_below(title_ph, SW, SH), [s["caption"]])
             else:                      # stats · chart · table · gallery: a cím alatti terület
                 _set_title(slide, title_ph, s.get("title"))
                 area = bodies[0] if bodies else None
