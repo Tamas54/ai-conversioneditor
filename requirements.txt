@@ -39,4 +39,5 @@ tenacity>=9.0.0
 python-multipart>=0.0.9
 aiofiles>=24.1.0
 python-dotenv>=1.0.1
+onnxruntime>=1.23,<1.24    # ISNet háttéreltávolítás (app/tools/cutout.py); 1.24+ már nem támogatja a py3.10-et
 tzdata>=2024.1           # zoneinfo a konténerben (nincs rendszer-tz-adatbázis)

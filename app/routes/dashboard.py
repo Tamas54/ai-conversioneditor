@@ -31,7 +31,7 @@ from app.llm.agent import run_agent
 from app.tools import vision_ops
 from app.tools.formats import detect_from_path
 from app.tools.wordcraft import available as wordcraft_available
-from app.routes.editor import editor_available
+from app.routes.editor import editor_available, crafts_status
 from app.storage import (
     input_path, new_file_id, output_path, save_bytes, public_url,
     write_meta, read_meta, delete_meta, display_label, is_meta_path,
@@ -460,4 +460,5 @@ async def api_status(request: Request) -> dict[str, Any]:
         "model_fallback": settings.LLM_MODEL_FALLBACK,
         "wordcraft_cli": wordcraft_available(),
         "wordcraft_editor": editor_available(),
+        "crafts": crafts_status(),
     }

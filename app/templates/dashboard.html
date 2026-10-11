@@ -590,9 +590,13 @@ async function pollStatus() {
     $("status-chromium").className = "pill " + (s.chromium_ready ? "ok" : "err");
     $("status-llm").textContent = `llm: ${s.siliconflow_configured ? s.model_primary.split('/').pop() : "no key"}`;
     $("status-llm").className = "pill " + (s.siliconflow_configured ? "ok" : "err");
-    wordcraftEditor = !!s.wordcraft_editor;
-    $("status-wc").textContent = `wordcraft: ${s.wordcraft_cli ? "cli" : "–"}${s.wordcraft_editor ? "+editor" : ""}`;
-    $("status-wc").className = "pill " + (s.wordcraft_cli && s.wordcraft_editor ? "ok" : "err");
+    const cr = s.crafts || {};
+    editorsReady = Object.fromEntries(Object.keys(EDITORS).map(a => [a, !!(cr[a] && cr[a].editor)]));
+    const short = { wordcraft: "W", photocraft: "P", vectorcraft: "V" };
+    const ok = Object.keys(EDITORS).filter(a => cr[a] && cr[a].cli && cr[a].editor);
+    $("status-wc").textContent = `crafts: ${ok.map(a => short[a]).join("") || "–"}${cr.cutout ? " +kivágás" : ""}`;
+    $("status-wc").title = "WordCraft / PhotoCraft / VectorCraft (CLI + szerkesztő), ISNet-kivágás";
+    $("status-wc").className = "pill " + (ok.length === 3 ? "ok" : "err");
     updateEditButton();
   } catch (e) {
     $("status-lo").className = "pill err"; $("status-lo").textContent = "lo: down";
@@ -739,18 +743,27 @@ function selectFile(f) {
 
 // ----- ✏️ kézi szerkesztő (WordCraft WASM, /editor/) -----
 // A szerkesztő Mentése/Exportja új verzióként jön vissza (/api/editor/save), forrás-linkkel.
-const EDITABLE = new Set(["docx","doc","odt","rtf","md","html","htm","txt","tex"]);
-let wordcraftEditor = false;
+// Fájltípus → szerkesztő (a Craft-motorok webes változata).
+const EDITORS = {
+  wordcraft:   { label: "Word",   exts: ["docx","doc","odt","rtf","md","html","htm","txt","tex"] },
+  photocraft:  { label: "Photo",  exts: ["png","jpg","jpeg","webp","psd","psb","tif","tiff","bmp","gif","exr","pcraft"] },
+  vectorcraft: { label: "Vector", exts: ["svg","svgz","pdf","ai","eps","vectorcraft"] },
+};
+let editorsReady = {};   // app → van-e webes build (az /api/status-ból)
+function editorFor(ext) {
+  ext = (ext || "").toLowerCase();
+  for (const [app, e] of Object.entries(EDITORS)) if (e.exts.includes(ext) && editorsReady[app]) return app;
+  return null;
+}
 let editing = false;
 let editorDirty = false;
 
 function updateEditButton() {
-  const ext = (selectedFileMeta && selectedFileMeta.ext || "").toLowerCase();
-  const show = wordcraftEditor && (editing || EDITABLE.has(ext));
-  $("btn-edit").style.display = show ? "inline-flex" : "none";
+  const app = editorFor(selectedFileMeta && selectedFileMeta.ext);
+  $("btn-edit").style.display = (editing || app) ? "inline-flex" : "none";
   $("btn-edit").innerHTML = editing
     ? '<span>👁</span><span class="lbl">Előnézet</span>'
-    : '<span>✏️</span><span class="lbl">Szerkesztés</span>';
+    : `<span>✏️</span><span class="lbl">Szerkesztés · ${app ? EDITORS[app].label : ""}</span>`;
 }
 
 function confirmLeaveEditor() {
@@ -771,11 +784,13 @@ function openEditor(f) {
   const src = f.url.slice(f.url.indexOf("/files/"));
   const save = `/api/editor/save?source=${encodeURIComponent(f.file_id)}`;
   const qs = `src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}`;
+  const app = editorFor(f.ext);
+  if (!app) return;
   setEditing(true);
-  $("preview-name").textContent = `✏️ ${label} — Mentés (Ctrl+S) = új verzió a listában`;
+  $("preview-name").textContent = `✏️ ${EDITORS[app].label}Craft · ${label} — Mentés (Ctrl+S) / Export = új verzió a listában`;
   const area = $("preview-area");
   area.className = "preview-frame";
-  area.innerHTML = `<iframe src="/editor/?${qs}" allow="clipboard-read; clipboard-write; fullscreen"></iframe>`;
+  area.innerHTML = `<iframe src="/editor/${app}/?${qs}" allow="clipboard-read; clipboard-write; fullscreen"></iframe>`;
   updateEditButton();
 }
 

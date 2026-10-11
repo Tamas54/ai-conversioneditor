@@ -241,6 +241,8 @@ async def convert(
     Set `engine="wordcraft"` for the Rust Word engine: no LibreOffice, a few
     ms per call. Sources docx/doc/odt/rtf/html/md/tex/txt; targets
     docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page).
+    engine="photocraft": images (psd/png/jpg/webp/tif/exr…, PSD layers kept
+    when saving psd). engine="vectorcraft": svg/pdf/ai/eps → pdf/svg/png/eps.
     """
     return await t_convert(
         _pool(),
@@ -305,6 +307,87 @@ async def wordcraft(
         file_id=file_id, commands=commands, author=author,
         save_format=save_format, template=template,
     )
+
+
+@mcp.tool()
+async def photocraft(
+    file_id: Optional[str] = None,
+    commands: Optional[list] = None,
+    new: Optional[dict] = None,
+    remove_background: bool = False,
+    background_file_id: Optional[str] = None,
+    background_blur: float = 0,
+    save_format: Optional[str] = None,
+    quality: Optional[int] = None,
+    read: Optional[str] = None,
+    query: Optional[str] = None,
+    offset: int = 0,
+    max_chars: int = 20000,
+) -> dict:
+    """
+    Edit an image with PhotoCraft (Photoshop-like engine, ~860 commands):
+    image.autoTone, image.imageSize {width, height}, image.crop, type.create
+    {x, y, text, size, color}, filter.blur.gaussianBlur {radius},
+    image.adjustments.photoFilter, layers… Result is a NEW file_id.
+
+    remove_background=true cuts the subject out with a neural net (ISNet:
+    keeps whiskers/hair). background_file_id puts that image behind the
+    subject, filling the canvas; background_blur (px, e.g. 18) fakes a
+    shallow depth of field. One call does "put this animal in front of
+    the Parliament": file_id=photo, remove_background=true,
+    background_file_id=<generate_image result>, background_blur=18.
+
+    commands: [{"command": id, "params": {...}}]; files in params by
+    "file_id" (e.g. file.placeEmbedded). new={"width":1200,"height":800}
+    starts a blank canvas. save_format: png (keeps transparency) | jpg |
+    webp | psd | tif | pcraft; quality 1-100 for jpg/webp.
+    read: "info" (size, layers) | "commands" (ids; `query` for params).
+    """
+    from app.tools import crafts
+    if read:
+        return await crafts.photo_read(read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
+    return await crafts.photo_run(
+        file_id=file_id, new=new, commands=commands, save_format=save_format, quality=quality,
+        remove_background=remove_background, background_file_id=background_file_id,
+        background_blur=background_blur,
+    )
+
+
+@mcp.tool()
+async def vectorcraft(
+    file_id: Optional[str] = None,
+    commands: Optional[list] = None,
+    export: Optional[list[str]] = None,
+    scale: Optional[float] = None,
+    read: Optional[str] = None,
+    query: Optional[str] = None,
+    offset: int = 0,
+    max_chars: int = 20000,
+) -> dict:
+    """
+    Design and lay out with VectorCraft (Illustrator/InDesign-like, ~730
+    commands): posters, flyers, brochures, multi-page PDFs, SVG. Opens
+    file_id (svg/pdf/ai/eps/.vectorcraft) or starts empty; exports every
+    format in `export` (default ["pdf"]; also svg, png, jpg, webp, eps,
+    vectorcraft) as new file_ids.
+
+    Typical: file.new {width:"210 mm", height:"297 mm"} → shape.rectangle
+    {x,y,width,height} → text.create {x, y, text, size, font, color,
+    area:{width,height}} (area = wrapping text box) → file.place
+    {"file_id": <image>} → artboard.new {width,height} (next page).
+    Coordinates in points (A4 = 595×842). Fonts: "Source Serif 4",
+    "Source Sans 3" are built in. A new shape/placed image stays SELECTED:
+    colour it with paint.setFill {color} / paint.setStroke {none: true};
+    Place images with file.place {"file_id": <img>, "rect": [x, y, w, h]}
+    (fits inside, aspect kept); without rect a photo lands at its physical
+    size, and object.setBounds on a placed image does not re-render it.
+    Later objects stack on top (draw backgrounds first).
+    read: "info" (artboards, fonts, counts) | "commands" (ids; `query`).
+    """
+    from app.tools import crafts
+    if read:
+        return await crafts.vector_read(read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
+    return await crafts.vector_run(file_id=file_id, commands=commands, export=export, scale=scale)
 
 
 @mcp.tool()

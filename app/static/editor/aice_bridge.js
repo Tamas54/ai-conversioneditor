@@ -1,5 +1,7 @@
-// aice_bridge.js — ragasztó a VÁLTOZATLAN WordCraft web-build (upstream release) és a
-// conversioneditor között. Az /editor/ index.html-be a szerver szúrja be, a WASM elé.
+// aice_bridge.js — ragasztó a VÁLTOZATLAN Craft web-buildek (WordCraft, PhotoCraft, VectorCraft;
+// upstream release-ek) és a conversioneditor között. Az /editor/<app>/ index.html-be a szerver
+// szúrja be, a WASM elé. Mindhárom ugyanígy épül: <app>_canvas + <app>_loading, drop = megnyitás,
+// Mentés/Export = letöltés-anchor.
 //
 // URL-paraméterek: ?src=<letöltési URL>&name=<fájlnév>&save=<POST URL>
 //   src  — betöltéskor letölti a fájlt és „ráejti" a vászonra (a WordCraft drop-útja nyitja meg)
@@ -48,13 +50,13 @@
       const blob = await r.blob();
       const dt = new DataTransfer();
       dt.items.add(new File([blob], name, { type: blob.type }));
-      const canvas = document.getElementById("wordcraft_canvas");
+      const canvas = document.querySelector("canvas");
       for (const t of ["dragenter", "dragover", "drop"])
         canvas.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
       notify({ type: "opened", name, bytes: blob.size });
     };
-    // A WordCraft akkor kész, amikor a betöltő feliratot eltávolította.
-    const wait = () => (document.getElementById("wordcraft_loading")
+    // Az app akkor kész, amikor a betöltő feliratot (#<app>_loading) eltávolította.
+    const wait = () => (document.querySelector('[id$="_loading"]')
       ? setTimeout(wait, 100)
       : open().catch((e) => notify({ type: "open_failed", name, error: String(e) })));
     addEventListener("TrunkApplicationStarted", wait);

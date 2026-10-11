@@ -64,6 +64,42 @@ RUN set -eux; \
 ENV WORDCRAFT_CLI=/opt/wordcraft/bin/wordcraft-cli \
     WORDCRAFT_WEB_DIR=/opt/wordcraft-web
 
+# --- PhotoCraft (képek) + VectorCraft (dizájn/layout): ugyanaz a minta, kész release, SHA256 ---
+# + ISNet háttéreltávolító modell (rembg release, onnxruntime-mal fut: app/tools/cutout.py)
+ARG PHOTOCRAFT_VERSION=0.7.0
+ARG PHOTOCRAFT_CLI_SHA256=641f831252fd31b43ee1a12e572d7442e5652c2e5bf623de085741c370f0c91d
+ARG PHOTOCRAFT_WEB_SHA256=dfcbaac00f81f5d05ccffba36a14b320c1b1c7b23a4135fe54877f527e550eec
+ARG VECTORCRAFT_VERSION=0.9.0
+ARG VECTORCRAFT_CLI_SHA256=afbc4a0904740dfd1208e717664eb294965055e74c227c2ac3dc53af502e46a4
+ARG VECTORCRAFT_WEB_SHA256=4ebe8829a22fa17975c96765dfe9812bd2834e3e721381b4b14abb802c4d7dc1
+ARG ISNET_SHA256=60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
+RUN set -eux; cd /tmp; \
+    for spec in "photocraft ${PHOTOCRAFT_VERSION} ${PHOTOCRAFT_CLI_SHA256} ${PHOTOCRAFT_WEB_SHA256}" \
+                "vectorcraft ${VECTORCRAFT_VERSION} ${VECTORCRAFT_CLI_SHA256} ${VECTORCRAFT_WEB_SHA256}"; do \
+        set -- $spec; app=$1; ver=$2; \
+        base="https://github.com/storytold/${app}/releases/download/v${ver}"; \
+        curl -fsSL -o cli.tar.gz "$base/${app}-${ver}-linux-x86_64.tar.gz"; \
+        echo "$3  cli.tar.gz" | sha256sum -c -; \
+        mkdir -p /opt/${app}; \
+        tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} \
+            "${app}-${ver}-linux-x86_64/bin/${app}-cli" "${app}-${ver}-linux-x86_64/share/doc/${app}"; \
+        curl -fsSL -o web.zip "$base/${app}-web-${ver}.zip"; \
+        echo "$4  web.zip" | sha256sum -c -; \
+        unzip -q web.zip; mv "${app}-web-${ver}" /opt/${app}-web; \
+        gzip -9 -k /opt/${app}-web/*.wasm /opt/${app}-web/*.js; \
+        rm -f cli.tar.gz web.zip; \
+        /opt/${app}/bin/${app}-cli --help >/dev/null; \
+    done; \
+    mkdir -p /opt/models; \
+    curl -fsSL -o /opt/models/isnet-general-use.onnx \
+        https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx; \
+    echo "${ISNET_SHA256}  /opt/models/isnet-general-use.onnx" | sha256sum -c -
+ENV PHOTOCRAFT_CLI=/opt/photocraft/bin/photocraft-cli \
+    PHOTOCRAFT_WEB_DIR=/opt/photocraft-web \
+    VECTORCRAFT_CLI=/opt/vectorcraft/bin/vectorcraft-cli \
+    VECTORCRAFT_WEB_DIR=/opt/vectorcraft-web \
+    CUTOUT_MODEL_PATH=/opt/models/isnet-general-use.onnx
+
 WORKDIR /app
 
 # --- Python deps ---

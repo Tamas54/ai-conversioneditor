@@ -47,6 +47,13 @@ class Settings(BaseModel):
     WORDCRAFT_CLI: str = os.getenv("WORDCRAFT_CLI", "/opt/wordcraft/bin/wordcraft-cli")
     WORDCRAFT_WEB_DIR: Path = Path(os.getenv("WORDCRAFT_WEB_DIR", "/opt/wordcraft-web"))
     WORDCRAFT_TIMEOUT_S: int = int(os.getenv("WORDCRAFT_TIMEOUT_S", "120"))
+    # PhotoCraft (képek) és VectorCraft (dizájn) — ugyanígy kész release-ből (Dockerfile).
+    PHOTOCRAFT_CLI: str = os.getenv("PHOTOCRAFT_CLI", "/opt/photocraft/bin/photocraft-cli")
+    PHOTOCRAFT_WEB_DIR: Path = Path(os.getenv("PHOTOCRAFT_WEB_DIR", "/opt/photocraft-web"))
+    VECTORCRAFT_CLI: str = os.getenv("VECTORCRAFT_CLI", "/opt/vectorcraft/bin/vectorcraft-cli")
+    VECTORCRAFT_WEB_DIR: Path = Path(os.getenv("VECTORCRAFT_WEB_DIR", "/opt/vectorcraft-web"))
+    # Háttéreltávolítás (rembg): ISNet — egy nehéz, ellenfényes fotón messze a legjobb (10-11 mérés).
+    CUTOUT_MODEL_PATH: Path = Path(os.getenv("CUTOUT_MODEL_PATH", "/opt/models/isnet-general-use.onnx"))
     EDITOR_MAX_SAVE_MB: int = int(os.getenv("EDITOR_MAX_SAVE_MB", "100"))
 
     # --- Public base URL (Railway sets this) ---
