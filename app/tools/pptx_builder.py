@@ -546,10 +546,19 @@ async def pptx_add_chart_slide(
     }
     xl_type = chart_type_map.get(chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
 
-    chart_data = CategoryChartData()
-    chart_data.categories = categories or []
-    for s in series or []:
-        chart_data.add_series(s.get("name", "Series"), s.get("values", []))
+    if xl_type == XL_CHART_TYPE.XY_SCATTER:
+        # Scatter: valódi X–Y pontok — series[i].points=[[x, y], …], vagy a categories az X-értékek.
+        chart_data = XyChartData()
+        for s in series or []:
+            ser = chart_data.add_series(s.get("name", "Series"))
+            pts = s.get("points") or list(zip((float(c) for c in categories or []), s.get("values", [])))
+            for x, y in pts:
+                ser.add_data_point(float(x), float(y))
+    else:
+        chart_data = CategoryChartData()
+        chart_data.categories = categories or []
+        for s in series or []:
+            chart_data.add_series(s.get("name", "Series"), s.get("values", []))
 
     # Position chart in the content area (below brand chrome)
     left = Inches(0.6)
@@ -593,6 +602,22 @@ async def pptx_add_chart_slide(
                         ser.format.fill.fore_color.rgb = rgb
         except Exception as e:
             log.debug("palette apply failed: %s", e)
+
+    # Scatter: jól látható, színes kör-jelölők (a python-pptx alapja apró, halvány pont), vonal nélkül
+    if chart_type == "scatter":
+        from pptx.enum.chart import XL_MARKER_STYLE
+        pal = palette or ["#1F3A5F", "#C66A00", "#2E7D32", "#8E24AA", "#00838F"]
+        try:
+            for i, ser in enumerate(chart.plots[0].series):
+                rgb = RGBColor(*_parse_rgb(pal[i % len(pal)]))
+                ser.marker.style = XL_MARKER_STYLE.CIRCLE
+                ser.marker.size = 10
+                ser.marker.format.fill.solid()
+                ser.marker.format.fill.fore_color.rgb = rgb
+                ser.marker.format.line.color.rgb = rgb
+                ser.format.line.fill.background()
+        except Exception as e:
+            log.debug("scatter style failed: %s", e)
 
     # Axis titles
     if title_axis_x or title_axis_y:

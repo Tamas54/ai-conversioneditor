@@ -556,14 +556,19 @@ async def pptx_add_table_slide(
 @mcp.tool()
 async def pptx_add_chart_slide(
     file_id: str, title: str, chart_type: str,
-    categories: list[str], series: list[dict],
+    categories: Optional[list[str]] = None, series: Optional[list[dict]] = None,
+    palette: Optional[list[str]] = None, show_data_labels: bool = False,
 ) -> dict:
     """Add a slide with a NATIVE PPTX chart (right-click → Edit Data works
-    in Word/PowerPoint). chart_type ∈ {column,bar,line,pie,doughnut,area}.
-    Each series: {name, values[]}. Returns new file_id."""
+    in PowerPoint). chart_type ∈ {column, column_stacked, bar, bar_stacked,
+    line, line_markers, pie, doughnut, area, area_stacked, scatter, radar}.
+    Each series: {name, values[]}; scatter: {name, points: [[x, y], …]}
+    (or numeric categories as x). palette: hex colours per series.
+    Returns new file_id."""
     return await pptx_builder.pptx_add_chart_slide(
         file_id=file_id, title=title, chart_type=chart_type,
         categories=categories, series=series,
+        palette=palette, show_data_labels=show_data_labels,
     )
 
 
@@ -579,10 +584,10 @@ async def pptx_apply_theme(
     page numbers, harmonized title/body colors. accent_position ∈
     {left,top,none}. REQUIRED for finished decks — without theme, decks
     look amateur. Returns new file_id."""
+    kwargs = {"accent_color": accent_color} if accent_color else {}  # különben a builder alapszíne
     return await pptx_builder.pptx_apply_theme(
-        file_id=file_id, accent_color=accent_color,
-        accent_position=accent_position, footer_text=footer_text,
-        page_numbers=page_numbers,
+        file_id=file_id, accent_position=accent_position,
+        footer_text=footer_text, page_numbers=page_numbers, **kwargs,
     )
 
 
@@ -641,17 +646,8 @@ async def generate_image(
     """Generate an image from text via SiliconFlow image-gen (FLUX.2-pro
     by default). Useful for: missing figures, conceptual illustrations,
     decorative covers. size ∈ {1024x1024, 1792x1024, 1024x1792}.
-    Returns image_file_id usable in insert_image / pptx slides."""
-    img_bytes = await vision_ops.generate_image(prompt, model=model, size=size)
-    # generate_image returns raw bytes; save as a file
-    from app.storage import new_file_id, output_path, public_url
-    fid = new_file_id("png")
-    output_path(fid).write_bytes(img_bytes)
-    return {
-        "image_file_id": fid,
-        "url": public_url(fid),
-        "size_bytes": len(img_bytes),
-    }
+    Returns image_file_id usable in insert_image."""
+    return await vision_ops.generate_image(prompt, model=model, size=size)
 
 
 # ============================================================
@@ -724,15 +720,6 @@ def mount_mcp(app: FastAPI):
     _app_ref = app
 
     mcp_app = mcp.streamable_http_app()
-
-    if settings.MCP_AUTH_TOKEN:
-        @app.middleware("http")
-        async def auth_mw(request: Request, call_next):
-            if request.url.path.startswith("/mcp"):
-                auth = request.headers.get("authorization", "")
-                if auth != f"Bearer {settings.MCP_AUTH_TOKEN}":
-                    raise HTTPException(401, "Unauthorized")
-            return await call_next(request)
-
+    # Hitelesítés: app/auth.py (MCP-kulcs Bearer-ben vagy ?key=-ben).
     app.mount("/mcp", mcp_app)
     log.info("MCP endpoint mounted at /mcp")

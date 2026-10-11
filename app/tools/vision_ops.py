@@ -72,6 +72,17 @@ async def extract_table_from_image(image_file_id: str) -> dict[str, Any]:
     }
 
 
+def _image_ext(data: bytes) -> str:
+    """A szolgáltató PNG-t, JPEG-et vagy WebP-t is adhat — a kiterjesztés a bájtokból jön."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return "png"
+
+
 async def generate_image(
     prompt: str,
     *,
@@ -82,9 +93,12 @@ async def generate_image(
     image_file_id ready for insert_image / pptx insertion."""
     t0 = time.time()
     img_bytes = await v.generate_image(prompt, model=model, size=size)
-    fid = new_file_id("png")
+    fid = new_file_id(_image_ext(img_bytes))
     with open(output_path(fid), "wb") as f:
         f.write(img_bytes)
+    from app.storage import write_meta
+    write_meta(fid, operation="generate_image", label=f"{prompt[:40].strip()}.{fid.rsplit('.', 1)[1]}",
+               extra={"prompt": prompt, "model": model, "size": size})
     return {
         "image_file_id": fid,
         "url": public_url(fid),

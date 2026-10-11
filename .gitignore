@@ -20,3 +20,7 @@ devlog20260502.md
 devlog2026050[3-9].md
 devlog202605[1-3][0-9].md
 devlog2026[0-9][0-9][0-9][0-9].md
+
+# Tervek — helyi munkadokumentum, nem a repóba
+plan2026*.md
+.env.production

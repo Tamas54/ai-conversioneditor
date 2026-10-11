@@ -38,6 +38,9 @@ class Settings(BaseModel):
     # MCP-side token so only authorized clients can hit the MCP endpoint.
     FILE_SIGNING_KEY: str = os.getenv("FILE_SIGNING_KEY", "change-me-in-railway")
     MCP_AUTH_TOKEN: str = os.getenv("MCP_AUTH_TOKEN", "")
+    # Dashboard-belépés (üres = nyitott dashboard, csak helyi fejlesztéshez); a süti aláíró kulcsa.
+    DASHBOARD_PASSWORD: str = os.getenv("DASHBOARD_PASSWORD", "")
+    SESSION_SECRET: str = os.getenv("SESSION_SECRET", os.getenv("FILE_SIGNING_KEY", "change-me-in-railway"))
 
     # --- WordCraft (Rust Word-motor, upstream release-ből; Dockerfile tölti le) ---
     # CLI: headless parancsok, gyors konverzió. WEB_DIR: a WASM-szerkesztő statikus fájljai.

@@ -428,6 +428,7 @@
     <button class="icon-btn" id="btn-refresh" title="Lista frissítése">
       <span>↻</span>
     </button>
+    <a class="icon-btn" href="/logout" title="Kilépés"><span>⎋</span></a>
   </div>
 </header>
 
@@ -551,6 +552,14 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+// Lejárt munkamenet: bármely 401-es válasz vissza a belépéshez (ne akadjon el némán).
+const _fetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const r = await _fetch(...args);
+  if (r.status === 401) location.href = "/login?next=" + encodeURIComponent(location.pathname);
+  return r;
+};
+
 let selectedFileId = null;
 let selectedFileMeta = null;
 let agentRunning = false;
