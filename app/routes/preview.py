@@ -42,6 +42,16 @@ def _resolve(file_id: str) -> Path:
     raise HTTPException(404, "file not found")
 
 
+def _inline_disposition(file_id: str, ext: str) -> str:
+    """Content-Disposition ékezetes névvel is: a HTTP-fejléc latin-1, ezért ASCII tartalék-név +
+    RFC 5987 filename*=UTF-8''… („Budapest a jövőben.pptx” előnézete 500-at dobott)."""
+    import unicodedata
+    from urllib.parse import quote
+    name = _preview_filename(file_id, ext)
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().replace('"', "") or f"preview.{ext}"
+    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
 def _preview_filename(file_id: str, ext: str) -> str:
     """Build a sensible filename for the preview download. Strips any old
     extension from the label and appends the preview format's extension —
@@ -62,13 +72,13 @@ async def preview(file_id: str, request: Request):
     if fmt == "pdf":
         return FileResponse(
             src, media_type="application/pdf",
-            headers={"Content-Disposition": f'inline; filename="{_preview_filename(file_id, "pdf")}"'},
+            headers={"Content-Disposition": _inline_disposition(file_id, "pdf")},
         )
 
     if fmt in IMAGE_FORMATS:
         return FileResponse(
             src, media_type=IMAGE_MIME.get(fmt, "image/png"),
-            headers={"Content-Disposition": f'inline; filename="{_preview_filename(file_id, fmt)}"'},
+            headers={"Content-Disposition": _inline_disposition(file_id, fmt)},
         )
 
     if fmt in {"html", "htm"}:
@@ -112,7 +122,7 @@ async def preview(file_id: str, request: Request):
                 # Match content type with filename extension so the user's
                 # PDF-viewer "Save" button produces a `.pdf` file, not a
                 # PDF-content-with-`.docx`-name kentaur.
-                "Content-Disposition": f'inline; filename="{_preview_filename(file_id, "pdf")}"',
+                "Content-Disposition": _inline_disposition(file_id, "pdf"),
             },
         )
 

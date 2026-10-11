@@ -1640,6 +1640,91 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "wordcraft_commands",
+            "description": (
+                "Edit the working DOCX with the WordCraft Word engine (the ~460 commands of Word's "
+                "ribbon, headless). Use for structure and formatting the simple tools can't do: "
+                "styles, tables, TOC, footnotes, comments, tracked changes. commands: "
+                "[{command, params}] e.g. review.trackChanges {value:true}, edit.replaceAll "
+                "{text, with, matchCase:true}, select.text {text} + review.newComment {text}, "
+                "references.toc {levels:2} (after review.acceptAll). The result becomes the working document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "commands": {"type": "array", "items": {"type": "object"}},
+                    "author": {"type": "string", "description": "name on tracked changes/comments"},
+                },
+                "required": ["commands"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_deck",
+            "description": (
+                "Create a complete, designed 16:9 PowerPoint deck in ONE call (replaces slide-by-slide "
+                "building). spec = {title, footer?, theme?|brand?, slides:[{layout, ...}]}; layouts: cover, "
+                "section, bullets(+image), image_left, image_right, full_image, quote, stats, chart, table, "
+                "gallery, closing. image = file_id | {generate: prompt} | {stock: words} | {url}. "
+                "The new deck becomes the working document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"spec": {"type": "object"}},
+                "required": ["spec"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "design_piece",
+            "description": (
+                "Make a designed PDF from a template (VectorCraft): poster, flyer, report_cover, "
+                "certificate, social, booklet. data holds the texts and image (file_id | {generate} | {stock}). "
+                "The PDF becomes the working document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string"},
+                    "data": {"type": "object"},
+                    "size": {"type": "string"},
+                    "theme": {"type": "object"},
+                },
+                "required": ["template", "data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "photo_edit",
+            "description": (
+                "Edit an image with PhotoCraft: remove_background (neural cut-out), background_file_id "
+                "(+ background_blur px) to put another image behind the subject, or commands like "
+                "image.autoTone, image.imageSize {width,height}, type.create {x,y,text,size,color}. "
+                "Returns a new image file_id (use it in documents/decks)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_file_id": {"type": "string"},
+                    "remove_background": {"type": "boolean"},
+                    "background_file_id": {"type": "string"},
+                    "background_blur": {"type": "number"},
+                    "commands": {"type": "array", "items": {"type": "object"}},
+                    "save_format": {"type": "string"},
+                },
+                "required": ["image_file_id"],
+            },
+        },
+    },
 ]
 
 
@@ -1879,6 +1964,18 @@ PPTX strategy (CRITICAL — DO NOT use convert_format(target='pptx')):
       150-char mega-bullet.
     • If a bullet is over ~70 chars, split it; if a slide has > 5 bullets,
       split it. These are REQUIRED, not soft suggestions.
+
+ENGINES (prefer these for bigger jobs — one call instead of many):
+  • build_deck — a whole designed, illustrated deck at once (instead of
+    pptx_create + slide-by-slide). Respect the density limits above.
+  • design_piece — posters, flyers, certificates, social cards, booklets.
+  • wordcraft_commands — Word-level DOCX structure: styles, tables, TOC,
+    comments, tracked changes (pass author "Kimi (szerkesztő)").
+  • photo_edit — background removal / replacement, retouch, captions.
+  After build_deck / design_piece: verify AT MOST ONCE (render + look).
+  If there are no real defects (overlap, cut-off text, wrong language),
+  call finish immediately — do not rebuild just to polish. Stock image
+  queries: 2-4 plain words ("storm clouds", "old library"), not sentences.
 """
 
 
@@ -2674,6 +2771,38 @@ async def _tool_parse_with_quality(state: AgentState, args: dict, pool) -> dict:
     return out
 
 
+async def _tool_wordcraft_commands(state: AgentState, args: dict, pool) -> dict:
+    from app.tools import wordcraft as wc
+    out = await wc.run(file_id=state.current_fid, commands=args.get("commands") or [],
+                       author=args.get("author") or "Kimi (szerkesztő)")
+    state.current_fid = out["file_id"]
+    return {"file_id": out["file_id"], "commands_run": out["commands_run"], "ms": out["ms_elapsed"]}
+
+
+async def _tool_build_deck(state: AgentState, args: dict, pool) -> dict:
+    from app.tools import pptx_deck
+    out = await pptx_deck.build(args["spec"])
+    state.current_fid = out["file_id"]
+    return {"file_id": out["file_id"], "slides": out["slides"], "images": out["images"], "ms": out["ms_elapsed"]}
+
+
+async def _tool_design_piece(state: AgentState, args: dict, pool) -> dict:
+    from app.tools import design as dz
+    out = await dz.render(args["template"], args.get("data") or {}, size=args.get("size"),
+                          theme=args.get("theme"), export=["pdf", "png"])
+    state.current_fid = out["file_id"]
+    return {"file_id": out["file_id"], "files": [f["file_id"] for f in out["files"]], "pages": out["pages"]}
+
+
+async def _tool_photo_edit(state: AgentState, args: dict, pool) -> dict:
+    from app.tools import crafts
+    out = await crafts.photo_run(
+        file_id=args["image_file_id"], commands=args.get("commands"), save_format=args.get("save_format"),
+        remove_background=bool(args.get("remove_background")), background_file_id=args.get("background_file_id"),
+        background_blur=float(args.get("background_blur") or 0))
+    return {"image_file_id": out["file_id"], "ms": out["ms_elapsed"]}
+
+
 TOOL_HANDLERS: dict[str, Callable[[AgentState, dict, Any], Awaitable[dict]]] = {
     "read_document": _tool_read_document,
     "count_matches": _tool_count_matches,
@@ -2759,6 +2888,11 @@ TOOL_HANDLERS: dict[str, Callable[[AgentState, dict, Any], Awaitable[dict]]] = {
     "extract_citations": _tool_extract_citations,
     "mtmt_search_author": _tool_mtmt_search_author,
     "mtmt_verify_citation": _tool_mtmt_verify_citation,
+    # Craft-motorok (egy hívás sok helyett)
+    "wordcraft_commands": _tool_wordcraft_commands,
+    "build_deck": _tool_build_deck,
+    "design_piece": _tool_design_piece,
+    "photo_edit": _tool_photo_edit,
     # mega-tool — recursive sub-agent
     "do_task": _tool_do_task,
 }

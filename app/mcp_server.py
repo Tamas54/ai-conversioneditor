@@ -34,7 +34,7 @@ from app.tools import (
     replace_heading as t_replace_heading,
     insert_image as t_insert_image,
 )
-from app.tools import docx_builder, docx_revisions, pptx_builder
+from app.tools import pptx_builder
 from app.tools import vision_ops, chart_image, chart_redraw as chart_redraw_mod
 from app.tools.visual_feedback import docx_render_pages as t_docx_render_pages
 
@@ -560,64 +560,6 @@ async def edit_with_instruction(
 
 
 @mcp.tool()
-async def docx_create(title: Optional[str] = None) -> dict:
-    """Create a new empty DOCX with an optional centered title. Returns
-    file_id. Chain with docx_add_* tools to fill the document."""
-    return await docx_builder.docx_create(title=title)
-
-
-@mcp.tool()
-async def docx_add_heading(
-    file_id: str, text: str, level: int = 1,
-) -> dict:
-    """Append a heading to a DOCX. level 1-9 (1=biggest). Returns new file_id."""
-    return await docx_builder.docx_add_heading(file_id=file_id, text=text, level=level)
-
-
-@mcp.tool()
-async def docx_add_paragraph(
-    file_id: str, text: str,
-    bold: bool = False, italic: bool = False,
-    font_size: Optional[float] = None, alignment: Optional[str] = None,
-) -> dict:
-    """Append a paragraph to a DOCX. alignment ∈ {left,center,right,justify}.
-    Returns new file_id."""
-    return await docx_builder.docx_add_paragraph(
-        file_id=file_id, text=text, bold=bold, italic=italic,
-        font_size=font_size, alignment=alignment,
-    )
-
-
-@mcp.tool()
-async def docx_add_bulleted_list(file_id: str, items: list[str]) -> dict:
-    """Append a bulleted list to a DOCX. Returns new file_id."""
-    return await docx_builder.docx_add_bulleted_list(file_id=file_id, items=items)
-
-
-@mcp.tool()
-async def docx_add_numbered_list(file_id: str, items: list[str]) -> dict:
-    """Append a numbered list to a DOCX. Returns new file_id."""
-    return await docx_builder.docx_add_numbered_list(file_id=file_id, items=items)
-
-
-@mcp.tool()
-async def docx_add_table(
-    file_id: str, headers: list[str], rows: list[list[str]],
-    style: str = "Light Grid Accent 1",
-) -> dict:
-    """Append a table with headers + data rows. Returns new file_id."""
-    return await docx_builder.docx_add_table(
-        file_id=file_id, headers=headers, rows=rows, style=style,
-    )
-
-
-@mcp.tool()
-async def docx_add_page_break(file_id: str) -> dict:
-    """Insert a page break at the end of a DOCX. Returns new file_id."""
-    return await docx_builder.docx_add_page_break(file_id=file_id)
-
-
-@mcp.tool()
 async def docx_render_pages(
     file_id: str, page_indices: Optional[list[int]] = None, dpi: int = 110,
 ) -> dict:
@@ -653,121 +595,9 @@ async def insert_image(
 # ============================================================
 
 
-@mcp.tool()
-async def docx_track_replace_paragraph(
-    file_id: str, anchor: str, new_text: str,
-    author: str = "Editor",
-) -> dict:
-    """Replace a paragraph as a TRACKED CHANGE: the original text becomes
-    a <w:del>, the new text a <w:ins>. Word reviewers see it as a tracked
-    edit they can accept/reject. Returns new file_id."""
-    return await docx_revisions.docx_track_replace_paragraph(
-        file_id=file_id, anchor=anchor, new_text=new_text, author=author,
-    )
-
-
-@mcp.tool()
-async def docx_accept_all_revisions(file_id: str) -> dict:
-    """Accept every <w:ins> / <w:del> in the document, producing a clean
-    DOCX with no tracked changes. Returns new file_id."""
-    return await docx_revisions.docx_accept_all_revisions(file_id=file_id)
-
-
-@mcp.tool()
-async def docx_reject_all_revisions(file_id: str) -> dict:
-    """Reject every <w:ins> / <w:del>: insertions removed, deletions
-    restored. Returns new file_id."""
-    return await docx_revisions.docx_reject_all_revisions(file_id=file_id)
-
-
-@mcp.tool()
-async def docx_list_revisions(file_id: str) -> dict:
-    """List every tracked-change in the DOCX (insertions + deletions)
-    with author and content. Read-only inspection, doesn't modify file."""
-    return await docx_revisions.docx_list_revisions(file_id=file_id)
-
-
-@mcp.tool()
-async def docx_add_comment(
-    file_id: str, anchor: str, text: str, author: str = "Editor",
-) -> dict:
-    """Add a comment anchored to the first paragraph matching `anchor`
-    text. Returns new file_id + comment_id."""
-    return await docx_revisions.docx_add_comment(
-        file_id=file_id, anchor=anchor, text=text, author=author,
-    )
-
-
 # ============================================================
 # PPTX builder
 # ============================================================
-
-
-@mcp.tool()
-async def pptx_create(title: str, subtitle: Optional[str] = None) -> dict:
-    """Create a new PPTX with a cover slide. Returns file_id. Chain with
-    pptx_add_* to fill in content slides, then pptx_apply_theme for chrome."""
-    return await pptx_builder.pptx_create(title=title, subtitle=subtitle)
-
-
-@mcp.tool()
-async def pptx_add_bullets_slide(
-    file_id: str, title: str, bullets: list[str],
-) -> dict:
-    """Add a bullets slide. Max 4-5 bullets, ≤70 chars each for readability.
-    Returns new file_id."""
-    return await pptx_builder.pptx_add_bullets_slide(
-        file_id=file_id, title=title, bullets=bullets,
-    )
-
-
-@mcp.tool()
-async def pptx_add_table_slide(
-    file_id: str, title: str, headers: list[str], rows: list[list[str]],
-) -> dict:
-    """Add a slide with a real PPTX table (better than bullets-pretending-
-    to-be-table). Best for 5-7 columns × 4-6 rows. Returns new file_id."""
-    return await pptx_builder.pptx_add_table_slide(
-        file_id=file_id, title=title, headers=headers, rows=rows,
-    )
-
-
-@mcp.tool()
-async def pptx_add_chart_slide(
-    file_id: str, title: str, chart_type: str,
-    categories: Optional[list[str]] = None, series: Optional[list[dict]] = None,
-    palette: Optional[list[str]] = None, show_data_labels: bool = False,
-) -> dict:
-    """Add a slide with a NATIVE PPTX chart (right-click → Edit Data works
-    in PowerPoint). chart_type ∈ {column, column_stacked, bar, bar_stacked,
-    line, line_markers, pie, doughnut, area, area_stacked, scatter, radar}.
-    Each series: {name, values[]}; scatter: {name, points: [[x, y], …]}
-    (or numeric categories as x). palette: hex colours per series.
-    Returns new file_id."""
-    return await pptx_builder.pptx_add_chart_slide(
-        file_id=file_id, title=title, chart_type=chart_type,
-        categories=categories, series=series,
-        palette=palette, show_data_labels=show_data_labels,
-    )
-
-
-@mcp.tool()
-async def pptx_apply_theme(
-    file_id: str,
-    accent_color: Optional[str] = None,
-    accent_position: str = "left",
-    footer_text: Optional[str] = None,
-    page_numbers: bool = True,
-) -> dict:
-    """Polish a deck with consistent visual chrome: accent bar, footer,
-    page numbers, harmonized title/body colors. accent_position ∈
-    {left,top,none}. REQUIRED for finished decks — without theme, decks
-    look amateur. Returns new file_id."""
-    kwargs = {"accent_color": accent_color} if accent_color else {}  # különben a builder alapszíne
-    return await pptx_builder.pptx_apply_theme(
-        file_id=file_id, accent_position=accent_position,
-        footer_text=footer_text, page_numbers=page_numbers, **kwargs,
-    )
 
 
 @mcp.tool()

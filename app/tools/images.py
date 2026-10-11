@@ -110,6 +110,20 @@ async def _commons(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
     raise ValueError(f"nincs Commons-találat: {query!r}")
 
 
+async def _stock_progressive(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
+    """Túl részletes keresőkifejezésre (ügynökök szeretik) nincs találat — egyre rövidebb változattal
+    újrapróbál (az utolsó szavak a legkevésbé lényegesek), és csak a végén hibázik."""
+    words = query.split()
+    tries = [query] + [" ".join(words[:n]) for n in (4, 3, 2) if len(words) > n]
+    last: Exception = ValueError(f"nincs stockkép: {query!r}")
+    for q in dict.fromkeys(tries):
+        try:
+            return await _stock(q, aspect)
+        except ValueError as e:
+            last = e
+    raise last
+
+
 async def _stock(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
     try:
         return await _commons(query, aspect)
@@ -172,7 +186,7 @@ async def resolve(spec: ImageSpec, *, aspect: Optional[float] = None, max_px: in
         p = existing(g["image_file_id"])
         return ResolvedImage(await asyncio.to_thread(_crop_to, p, aspect, max_px), None, g["image_file_id"])
     if spec.get("stock"):
-        data, credit = await _stock(spec["stock"], aspect)
+        data, credit = await _stock_progressive(spec["stock"], aspect)
         return ResolvedImage(await asyncio.to_thread(_crop_to, data, aspect, max_px), credit, None)
     raise ValueError(f"ismeretlen képforrás: {spec!r} (file_id | url | generate | stock)")
 
