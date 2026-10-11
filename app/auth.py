@@ -36,7 +36,7 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
-    ("GET", "/app"), ("GET", "/editor/"), ("GET", "/preview/"), ("GET", "/api/thumb/"), ("GET", "/api/files"),
+    ("GET", "/app"), ("GET", "/editor/"), ("GET", "/preview/"), ("GET", "/api/thumb/"), ("GET", "/api/print/"), ("GET", "/api/files"),
     ("GET", "/api/account"), ("GET", "/api/convert/targets"), ("GET", "/api/forms/fields"), ("GET", "/api/jobs/"),
     ("GET", "/api/revisions"), ("GET", "/api/billing/plans"),
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),

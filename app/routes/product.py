@@ -88,6 +88,36 @@ async def _render_thumb(src: Path, ext: str, dst: Path) -> None:
         raw.unlink(missing_ok=True)
 
 
+_print_gate = asyncio.Semaphore(2)
+
+
+@router.get("/api/print/{file_id}", include_in_schema=False)
+async def print_pdf(file_id: str):
+    """Nyomtatható PDF bármelyik fájlból — a böngésző ezt nyomtatja. PDF: maga; más: PDF-re alakítva, temp-cache
+    (a forrás módosításáig), verzió-sor nélkül."""
+    from app.storage import temp_path
+    from app.tools import anyconvert
+    from app.tools.crafts import existing
+    try:
+        src = existing(file_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404)
+    headers = {"Content-Disposition": 'inline; filename="print.pdf"', "Cache-Control": "private, max-age=60"}
+    if src.suffix.lower() == ".pdf":
+        return FileResponse(src, media_type="application/pdf", headers=headers)
+    dst = temp_path(f"print-{src.stem}-{src.suffix.lstrip('.')}.pdf")
+    if not (dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime):
+        async with _print_gate:
+            try:
+                await anyconvert.to_pdf(src, dst)
+            except ValueError as e:
+                raise HTTPException(415, str(e))
+            except Exception:
+                dst.unlink(missing_ok=True)
+                raise HTTPException(422, "Could not prepare this file for printing — download it and print from your computer.")
+    return FileResponse(dst, media_type="application/pdf", headers=headers)
+
+
 @router.get("/api/thumb/{file_id}", include_in_schema=False)
 async def thumb(file_id: str):
     from app.storage import temp_path

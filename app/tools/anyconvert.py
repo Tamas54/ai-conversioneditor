@@ -87,6 +87,35 @@ def _zip_dir(files: list[Path], dst: Path, stem: str) -> None:
             z.write(f, f"{stem}-{i:03d}{f.suffix}")
 
 
+async def to_pdf(src: Path, dst: Path) -> None:
+    """Nyomtatáshoz: bármelyik támogatott fájl → PDF a `dst`-be, CSENDBEN (nincs meta, nincs verzió-sor)."""
+    from app.tools import crafts, wordcraft
+    ext = src.suffix.lstrip(".").lower()
+    if ext in DOCS and ext in wordcraft.OPEN_FORMATS and ext != "doc":
+        await wordcraft.convert_file(src, dst)
+    elif ext == "pptx":
+        await crafts.office_convert("deck", src, dst)
+    elif ext in IMAGES:
+        await asyncio.to_thread(_image_to_pdf, src, dst)
+    elif ext in VECTORS:
+        await crafts.convert_file("vectorcraft", src, dst)
+    elif ext in DOCS | SLIDES | SHEETS:           # doc, ppt, odp, táblázatok: LibreOffice (saját profillal, párhuzamosan is)
+        work = temp_path(new_file_id("lo")); work.mkdir(parents=True)
+        try:
+            await _run("soffice", f"-env:UserInstallation=file://{work}/profile", "--headless", "--convert-to", "pdf",
+                       "--outdir", str(work), str(src))
+            out = work / (src.stem + ".pdf")
+            if not out.exists():
+                raise RuntimeError("LibreOffice produced nothing")
+            shutil.move(str(out), dst)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    else:
+        raise ValueError(f"Printing .{ext} files isn't supported — download it instead.")
+    if not dst.exists() or dst.stat().st_size == 0:
+        raise RuntimeError("The print version came out empty.")
+
+
 async def convert_any(pool, file_id: str, target: str) -> dict[str, Any]:
     from app.tools import crafts, wordcraft
     from app.tools.convert import convert as legacy_convert

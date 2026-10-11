@@ -145,6 +145,7 @@
       <span id="edit-btns"></span>
       <span class="convert-to" id="convert-to" hidden><select id="convert-fmt" aria-label="Convert to"></select><button class="btn ghost" id="btn-convert">Convert</button></span>
       <a class="btn" id="btn-download" download>Download</a>
+      <button class="btn" id="btn-print">Print</button>
       <button class="btn ghost" id="btn-delete">Delete</button>
       <a class="btn ghost x-close" id="btn-close" href="#/files" aria-label="Close" title="Close">✕</a>
     </div>
@@ -230,9 +231,28 @@ function ago(ts) {
   return new Date(ts * 1000).toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" });
 }
 const size = kb => kb < 1 ? "<1 kB" : kb < 1024 ? `${kb} kB` : `${(kb / 1024).toFixed(1)} MB`;
+const ICON_DL = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>`;
+const ICON_PRINT = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/></svg>`;
 function fileCard(f) {
-  return `<button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
-    <span class="name" title="${esc(f.label)}">${esc(f.label)}</span><span class="meta">${size(f.size_kb)} · ${ago(f.mtime)}</span></button>`;
+  return `<div class="file-card"><button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
+    <span class="name" title="${esc(f.label)}">${esc(f.label)}</span><span class="meta">${size(f.size_kb)} · ${ago(f.mtime)}</span></button>
+    <span class="file-acts"><a class="fa" href="${esc(f.url)}" download title="Download" aria-label="Download ${esc(f.label)}">${ICON_DL}</a><button class="fa" data-print="${esc(f.file_id)}" title="Print" aria-label="Print ${esc(f.label)}">${ICON_PRINT}</button></span></div>`;
+}
+// nyomtatás: a szerver PDF-et ad (Word, pptx, táblázat, kép, PSD… → PDF), a böngésző azt nyomtatja
+async function printFile(id) {
+  toast("Getting it ready to print…");
+  try {
+    const r = await fetch(`/api/print/${encodeURIComponent(id)}`);
+    if (!r.ok) { let m = "Could not print this file."; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+    const url = URL.createObjectURL(await r.blob());
+    const fr = document.createElement("iframe");
+    fr.className = "print-frame"; fr.title = "Print"; fr.src = url;
+    fr.onload = () => setTimeout(() => {
+      try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch { window.open(url, "_blank"); }
+      setTimeout(() => { fr.remove(); URL.revokeObjectURL(url); }, 120000);
+    }, 250);
+    document.body.append(fr);
+  } catch (e) { toast(e.message); }
 }
 const BANDS = { pptx: "#FF5A36", ppt: "#FF5A36", pdf: "#C2362B", docx: "#2F80ED", doc: "#2F80ED", odt: "#2F80ED",
   xlsx: "#1E9E6A", csv: "#1E9E6A", md: "#5C6870", txt: "#5C6870", svg: "#8E44AD", vectorcraft: "#8E44AD", psd: "#2F5D7C" };
@@ -243,6 +263,7 @@ function glyph(ext) {
 function renderFiles(el, list) {
   el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — make something above, or upload a file.</div>`;
   el.querySelectorAll(".file").forEach(b => b.addEventListener("click", () => location.hash = "#/file/" + encodeURIComponent(b.dataset.id)));
+  el.querySelectorAll("[data-print]").forEach(b => b.addEventListener("click", () => printFile(b.dataset.print)));
   // nincs bélyegkép (ismeretlen típus, render-hiba) → típus-ikon
   el.querySelectorAll(".thumb img").forEach(img => img.addEventListener("error", () => { const t = img.parentElement; t.innerHTML = glyph(t.dataset.ext); }, { once: true }));
 }
@@ -346,6 +367,7 @@ const views = {
     const f = files.find(x => x.file_id === id);
     if (!f) { $("#file-name").textContent = "This file is gone"; return; }
     $("#file-name").textContent = f.label; $("#btn-download").href = f.url;
+    $("#btn-print").addEventListener("click", () => printFile(f.file_id));
     for (const id of ["#btn-back", "#btn-close"]) {      // kilépés oda, ahonnan jött (címlap vagy Files)
       const a = $(id); a.href = lastPlace;
       a.addEventListener("click", e => {

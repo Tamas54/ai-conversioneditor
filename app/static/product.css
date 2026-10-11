@@ -298,3 +298,14 @@ label > .ai-badge { margin: -2px 0 2px; }
   background: var(--paper); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .drawer-x:hover { background: var(--paper-2); }
 .drawer h2 { padding-right: 52px; }
+
+/* letöltés + nyomtatás minden fájlkártyán (asztalin rámutatásra, érintőképernyőn mindig látszik) */
+.file-card { position: relative; display: grid; }
+.file-acts { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
+.file-card:hover .file-acts, .file-card:focus-within .file-acts { opacity: 1; }
+@media (hover: none) { .file-acts { opacity: 1; } }
+.fa { all: unset; box-sizing: border-box; cursor: pointer; width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center;
+  justify-content: center; background: var(--card); color: var(--ink); border: 1px solid var(--rule); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+.fa:hover { border-color: var(--graphite); }
+.fa:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.print-frame { position: fixed; right: 0; bottom: 0; width: 0; height: 0; border: 0; visibility: hidden; }
