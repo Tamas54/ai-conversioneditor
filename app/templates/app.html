@@ -33,7 +33,7 @@
     <a href="#/connect" data-nav="connect">Connect your AI</a>
   </nav>
   <span class="spacer"></span>
-  <a class="chip" id="credits" href="#/connect" title="Credits pay for AI-generated images">credits …</a>
+  <a class="chip" id="credits" href="#/plans" title="Your plan and credits">credits …</a>
   <a class="chip" href="/logout" id="signout">Sign out</a>
   <a class="chip" href="/login?next=/app" id="signin" hidden>Sign in</a>
   <a class="chip chip-cta" href="/signup?next=/app" id="signup" hidden>Create free account</a>
@@ -118,6 +118,22 @@
     </div>
     <h2 style="margin-top:32px">Credits</h2>
     <p class="muted" id="credit-text"></p>
+  </section>
+</template>
+
+<template id="t-plans">
+  <section class="sheet plans">
+    <div class="row-head"><h2>Plans</h2><div class="seg" id="interval"><label><input type="radio" name="iv" value="month" checked><span>Monthly</span></label><label><input type="radio" name="iv" value="year"><span>Yearly · 2 months free</span></label></div></div>
+    <p class="muted" id="plan-now"></p>
+    <div class="plan-cards" id="plan-cards"></div>
+    <h3 class="plans-h">Credit packs <span class="muted small">— no subscription, they don't expire</span></h3>
+    <div class="packs" id="packs"></div>
+    <div class="plans-grid2">
+      <div><h3 class="plans-h">What costs credits</h3><table class="costs" id="costs"></table>
+        <p class="muted small">Everything else — documents, decks, scans within your monthly pages, changes, PDF tools, conversions, editors — is included in your plan.</p></div>
+      <div id="usage-box" hidden><h3 class="plans-h">This month</h3><div id="usage"></div></div>
+    </div>
+    <p class="muted small" id="manage"></p>
   </section>
 </template>
 
@@ -230,8 +246,57 @@ function renderFiles(el, list) {
   el.querySelectorAll(".thumb img").forEach(img => img.addEventListener("error", () => { const t = img.parentElement; t.innerHTML = glyph(t.dataset.ext); }, { once: true }));
 }
 
+// ---------- csomagok ----------
+const FEATURES = {
+  free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
+  plus: p => [`${p.monthly_credits} credits every month`, "Presentations, documents and changes — as many as you need", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
+  pro: p => [`${p.monthly_credits} credits every month`, "Everything in Plus, with room for heavy use", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `Up to ${p.batch} photos at once`, "Use it from Claude, ChatGPT and your scripts (MCP)", `Files kept a year`],
+};
+async function buy(item, interval) {
+  if (account?.guest) { location.href = "/signup?next=/app%23/plans"; return; }
+  try { const r = await api("/api/billing/checkout", { method: "POST", body: JSON.stringify({ item, interval }) }); location.href = r.url; }
+  catch (e) { toast(e.message); }
+}
+
 // ---------- nézetek ----------
 const views = {
+  async plans(arg) {
+    mount("t-plans");
+    await loadAccount();
+    const P = await api("/api/billing/plans"), cur = account.guest ? null : account.plan, eur = n => `€${n}`;
+    if (/paid=1/.test(arg || "")) toast("Thank you! Your plan and credits show up within a few seconds.");
+    $("#plan-now").textContent = account.guest ? "You're a guest — create a free account to get 30 credits."
+      : `You're on ${account.plan_name}${account.credits === null ? "" : ` with ${account.credits} credits`}.`;
+    const draw = () => {
+      const iv = document.querySelector("[name=iv]:checked").value;
+      $("#plan-cards").innerHTML = ["free", "plus", "pro"].map(k => {
+        const p = P.plans[k], price = k === "free" ? "€0" : iv === "year" ? `${eur(p.year)}<small>/year</small>` : `${eur(p.month)}<small>/month</small>`;
+        const btn = k === "free" ? (account.guest ? `<a class="btn" href="/signup?next=/app%23/plans">Create free account</a>` : `<span class="muted small">${cur === "free" ? "Your plan" : ""}</span>`)
+          : cur === k ? `<span class="badge-cur">Your plan</span>`
+          : P.enabled ? `<button class="btn primary" data-buy="${k}">Choose ${p.name}</button>` : `<button class="btn" disabled>Payments open soon</button>`;
+        return `<article class="plan${k === "plus" ? " pick" : ""}${cur === k ? " cur" : ""}"><h3>${p.name}</h3><div class="price">${price}</div>
+          <ul>${FEATURES[k](p).map(f => `<li>${esc(f)}</li>`).join("")}</ul>${btn}</article>`;
+      }).join("");
+      $("#plan-cards").querySelectorAll("[data-buy]").forEach(b => b.addEventListener("click", () => buy(b.dataset.buy, iv)));
+    };
+    document.querySelectorAll("[name=iv]").forEach(r => r.addEventListener("change", draw)); draw();
+    $("#packs").innerHTML = Object.entries(P.packs).map(([k, p]) => `<article class="pack"><b>${p.credits}</b> credits<span>${eur(p.price)}</span>
+      ${P.enabled ? `<button class="btn" data-pack="${k}">Buy</button>` : `<button class="btn" disabled>Soon</button>`}</article>`).join("");
+    $("#packs").querySelectorAll("[data-pack]").forEach(b => b.addEventListener("click", () => buy(b.dataset.pack)));
+    const c = P.costs;
+    $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
+      [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+    if (account.usage && Object.keys(account.usage).length) {
+      $("#usage-box").hidden = false;
+      const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages" };
+      $("#usage").innerHTML = Object.entries(account.usage).map(([k, u]) => `<div class="use"><span>${names[k] || k}</span><span class="mono small">${u.used} / ${u.limit.toLocaleString("en")}</span>
+        <i style="--w:${Math.min(100, 100 * u.used / Math.max(1, u.limit))}%"></i></div>`).join("");
+    }
+    if (account.has_subscription && P.enabled) {
+      $("#manage").innerHTML = `<button class="btn ghost" id="portal">Manage subscription, invoices and card</button>`;
+      $("#portal").addEventListener("click", async () => { try { location.href = (await api("/api/billing/portal", { method: "POST" })).url; } catch (e) { toast(e.message); } });
+    }
+  },
   async home() {
     mount("t-home");
     const nums = $(".ruler-nums"), w = $(".mat").clientWidth;   // vonalzó-számok 40 px-enként (1 = 1 cm)

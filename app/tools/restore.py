@@ -209,7 +209,7 @@ async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_i
     from app.tools import crafts
     mono = await asyncio.to_thread(_is_mono, src)
     color = mono if colorize is None else (colorize and mono)
-    steps = 2 if color else 1
+    steps = 3 if color else 2           # árazás 10-11: helyreállítás 2, színezés +1 (kredit ≈ €0,10; önktsg 4 ¢ / lépés)
     charged = await _charge(steps, stem)
     work = src.parent
     try:

@@ -261,3 +261,27 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .connect-note { margin: 22px 0 0; }
 @media (max-width: 900px) { .how { grid-template-columns: 1fr; gap: 18px; } .try { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .try { grid-template-columns: 1fr; } }
+
+/* csomagok */
+.plans .row-head .seg { margin: 0; }
+.plan-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 18px 0 40px; }
+.plan { background: #fff; border: 1px solid var(--rule); border-radius: 16px; padding: 22px 22px 24px; display: grid; gap: 12px; align-content: start; }
+.plan.pick { border-color: var(--mat); box-shadow: 0 0 0 3px rgba(30, 68, 54, .12); }
+.plan.cur { background: var(--paper-2); }
+.plan h3 { margin: 0; font: 700 20px/1 var(--f-display); }
+.plan .price { font: 800 38px/1 var(--f-display); letter-spacing: -.02em; }
+.plan .price small { font: 500 15px/1 var(--f-body); color: var(--graphite); letter-spacing: 0; margin-left: 3px; }
+.plan ul { margin: 0; padding-left: 18px; color: var(--graphite); font-size: 14.5px; display: grid; gap: 6px; }
+.plan .btn { justify-self: start; }
+.badge-cur { font: 600 12px/1 var(--f-mono); color: var(--mat); }
+.plans-h { font: 700 18px/1.2 var(--f-display); margin: 0 0 12px; }
+.packs { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 40px; }
+.pack { display: flex; align-items: center; gap: 14px; background: #fff; border: 1px solid var(--rule); border-radius: 14px; padding: 14px 16px; }
+.pack b { font: 800 26px/1 var(--f-display); } .pack span { font: 600 16px/1 var(--f-body); color: var(--graphite); }
+.plans-grid2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; }
+.costs { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+.costs td { padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 14.5px; } .costs td:last-child { text-align: right; font: 600 13px/1 var(--f-mono); }
+.use { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; margin-bottom: 12px; font-size: 14px; }
+.use i { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--mat) var(--w), var(--rule) var(--w)); }
+@media (max-width: 900px) { .plan-cards, .plans-grid2 { grid-template-columns: 1fr; } }
+.plans .seg span { white-space: nowrap; }

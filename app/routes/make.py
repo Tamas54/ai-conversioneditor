@@ -116,6 +116,8 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
     if len(brief) < 10:
         raise HTTPException(400, "Describe the presentation in a sentence or two.")
     n = max(4, min(15, int(body.get("slides") or 8)))
+    from app import billing
+    await billing.use("deck")
     mode = body.get("images") or "stock"
     style = None
     if body.get("style_file_id"):          # „ilyen stílusú pptx” — téma a mintából (pptx téma / PDF / kép)
@@ -408,8 +410,18 @@ async def make_digitize(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("max_pages"):            # „csak az első N oldal” (próba, mintafejezet)
         limit = max(1, min(limit, int(body["max_pages"])))
 
+    async def on_pages(n: int, form_pages: int) -> None:     # a keret / kredit, amint kiderül, hány oldal
+        from app import billing
+        if form_pages:
+            await billing.use("form_pages", form_pages)
+        if n:
+            await billing.scan_pages(n)
+
     async def work(progress):
-        res = await digitize.digitize(ids, outputs, lang, limit, progress)
+        try:
+            res = await digitize.digitize(ids, outputs, lang, limit, progress, on_pages=on_pages)
+        except Exception as e:
+            raise _fail(e)
         events.emit("tool_done", tool="make_digitize", result={"files": [f["file_id"] for f in res["files"]],
                                                                "pages": res["pages"]})
         return res
@@ -478,8 +490,11 @@ async def make_photo_edit(body: dict[str, Any]) -> dict[str, Any]:
     if not instruction and not steps:
         raise HTTPException(400, "Describe the edit, e.g. “crop to 4:5, warmer, headline ‘Summer sale’ at the top, logo bottom right”.")
     formats = [f for f in body.get("formats") or ["psd", "jpg"] if f in ("psd", "jpg", "png", "webp")] or ["psd", "jpg"]
-    limit = 1000 if tenancy.current_user_id() == tenancy.ADMIN_ID else 200
-    ids = ids[:limit]
+    from app import billing
+    plan = await billing.plan_of(tenancy.current_user_id())
+    if len(ids) > billing.batch_limit(plan):
+        raise HTTPException(402, f"Up to {billing.batch_limit(plan)} photos at once on the {billing.PLANS[plan]['name']} plan.")
+    await billing.use("photo_edit", len(ids))
 
     async def work(progress):
         try:
@@ -504,8 +519,8 @@ async def make_restore(body: dict[str, Any]) -> dict[str, Any]:
     colorize = body.get("colorize")
     split = bool(body.get("split_prints", True))
     left = await _credits_left()
-    if left is not None and left < settings.IMAGE_CREDIT_COST:
-        raise HTTPException(402, f"Restoring needs credits ({settings.IMAGE_CREDIT_COST} per photo, +{settings.IMAGE_CREDIT_COST} to colourise); you have {left}.")
+    if left is not None and left < 2:
+        raise HTTPException(402, f"Restoring needs credits (2 per photo, +1 to colourise); you have {left}. See Plans.")
 
     async def work(progress):
         try:
@@ -531,6 +546,8 @@ async def make_revise(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     if not instruction and not body.get("style_file_id"):
         raise HTTPException(400, "Say what should change.")
     pool = getattr(request.app.state, "pool", None)
+    from app import billing
+    await billing.use("revise")
 
     async def work(progress):
         progress(0, 1, "working")
@@ -623,6 +640,8 @@ async def make_document(body: dict[str, Any]) -> dict[str, Any]:
     brief = (body.get("brief") or "").strip()
     if len(brief) < 10:
         raise HTTPException(400, "Describe the document in a sentence or two.")
+    from app import billing
+    await billing.use("document")
     kind = DOC_KINDS.get(body.get("kind") or "other", "a document")
     from app.llm.siliconflow import _call_model
     try:

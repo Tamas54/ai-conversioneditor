@@ -79,6 +79,25 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
 CREATE INDEX IF NOT EXISTS credit_ledger_user_idx ON credit_ledger (user_id, created_at DESC);
 -- egyszeri, kis tábla (10-11-én jött létre): a fájl tulajdonosa (munkaterület)
 ALTER TABLE file_versions ADD COLUMN IF NOT EXISTS owner_id text;
+-- számlázás (10-11): csomag + Stripe-azonosítók a felhasználón — csak ha hiányzik (ADD COLUMN = ACCESS EXCLUSIVE zár)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'plan') THEN
+    ALTER TABLE users ADD COLUMN plan text NOT NULL DEFAULT 'free', ADD COLUMN stripe_customer_id text,
+                      ADD COLUMN stripe_subscription_id text, ADD COLUMN topup_month text;
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS usage_monthly (
+    user_id         text NOT NULL,
+    month           text NOT NULL,
+    kind            text NOT NULL,
+    n               integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, month, kind)
+);
+CREATE TABLE IF NOT EXISTS stripe_events (
+    id              text PRIMARY KEY,
+    type            text,
+    received_at     timestamptz NOT NULL DEFAULT now()
+);
 -- OCR-eredmény oldalanként (a kép bájtjainak sha256-ja + prompt-verzió + modell): amit egyszer
 -- kiolvastunk, nem fizetjük meg újra (ugyanaz a szkennelt oldal másodszor = 0 LLM-hívás)
 CREATE TABLE IF NOT EXISTS ocr_cache (
@@ -304,7 +323,8 @@ async def user_login(email: str, password: str) -> Optional[dict[str, Any]]:
 
 
 async def user_get(uid: str) -> Optional[dict[str, Any]]:
-    rows = await _rows("SELECT id, email, name, is_admin, credits, created_at, disabled FROM users WHERE id = %s", (uid,))
+    rows = await _rows("SELECT id, email, name, is_admin, credits, created_at, disabled, plan, stripe_customer_id, "
+                       "stripe_subscription_id FROM users WHERE id = %s", (uid,))
     return rows[0] if rows else None
 
 
@@ -381,4 +401,64 @@ async def reassign_owner(src_uid: str, dst_uid: str) -> None:
     """Vendég → fiók: a verziótörténet sorai az új tulajdonoshoz."""
     if enabled():
         await _rows("UPDATE file_versions SET owner_id = %s WHERE owner_id = %s", (dst_uid, src_uid))
+
+
+# ---------- számlázás: havi keretek, ingyenes feltöltés, Stripe ----------
+
+async def usage_get(uid: str, month: str, kind: str) -> int:
+    rows = await _rows("SELECT n FROM usage_monthly WHERE user_id = %s AND month = %s AND kind = %s", (uid, month, kind))
+    return rows[0]["n"] if rows else 0
+
+
+async def usage_add(uid: str, month: str, kind: str, n: int, limit: Optional[int]) -> Optional[int]:
+    """Atomi növelés; ha a keret (limit) túllépne, nem növel és None-t ad."""
+    if limit is None:
+        rows = await _rows("""INSERT INTO usage_monthly (user_id, month, kind, n) VALUES (%s, %s, %s, %s)
+                              ON CONFLICT (user_id, month, kind) DO UPDATE SET n = usage_monthly.n + EXCLUDED.n RETURNING n""",
+                           (uid, month, kind, n))
+        return rows[0]["n"]
+    rows = await _rows("""INSERT INTO usage_monthly AS u (user_id, month, kind, n) SELECT %s, %s, %s, %s WHERE %s <= %s
+                          ON CONFLICT (user_id, month, kind) DO UPDATE SET n = u.n + EXCLUDED.n WHERE u.n + EXCLUDED.n <= %s
+                          RETURNING n""", (uid, month, kind, n, n, limit, limit))
+    return rows[0]["n"] if rows else None
+
+
+async def free_topup(uid: str, month: str, amount: int) -> int:
+    """Ingyenes csomag: hónaponként egyszer feltöltés legalább `amount` kreditre (nem halmozódik). Vissza: jóváírt."""
+    rows = await _rows("""WITH old AS (SELECT credits FROM users WHERE id = %s AND plan = 'free'
+                                         AND topup_month IS DISTINCT FROM %s FOR UPDATE)
+                          UPDATE users u SET credits = GREATEST(u.credits, %s), topup_month = %s FROM old
+                          WHERE u.id = %s RETURNING u.credits AS now, old.credits AS before""", (uid, month, amount, month, uid))
+    if not rows:
+        return 0
+    delta = rows[0]["now"] - rows[0]["before"]
+    if delta > 0:
+        await _rows("INSERT INTO credit_ledger (user_id, delta, balance_after, reason, ref) VALUES (%s, %s, %s, %s, %s)",
+                    (uid, delta, rows[0]["now"], "free monthly credits", month))
+    return delta
+
+
+async def user_set_billing(uid: str, *, plan: Optional[str] = None, customer: Optional[str] = None,
+                           subscription: Optional[str] = None) -> None:
+    sets, vals = [], []
+    for col, v in (("plan", plan), ("stripe_customer_id", customer), ("stripe_subscription_id", subscription)):
+        if v is not None:
+            sets.append(f"{col} = %s"); vals.append(v or None)
+    if sets:
+        await _rows(f"UPDATE users SET {', '.join(sets)} WHERE id = %s", (*vals, uid))
+
+
+async def user_by_subscription(sub: Optional[str], customer: Optional[str]) -> Optional[dict[str, Any]]:
+    rows = await _rows("SELECT * FROM users WHERE (stripe_subscription_id = %s::text AND %s::text IS NOT NULL) OR "
+                       "(stripe_customer_id = %s::text AND %s::text IS NOT NULL) LIMIT 1", (sub, sub, customer, customer))
+    return rows[0] if rows else None
+
+
+async def stripe_event_seen(event_id: str) -> bool:
+    return bool(await _rows("SELECT 1 FROM stripe_events WHERE id = %s", (event_id,)))
+
+
+async def stripe_event_done(event_id: str, kind: str) -> None:
+    """Csak SIKERES feldolgozás után: ha közben hiba van, a Stripe újrapróbálkozása újra feldolgozza."""
+    await _rows("INSERT INTO stripe_events (id, type) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING", (event_id, kind))
 

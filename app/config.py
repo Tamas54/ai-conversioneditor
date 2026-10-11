@@ -51,7 +51,7 @@ class Settings(BaseModel):
     # Termék (nemzetközi, angol felület): név, regisztráció, kreditek
     PRODUCT_NAME: str = os.getenv("PRODUCT_NAME", "Studio")
     SIGNUP_OPEN: bool = os.getenv("SIGNUP_OPEN", "1") not in ("0", "false", "no", "")
-    SIGNUP_CREDITS: int = int(os.getenv("SIGNUP_CREDITS", "0"))      # AI-kép nem jár ingyen
+    SIGNUP_CREDITS: int = int(os.getenv("SIGNUP_CREDITS", "30"))     # árazás 10-11: 30 induláskor, utána havi 10
     IMAGE_CREDIT_COST: int = int(os.getenv("IMAGE_CREDIT_COST", "1"))  # egy FLUX-kép ára kreditben
     # Digitalizálás (OCR): oldalkorlát munkánként a nem-admin felhasználónak (az OCR LLM-hívás, ~0,2 ¢/oldal)
     OCR_MAX_PAGES: int = int(os.getenv("OCR_MAX_PAGES", "60"))

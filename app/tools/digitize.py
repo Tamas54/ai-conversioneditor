@@ -502,7 +502,7 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
 
 
 async def digitize(file_ids: list[str], outputs: list[str], language: Optional[str], max_pages: int,
-                   progress: Callable[[int, int, str], None]) -> dict[str, Any]:
+                   progress: Callable[[int, int, str], None], on_pages=None) -> dict[str, Any]:
     outputs = [o for o in outputs if o in OUTPUTS] or ["docx"]
     work = temp_path(new_file_id("scan"))
     work.mkdir(parents=True)
@@ -513,6 +513,9 @@ async def digitize(file_ids: list[str], outputs: list[str], language: Optional[s
             raise ValueError("No pages found.")
         truncated = len(pages) > max_pages
         pages = pages[:max_pages]
+        if on_pages:          # havi keret / kredit (számlázás) — mielőtt bármi drága elindul
+            text_out = [o for o in outputs if o != "fillable_pdf"]
+            await on_pages(len(pages) if text_out else 0, len(pages) if "fillable_pdf" in outputs else 0)
         texts: list[str] = [""] * len(pages)
         cached, done = 0, 0
         stem = Path(display_label(file_ids[0])).stem

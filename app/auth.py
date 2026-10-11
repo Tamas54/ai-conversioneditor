@@ -32,13 +32,13 @@ router = APIRouter()
 
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
-_PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/")
+_PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook")
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
     ("GET", "/app"), ("GET", "/editor/"), ("GET", "/preview/"), ("GET", "/api/thumb/"), ("GET", "/api/files"),
     ("GET", "/api/account"), ("GET", "/api/convert/targets"), ("GET", "/api/forms/fields"), ("GET", "/api/jobs/"),
-    ("GET", "/api/revisions"),
+    ("GET", "/api/revisions"), ("GET", "/api/billing/plans"),
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
     ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"), ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),
@@ -334,10 +334,19 @@ async def api_account(request: Request) -> dict:
     uid = tenancy.current_user_id()
     from app import db
     guest = tenancy.is_guest(uid)
+    from app import billing
+    if not guest:
+        await billing.monthly_topup(uid)
     user = await db.user_get(uid) if db.enabled() and not guest else None
+    plan = "pro" if uid == tenancy.ADMIN_ID else (user or {}).get("plan") or "free"
+    month = billing.month_key()
+    usage = {k: {"used": await db.usage_get(uid, month, k), "limit": v}
+             for k, v in billing.PLANS[plan]["quota"].items()} if user else {}
     base = settings.PUBLIC_BASE_URL.rstrip("/")
     return {
         "guest": guest, "guest_max_upload_mb": GUEST_MAX_UPLOAD_MB if guest else None,
+        "plan": plan, "plan_name": billing.PLANS[plan]["name"], "usage": usage, "billing_enabled": billing.enabled(),
+        "has_subscription": bool((user or {}).get("stripe_customer_id")),
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
