@@ -1,5 +1,5 @@
 # MCP + web server
-mcp>=1.0.0
+mcp>=1.27,<2               # 2.x: FastMCP → MCPServer, más API; a v1-es kód nem indul
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
