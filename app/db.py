@@ -79,6 +79,16 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
 CREATE INDEX IF NOT EXISTS credit_ledger_user_idx ON credit_ledger (user_id, created_at DESC);
 -- egyszeri, kis tábla (10-11-én jött létre): a fájl tulajdonosa (munkaterület)
 ALTER TABLE file_versions ADD COLUMN IF NOT EXISTS owner_id text;
+-- OCR-eredmény oldalanként (a kép bájtjainak sha256-ja + prompt-verzió + modell): amit egyszer
+-- kiolvastunk, nem fizetjük meg újra (ugyanaz a szkennelt oldal másodszor = 0 LLM-hívás)
+CREATE TABLE IF NOT EXISTS ocr_cache (
+    sha256          text NOT NULL,
+    prompt_ver      text NOT NULL,
+    model           text NOT NULL,
+    text            text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (sha256, prompt_ver, model)
+);
 """
 
 _pool = None
@@ -348,3 +358,21 @@ async def credits_add(uid: str, amount: int, reason: str, ref: Optional[str] = N
     await _rows("INSERT INTO credit_ledger (user_id, delta, balance_after, reason, ref) VALUES (%s, %s, %s, %s, %s)",
                 (uid, amount, rows[0]["credits"], reason, ref))
     return rows[0]["credits"]
+
+
+# ---------- OCR-gyorsítótár ----------
+
+async def ocr_cache_get(sha256: str, prompt_ver: str, model: str) -> Optional[str]:
+    if not enabled():
+        return None
+    rows = await _rows("SELECT text FROM ocr_cache WHERE sha256 = %s AND prompt_ver = %s AND model = %s",
+                       (sha256, prompt_ver, model))
+    return rows[0]["text"] if rows else None
+
+
+async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str) -> None:
+    if not enabled():
+        return
+    await _rows("INSERT INTO ocr_cache (sha256, prompt_ver, model, text) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (sha256, prompt_ver, model) DO NOTHING", (sha256, prompt_ver, model, text))
+

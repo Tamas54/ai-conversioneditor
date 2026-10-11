@@ -35,14 +35,18 @@
         <span class="label">Presentation</span><span class="hint">Slides from a short brief, with photos and charts</span></button>
       <button class="tool" data-make="social"><span class="obj"><span class="paper o-post"><div></div><span></span></span></span>
         <span class="label">Social post</span><span class="hint">One design, every platform size at once</span></button>
-      <button class="tool" data-make="book"><span class="obj"><span class="o-book paper"><i></i><i></i></span></span>
-        <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF</span></button>
-      <button class="tool" data-make="photo"><span class="obj"><span class="paper o-photo"><div></div></span></span>
-        <span class="label">Photo</span><span class="hint">Cut out the subject, swap the background, enhance</span></button>
       <button class="tool" data-make="print"><span class="obj"><span class="paper o-poster">Big<br>idea.</span></span>
         <span class="label">Print design</span><span class="hint">Posters, flyers, report covers, certificates</span></button>
+      <button class="tool" data-make="photo"><span class="obj"><span class="paper o-photo"><div></div></span></span>
+        <span class="label">Photo</span><span class="hint">Cut out the subject, swap the background, enhance</span></button>
+      <button class="tool" data-make="book"><span class="obj"><span class="o-book paper"><i></i><i></i></span></span>
+        <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF</span></button>
+      <button class="tool" data-make="scan"><span class="obj"><span class="o-scan"><span class="paper"><i></i><i></i><i></i><i></i><i></i></span></span></span>
+        <span class="label">Scan to text</span><span class="hint">Old books and photographed pages → Word, a new PDF, searchable PDF</span></button>
       <button class="tool" data-make="pdf"><span class="obj"><span class="paper o-pdf"><i></i><i></i><i class="x"></i><i></i><i></i><b>PDF</b></span></span>
         <span class="label">PDF tools</span><span class="hint">Merge, compress, black out, number, protect, to Word</span></button>
+      <button class="tool" data-make="convert"><span class="obj"><span class="o-convert"><span class="paper a">DOCX</span><span class="paper b">PDF</span><b>⇄</b></span></span>
+        <span class="label">Convert</span><span class="hint">Word, PDF, slides, sheets, images, e-books — any to any</span></button>
     </div>
   </div></section>
   <section class="sheet">
@@ -84,6 +88,7 @@
       <a class="btn ghost" href="#/files" aria-label="Back to files">←</a>
       <h2 id="file-name"></h2>
       <span id="edit-btns"></span>
+      <span class="convert-to" id="convert-to" hidden><select id="convert-fmt" aria-label="Convert to"></select><button class="btn ghost" id="btn-convert">Convert</button></span>
       <a class="btn" id="btn-download" download>Download</a>
       <button class="btn ghost" id="btn-delete">Delete</button>
     </div>
@@ -213,6 +218,18 @@ const views = {
       });
       box.append(b);
     });
+    api(`/api/convert/targets?ext=${encodeURIComponent(f.ext)}`).then(({ targets }) => {
+      if (!targets.length) return;
+      $("#convert-fmt").innerHTML = `<option value="" disabled selected>Convert to…</option>` + targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("");
+      $("#convert-to").hidden = false;
+      $("#btn-convert").addEventListener("click", async () => {
+        const fmt = $("#convert-fmt").value; if (!fmt) { $("#convert-fmt").focus(); return; }
+        const b = $("#btn-convert"); b.disabled = true; b.textContent = "Converting…";
+        try { const r = await api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: f.file_id, target: fmt }) });
+              toast(`Converted — ${r.label}`); location.hash = "#/file/" + encodeURIComponent(r.file_id); }
+        catch (e) { toast(e.message); b.disabled = false; b.textContent = "Convert"; }
+      });
+    }).catch(() => {});
     $("#btn-delete").addEventListener("click", async () => {
       await api(`/api/files/${encodeURIComponent(f.file_id)}`, { method: "DELETE" }); toast("Deleted"); location.hash = "#/files";
     });
@@ -346,6 +363,55 @@ const MAKERS = {
       return api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent") }) });
     },
   },
+  scan: {
+    title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and give you an editable document.",
+    fields: () => `<label>Pages, in order<input type="file" name="pages" accept="image/*,.pdf,application/pdf" multiple required></label>
+      <p class="muted small" style="margin:-6px 0 14px">Phone photos are fine — flat, well lit, one page per photo. A scanned PDF works too. Up to ${account?.ocr_max_pages ?? 60} pages at a time.</p>
+      <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">You get</legend>
+      <div class="checks"><label><input type="checkbox" name="out" value="docx" checked> Word document (.docx)</label>
+      <label><input type="checkbox" name="out" value="pdf" checked> New, clean PDF</label>
+      <label><input type="checkbox" name="out" value="searchable_pdf"> Searchable PDF — keeps the original look</label>
+      <label><input type="checkbox" name="out" value="txt"> Plain text (.txt)</label></div></fieldset>
+      <label>Language<select name="lang"><option value="">Detect automatically</option><option>English</option><option>German</option>
+        <option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Dutch</option>
+        <option>Polish</option><option>Czech</option><option>Hungarian</option><option>Romanian</option><option>Swedish</option><option>Latin</option></select></label>
+      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised.</p>`,
+    wire() {},
+    async submit(fd, form) {
+      const picked = [...form.querySelector("[name=pages]").files], st = $("#make-status"), ids = [];
+      for (const [i, f] of picked.entries()) { st.textContent = `Uploading ${i + 1} of ${picked.length}…`; ids.push((await uploadFile(f)).file_id); }
+      let job = await api("/api/make/digitize", { method: "POST", body: JSON.stringify({ file_ids: ids, outputs: fd.getAll("out"), language: fd.get("lang") }) });
+      while (job.status === "running") {
+        st.textContent = job.total ? (job.stage === "building files" ? "Putting the documents together…" : `Reading page ${Math.min(job.done + 1, job.total)} of ${job.total}…`) : "Preparing the pages…";
+        await new Promise(r => setTimeout(r, 2000));
+        job = await api(`/api/jobs/${job.id}`);
+      }
+      if (job.status !== "done") throw new Error(job.error || "Something went wrong — try again.");
+      const r = job.result;
+      if (r.truncated) toast(`Only the first ${r.pages} pages were read — send the rest as a second batch.`);
+      return { file_id: r.file_id, n: r.files.length,
+        msg: `Read ${r.pages} pages · ${r.words.toLocaleString("en")} words${r.figures ? ` · ${r.figures} picture${r.figures > 1 ? "s" : ""}` : ""}` };
+    },
+  },
+  convert: {
+    title: "Convert a file", sub: "Pick a file and the format you need. The original stays as it was.",
+    fields: () => `<label>File<input type="file" name="file" required></label>
+      <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
+    wire(form) {
+      form.querySelector("[name=file]").addEventListener("change", async e => {
+        const f = e.target.files[0], sel = form.querySelector("[name=target]");
+        const ext = (f?.name.split(".").pop() || "").toLowerCase();
+        const { targets } = await api(`/api/convert/targets?ext=${encodeURIComponent(ext)}`);
+        sel.innerHTML = targets.length ? targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("") : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
+        sel.disabled = !targets.length;
+      });
+    },
+    async submit(fd, form) {
+      const f = await uploadFile(form.querySelector("[name=file]").files[0]);
+      $("#make-status").textContent = "Converting…";
+      return api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: f.file_id, target: fd.get("target") }) });
+    },
+  },
   pdf: {
     title: "PDF tools", sub: "Pick a job, add your PDF — you get a new file; the original stays as it was.",
     fields: () => `<label>Job<select name="action">
@@ -393,7 +459,7 @@ function openMaker(kind) {
     try {
       const r = await m.submit(new FormData(form), form);
       $("#drawer").close(); await loadAccount();
-      toast(r.n > 1 ? `Done — ${r.n} sizes are in your files` : "Done");
+      toast(r.msg || (r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
       location.hash = "#/file/" + encodeURIComponent(r.file_id);
     } catch (err) { $("#make-status").textContent = err.message; go.disabled = false; }
   };

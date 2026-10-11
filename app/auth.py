@@ -276,6 +276,7 @@ async def api_account(request: Request) -> dict:
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
+        "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
         "keys": await db.api_key_list(uid) if db.enabled() else [],
         "mcp_url": f"{base}/mcp", "product": settings.PRODUCT_NAME,
     }

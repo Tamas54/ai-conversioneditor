@@ -16,7 +16,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app import events, tenancy
 from app.config import settings
@@ -349,3 +349,50 @@ async def make_pdf(body: dict[str, Any]) -> dict[str, Any]:
     res = {"file_id": fid, "url": public_url(fid), "size_kb": out.stat().st_size // 1024}
     events.emit("tool_done", tool="make_pdf", params={"action": action}, result=res)
     return res
+
+
+# ---------- Convert (bármi → bármi) ----------
+
+@router.get("/api/convert/targets")
+async def convert_targets(ext: str) -> dict[str, Any]:
+    from app.tools import anyconvert
+    return {"targets": [{"fmt": t, "label": anyconvert.LABELS.get(t, t.upper())} for t in anyconvert.targets_for(ext)]}
+
+
+@router.post("/api/make/convert")
+async def make_convert(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    from app.tools import anyconvert
+    fid, target = body.get("file_id"), (body.get("target") or "").strip()
+    if not fid or not target:
+        raise HTTPException(400, "Choose a file and a format.")
+    try:
+        out = await anyconvert.convert_any(getattr(request.app.state, "pool", None), fid, target)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise _fail(e)
+    events.emit("tool_done", tool="make_convert", params={"target": target}, result={"file_id": out["file_id"]})
+    return out
+
+
+# ---------- Digitalizálás: régi könyv / fotózott oldal → szöveg, Word, új PDF, kereshető PDF ----------
+
+@router.post("/api/make/digitize")
+async def make_digitize(body: dict[str, Any]) -> dict[str, Any]:
+    from app import jobs
+    from app.tools import digitize
+    ids = [i for i in body.get("file_ids") or [] if i]
+    if not ids:
+        raise HTTPException(400, "Add photos or scans of the pages.")
+    outputs = [o for o in body.get("outputs") or ["docx"] if o in digitize.OUTPUTS]
+    if not outputs:
+        raise HTTPException(400, "Pick at least one result: Word, new PDF, searchable PDF or text.")
+    lang = (body.get("language") or "").strip() or None
+    limit = 1000 if tenancy.current_user_id() == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES
+
+    async def work(progress):
+        res = await digitize.digitize(ids, outputs, lang, limit, progress)
+        events.emit("tool_done", tool="make_digitize", result={"files": [f["file_id"] for f in res["files"]],
+                                                               "pages": res["pages"]})
+        return res
+    return jobs.start("digitize", work)

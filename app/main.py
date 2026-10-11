@@ -29,6 +29,7 @@ from app.config import settings
 from app.mcp_server import mcp as _mcp_instance, mount_mcp
 from app.auth import auth_middleware, log_auth_state, router as auth_router
 from app.routes import files, upload, health, dashboard, preview, editor, reviews, make, product
+from app import jobs
 from app.storage.cleanup import cleanup_loop
 from app.workers.pool import WorkerPool
 
@@ -98,6 +99,7 @@ app.include_router(dashboard.router)
 app.include_router(editor.router)
 app.include_router(reviews.router)
 app.include_router(make.router)
+app.include_router(jobs.router)
 app.include_router(product.router)
 mount_mcp(app)
 

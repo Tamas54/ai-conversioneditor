@@ -51,6 +51,8 @@ class Settings(BaseModel):
     SIGNUP_OPEN: bool = os.getenv("SIGNUP_OPEN", "1") not in ("0", "false", "no", "")
     SIGNUP_CREDITS: int = int(os.getenv("SIGNUP_CREDITS", "0"))      # AI-kép nem jár ingyen
     IMAGE_CREDIT_COST: int = int(os.getenv("IMAGE_CREDIT_COST", "1"))  # egy FLUX-kép ára kreditben
+    # Digitalizálás (OCR): oldalkorlát munkánként a nem-admin felhasználónak (az OCR LLM-hívás, ~0,2 ¢/oldal)
+    OCR_MAX_PAGES: int = int(os.getenv("OCR_MAX_PAGES", "60"))
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", os.getenv("FILE_SIGNING_KEY", "change-me-in-railway"))
 
     # --- WordCraft (Rust Word-motor, upstream release-ből; Dockerfile tölti le) ---

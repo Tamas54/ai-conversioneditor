@@ -525,6 +525,34 @@ async def office(
 
 
 @mcp.tool()
+async def digitize(
+    file_ids: Optional[list[str]] = None,
+    outputs: Optional[list[str]] = None,
+    language: Optional[str] = None,
+    job_id: Optional[str] = None,
+) -> dict:
+    """
+    Old book / photographed or scanned pages → editable documents. Each page
+    is read by a vision model (old spelling kept, hyphenation and paragraphs
+    rejoined, running heads and page numbers dropped, footnotes kept);
+    printed illustrations, ornaments and maps are cut out and placed where
+    they were; library stamps and handwriting are left out.
+
+    Start: file_ids = page photos/scans in order, or scanned PDFs;
+    outputs ⊆ ["docx", "pdf" (new typeset A5 book), "searchable_pdf"
+    (original pages + invisible text layer), "txt", "md"] (default docx);
+    language = hint, e.g. "Hungarian". Returns a job — a long book takes
+    minutes: call again with job_id until status is "done" (result.files)
+    or "failed". Pages already read are cached, so a rerun is cheap.
+    """
+    from app import jobs
+    if job_id:
+        return await jobs.job_status(job_id)
+    from app.routes.make import make_digitize
+    return await make_digitize({"file_ids": file_ids or [], "outputs": outputs or ["docx"], "language": language})
+
+
+@mcp.tool()
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:

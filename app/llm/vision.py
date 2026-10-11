@@ -45,7 +45,7 @@ _MAX_IMAGE_LONG_EDGE = 1280  # SiliconFlow Kimi K2.6 vision sweet spot
 _MAX_IMAGE_BYTES = 2_000_000  # ~2 MB cap for the encoded payload
 
 
-def image_to_data_url(path: Path) -> str:
+def image_to_data_url(path: Path, long_edge: Optional[int] = None) -> str:
     """Encode an image as a data URL. If the image is too large (long edge
     > _MAX_IMAGE_LONG_EDGE px or file > _MAX_IMAGE_BYTES), downscale via
     Pillow before encoding. SiliconFlow returns HTTP 400 on oversize images."""
@@ -56,9 +56,10 @@ def image_to_data_url(path: Path) -> str:
         from PIL import Image
         with Image.open(path) as img:
             w, h = img.size
-            if max(w, h) > _MAX_IMAGE_LONG_EDGE or len(raw) > _MAX_IMAGE_BYTES:
+            edge = long_edge or _MAX_IMAGE_LONG_EDGE
+            if max(w, h) > edge or len(raw) > _MAX_IMAGE_BYTES:
                 needs_resize = True
-                scale = min(1.0, _MAX_IMAGE_LONG_EDGE / max(w, h))
+                scale = min(1.0, edge / max(w, h))
                 long_edge = int(max(w, h) * scale)
                 img = img.convert("RGB")  # ensure JPEG-safe mode
                 # Re-encode and shrink further if the JPEG is still oversize.
