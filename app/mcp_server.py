@@ -317,6 +317,9 @@ async def pptx_build(spec: dict) -> dict:
     Build a whole 16:9 PowerPoint deck in ONE call, designed and illustrated.
     spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
             text, muted, font_heading, font_body}, "slides": [...]}
+    "template_file_id": an uploaded .pptx/.potx used as the FULL template —
+            its slide masters, layouts, backgrounds, logo, fonts and colours;
+            the slides go into the template's own layouts (theme is ignored).
     Slide layouts (each may carry "notes"):
       cover {title, subtitle?, kicker?, image?}   section {title, subtitle?, number?, image?}
       bullets {title, bullets[], text?, image?}    image_left|image_right {title, bullets[]|text, image}

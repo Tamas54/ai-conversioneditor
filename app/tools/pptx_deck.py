@@ -370,6 +370,13 @@ def _persist_spec(spec: dict[str, Any], by_slot: dict) -> dict[str, Any]:
 
 
 async def build(spec: dict[str, Any]) -> dict[str, Any]:
+    if spec.get("template_file_id"):          # a minta-pptx TELJES sablonként (mesterdiák, elrendezés, háttér, logó)
+        from app.tools import pptx_template
+        from app.tools.crafts import existing
+        out = await pptx_template.build(spec, existing(spec["template_file_id"]))
+        title = spec.get("title") or ((spec.get("slides") or [{}])[0].get("title")) or "deck"
+        write_meta(out["file_id"], operation="pptx_build", label=f"{title[:50]}.pptx", extra={"deck_spec": out.pop("saved_spec")})
+        return out
     from pptx import Presentation
     from pptx.util import Inches
     t0 = time.time()

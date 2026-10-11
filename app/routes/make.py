@@ -120,7 +120,13 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
     await billing.use("deck")
     mode = body.get("images") or "stock"
     style = None
-    if body.get("style_file_id"):          # „ilyen stílusú pptx” — téma a mintából (pptx téma / PDF / kép)
+    template_id = None
+    if str(body.get("style_file_id") or "").lower().endswith((".pptx", ".potx")) and body.get("use_template", True):
+        from app.tools import pptx_template
+        from app.tools.crafts import existing as _ex
+        if pptx_template.usable(_ex(body["style_file_id"])):     # dizájn a mesterdián → teljes sablon; különben téma
+            template_id = body["style_file_id"]
+    if body.get("style_file_id") and not template_id:   # „ilyen stílusú” — téma a mintából (PDF / kép / Word)
         from app.tools import style_ref
         try:
             style = await style_ref.theme_from(body["style_file_id"])
@@ -151,7 +157,9 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
             else:
                 s["image"] = {"stock": q}
         deck = {"title": spec.get("title") or slides[0].get("title"), "footer": spec.get("footer"), "slides": slides}
-        if style:
+        if template_id:                    # pptx-minta = teljes sablon (elrendezés, háttér, logó, betű, szín)
+            deck["template_file_id"] = template_id
+        elif style:
             deck["theme"] = {k: v for k, v in style.items() if k != "mood"}
         elif body.get("accent"):
             deck["theme"] = {"accent": body["accent"]}

@@ -152,7 +152,7 @@
       <ol class="versions" id="versions" aria-label="Versions"></ol>
       <div class="rev-row">
         <input id="rev-input" autocomplete="off" placeholder="Ask for a change — e.g. “on page 22 add a photo of the Colosseum”, “remove the grass in front of the animal”">
-        <label class="btn ghost rev-style" title="Attach a style example: a pptx, pdf or picture whose look you want"><span id="rev-style-name">Style example</span><input type="file" id="rev-style" hidden accept=".pptx,.pdf,.docx,image/*"></label>
+        <label class="btn ghost rev-style" title="Attach a style example: a Word file, pptx/template, PDF or picture whose look you want"><span id="rev-style-name">Style example</span><input type="file" id="rev-style" hidden accept=".pptx,.potx,.pdf,.docx,.odt,.rtf,image/*"></label>
         <button class="btn primary" id="rev-go">Apply <em class="ai-badge">AI</em></button>
       </div>
       <p class="status small" id="rev-status"></p>
@@ -437,7 +437,10 @@ const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend st
   <div class="swatches">${ACCENTS.map((c, i) => `<input type="radio" name="accent" value="${c}" style="--c:${c}" aria-label="${c}" ${i ? "" : "checked"}>`).join("")}</div></fieldset>`;
 
 // stílusminta: „olyan legyen, mint ez” — egy saját dokumentum, valaki más pptx-e, egy PDF vagy kép
-const styleField = (what = "document") => `<label class="style-field">Style example <span class="muted small">(optional) — a ${what} whose look you want: Word, PDF, pptx or a picture</span>
+const styleField = (what = "document") => what === "deck"
+  ? `<label class="style-field">Style example <span class="muted small">(optional) — a PowerPoint or template (.pptx, .potx) to build on: its layouts, backgrounds, logo and fonts are used. A PDF or picture gives just the colours and fonts.</span>
+  <input type="file" name="style" accept=".pptx,.potx,.pdf,image/*"></label>`
+  : `<label class="style-field">Style example <span class="muted small">(optional) — a ${what} whose look you want: Word, PDF, pptx or a picture</span>
   <input type="file" name="style" accept=".docx,.odt,.rtf,.pdf,.pptx,image/*"></label>`;
 async function readStyle(form) {
   const f = form.querySelector("[name=style]")?.files[0];

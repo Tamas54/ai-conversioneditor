@@ -125,7 +125,12 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
     stem = Path(display_label(file_id)).stem.split(" (")[0]
     request = request.strip()
     theme = None
-    if style_file_id and ext == "pptx":
+    template_id = None
+    if ext == "pptx" and str(style_file_id or "").lower().endswith((".pptx", ".potx")):
+        from app.tools import pptx_template
+        if pptx_template.usable(crafts.existing(style_file_id)):   # dizájn a mesterdián → teljes sablon; különben téma
+            template_id = style_file_id
+    if style_file_id and ext == "pptx" and not template_id:
         from app.tools import style_ref
         theme = await style_ref.theme_from(style_file_id)
     if style_file_id:
@@ -179,7 +184,18 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
             out_id = new_docx
     elif ext == "pptx" and _meta(file_id).get("deck_spec"):
         from app.tools import pptx_deck
-        spec, summary = await _revise_deck(_meta(file_id)["deck_spec"], request, theme)
+        base = copy.deepcopy(_meta(file_id)["deck_spec"])
+        if template_id:                          # új sablon: a minta-pptx mesterdiái, elrendezései, háttere
+            base["template_file_id"] = template_id
+            base.pop("theme", None)
+        elif theme:                              # a minta csak témát ad (PDF / kép / dizájn nélküli pptx): a régi sablon el
+            base.pop("template_file_id", None)
+        if template_id and request.strip() == "Restyle it like the example.":
+            spec, summary = base, "Rebuilt on the example's template."
+        else:
+            spec, summary = await _revise_deck(base, request, theme)
+            if base.get("template_file_id"):      # a modell a JSON-ból kihagyhatja — a sablon marad
+                spec["template_file_id"] = base["template_file_id"]
         built = await pptx_deck.build(spec)
         out_id = built["file_id"]
     else:
