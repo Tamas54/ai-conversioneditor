@@ -15,7 +15,7 @@ APP_HTML = Path(__file__).parent.parent / "templates" / "app.html"
 
 @router.get("/", include_in_schema=False)
 async def root():
-    return RedirectResponse("/app", status_code=303)
+    return RedirectResponse("/app", status_code=301)
 
 
 @router.get("/favicon.ico", include_in_schema=False)
@@ -26,10 +26,19 @@ async def favicon():
 
 
 @router.get("/app", include_in_schema=False)
-async def app_page() -> HTMLResponse:
-    page = (APP_HTML.read_text("utf-8").replace("{{PRODUCT}}", html.escape(settings.PRODUCT_NAME))
-            .replace("{{BASE}}", html.escape(settings.PUBLIC_BASE_URL.rstrip("/"))))
-    return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
+@router.get("/app/{rest:path}", include_in_schema=False)
+async def app_page(rest: str = "") -> HTMLResponse:
+    """Egy oldal, STATIKUS útvonalakkal (/app/make/<eszköz>/<mód>, /app/file/<id>/edit/<szerkesztő>, /app/files…):
+    a szerver útvonalanként adja a címet, leírást, kanonikus linket, schema.org-ot és az eszköz látható ismertetőjét."""
+    from app import seo
+    meta = seo.page_for(rest)
+    e = html.escape
+    page = (APP_HTML.read_text("utf-8")
+            .replace("{{TITLE}}", e(meta["title"])).replace("{{DESCRIPTION}}", e(meta["desc"]))
+            .replace("{{CANONICAL}}", e(meta["canonical"])).replace("{{SEO_HEAD}}", seo.head_html(meta))
+            .replace("{{ABOUT}}", meta["about"])
+            .replace("{{PRODUCT}}", e(settings.PRODUCT_NAME)).replace("{{BASE}}", e(settings.PUBLIC_BASE_URL.rstrip("/"))))
+    return HTMLResponse(page, headers={"Cache-Control": "no-cache", **seo.robots_header(meta)})
 
 
 # ---------- bélyegképek a fájlkártyákhoz ----------

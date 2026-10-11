@@ -32,7 +32,8 @@ router = APIRouter()
 
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
-_PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook")
+_PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook",
+                    "/robots.txt", "/llms.txt", "/sitemap.xml")
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (

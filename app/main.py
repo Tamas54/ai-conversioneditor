@@ -102,6 +102,8 @@ app.include_router(make.router)
 app.include_router(jobs.router)
 app.include_router(billing.router)
 app.include_router(product.router)
+from app import seo  # noqa: E402
+app.include_router(seo.router)
 mount_mcp(app)
 
 

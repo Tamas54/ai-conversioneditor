@@ -83,7 +83,7 @@ def _links(res):
         if isinstance(o, dict):
             fid = o.get("file_id")
             if isinstance(fid, str) and "." in fid and fid.rsplit(".", 1)[1].lower() in _EDITABLE and "edit_url" not in o:
-                o["edit_url"] = f"{base}/app#/file/{fid}/edit"
+                o["edit_url"] = f"{base}/app/file/{fid}/edit"
             for v in list(o.values()):
                 walk(v, depth + 1)
         elif isinstance(o, list):

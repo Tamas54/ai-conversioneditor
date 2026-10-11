@@ -167,7 +167,7 @@ async def checkout(uid: str, email: Optional[str], item: str, interval: Optional
     base = settings.PUBLIC_BASE_URL.rstrip("/")
     data: dict[str, Any] = {
         "mode": mode, "line_items": [line], "client_reference_id": uid,
-        "success_url": f"{base}/app#/plans?paid=1", "cancel_url": f"{base}/app#/plans",
+        "success_url": f"{base}/app/plans?paid=1", "cancel_url": f"{base}/app/plans",
         "metadata": {"uid": uid, "item": item, "interval": interval or ""},
         "allow_promotion_codes": True, "automatic_tax": {"enabled": os.getenv("STRIPE_TAX", "") == "1"},
     }
@@ -194,7 +194,7 @@ async def portal(uid: str) -> str:
     if not u or not u.get("stripe_customer_id"):
         raise HTTPException(400, "No subscription yet.")
     s = await _stripe("POST", "billing_portal/sessions",
-                      {"customer": u["stripe_customer_id"], "return_url": settings.PUBLIC_BASE_URL.rstrip("/") + "/app#/plans"})
+                      {"customer": u["stripe_customer_id"], "return_url": settings.PUBLIC_BASE_URL.rstrip("/") + "/app/plans"})
     return s["url"]
 
 
