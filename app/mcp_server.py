@@ -226,6 +226,7 @@ async def convert(
     source_format: Optional[str] = None,
     use_browser: bool = False,
     options: Optional[dict] = None,
+    engine: Optional[str] = None,
 ) -> dict:
     """
     Convert a document between formats.
@@ -236,6 +237,10 @@ async def convert(
     Set `use_browser=True` for HTML→PDF when JS-rendering or modern CSS
     (flexbox/grid/recharts/d3) is needed. Defaults to WeasyPrint (faster,
     print-quality CSS only).
+
+    Set `engine="wordcraft"` for the Rust Word engine: no LibreOffice, a few
+    ms per call. Sources docx/doc/odt/rtf/html/md/tex/txt; targets
+    docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page).
     """
     return await t_convert(
         _pool(),
@@ -245,6 +250,43 @@ async def convert(
         target_format=target_format,
         use_browser=use_browser,
         options=options,
+        engine=engine,
+    )
+
+
+@mcp.tool()
+async def wordcraft(
+    file_id: Optional[str] = None,
+    commands: Optional[list] = None,
+    author: Optional[str] = None,
+    save_format: str = "docx",
+    template: Optional[str] = None,
+    read: Optional[str] = None,
+    query: Optional[str] = None,
+) -> dict:
+    """
+    Edit a document with the WordCraft Word engine: the same ~460 commands
+    that drive Word's ribbon (styles, tables, track changes, comments, TOC,
+    footnotes…), run headless. The result is a NEW file_id; the source stays.
+
+    commands: in order, each {"command": id, "params": {...}} or "id={json}".
+      [{"command": "review.trackChanges", "params": {"value": true}},
+       {"command": "select.text", "params": {"text": "old"}},
+       {"command": "text.insert", "params": {"text": "new"}}]
+    author: name on tracked changes and comments (e.g. "Claude (copyedit)").
+    No file_id → starts from `template` (blank|sample|letter|resume|report).
+    save_format: docx (default) | pdf | odt | rtf | html | md | tex | txt | png.
+
+    read instead of editing: "text" | "info" | "inspect" (structure JSON,
+    shows tracked-change runs) | "commands" (filter with `query`, e.g. "table").
+    A human can open any docx in the dashboard editor (✏️) to continue by hand.
+    """
+    from app.tools import wordcraft as wc
+    if read:
+        return await wc.read(read, file_id=file_id, query=query)
+    return await wc.run(
+        file_id=file_id, commands=commands, author=author,
+        save_format=save_format, template=template,
     )
 
 

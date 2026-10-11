@@ -30,6 +30,8 @@ from app.tools.convert import convert as t_convert
 from app.llm.agent import run_agent
 from app.tools import vision_ops
 from app.tools.formats import detect_from_path
+from app.tools.wordcraft import available as wordcraft_available
+from app.routes.editor import editor_available
 from app.storage import (
     input_path, new_file_id, output_path, save_bytes, public_url,
     write_meta, read_meta, delete_meta, display_label, is_meta_path,
@@ -212,6 +214,7 @@ async def api_convert(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             target_format=body["target_format"],
             use_browser=bool(body.get("use_browser", False)),
             options=body.get("options"),
+            engine=body.get("engine"),
         ),
     )
 
@@ -455,4 +458,6 @@ async def api_status(request: Request) -> dict[str, Any]:
         "siliconflow_configured": bool(settings.SILICONFLOW_API_KEY),
         "model_primary": settings.LLM_MODEL_PRIMARY,
         "model_fallback": settings.LLM_MODEL_FALLBACK,
+        "wordcraft_cli": wordcraft_available(),
+        "wordcraft_editor": editor_available(),
     }

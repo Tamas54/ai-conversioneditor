@@ -26,7 +26,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.mcp_server import mcp as _mcp_instance, mount_mcp
-from app.routes import files, upload, health, dashboard, preview
+from app.routes import files, upload, health, dashboard, preview, editor
 from app.storage.cleanup import cleanup_loop
 from app.workers.pool import WorkerPool
 
@@ -85,6 +85,7 @@ app.include_router(upload.router)
 app.include_router(files.router)
 app.include_router(preview.router)
 app.include_router(dashboard.router)
+app.include_router(editor.router)
 mount_mcp(app)
 
 

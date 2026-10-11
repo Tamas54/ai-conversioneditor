@@ -69,8 +69,11 @@ async def convert(
     target_format: str,
     use_browser: bool = False,
     options: Optional[dict] = None,
+    engine: Optional[str] = None,
 ) -> dict:
-    """Convert a document. Returns {file_id, url, size_kb, ms_elapsed, backend}."""
+    """Convert a document. Returns {file_id, url, size_kb, ms_elapsed, backend}.
+
+    engine='wordcraft' → a Rust WordCraft-motor (LibreOffice nélkül, ms-ok alatt)."""
     t0 = time.time()
     options = options or {}
 
@@ -78,7 +81,15 @@ async def convert(
     src_fmt = normalize_format(source_format or detect_from_path(src_path))
     tgt_fmt = normalize_format(target_format)
 
-    backend = route(src_fmt, tgt_fmt, use_browser=use_browser)
+    if engine == "wordcraft":
+        from app.tools import wordcraft
+        if src_fmt not in wordcraft.OPEN_FORMATS or tgt_fmt not in wordcraft.SAVE_FORMATS:
+            raise ValueError(f"engine=wordcraft: {src_fmt} → {tgt_fmt} nem támogatott")
+        backend = "wordcraft"
+    elif engine:
+        raise ValueError(f"ismeretlen engine: {engine} (lehet: wordcraft)")
+    else:
+        backend = route(src_fmt, tgt_fmt, use_browser=use_browser)
     log.info("convert: %s → %s via %s", src_fmt, tgt_fmt, backend)
 
     out_id = new_file_id(tgt_fmt)
@@ -96,6 +107,10 @@ async def convert(
 
     if backend == "noop":
         shutil.copy2(src_path, out_path)
+
+    elif backend == "wordcraft":
+        from app.tools import wordcraft
+        await wordcraft.convert_file(src_path, out_path)
 
     elif backend == "libreoffice":
         target_filter = lo_filter_for(src_fmt, tgt_fmt) or LO_FILTERS.get(tgt_fmt, tgt_fmt)

@@ -61,6 +61,17 @@ dokumentum-műveleteket, kódgenerálás és sandbox-bohóckodás nélkül. Egy 
   — Kimi K2.6 strukturált edit-tervet készít, deterministic toolokkal végrehajtjuk.
   PDF input automatikusan round-trippel DOCX-en át (layout-warning a kimenetben).
 
+### WordCraft — Rust Word-motor (kézi + gépi szerkesztés)
+A [WordCraft](https://github.com/storytold/wordcraft) (MIT OR Apache-2.0) kész release-ét a
+Dockerfile tölti le (rögzített verzió + SHA256), fordítás nincs.
+- `wordcraft(file_id?, commands?, author?, save_format?, template?, read?, query?)` — a Word
+  szalagját hajtó ~460 parancs fej nélkül; az eredmény ÚJ file_id. `author` = a változáskövetés
+  szerzője. `read`: `text` | `info` | `inspect` | `commands` (szűrés: `query`).
+- `convert(..., engine="wordcraft")` — LibreOffice nélkül, pár ms (docx/odt/rtf/html/md/tex/txt → … / pdf / png).
+- Dashboard ✏️ **Szerkesztés**: a WASM-szerkesztő a középső panelen; Mentés (Ctrl+S) / Exportálás
+  új verzióként kerül a listába, forrás-linkkel (`/editor/`, `POST /api/editor/save`,
+  ragasztó: `app/static/editor/aice_bridge.js`).
+
 ## Konverziós mátrix
 
 |         | pdf      | docx     | html        | md       | odt | pptx | xlsx |

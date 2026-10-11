@@ -39,6 +39,13 @@ class Settings(BaseModel):
     FILE_SIGNING_KEY: str = os.getenv("FILE_SIGNING_KEY", "change-me-in-railway")
     MCP_AUTH_TOKEN: str = os.getenv("MCP_AUTH_TOKEN", "")
 
+    # --- WordCraft (Rust Word-motor, upstream release-ből; Dockerfile tölti le) ---
+    # CLI: headless parancsok, gyors konverzió. WEB_DIR: a WASM-szerkesztő statikus fájljai.
+    WORDCRAFT_CLI: str = os.getenv("WORDCRAFT_CLI", "/opt/wordcraft/bin/wordcraft-cli")
+    WORDCRAFT_WEB_DIR: Path = Path(os.getenv("WORDCRAFT_WEB_DIR", "/opt/wordcraft-web"))
+    WORDCRAFT_TIMEOUT_S: int = int(os.getenv("WORDCRAFT_TIMEOUT_S", "120"))
+    EDITOR_MAX_SAVE_MB: int = int(os.getenv("EDITOR_MAX_SAVE_MB", "100"))
+
     # --- Public base URL (Railway sets this) ---
     PUBLIC_BASE_URL: str = os.getenv(
         "PUBLIC_BASE_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000")

@@ -126,6 +126,10 @@
     flex: 1;
     overflow: hidden;
   }
+  /* ✏️ szerkesztő mód: a WordCraft szalagjának kell a szélesség */
+  .layout.editing { grid-template-columns: 240px 1fr 0; grid-template-rows: 1fr 0;
+    height: calc(100vh - 16px - var(--header-h, 64px)); }
+  .layout.editing .events, .layout.editing .chat { display: none; }
   .files { grid-area: files; border-right: 2px double var(--border); overflow: hidden;
     display: flex; flex-direction: column; background: var(--panel); }
   .preview { grid-area: preview; overflow: hidden; display: flex; flex-direction: column;
@@ -400,6 +404,7 @@
     <span class="pill" id="status-chromium">chrome: ?</span>
     <span class="pill" id="status-llm">llm: ?</span>
     <span class="pill" id="status-events">events: …</span>
+    <span class="pill" id="status-wc" title="WordCraft (Rust Word-motor)">wordcraft: ?</span>
   </div>
   <span style="flex:1"></span>
   <div class="toolbar">
@@ -408,6 +413,9 @@
     <input type="file" id="upload-input" style="display:none">
     <button class="icon-btn" id="btn-upload" title="Fájl feltöltése">
       <span>⬆</span><span class="lbl">Upload</span>
+    </button>
+    <button class="icon-btn" id="btn-edit" title="Kézi szerkesztés (WordCraft)" style="display:none">
+      <span>✏️</span><span class="lbl">Szerkesztés</span>
     </button>
     <a class="icon-btn primary" id="btn-download" title="Eredeti fájl letöltése"
        href="#" download style="display:none">
@@ -422,7 +430,7 @@
   </div>
 </header>
 
-<div class="layout">
+<div class="layout" id="layout">
 
   <aside class="files">
     <div class="scroll" id="files-list"><div style="color:var(--muted);padding:12px">Töltés…</div></div>
@@ -572,6 +580,10 @@ async function pollStatus() {
     $("status-chromium").className = "pill " + (s.chromium_ready ? "ok" : "err");
     $("status-llm").textContent = `llm: ${s.siliconflow_configured ? s.model_primary.split('/').pop() : "no key"}`;
     $("status-llm").className = "pill " + (s.siliconflow_configured ? "ok" : "err");
+    wordcraftEditor = !!s.wordcraft_editor;
+    $("status-wc").textContent = `wordcraft: ${s.wordcraft_cli ? "cli" : "–"}${s.wordcraft_editor ? "+editor" : ""}`;
+    $("status-wc").className = "pill " + (s.wordcraft_cli && s.wordcraft_editor ? "ok" : "err");
+    updateEditButton();
   } catch (e) {
     $("status-lo").className = "pill err"; $("status-lo").textContent = "lo: down";
   }
@@ -683,6 +695,8 @@ function flashFile(fileId) {
 const RENDERED_AS_PDF = new Set(["docx","doc","odt","rtf","pptx","ppt","xlsx","xls"]);
 
 function selectFile(f) {
+  if (!confirmLeaveEditor()) return;
+  setEditing(false);
   selectedFileId = f.file_id;
   selectedFileMeta = f;
   const labelText = f.label || f.file_id;
@@ -708,9 +722,77 @@ function selectFile(f) {
   $("btn-delete").title = `Töröl: ${labelText}`;
   $("chat-send").disabled = !$("chat-input").value.trim();
   $("chat-input").placeholder = `Mit csináljon Kimi ezzel: ${labelText}? (Ctrl+Enter küld)`;
+  updateEditButton();
   refreshFiles();
   if (f.source_file_id) setTimeout(() => flashFile(f.source_file_id), 200);
 }
+
+// ----- ✏️ kézi szerkesztő (WordCraft WASM, /editor/) -----
+// A szerkesztő Mentése/Exportja új verzióként jön vissza (/api/editor/save), forrás-linkkel.
+const EDITABLE = new Set(["docx","doc","odt","rtf","md","html","htm","txt","tex"]);
+let wordcraftEditor = false;
+let editing = false;
+let editorDirty = false;
+
+function updateEditButton() {
+  const ext = (selectedFileMeta && selectedFileMeta.ext || "").toLowerCase();
+  const show = wordcraftEditor && (editing || EDITABLE.has(ext));
+  $("btn-edit").style.display = show ? "inline-flex" : "none";
+  $("btn-edit").innerHTML = editing
+    ? '<span>👁</span><span class="lbl">Előnézet</span>'
+    : '<span>✏️</span><span class="lbl">Szerkesztés</span>';
+}
+
+function confirmLeaveEditor() {
+  return !(editing && editorDirty) ||
+    confirm("A szerkesztőben lehet nem mentett módosítás (Fájl › Mentés / Ctrl+S).\nElhagyod?");
+}
+
+function setEditing(on) {
+  editing = on;
+  const h = document.querySelector("header");
+  if (h) document.documentElement.style.setProperty("--header-h", h.getBoundingClientRect().height + "px");
+  if (!on) editorDirty = false;
+  $("layout").classList.toggle("editing", on);
+}
+
+function openEditor(f) {
+  const label = f.label || f.file_id;
+  const name = label.toLowerCase().endsWith("." + f.ext) ? label : `${label}.${f.ext}`;
+  // Azonos eredetű, relatív fájl-URL (a public_url hosztja proxy mögött eltérhet).
+  const src = f.url.slice(f.url.indexOf("/files/"));
+  const save = `/api/editor/save?source=${encodeURIComponent(f.file_id)}`;
+  const qs = `src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}`;
+  setEditing(true);
+  $("preview-name").textContent = `✏️ ${label} — Mentés (Ctrl+S) = új verzió a listában`;
+  const area = $("preview-area");
+  area.className = "preview-frame";
+  area.innerHTML = `<iframe src="/editor/?${qs}" allow="clipboard-read; clipboard-write; fullscreen"></iframe>`;
+  updateEditButton();
+}
+
+$("btn-edit").addEventListener("click", () => {
+  if (!selectedFileMeta) return;
+  if (editing) { selectFile(selectedFileMeta); return; }  // vissza előnézetbe (őrrel)
+  openEditor(selectedFileMeta);
+});
+
+window.addEventListener("message", async (e) => {
+  if (e.origin !== location.origin || !e.data || e.data.source !== "wordcraft") return;
+  const m = e.data;
+  if (m.type === "touched") editorDirty = true;
+  else if (m.type === "saved") {
+    editorDirty = false;
+    toast(`mentve: ${m.label || m.name}`, "ok");
+    await refreshFiles();
+    setTimeout(() => flashFile(m.file_id), 200);
+  } else if (m.type === "save_failed") toast(`mentés a szerverre sikertelen (${m.error}) — letöltésként ment`, "err");
+  else if (m.type === "open_failed") toast(`megnyitás sikertelen: ${m.error}`, "err");
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (editing && editorDirty) { e.preventDefault(); e.returnValue = ""; }
+});
 
 // ----- events SSE -----
 function eventLineHtml(evt) {
@@ -796,6 +878,7 @@ $("btn-delete").addEventListener("click", async () => {
   if (!selectedFileId) return;
   const label = selectedFileMeta ? (selectedFileMeta.label || selectedFileId) : selectedFileId;
   if (!confirm(`Tényleg törlöd?\n${label}`)) return;
+  setEditing(false); updateEditButton();
   const r = await fetch(`/api/files/${selectedFileId}`, { method: "DELETE" });
   if (!r.ok) { toast("delete failed", "err"); return; }
   toast("törölve", "ok");
