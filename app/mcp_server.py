@@ -541,7 +541,8 @@ async def digitize(
 
     Start: file_ids = page photos/scans in order, or scanned PDFs;
     outputs ⊆ ["docx", "pdf" (new typeset A5 book), "searchable_pdf"
-    (original pages + invisible text layer), "txt", "md"] (default docx);
+    (original pages + invisible text layer), "txt", "md", "fillable_pdf"
+    (a printed form rebuilt with real form fields)] (default docx);
     language = hint, e.g. "Hungarian"; max_pages = only the first N pages
     (a sample chapter). Returns a job — a long book takes
     minutes: call again with job_id until status is "done" (result.files)
@@ -553,6 +554,30 @@ async def digitize(
     from app.routes.make import make_digitize
     return await make_digitize({"file_ids": file_ids or [], "outputs": outputs or ["docx"], "language": language,
                                 "max_pages": max_pages})
+
+
+@mcp.tool()
+async def pdf_form(
+    file_id: str,
+    values: Optional[dict] = None,
+    data_file_id: Optional[str] = None,
+    flatten: bool = False,
+) -> dict:
+    """
+    Fillable PDF forms. With only file_id: lists the fields (name, type,
+    value, options, page). With values {field: value}: fills them (check
+    boxes take true/false; keys may be field names or close spellings) and
+    returns a NEW file_id. With data_file_id (CSV/XLSX, first row = field
+    names): one filled copy per row, combined into one PDF. flatten=true
+    bakes the values in for printing (no longer editable). Accented text
+    (ő, ű, …) is kept. To get a fillable form from a photo or scan, use
+    digitize with outputs=["fillable_pdf"]; for a printed digital PDF use
+    pdf tools action make_fillable (/api/make/pdf).
+    """
+    from app.routes.make import form_fields, make_fill_form
+    if not values and not data_file_id:
+        return await form_fields(file_id)
+    return await make_fill_form({"file_id": file_id, "values": values, "data_file_id": data_file_id, "flatten": flatten})
 
 
 @mcp.tool()

@@ -292,12 +292,14 @@ def _pdf_plan(action: str, body: dict[str, Any]) -> tuple[list[dict[str, Any]], 
         return [{"tool": "doc_protect", "args": {"open_password": pw}}], "pdf", True
     if action == "compare":
         return [{"tool": "doc_compare_report", "args": {"doc": 2, "other": 1, "path": "$out"}}], "pdf", False
+    if action == "make_fillable":   # digitális (nem fotózott) nyomtatvány: vonalak/dobozok → valódi mezők
+        return [{"tool": "form_detect_fields", "args": {"add": True}}], "pdf", True
     raise HTTPException(400, f"unknown action: {action}")
 
 
 PDF_LABELS = {"merge": "merged", "compress": "compressed", "to_word": "", "page_numbers": "numbered",
               "watermark": "watermarked", "redact": "redacted", "ocr": "searchable", "protect": "protected",
-              "compare": "comparison"}
+              "compare": "comparison", "make_fillable": "fillable"}
 
 
 @router.post("/api/make/pdf")
@@ -398,3 +400,50 @@ async def make_digitize(body: dict[str, Any]) -> dict[str, Any]:
                                                                "pages": res["pages"]})
         return res
     return jobs.start("digitize", work)
+
+
+# ---------- Űrlapok: mezők, kitöltés (egyenként vagy táblázatból) ----------
+
+@router.get("/api/forms/fields")
+async def form_fields(file_id: str) -> dict[str, Any]:
+    from app.tools import forms
+    if not file_id.lower().endswith(".pdf"):
+        return {"fields": []}
+    try:
+        return {"fields": await forms.fields(file_id)}
+    except FileNotFoundError:
+        raise HTTPException(404, "File not found.")
+    except Exception as e:
+        log.warning("form_fields %s: %s", file_id, e)
+        return {"fields": []}
+
+
+@router.post("/api/make/fill_form")
+async def make_fill_form(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id, values: {mező: érték}} vagy {file_id, data_file_id: csv/xlsx} (soronként egy példány); flatten?"""
+    from pathlib import Path
+    from app.storage import display_label, output_path, public_url, write_meta
+    from app.storage.files import new_file_id
+    from app.tools import crafts, forms
+    fid = body.get("file_id")
+    if not fid:
+        raise HTTPException(400, "Choose the form (a PDF with fields).")
+    flatten = bool(body.get("flatten"))
+    out_id = new_file_id("pdf")
+    stem = Path(display_label(fid)).stem
+    try:
+        if body.get("data_file_id"):
+            rows = forms.read_rows(crafts.existing(body["data_file_id"]))
+            info = await forms.fill_batch(fid, rows, flatten, output_path(out_id))
+            label = f"{stem} ({info['copies']} filled).pdf"
+        else:
+            info = await forms.fill(fid, dict(body.get("values") or {}), flatten, output_path(out_id))
+            label = f"{stem} (filled).pdf"
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise _fail(e)
+    write_meta(out_id, source_file_id=fid, operation="fill form", label=label)
+    res = {"file_id": out_id, "url": public_url(out_id), "label": label, "size_kb": output_path(out_id).stat().st_size // 1024, **info}
+    events.emit("tool_done", tool="make_fill_form", result={"file_id": out_id})
+    return res

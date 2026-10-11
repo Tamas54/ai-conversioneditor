@@ -218,6 +218,12 @@ const views = {
       });
       box.append(b);
     });
+    if (f.ext === "pdf") api(`/api/forms/fields?file_id=${encodeURIComponent(f.file_id)}`).then(({ fields }) => {
+      if (!fields.length) return;
+      const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Fill in";
+      b.addEventListener("click", () => openFill(f, fields));
+      $("#edit-btns").prepend(b);
+    }).catch(() => {});
     api(`/api/convert/targets?ext=${encodeURIComponent(f.ext)}`).then(({ targets }) => {
       if (!targets.length) return;
       $("#convert-fmt").innerHTML = `<option value="" disabled selected>Convert to…</option>` + targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("");
@@ -364,14 +370,15 @@ const MAKERS = {
     },
   },
   scan: {
-    title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and give you an editable document.",
+    cta: "Read the pages", title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and give you an editable document.",
     fields: () => `<label>Pages, in order<input type="file" name="pages" accept="image/*,.pdf,application/pdf" multiple required></label>
       <p class="muted small" style="margin:-6px 0 14px">Phone photos are fine — flat, well lit, one page per photo. A scanned PDF works too. Up to ${account?.ocr_max_pages ?? 60} pages at a time.</p>
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">You get</legend>
       <div class="checks"><label><input type="checkbox" name="out" value="docx" checked> Word document (.docx)</label>
       <label><input type="checkbox" name="out" value="pdf" checked> New, clean PDF</label>
       <label><input type="checkbox" name="out" value="searchable_pdf"> Searchable PDF — keeps the original look</label>
-      <label><input type="checkbox" name="out" value="txt"> Plain text (.txt)</label></div></fieldset>
+      <label><input type="checkbox" name="out" value="txt"> Plain text (.txt)</label>
+      <label><input type="checkbox" name="out" value="fillable_pdf"> Fillable form — a printed form rebuilt with real fields</label></div></fieldset>
       <label>Language<select name="lang"><option value="">Detect automatically</option><option>English</option><option>German</option>
         <option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Dutch</option>
         <option>Polish</option><option>Czech</option><option>Hungarian</option><option>Romanian</option><option>Swedish</option><option>Latin</option></select></label>
@@ -389,12 +396,15 @@ const MAKERS = {
       if (job.status !== "done") throw new Error(job.error || "Something went wrong — try again.");
       const r = job.result;
       if (r.truncated) toast(`Only the first ${r.pages} pages were read — send the rest as a second batch.`);
-      return { file_id: r.file_id, n: r.files.length,
-        msg: `Read ${r.pages} pages · ${r.words.toLocaleString("en")} words${r.figures ? ` · ${r.figures} picture${r.figures > 1 ? "s" : ""}` : ""}` };
+      const parts = [`Read ${r.pages} page${r.pages > 1 ? "s" : ""}`];
+      if (r.words) parts.push(`${r.words.toLocaleString("en")} words`);
+      if (r.figures) parts.push(`${r.figures} picture${r.figures > 1 ? "s" : ""}`);
+      if (r.fields?.length) parts.push(`${r.fields.length} form fields`);
+      return { file_id: r.file_id, n: r.files.length, msg: parts.join(" · ") };
     },
   },
   convert: {
-    title: "Convert a file", sub: "Pick a file and the format you need. The original stays as it was.",
+    cta: "Convert", title: "Convert a file", sub: "Pick a file and the format you need. The original stays as it was.",
     fields: () => `<label>File<input type="file" name="file" required></label>
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
     wire(form) {
@@ -413,13 +423,13 @@ const MAKERS = {
     },
   },
   pdf: {
-    title: "PDF tools", sub: "Pick a job, add your PDF — you get a new file; the original stays as it was.",
+    cta: "Run", title: "PDF tools", sub: "Pick a job, add your PDF — you get a new file; the original stays as it was.",
     fields: () => `<label>Job<select name="action">
         <option value="merge">Merge PDFs into one</option><option value="compress">Make the file smaller</option>
         <option value="to_word">Convert to Word (.docx)</option><option value="page_numbers">Add page numbers</option>
         <option value="watermark">Add a watermark</option><option value="redact">Black out text for good</option>
         <option value="ocr">Make a scan searchable (English)</option><option value="protect">Lock with a password</option>
-        <option value="compare">Compare two versions</option></select></label>
+        <option value="compare">Compare two versions</option><option value="make_fillable">Make a printed form fillable</option></select></label>
       <label><span id="pdf-files-label">PDF</span><input type="file" name="pdfs" accept="application/pdf,.pdf" required></label>
       <div data-for="watermark" hidden><label>Watermark text<input type="text" name="wm" maxlength="40" placeholder="DRAFT"></label></div>
       <div data-for="page_numbers" hidden><label>Position<select name="pos"><option value="center">Bottom centre</option><option value="right">Bottom right</option><option value="left">Bottom left</option></select></label></div>
@@ -446,11 +456,47 @@ const MAKERS = {
     },
   },
 };
+// kitöltő űrlap a PDF saját mezőiből (név → címke: a mezőnévből olvasható alak)
+function openFill(f, fields) {
+  // a nyomtatott felirat (a mező tooltipje, ékezetekkel) — ha nincs, a mezőnévből
+  const label = fd => (fd.tooltip || "").replace(/[:\s]+$/, "") || fd.name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+  const input = fd => {
+    const id = `fv-${fd.name}`;
+    if (fd.type === "checkbox") return `<label class="checks" style="margin:0 0 10px"><span><input type="checkbox" name="${esc(fd.name)}" ${fd.value && fd.value !== "Off" ? "checked" : ""}> ${esc(label(fd))}</span></label>`;
+    if ((fd.type === "combo" || fd.type === "list" || fd.type === "radio") && fd.options?.length)
+      return `<label>${esc(label(fd))}<select name="${esc(fd.name)}"><option value=""></option>${fd.options.map(o => `<option ${o === fd.value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`;
+    return `<label for="${esc(id)}">${esc(label(fd))}<input id="${esc(id)}" type="text" name="${esc(fd.name)}" value="${esc(fd.value || "")}"></label>`;
+  };
+  MAKERS.fill = {
+    cta: "Fill in", title: "Fill in the form", sub: `${fields.length} fields. You get a new PDF; this one stays blank.`,
+    fields: () => fields.filter(fd => fd.type !== "button" && fd.type !== "signature" && !fd.read_only).map(input).join("") +
+      `<details style="margin:6px 0 14px"><summary style="cursor:pointer;font-weight:600;font-size:13px">Or fill many copies from a spreadsheet</summary>
+       <p class="muted small" style="margin:8px 0">CSV or Excel: first row = field names (${esc(fields.slice(0, 4).map(x => x.name).join(", "))}…), one copy per row, all in one PDF.</p>
+       <input type="file" name="sheet" accept=".csv,.tsv,.xlsx"></details>
+       <label class="checks" style="margin:0 0 6px"><span><input type="checkbox" name="__flat"> Print-ready — the answers can't be changed afterwards</span></label>`,
+    wire() {},
+    async submit(fd, form) {
+      const sheet = form.querySelector("[name=sheet]").files[0], flatten = !!fd.get("__flat");
+      if (sheet) {
+        const d = await uploadFile(sheet);
+        $("#make-status").textContent = "Filling one copy per row…";
+        return api("/api/make/fill_form", { method: "POST", body: JSON.stringify({ file_id: f.file_id, data_file_id: d.file_id, flatten }) });
+      }
+      const values = {};
+      for (const fdx of fields) {
+        const el = form.querySelector(`[name="${CSS.escape(fdx.name)}"]`); if (!el) continue;
+        values[fdx.name] = el.type === "checkbox" ? el.checked : el.value;
+      }
+      return api("/api/make/fill_form", { method: "POST", body: JSON.stringify({ file_id: f.file_id, values, flatten }) });
+    },
+  };
+  openMaker("fill");
+}
 function openMaker(kind) {
   const m = MAKERS[kind], form = $("#make-form");
   form.innerHTML = `<h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
     <p class="status" id="make-status"></p>
-    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">Make it</button></div>`;
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
   m.wire(form);
   form.onsubmit = async e => {
     if (e.submitter?.value !== "go") return;

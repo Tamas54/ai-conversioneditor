@@ -32,7 +32,7 @@ PROMPT_VER = "book-v5"
 # A DeepSeek ábrát csak „először a képek” sorrendű utasítással jelöl megbízhatóan (ezért ilyen a prompt).
 OCR_EDGE = 2048
 FIGURE_KEEP = {"illustration", "photo", "map", "diagram", "ornament", "emblem", "chart", "table"}
-OUTPUTS = {"docx", "pdf", "searchable_pdf", "txt", "md"}
+OUTPUTS = {"docx", "pdf", "searchable_pdf", "txt", "md", "fillable_pdf"}
 _IMG = {"png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif"}
 _CONCURRENCY = 8
 _FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -510,6 +510,21 @@ async def digitize(file_ids: list[str], outputs: list[str], language: Optional[s
         pages = pages[:max_pages]
         texts: list[str] = [""] * len(pages)
         cached, done = 0, 0
+        stem = Path(display_label(file_ids[0])).stem
+        files: list[dict[str, Any]] = []
+        form_info: dict[str, Any] = {}
+        if "fillable_pdf" in outputs:
+            from app.tools import forms
+            fid = new_file_id("pdf")
+            progress(0, len(pages), "reading the form")
+            form_info = await forms.rebuild(pages, language, output_path(fid), progress)
+            write_meta(fid, source_file_id=file_ids[0], operation="fillable form", label=f"{stem} (fillable).pdf")
+            files.append({"file_id": fid, "url": public_url(fid), "label": f"{stem} (fillable).pdf",
+                          "size_kb": output_path(fid).stat().st_size // 1024})
+            outputs = [o for o in outputs if o != "fillable_pdf"]
+            if not outputs:
+                return {"files": files, "file_id": fid, "pages": len(pages), "pages_cached": 0, "figures": 0,
+                        "truncated": truncated, "words": 0, "fields": form_info.get("fields", [])}
         gate = asyncio.Semaphore(_CONCURRENCY)
         progress(0, len(pages), "reading text")
 
@@ -534,9 +549,9 @@ async def digitize(file_ids: list[str], outputs: list[str], language: Optional[s
         md_img, md = assemble(with_img), assemble(plain_pages)
         if not md.strip():
             raise ValueError("No text found on these pages.")
-        stem = Path(display_label(file_ids[0])).stem
-        files = await build_outputs(md, md_img, figdir, title_of(md, stem), outputs, pages, plain_pages, file_ids[0], stem)
+        files += await build_outputs(md, md_img, figdir, title_of(md, stem), outputs, pages, plain_pages, file_ids[0], stem)
         return {"files": files, "file_id": files[0]["file_id"], "pages": len(pages), "pages_cached": cached, "figures": figures,
+                "fields": form_info.get("fields", []),
                 "truncated": truncated, "words": len(to_plain(md).split())}
     finally:
         shutil.rmtree(work, ignore_errors=True)
