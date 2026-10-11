@@ -63,7 +63,12 @@ def _has_key(request: Request) -> bool:
         return False
     auth = request.headers.get("authorization", "")
     given = auth[7:] if auth.lower().startswith("bearer ") else request.query_params.get("key", "")
-    return bool(given) and hmac.compare_digest(given, key)
+    return bool(given) and _same(given, key)
+
+
+def _same(a: str, b: str) -> bool:
+    # Bájtként: a compare_digest str-re TypeError-t dob nem-ASCII karakternél (ékezetes jelszó).
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 
 def _client_ip(request: Request) -> str:
@@ -140,7 +145,7 @@ async def login(request: Request, password: str = Form(...), next: str = Form("/
         q.popleft()
     if len(q) >= _FAIL_LIMIT:
         return RedirectResponse(f"/login?next={quote(nxt)}&error={quote('Túl sok próbálkozás, várj 15 percet.')}", status_code=303)
-    if not settings.DASHBOARD_PASSWORD or not hmac.compare_digest(password, settings.DASHBOARD_PASSWORD):
+    if not settings.DASHBOARD_PASSWORD or not _same(password, settings.DASHBOARD_PASSWORD):
         q.append(now)
         log.warning("sikertelen belépés: %s", ip)
         return RedirectResponse(f"/login?next={quote(nxt)}&error={quote('Hibás jelszó.')}", status_code=303)
