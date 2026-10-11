@@ -18,9 +18,17 @@ async def root():
     return RedirectResponse("/app", status_code=303)
 
 
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import FileResponse
+    return FileResponse(Path(__file__).parent.parent / "static" / "favicon.ico", media_type="image/x-icon",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @router.get("/app", include_in_schema=False)
 async def app_page() -> HTMLResponse:
-    page = APP_HTML.read_text("utf-8").replace("{{PRODUCT}}", html.escape(settings.PRODUCT_NAME))
+    page = (APP_HTML.read_text("utf-8").replace("{{PRODUCT}}", html.escape(settings.PRODUCT_NAME))
+            .replace("{{BASE}}", html.escape(settings.PUBLIC_BASE_URL.rstrip("/"))))
     return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
 
