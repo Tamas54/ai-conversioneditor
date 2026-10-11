@@ -11,6 +11,10 @@ data/
 .coverage
 *.egg-info/
 build/
+# kivétel: a WordCraft webes AICE-build receptje (patch + scriptek) a repóba tartozik
+!/build/
+/build/*
+!/build/wordcraft-web/
 dist/
 .DS_Store
 

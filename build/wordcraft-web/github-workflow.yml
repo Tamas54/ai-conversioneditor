@@ -1,0 +1,127 @@
+# A WordCraft webes (WASM) szerkesztő AICE-buildje: storytold/wordcraft tag + a
+# build/wordcraft-web patch (Caladea/Carlito befordítva, Discord-gomb nélkül) → zip → GitHub
+# release ebben a repóban. Csak kézzel indul. Részletek: build/wordcraft-web/README.md.
+name: wordcraft-web
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release-tag = csomagnév (pl. wordcraft-web-0.5.0-aice1)"
+        type: string
+        required: true
+        default: wordcraft-web-0.5.0-aice1
+      upstream_ref:
+        description: "storytold/wordcraft tag, amire a patch megy"
+        type: string
+        required: true
+        default: v0.5.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wordcraft-web-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Pinelt eszközök (a helyi build is ezekkel készült).
+  RUST_TOOLCHAIN: "1.95.0"
+  TRUNK_VERSION: "0.21.14"
+  TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+  # Az upstream release.yml-ben pinelt craft-fonts (a web-build ebből csak a BIZ UDPGothic
+  # Regular UI-fontot ágyazza be) — így a csomag a hivatalos zippel azonos, plusz a patch.
+  CRAFT_FONTS_REF: 8dcdacd5153e64560d109541a47d806f26f048c0
+  TAG: ${{ inputs.tag }}
+  UPSTREAM_REF: ${{ inputs.upstream_ref }}
+
+jobs:
+  build:
+    name: Build + release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Bemenetek ellenőrzése
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^wordcraft-web-[0-9A-Za-z._-]+$'; then
+            echo "::error::A tag formája wordcraft-web-<verzió>-aiceN legyen, nem: $TAG"
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::A(z) $TAG release már létezik; a Dockerfile a SHA256-át pineli, ezért új taget adj (pl. -aice2)."
+            exit 1
+          fi
+
+      - name: Repó (patch + scriptek)
+        uses: actions/checkout@v4
+        with:
+          path: aice
+
+      - name: storytold/wordcraft @ ${{ inputs.upstream_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/wordcraft
+          ref: ${{ inputs.upstream_ref }}
+          path: wordcraft
+
+      - name: storytold/craft-fonts (upstreammel azonos pin)
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+
+      - name: Rust ${{ env.RUST_TOOLCHAIN }} + wasm32 target
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+
+      - name: trunk ${{ env.TRUNK_VERSION }} (előre fordított, SHA256-tal)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${TRUNK_SHA256}  $RUNNER_TEMP/trunk.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin" trunk
+          trunk --version
+
+      # Patch → Caladea/Carlito letöltése és SHA256-ellenőrzése → trunk build → zip.
+      - name: Patch + fontok + build + zip
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+        run: aice/build/wordcraft-web/build.sh wordcraft "$TAG" out
+
+      - name: SHA256
+        run: |
+          cat out/SHA256SUMS.txt
+          {
+            echo "### $TAG"
+            echo
+            echo "storytold/wordcraft \`$UPSTREAM_REF\` ($(git -C wordcraft rev-parse --short=9 HEAD)) + \`build/wordcraft-web/0001-aice-fonts-and-branding.patch\`"
+            echo
+            echo '```'
+            cat out/SHA256SUMS.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY" >out/release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.tag }}
+          path: |
+            out/${{ inputs.tag }}.zip
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" "out/$TAG.zip" out/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file out/release-notes.md

@@ -1,0 +1,56 @@
+AICE-javítás a storytold/wordcraft v0.5.0 webes (WASM) buildjéhez.
+
+1. Fontok: a webes buildbe (csak target_arch = "wasm32") befordítja a Caladea (Cambria) és
+   Carlito (Calibri) metrika-kompatibilis fontokat (Regular, Bold, Italic, BoldItalic). A
+   fontfájlokat a patch NEM tartalmazza: build előtt a fetch-fonts.sh tölti le az
+   assets/fonts/ alá, SHA256-ellenőrzéssel. Natív build változatlan.
+2. Arculat: a címsor Discord-gombja (UiState.show_discord) alapból ki van kapcsolva a webes
+   buildben. Natív build változatlan.
+
+Alkalmazás:  git -C <wordcraft> apply 0001-aice-fonts-and-branding.patch
+
+diff --git a/crates/fonts/src/fontdb.rs b/crates/fonts/src/fontdb.rs
+index db1180e..4a28d01 100644
+--- a/crates/fonts/src/fontdb.rs
++++ b/crates/fonts/src/fontdb.rs
+@@ -35,6 +35,26 @@ static BUNDLED: &[&[u8]] = &[
+     include_bytes!("../../../assets/fonts/Inter-Medium.ttf"),
+     include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"),
+     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
++    // AICE: a webes buildnek nincs rendszerfontja, ezért a Cambria/Calibri metrika-kompatibilis
++    // párjai (Caladea: Apache-2.0, Carlito: OFL-1.1) is bekerülnek; a `word::substitutes` ezeket
++    // választja elsőnek. A fájlokat build előtt az ai-conversioneditor
++    // build/wordcraft-web/fetch-fonts.sh-ja tölti le az assets/fonts/ alá, SHA256-ellenőrzéssel.
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Caladea-Regular.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Caladea-Bold.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Caladea-Italic.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Caladea-BoldItalic.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Carlito-Regular.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Carlito-Bold.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Carlito-Italic.ttf"),
++    #[cfg(target_arch = "wasm32")]
++    include_bytes!("../../../assets/fonts/Carlito-BoldItalic.ttf"),
+ ];
+ 
+ #[derive(Clone)]
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 28e4359..99852c8 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -138,7 +138,8 @@ impl Default for UiState {
+             theme: theme::Appearance::default(),
+             legacy_dark: None,
+             nav_tab: "headings".into(),
+-            show_discord: true,
++            // AICE: a beágyazott webes szerkesztő címsorában nincs közösségi (Discord) gomb.
++            show_discord: !cfg!(target_arch = "wasm32"),
+             author: String::new(),
+             window: None,
+             language: i18n::AUTO.into(),
