@@ -216,7 +216,7 @@ function accountCta(title) {
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
     <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn primary" href="/signup?next=/app">Create free account</a></div>`;
-  form.onsubmit = null; $("#drawer").showModal();
+  form.onsubmit = null; if (!$("#drawer").open) $("#drawer").showModal();
 }
 // hosszú munka (job) követése: a státuszsort frissíti, a végén az eredményt adja
 async function pollJob(job, label, st = $("#make-status")) {
@@ -612,7 +612,13 @@ async function readSlot(form, name, need = "") {    // → file_id-k: a kiválas
   const s = slotEl(form, name); if (!s) return [];
   const ids = slotPicked(form, name), up = [...s.querySelector("input[type=file]").files];
   for (const [i, f] of up.entries()) { $("#make-status").textContent = up.length > 1 ? `Uploading ${i + 1} of ${up.length}…` : "Uploading…"; ids.push((await uploadFile(f)).file_id); }
-  if (!ids.length && need) { s.classList.add("needs"); s.scrollIntoView({ block: "center", behavior: "smooth" }); throw new Error(`Choose ${need} — upload it or pick it from your files.`); }
+  if (!ids.length && need) {   // nincs fájl: a választó nyílik (saját fájlok listája, ha van illő; különben a gép fájlválasztója)
+    s.classList.add("needs"); s.scrollIntoView({ block: "center", behavior: "smooth" });
+    const exts = s.dataset.exts ? s.dataset.exts.split(",") : null, have = files.some(f => !exts || exts.includes(f.ext));
+    if (have) { if (s.querySelector(".slot-list").hidden) s.querySelector(".slot-pick").click(); }
+    else s.querySelector("input[type=file]").click();
+    throw Object.assign(new Error(`Choose ${need} — ${have ? "pick one of your files, or upload one" : "pick it in the window that opened"}. It carries on by itself.`), { slot: name });
+  }
   return ids;
 }
 function slotSnapshot(form) {
@@ -741,15 +747,18 @@ const MAKERS = {
         const [id] = await readSlot(form, "docfile", "a document");
         r = { file_id: id };
       } else if (m === "brief") {
-        if (account?.guest) throw new Error(AI_NOTE);
+        if (account?.guest) throw needAccount();
+        let brief = (fd.get("brief") || "").trim(), ex = false;
+        if (brief.length < 10) { brief = example(form, "brief"); ex = true; }       // üresen: a példa alapján
         const style_file_id = await readStyle(form);
-        $("#make-status").textContent = "Writing…";
-        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "brief", kind: fd.get("kind"), brief: fd.get("brief"), style_file_id }) });
+        $("#make-status").textContent = ex ? "No brief yet — writing the example…" : "Writing…";
+        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "brief", kind: fd.get("kind"), brief, style_file_id }) });
+        if (ex) r.msg = "Written from the example brief — write your own any time";
       } else {
         const style_file_id = await readStyle(form);
         r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "template", template: fd.get("template"), style_file_id }) });
       }
-      return { ...r, edit: true, msg: m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…" };
+      return { ...r, edit: true, msg: r.msg || (m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…") };
     },
   },
   deck: {
@@ -790,26 +799,27 @@ const MAKERS = {
         const style_file_id = await readStyle(form);
         r = await api("/api/make/deck", { method: "POST", body: JSON.stringify({ mode: "blank", title: fd.get("title"), accent: fd.get("accent"), style_file_id }) });
       } else {
-        if (account?.guest) throw new Error(AI_NOTE);
+        if (account?.guest) throw needAccount();
         const body = { mode: m, images: fd.get("images"), accent: fd.get("accent"), slides: +fd.get("slides") || null };
+        let ex = false;
         if (m === "document") {
           [body.source_file_id] = await readSlot(form, "source", "a document");
           body.brief = fd.get("dbrief") || "";
         } else {
-          body.brief = fd.get("brief") || "";
-          if (body.brief.trim().length < 10) throw new Error("Describe the presentation in a sentence or two.");
+          body.brief = (fd.get("brief") || "").trim();
+          if (body.brief.length < 10) { body.brief = example(form, "brief"); ex = true; }   // üresen: a példa-pakli
         }
         body.style_file_id = await readStyle(form);
         $("#make-status").textContent = m === "document" ? "Reading the document and writing the slides…" : "Writing the slides…";
         r = await api("/api/make/deck", { method: "POST", body: JSON.stringify(body) });
-        return { ...r, msg: "Done — fix anything in the slide editor, or ask for changes below" };
+        return { ...r, msg: ex ? "Made from the example brief — write your own any time" : "Done — fix anything in the slide editor, or ask for changes below" };
       }
       return { ...r, edit: true, msg: "Opening the slide editor…" };
     },
   },
   social: {
     alt: "Make & edit", altLoose: true, title: "New social post", sub: "Headline + picture → every size you tick, ready to post. “Make & edit” opens it in the design editor to fine-tune.",
-    fields: () => `<label>Headline<input type="text" name="headline" required maxlength="120"></label>
+    fields: () => `<label>Headline<input type="text" name="headline" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
       <div class="checks"><label><input type="checkbox" name="sizes" value="square" checked> Square 1080×1080</label>
@@ -821,7 +831,7 @@ const MAKERS = {
       ${swatches()}`,
     wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
     async submit(fd, form, opts = {}) {
-      if (!fd.get("headline")) { if (!opts.alt) throw new Error("Add a headline."); fd.set("headline", "Your headline here"); }
+      if (!fd.get("headline")) { opts.alt = true; fd.set("headline", "Your headline here"); }   // üresen: a szerkesztőben írja be
       const body = { headline: fd.get("headline"), subtitle: fd.get("subtitle"), handle: fd.get("handle"), sizes: fd.getAll("sizes"),
         image: await readPicker(form, "img"), accent: fd.get("accent"), editable: !!opts.alt };
       if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
@@ -882,10 +892,10 @@ const MAKERS = {
       }));
     },
     async submit(fd, form, opts = {}) {
-      const mode = fd.get("mode");
+      let mode = fd.get("mode"), quickNote = "";
       const instr0 = mode === "edit" ? (fd.get("instruction") || "").trim() : "";
-      if (mode === "edit" && !instr0) throw new Error("Describe the edit — or use a quick fix.");
-      if (mode !== "quick" && mode !== "open" && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
+      if (mode === "edit" && !instr0) { mode = "quick"; fd.set("action", "enhance"); quickNote = "No instructions — gave it a quick enhance. "; }
+      if (mode !== "quick" && mode !== "open" && account?.guest) throw needAccount();
       const ids = await readSlot(form, "photos", "a photo");
       if (mode === "open") {
         return { file_id: ids[0], n: ids.length, edit: true, msg: ids.length > 1 ? "Opening the first one — the others are in your files" : "Opening the photo editor…" };
@@ -913,20 +923,20 @@ const MAKERS = {
         st.textContent = `Working on photo ${i + 1} of ${ids.length}…`;
         last = await api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: id, action, background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
       }
-      return { ...last, n: ids.length, edit: !!opts.alt };
+      return { ...last, n: ids.length, edit: !!opts.alt, msg: quickNote ? quickNote + "Describe an edit next time for more." : undefined };
     },
   },
   print: {
     alt: "Make & edit", altLoose: true, title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. “Make & edit” opens it in the design editor.",
     fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
-      <label>Title / name<input type="text" name="title" required maxlength="120"></label>
+      <label>Title / name<input type="text" name="title" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Text<textarea name="body" placeholder="Main text (flyers flow it into two columns)"></textarea></label>
       <label>Date / place / author<input type="text" name="meta" maxlength="120" placeholder="e.g. 12 November · City Hall"></label>
       ${imagePicker("img")}${swatches()}`,
     wire(form) { wirePicker(form, "img"); },
     async submit(fd, form, opts = {}) {
-      if (!fd.get("title")) { if (!opts.alt) throw new Error("Add a title."); fd.set("title", t0(fd.get("template"))); }
+      if (!fd.get("title")) { opts.alt = true; fd.set("title", t0(fd.get("template"))); }   // üresen: a szerkesztőben írja be
       const t = fd.get("template"), img = await readPicker(form, "img");
       const data = t === "certificate"
         ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
@@ -982,8 +992,14 @@ const MAKERS = {
     },
     async submit(fd, form) {
       const [fid] = await readSlot(form, "file", "a file");
+      let target = fd.get("target");
+      if (!target) {   // magától folytatott beküldésnél a lista még tölthet: a lehetséges első formátum
+        const { targets } = await api(`/api/convert/targets?ext=${encodeURIComponent(extOf(fid))}`);
+        if (!targets.length) throw new Error(`We can't convert .${extOf(fid)} files yet.`);
+        target = targets[0].fmt;
+      }
       $("#make-status").textContent = "Converting…";
-      return api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: fid, target: fd.get("target") }) });
+      return api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: fid, target }) });
     },
   },
   pdf: {
@@ -1013,7 +1029,11 @@ const MAKERS = {
     },
     async submit(fd, form) {
       const a = fd.get("action"), ids = await readSlot(form, "pdfs", "a PDF");
-      if ((a === "merge" || a === "compare") && ids.length < 2) throw new Error("Pick at least two PDFs — several at once, or add them from your files.");
+      if ((a === "merge" || a === "compare") && ids.length < 2) {   // egy PDF-fel: a lista nyílik, a másodiknál magától folytatja
+        const s = slotEl(form, "pdfs");
+        if (s.querySelector(".slot-list").hidden) s.querySelector(".slot-pick").click();
+        throw Object.assign(new Error("Add one more PDF — pick it from your files or upload it. It carries on by itself."), { slot: "pdfs", min: 2 });
+      }
       return api("/api/make/pdf", { method: "POST", body: JSON.stringify({ action: a, file_ids: ids, text: fd.get("wm") || "DRAFT",
         position: fd.get("pos"), words: (fd.get("words") || "").split("\n"), patterns: fd.getAll("pat"), password: fd.get("pw") }) });
     },
@@ -1112,6 +1132,14 @@ function restoreForm(form, st) {
   form.querySelectorAll("input[type=radio]:checked, input[type=checkbox]").forEach(e => e.dispatchEvent(new Event("change", { bubbles: true })));
   $("#make-status").textContent = "Your last settings are filled in — change what you like and make it again." + (st.hadFiles ? " Pick the files again." : "");
 }
+// ZSÁKUTCA NINCS: minden gomb visz valahova. Üres szövegmező → a helyőrző példája; vendég AI-n → fiók-ajánlat;
+// hiányzó fájl → a választó nyílik, és a kiválasztás után magától folytatja (readSlot + openMaker).
+function example(form, name) {
+  const el = form.querySelector(`[name=${name}]`);
+  el.value = (el.placeholder || "").replace(/^e\.g\.\s*/i, "").trim();
+  return el.value;
+}
+const needAccount = () => Object.assign(new Error(AI_NOTE), { cta: true });
 // „Make & edit”: a natív (VectorCraft) dizájnfájl rögtön a dizájn-szerkesztőben nyílik
 function editNative(list, n) {
   const nat = (list || []).find(f => f.file_id.endsWith(".vectorcraft")) || list[0];
@@ -1167,7 +1195,20 @@ function openMaker(kind, opts = {}) {
       $("#drawer").close(); await loadAccount();
       toast(r.msg || (r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
       nav("/app/file/" + encodeURIComponent(r.file_id) + (r.edit ? "/edit" : ""));
-    } catch (err) { $("#make-status").textContent = err.message; go.disabled = false; if (alt) alt.disabled = false; }
+    } catch (err) {
+      go.disabled = false; if (alt) alt.disabled = false;
+      if (err.cta) return accountCta(m.title);                 // vendég AI-n: a fiók-ajánlat (nem zsákutca)
+      $("#make-status").textContent = err.message;
+      if (err.slot) {                                          // hiányzó fájl: amint kiválasztja, magától folytatja
+        const s = slotEl(form, err.slot), sub = e.submitter.value;
+        const resume = () => {
+          if (slotPicked(form, err.slot).length + s.querySelector("input[type=file]").files.length < (err.min || 1)) return;
+          s.removeEventListener("slotchange", resume);
+          form.requestSubmit(sub === "alt" ? $("#make-alt") : $("#make-go"));
+        };
+        s.addEventListener("slotchange", resume);
+      }
+    }
   };
   if (!$("#drawer").open) $("#drawer").showModal();
   form.scrollTop = 0; $("#drawer").scrollTop = 0;
