@@ -14,6 +14,7 @@
   :root { --paper: #191D1E; --paper-2: #202526; --card: #22282A; --rule: #2E3436; --ink: #ECEFEC; --graphite: #9AA6AC; color-scheme: dark; }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* a saját display-szabályok ne írják felül */
 html, body { margin: 0; }
 body { font: 15px/1.5 var(--f-body); color: var(--ink); background: var(--paper); -webkit-font-smoothing: antialiased; }
 a { color: inherit; }
@@ -314,3 +315,28 @@ label > .ai-badge { margin: -2px 0 2px; }
 .needs { border-color: var(--err) !important; box-shadow: 0 0 0 3px rgba(194, 54, 43, .2) !important; }
 input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; border-radius: 6px; }
 #make-status:not(:empty) { color: var(--ink); font-weight: 600; }
+
+/* ---------- átjárás: fájlhely, eszközváltó, „Use in…” ---------- */
+.slot { display: grid; gap: 6px; margin-bottom: 14px; }
+.slot-label { font-weight: 600; font-size: 13px; }
+.slot-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.slot-row input[type=file] { flex: 1 1 200px; min-width: 0; font-size: 13px; }
+.slot-pick { padding: 7px 11px; font-size: 13px; }
+.slot.needs .slot-row { outline: 2px solid var(--err); outline-offset: 3px; border-radius: 8px; }
+.slot-list { display: grid; gap: 4px; max-height: 240px; overflow: auto; border: 1px solid var(--rule); border-radius: 10px; padding: 6px; background: var(--card); }
+.slot-list button { all: unset; cursor: pointer; display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 5px 6px; border-radius: 8px; font-size: 13px; }
+.slot-list button:hover, .slot-list button:focus-visible { background: var(--paper-2); }
+.slot-list img { width: 40px; height: 30px; object-fit: cover; border-radius: 4px; background: var(--paper-2); }
+.slot-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot-list em { font: 500 11px var(--f-mono); color: var(--graphite); font-style: normal; }
+.slot-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.slot-chips:empty { display: none; }
+.slot-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; border-radius: 999px; background: var(--paper-2); border: 1px solid var(--rule); font-size: 13px; font-weight: 600; max-width: 100%; }
+.slot-chip button { all: unset; cursor: pointer; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; color: var(--graphite); }
+.slot-chip button:hover { background: var(--rule); color: var(--ink); }
+.style-field .slot { border-top: 1px dashed var(--rule); padding-top: 12px; margin-top: 4px; }
+.tool-switch { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 52px 18px 0; }
+.tool-switch button, .tool-switch span { all: unset; cursor: pointer; white-space: nowrap; font: 600 12px/1 var(--f-body); padding: 7px 10px; border-radius: 999px; border: 1px solid var(--rule); color: var(--graphite); }
+.tool-switch span[aria-current] { cursor: default; color: var(--paper); background: var(--ink); border-color: var(--ink); }
+.tool-switch button:hover, .tool-switch button:focus-visible { color: var(--ink); border-color: var(--graphite); }
+.use-in { width: auto; max-width: 220px; padding: 10px 12px; font-weight: 600; font-size: 14px; }

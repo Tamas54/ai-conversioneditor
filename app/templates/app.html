@@ -144,6 +144,7 @@
       <h2 id="file-name"></h2>
       <a class="btn ghost" id="made-back" hidden></a>
       <span id="edit-btns"></span>
+      <select class="use-in" id="use-in" aria-label="Use this file in another tool" hidden></select>
       <span class="convert-to" id="convert-to" hidden><select id="convert-fmt" aria-label="Convert to"></select><button class="btn ghost" id="btn-convert">Convert</button></span>
       <a class="btn" id="btn-download" download>Download</a>
       <button class="btn" id="btn-print">Print</button>
@@ -206,7 +207,8 @@ const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
   deck: ["pmode", { blank: "new", brief: "from-brief", document: "from-document", open: "open" }],
   photo: ["mode", { edit: "edit", restore: "restore", quick: "quick-fix", open: "open" }],
 };
-const makeLink = (kind, mode, src) => `#/make/${SLUGS[kind]}` + (mode && MODES[kind] ? `/${MODES[kind][1][mode]}` : "") + (src ? `?src=${encodeURIComponent(src)}` : "");       // a Presentationnek van AI nélküli módja (New / Open a file)
+const makeLink = (kind, mode, src, slot) => `#/make/${SLUGS[kind]}` + (mode && MODES[kind] ? `/${MODES[kind][1][mode]}` : "")
+  + (src ? `?src=${encodeURIComponent(src)}` + (slot ? `&slot=${encodeURIComponent(slot)}` : "") : "");       // a Presentationnek van AI nélküli módja (New / Open a file)
 function accountCta(title) {
   const form = $("#make-form");
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
@@ -412,22 +414,22 @@ const views = {
       });
       box.append(b);
     });
-    if (["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pdf"].includes(f.ext)) {   // dokumentum → pakli
-      const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = "Make slides";
-      b.title = "Turn this document into a presentation";
-      b.addEventListener("click", () => location.hash = makeLink("deck", "document", f.file_id));
-      box.append(b);
-    }
-    if (f.ext === "pptx") {                                     // pakli → Word-kiosztmány
-      const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = "Make a handout";
-      b.title = "A Word document with every slide, its text and your speaker notes";
-      b.addEventListener("click", async () => {
-        b.disabled = true; b.textContent = "Making the handout…";
-        try { const r = await api("/api/make/handout", { method: "POST", body: JSON.stringify({ file_id: f.file_id }) });
-              toast(`Handout ready — ${r.label}`); location.hash = "#/file/" + encodeURIComponent(r.file_id); }
-        catch (e) { toast(e.message); b.disabled = false; b.textContent = "Make a handout"; }
+    const uses = USES.filter(([, , , exts]) => exts.includes(f.ext));     // átjárás: ez a fájl melyik eszközben használható
+    if (uses.length) {
+      const sel = $("#use-in");
+      sel.innerHTML = `<option value="" disabled selected>Use in…</option>` + uses.map((u, i) => `<option value="${i}">${esc(u[4])}</option>`).join("");
+      sel.hidden = false;
+      sel.addEventListener("change", async () => {
+        const [kind, mode, slot] = uses[+sel.value]; sel.selectedIndex = 0;
+        if (kind === "handout") {
+          toast("Making the handout…");
+          try { const r = await api("/api/make/handout", { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
+                toast(`Handout ready — ${r.label}`); location.hash = "#/file/" + encodeURIComponent(r.file_id); }
+          catch (e) { toast(e.message); }
+          return;
+        }
+        location.hash = makeLink(kind, mode, cur.file_id, slot);
       });
-      box.append(b);
     }
     if (sub === "edit") {
       const b = box.querySelector(`button[data-app="${wantApp}"]`) || box.querySelector("button[data-app]");
@@ -469,7 +471,8 @@ views.make = async arg => {    // #/make/<eszköz>[/<mód>][?src=<file_id>] — 
   if (!mounted) { history.replaceState(null, "", "#/"); await views.home(); history.replaceState(null, "", "#/make/" + arg); }
   const mode = MODES[kind] && Object.entries(MODES[kind][1]).find(([, w]) => w === modeSlug)?.[0];
   const q = new URLSearchParams(qs);
-  openMaker(kind, { mode, source: q.get("src") || undefined, again: !!(history.state?.again || q.get("again")) });
+  openMaker(kind, { mode, source: q.get("src") || undefined, slot: q.get("slot") || undefined,
+    again: !!(history.state?.again || q.get("again")), draft: !!history.state?.draft });
 };
 async function route() {
   const [, name = "", arg] = location.hash.match(/^#\/([a-z]*)\/?(.*)$/) || [];
@@ -507,13 +510,13 @@ function imagePicker(name, { allowNone = true, ai = true, label = "Image" } = {}
   const opts = [["upload", "Upload"], ["stock", "Stock photo"]].concat(ai ? [["ai", account?.guest ? "AI image · account" : "AI image"]] : []).concat(allowNone ? [["none", "None"]] : []);
   return `<fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">${label}</legend>
     <div class="seg" role="radiogroup">${opts.map(([v, t], i) => `<label><input type="radio" name="${name}-src" value="${v}" ${i === 1 ? "checked" : ""}><span>${t}</span></label>`).join("")}</div>
-    <input type="file" name="${name}-file" accept="image/*" hidden>
+    <div data-upload-of="${name}" hidden>${fileSlot(`${name}-file`, { exts: EXT.image, label: "" })}</div>
     <input type="text" name="${name}-q" placeholder="What should it show? e.g. city skyline at dusk"></fieldset>`;
 }
 function wirePicker(form, name) {
   const sync = () => {
     const v = form.querySelector(`[name=${name}-src]:checked`).value;
-    form.querySelector(`[name=${name}-file]`).hidden = v !== "upload";
+    form.querySelector(`[data-upload-of="${name}"]`).hidden = v !== "upload";
     const q = form.querySelector(`[name=${name}-q]`); q.hidden = !(v === "stock" || v === "ai");
     q.placeholder = v === "ai" ? `Describe the image — costs ${account?.image_credit_cost ?? 1} credit` : "Search words, e.g. city skyline";
   };
@@ -522,8 +525,8 @@ function wirePicker(form, name) {
 async function readPicker(form, name) {
   const v = form.querySelector(`[name=${name}-src]:checked`)?.value;
   if (v === "upload") {
-    const f = form.querySelector(`[name=${name}-file]`).files[0]; if (!f) return null;
-    return { file_id: (await uploadFile(f)).file_id };
+    const [id] = await readSlot(form, `${name}-file`);
+    return id ? { file_id: id } : null;
   }
   const q = form.querySelector(`[name=${name}-q]`)?.value.trim();
   if (!q) return null;
@@ -533,17 +536,150 @@ const ACCENTS = ["#FF5A36", "#2F80ED", "#1E9E6A", "#8E44AD", "#F2B705", "#15191B
 const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Accent colour</legend>
   <div class="swatches">${ACCENTS.map((c, i) => `<input type="radio" name="accent" value="${c}" style="--c:${c}" aria-label="${c}" ${i ? "" : "checked"}>`).join("")}</div></fieldset>`;
 
+// ---------- ÁTJÁRÁS-RENDSZER ----------
+// 1) Fájlhely: MINDEN készítő MINDEN fájlmezője ez — feltöltés, „From your files”, vagy kívülről átadott fájl.
+const EXT = {
+  image: ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif", "psd"],
+  doc: ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm"],
+  slides: ["pptx", "potx", "ppt", "odp"], pdf: ["pdf"],
+};
+const extOf = n => (String(n).split(/[?#]/)[0].split(".").pop() || "").toLowerCase();
+function fileSlot(name, { exts = null, multiple = false, label = "File", hint = "" } = {}) {
+  return `<div class="slot" data-slot="${name}" data-exts="${exts ? exts.join(",") : ""}"${multiple ? " data-multiple" : ""}>
+    ${label ? `<span class="slot-label">${label}</span>` : ""}
+    <div class="slot-row"><input type="file" name="${name}" accept="${exts ? exts.map(e => "." + e).join(",") : ""}"${multiple ? " multiple" : ""}>
+      <button type="button" class="btn ghost slot-pick">From your files</button></div>
+    <div class="slot-list" hidden></div><div class="slot-chips"></div>${hint}</div>`;
+}
+const slotEl = (form, name) => form.querySelector(`.slot[data-slot="${name}"]`);
+function slotPicked(form, name) { try { return JSON.parse(slotEl(form, name)?.dataset.ids || "[]"); } catch { return []; } }
+function setSlotPicked(form, name, ids) {
+  const s = slotEl(form, name); if (!s) return;
+  if (!s.hasAttribute("data-multiple")) { ids = ids.slice(-1); if (ids.length) s.querySelector("input[type=file]").value = ""; }
+  s.dataset.ids = JSON.stringify(ids);
+  s.querySelector(".slot-chips").innerHTML = ids.map(id => `<span class="slot-chip">${esc(files.find(x => x.file_id === id)?.label || id)}<button type="button" data-unpick="${esc(id)}" aria-label="Remove">✕</button></span>`).join("");
+  if (ids.length) s.classList.remove("needs");
+  s.dispatchEvent(new Event("slotchange", { bubbles: true }));
+}
+function pickerUpload(form, name) {                 // képválasztó fájlhelye: „Upload” módra vált
+  if (!name.endsWith("-file")) return;
+  const r = form.querySelector(`[name="${name.slice(0, -5)}-src"][value=upload]`);
+  if (r && !r.checked) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); }
+}
+function setSlotFiles(form, name, list) {          // File-objektumok átvitele (ablakváltáskor, visszatéréskor)
+  const s = slotEl(form, name), inp = s?.querySelector("input[type=file]"); if (!inp || !list?.length) return;
+  pickerUpload(form, name);
+  const dt = new DataTransfer(); (inp.multiple ? list : list.slice(0, 1)).forEach(f => dt.items.add(f));
+  inp.files = dt.files; s.classList.remove("needs"); s.dispatchEvent(new Event("slotchange", { bubbles: true }));
+}
+function slotExt(form, name) {                      // az első kiválasztott fájl kiterjesztése
+  const ids = slotPicked(form, name); if (ids.length) return extOf(ids[0]);
+  const f = slotEl(form, name)?.querySelector("input[type=file]").files[0]; return f ? extOf(f.name) : "";
+}
+async function readSlot(form, name, need = "") {    // → file_id-k: a kiválasztott saját fájlok + a most feltöltöttek
+  const s = slotEl(form, name); if (!s) return [];
+  const ids = slotPicked(form, name), up = [...s.querySelector("input[type=file]").files];
+  for (const [i, f] of up.entries()) { $("#make-status").textContent = up.length > 1 ? `Uploading ${i + 1} of ${up.length}…` : "Uploading…"; ids.push((await uploadFile(f)).file_id); }
+  if (!ids.length && need) { s.classList.add("needs"); s.scrollIntoView({ block: "center", behavior: "smooth" }); throw new Error(`Choose ${need} — upload it or pick it from your files.`); }
+  return ids;
+}
+function slotSnapshot(form) {
+  const o = {};
+  form.querySelectorAll(".slot").forEach(s => { o[s.dataset.slot] = { ids: slotPicked(form, s.dataset.slot), files: [...s.querySelector("input[type=file]").files] }; });
+  return o;
+}
+function restoreSlots(form, snap) { for (const [name, v] of Object.entries(snap || {})) { if (v.ids?.length) presetSlot(form, name, v.ids); if (v.files?.length) setSlotFiles(form, name, v.files); } }
+function presetSlot(form, name, ids) {
+  pickerUpload(form, name);
+  setSlotPicked(form, name, ids);
+  if (ids.some(id => !files.find(x => x.file_id === id))) loadFiles().then(() => setSlotPicked(form, name, slotPicked(form, name))).catch(() => {});
+}
+function wireSlots(form) {
+  form.querySelectorAll(".slot").forEach(s => {
+    const name = s.dataset.slot, list = s.querySelector(".slot-list");
+    s.querySelector("input[type=file]").addEventListener("change", () => {
+      s.classList.remove("needs"); if (!s.hasAttribute("data-multiple")) setSlotPicked(form, name, []); else s.dispatchEvent(new Event("slotchange", { bubbles: true }));
+    });
+    s.querySelector(".slot-pick").addEventListener("click", async () => {
+      if (!list.hidden) { list.hidden = true; return; }
+      if (!files.length) await loadFiles().catch(() => {});
+      const exts = s.dataset.exts ? s.dataset.exts.split(",") : null;
+      const mine = files.filter(f => !exts || exts.includes(f.ext)).slice(0, 40);
+      list.innerHTML = mine.length ? mine.map(f => `<button type="button" data-pick="${esc(f.file_id)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"><span>${esc(f.label)}</span><em>${ago(f.mtime)}</em></button>`).join("")
+        : `<p class="muted small" style="margin:6px 0">No matching files yet — upload one.</p>`;
+      list.hidden = false;
+    });
+    list.addEventListener("click", e => {
+      const b = e.target.closest("[data-pick]"); if (!b) return;
+      const multi = s.hasAttribute("data-multiple");
+      setSlotPicked(form, name, multi ? [...new Set([...slotPicked(form, name), b.dataset.pick])] : [b.dataset.pick]);
+      if (!multi) list.hidden = true;
+    });
+    s.querySelector(".slot-chips").addEventListener("click", e => {
+      const b = e.target.closest("[data-unpick]"); if (b) setSlotPicked(form, name, slotPicked(form, name).filter(x => x !== b.dataset.unpick));
+    });
+  });
+}
+// 2) Mit fogad melyik eszköz: [fájlhely, kiterjesztések, mód] — ebből jön az átvitel ablakváltáskor és a „Use in…” menü
+const TAKES = {
+  doc: [["docfile", EXT.doc, "open"], ["style", ["docx", "odt", "rtf", "pdf", "pptx", ...EXT.image], null]],
+  deck: [["source", [...EXT.doc, "pdf"], "document"], ["pfile", ["pptx", "ppt", "odp"], "open"], ["style", ["pptx", "potx", "pdf", ...EXT.image], null]],
+  social: [["img-file", EXT.image, null]],
+  print: [["img-file", EXT.image, null]],
+  photo: [["photos", EXT.image, null]],
+  book: [["manuscript", ["docx"], null], ["cover-file", EXT.image, null]],
+  scan: [["pages", [...EXT.image, "pdf"], null]],
+  pdf: [["pdfs", ["pdf"], null]],
+  convert: [["file", null, null]],
+};
+const USES = [   // a fájlnézet „Use in…” menüje: [eszköz, mód, fájlhely, kiterjesztések, felirat]
+  ["deck", "document", "source", [...EXT.doc, "pdf"], "Presentation — slides from this"],
+  ["handout", null, null, ["pptx"], "Word handout — every slide with its text and notes"],
+  ["deck", "brief", "style", ["pptx", "potx"], "Presentation — a new deck on this design"],
+  ["book", null, "manuscript", ["docx"], "Book — typeset it as a book"],
+  ["doc", "brief", "style", ["docx", "odt", "rtf", "pdf"], "Document — write a new one in this style"],
+  ["photo", "edit", "photos", EXT.image, "Photos — edit with words"],
+  ["photo", "restore", "photos", EXT.image, "Photos — restore & colourise"],
+  ["social", null, "img-file", EXT.image, "Social post — with this picture"],
+  ["print", null, "img-file", EXT.image, "Print design — with this picture"],
+  ["book", null, "cover-file", EXT.image, "Book — as the cover picture"],
+  ["scan", null, "pages", [...EXT.image, "pdf"], "Scan to text — read the text"],
+  ["pdf", null, "pdfs", ["pdf"], "PDF tools — merge, compress, black out…"],
+];
+const takesFor = (kind, ext) => (TAKES[kind] || []).find(([, exts]) => !exts || exts.includes(ext));
+// 3) Ablakváltás: a félkész ablak megmarad (Vissza oda hoz, kitöltve), a kiválasztott fájl átjön, ha az új eszköz fogadja
+const drafts = {};
+let pendingCarry = null;
+function switchTool(from, to, form) {
+  drafts[from] = { ...formState(form), slots: slotSnapshot(form) };
+  let carry = null;
+  for (const [slot] of (TAKES[from] || []).filter(([s]) => s !== "style")) {
+    const snap = drafts[from].slots[slot];
+    if (snap && (snap.ids.length || snap.files.length)) { carry = snap; break; }
+  }
+  if (location.hash.startsWith("#/make/")) history.replaceState({ draft: true }, "", location.hash);
+  pendingCarry = carry && { to, ...carry };
+  location.hash = makeLink(to);
+}
+function applyCarry(kind, form) {
+  if (!pendingCarry || pendingCarry.to !== kind) return;
+  const c = pendingCarry; pendingCarry = null;
+  const first = c.ids[0] || c.files[0]?.name; if (!first) return;
+  const tk = takesFor(kind, extOf(first)); if (!tk) return;
+  const [slot, , mode] = tk, field = MODES[kind]?.[0];
+  if (mode && field) { const r = form.querySelector(`[name=${field}][value=${mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
+  if (c.ids.length) presetSlot(form, slot, c.ids);
+  if (c.files.length) setSlotFiles(form, slot, c.files);
+}
+
 // stílusminta: „olyan legyen, mint ez” — egy saját dokumentum, valaki más pptx-e, egy PDF vagy kép
-const styleField = (what = "document") => what === "deck"
-  ? `<label class="style-field">Style example <span class="muted small">(optional) — a PowerPoint or template (.pptx, .potx) to build on: its layouts, backgrounds, logo and fonts are used. A PDF or picture gives just the colours and fonts.</span>
-  <input type="file" name="style" accept=".pptx,.potx,.pdf,image/*"></label>`
-  : `<label class="style-field">Style example <span class="muted small">(optional) — a ${what} whose look you want: Word, PDF, pptx or a picture</span>
-  <input type="file" name="style" accept=".docx,.odt,.rtf,.pdf,.pptx,image/*"></label>`;
+const styleField = (what = "document") => `<div class="style-field">${what === "deck"
+  ? fileSlot("style", { exts: ["pptx", "potx", "pdf", ...EXT.image], label: `Style example <span class="muted small">(optional) — a PowerPoint or template (.pptx, .potx) to build on: its layouts, backgrounds, logo and fonts are used. A PDF or picture gives just the colours and fonts.</span>` })
+  : fileSlot("style", { exts: ["docx", "odt", "rtf", "pdf", "pptx", ...EXT.image], label: `Style example <span class="muted small">(optional) — a ${what} whose look you want: Word, PDF, pptx or a picture</span>` })}</div>`;
 async function readStyle(form) {
-  const f = form.querySelector("[name=style]")?.files[0];
-  if (!f) return null;
-  $("#make-status").textContent = "Reading the style example…";
-  return (await uploadFile(f)).file_id;
+  const [id] = await readSlot(form, "style");
+  if (id) $("#make-status").textContent = "Reading the style example…";
+  return id || null;
 }
 
 // ---------- készítők ----------
@@ -559,7 +695,7 @@ const MAKERS = {
         <label>What should it be? <em class="ai-badge">AI</em><select name="kind"><option value="letter">Letter</option><option value="report">Report</option>
           <option value="article">Article</option><option value="proposal">Proposal</option><option value="memo">Memo</option><option value="cv">CV / résumé</option><option value="other">Something else</option></select></label>
         <label>Brief<textarea name="brief" placeholder="e.g. A friendly letter to our tenants: the courtyard is being renovated from 3 to 14 November, cars must park on the street; thank them for their patience."></textarea></label></div>
-      <div data-dmode="open" hidden><label>Document<input type="file" name="docfile" accept=".docx,.doc,.odt,.rtf,.md,.txt,.html"></label></div>
+      <div data-dmode="open" hidden>${fileSlot("docfile", { exts: EXT.doc, label: "Document" })}</div>
       <div data-dmode-style>${styleField("document")}</div>`,
     wire(form) {
       const sync = () => { const m = form.querySelector("[name=dmode]:checked").value; form.querySelectorAll("[data-dmode]").forEach(d => d.hidden = d.dataset.dmode !== m);
@@ -570,8 +706,8 @@ const MAKERS = {
       const m = fd.get("dmode");
       let r;
       if (m === "open") {
-        const f = form.querySelector("[name=docfile]").files[0]; if (!f) throw new Error("Choose a document.");
-        r = await uploadFile(f);
+        const [id] = await readSlot(form, "docfile", "a document");
+        r = { file_id: id };
       } else if (m === "brief") {
         if (account?.guest) throw new Error(AI_NOTE);
         const style_file_id = await readStyle(form);
@@ -594,22 +730,16 @@ const MAKERS = {
         <p class="muted small" style="margin:-6px 0 12px">Opens straight in the slide editor.</p></div>
       <div data-pmode="brief"><label>What is it about? <em class="ai-badge">AI</em><textarea name="brief" placeholder="e.g. A 10-minute pitch for our community solar project: the problem, how it works, costs, timeline and the ask."></textarea></label></div>
       <div data-pmode="document" hidden>
-        <label>Document <em class="ai-badge">AI</em><select name="source"></select></label>
-        <label>…or upload one<input type="file" name="srcfile" accept=".docx,.doc,.odt,.rtf,.md,.txt,.html,.pdf"></label>
+        ${fileSlot("source", { exts: [...EXT.doc, "pdf"], label: 'Document <em class="ai-badge">AI</em>' })}
         <label>What should the deck do? <span class="muted small" style="font-weight:400">(optional)</span><textarea name="dbrief" style="min-height:70px" placeholder="e.g. A 10-minute talk for the board — keep the numbers"></textarea></label>
         <p class="muted small" style="margin:-6px 0 12px">Its headings become slides; its facts, tables and pictures are kept.</p></div>
-      <div data-pmode="open" hidden><label>Presentation<input type="file" name="pfile" accept=".pptx,.ppt,.odp"></label></div>
+      <div data-pmode="open" hidden>${fileSlot("pfile", { exts: ["pptx", "ppt", "odp"], label: "Presentation" })}</div>
       <div data-pmode-ai><label>Slides<select name="slides"><option value="">Automatic</option>${Array.from({ length: 12 }, (_, i) => `<option>${i + 4}</option>`).join("")}</select></label>
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
       <div class="seg"><label><input type="radio" name="images" value="stock" checked><span>Stock photos</span></label>
       <label><input type="radio" name="images" value="ai"><span>AI images</span></label><label><input type="radio" name="images" value="none"><span>None</span></label></div></fieldset></div>
       <div data-pmode-look>${swatches()}${styleField("deck")}</div>`,
     wire(form, o = {}) {
-      const DOC = ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pdf"];
-      const docs = files.filter(f => DOC.includes(f.ext));
-      form.querySelector("[name=source]").innerHTML = docs.length
-        ? docs.map(f => `<option value="${esc(f.file_id)}"${f.file_id === o.source ? " selected" : ""}>${esc(f.label)}</option>`).join("")
-        : `<option value="">No documents yet — upload one below</option>`;
       const sync = () => { const m = form.querySelector("[name=pmode]:checked").value;
         form.querySelectorAll("[data-pmode]").forEach(d => d.hidden = d.dataset.pmode !== m);
         form.querySelector("[data-pmode-ai]").hidden = !["brief", "document"].includes(m);
@@ -622,8 +752,8 @@ const MAKERS = {
       const m = fd.get("pmode");
       let r;
       if (m === "open") {
-        const f = form.querySelector("[name=pfile]").files[0]; if (!f) throw new Error("Choose a presentation.");
-        r = await uploadFile(f);
+        const [id] = await readSlot(form, "pfile", "a presentation");
+        r = { file_id: id };
       } else if (m === "blank") {
         const style_file_id = await readStyle(form);
         r = await api("/api/make/deck", { method: "POST", body: JSON.stringify({ mode: "blank", title: fd.get("title"), accent: fd.get("accent"), style_file_id }) });
@@ -631,9 +761,7 @@ const MAKERS = {
         if (account?.guest) throw new Error(AI_NOTE);
         const body = { mode: m, images: fd.get("images"), accent: fd.get("accent"), slides: +fd.get("slides") || null };
         if (m === "document") {
-          const up = form.querySelector("[name=srcfile]").files[0];
-          body.source_file_id = up ? (await uploadFile(up)).file_id : fd.get("source");
-          if (!body.source_file_id) throw new Error("Choose a document, or upload one.");
+          [body.source_file_id] = await readSlot(form, "source", "a document");
           body.brief = fd.get("dbrief") || "";
         } else {
           body.brief = fd.get("brief") || "";
@@ -672,7 +800,7 @@ const MAKERS = {
   },
   book: {
     cta: "Make the book", title: "New book", sub: "Upload your manuscript (.docx with Heading 1 chapters). It opens typeset in the Word editor so you can check every page before you publish — the PDF is made alongside.",
-    fields: () => `<label>Manuscript (.docx)<input type="file" name="manuscript" accept=".docx" required></label>
+    fields: () => `${fileSlot("manuscript", { exts: ["docx"], label: "Manuscript (.docx)" })}
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="layout" value="book" checked><span>Book — check it in Word</span></label>
       <label><input type="radio" name="layout" value="booklet"><span>Designed booklet (PDF)</span></label></div>
       <label>Title<input type="text" name="title" maxlength="120"></label>
@@ -681,7 +809,8 @@ const MAKERS = {
       ${imagePicker("cover", { label: "Cover image" })}${styleField("book or document")}`,
     wire(form) { wirePicker(form, "cover"); },
     async submit(fd, form) {
-      const m = await uploadFile(form.querySelector("[name=manuscript]").files[0]);
+      const [mid] = await readSlot(form, "manuscript", "your manuscript (.docx)");
+      const m = { file_id: mid };
       const style_file_id = await readStyle(form);
       $("#make-status").textContent = "Typesetting the book…";
       const r = await api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover"), style_file_id, layout: fd.get("layout") }) });
@@ -690,7 +819,7 @@ const MAKERS = {
   },
   photo: {
     cta: "Go", alt: "Go & edit", title: "Photos", sub: "Every result is a layered Photoshop file (PSD) plus a JPG — nothing is lost, every step can be undone by hand. “Go & edit” opens the result in the photo editor.",
-    fields: () => `<label>Photos<input type="file" name="photos" accept="image/*" multiple required></label>
+    fields: () => `${fileSlot("photos", { exts: EXT.image, multiple: true, label: "Photos" })}
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
       <label><input type="radio" name="mode" value="restore"><span>Restore old photos</span></label>
       <label><input type="radio" name="mode" value="quick"><span>Quick fix</span></label>
@@ -704,7 +833,7 @@ const MAKERS = {
       <label>What should change? <em class="ai-badge">AI</em><textarea name="instruction" placeholder="e.g. Instagram 4:5, a bit warmer, darker dramatic sky, headline ‘Summer sale −30%’ at the top, our logo bottom right"></textarea></label>
       <div class="chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:-6px 0 14px">${["Instagram 4:5", "Square 1:1", "Warmer, more vivid", "Black & white, high contrast", "Cinematic teal & orange look", "Dramatic sky", "Brighter, fix exposure", "Remove the background, white backdrop", "Headline at the top"]
         .map(c => `<button type="button" class="chip" data-chip="${esc(c)}">${esc(c)}</button>`).join("")}</div>
-      <label>Logo (optional)<input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg"></label></div>
+      ${fileSlot("logo", { exts: ["png", "svg", "webp", "jpg", "jpeg"], label: "Logo (optional)" })}</div>
       <div data-mode="quick" hidden>
       <div class="seg" style="margin-top:2px"><label><input type="radio" name="action" value="enhance" checked><span>Enhance</span></label>
       <label><input type="radio" name="action" value="remove_background"><span>Remove background</span></label>
@@ -721,18 +850,15 @@ const MAKERS = {
       }));
     },
     async submit(fd, form, opts = {}) {
-      const mode = fd.get("mode"), photos = [...form.querySelector("[name=photos]").files];
-      if (!photos.length) throw new Error("Choose a photo.");
+      const mode = fd.get("mode");
+      const instr0 = mode === "edit" ? (fd.get("instruction") || "").trim() : "";
+      if (mode === "edit" && !instr0) throw new Error("Describe the edit — or use a quick fix.");
+      if (mode !== "quick" && mode !== "open" && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
+      const ids = await readSlot(form, "photos", "a photo");
       if (mode === "open") {
-        const ids = [];
-        for (const f of photos) ids.push((await uploadFile(f)).file_id);
         return { file_id: ids[0], n: ids.length, edit: true, msg: ids.length > 1 ? "Opening the first one — the others are in your files" : "Opening the photo editor…" };
       }
-      const instr = mode === "edit" ? (fd.get("instruction") || "").trim() : "", action = mode === "quick" ? fd.get("action") : "";
-      if (mode === "edit" && !instr) throw new Error("Describe the edit — or use a quick fix.");
-      if (mode !== "quick" && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
-      const st = $("#make-status"), ids = [];
-      for (const [i, f] of photos.entries()) { st.textContent = `Uploading ${i + 1} of ${photos.length}…`; ids.push((await uploadFile(f)).file_id); }
+      const instr = instr0, action = mode === "quick" ? fd.get("action") : "", st = $("#make-status");
       if (mode === "restore") {
         const job = await api("/api/make/restore", { method: "POST", body: JSON.stringify({ file_ids: ids, colorize: fd.get("colorize") ? null : false, split_prints: !!fd.get("split") }) });
         const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the pictures…");
@@ -742,8 +868,7 @@ const MAKERS = {
         return { file_id: r.file_id, n: r.files.length, msg: `Restored ${r.photos} picture${r.photos > 1 ? "s" : ""} — layered PSDs are in your files` };
       }
       if (instr) {
-        const logoFile = form.querySelector("[name=logo]").files[0];
-        const logo = logoFile ? (await uploadFile(logoFile)).file_id : null;
+        const [logo = null] = await readSlot(form, "logo");
         const job = await api("/api/make/photo_edit", { method: "POST", body: JSON.stringify({ file_ids: ids, instruction: instr, logo_file_id: logo }) });
         const r = await pollJob(job, j => j.stage === "planning the edit" ? "Planning the edit…" : `Editing photo ${Math.min(j.done + 1, j.total)} of ${j.total}…`);
         const jpg = r.files.find(x => /\.(jpe?g|png)$/.test(x.file_id)) || r.files[0];
@@ -780,7 +905,7 @@ const MAKERS = {
   },
   scan: {
     cta: "Read the pages", title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and give you an editable document.",
-    fields: () => `<label>Pages, in order<input type="file" name="pages" accept="image/*,.pdf,application/pdf" multiple required></label>
+    fields: () => `${fileSlot("pages", { exts: [...EXT.image, "pdf"], multiple: true, label: "Pages, in order" })}
       <p class="muted small" style="margin:-6px 0 14px">Phone photos are fine — flat, well lit, one page per photo. A scanned PDF works too. Up to ${account?.ocr_max_pages ?? 60} pages at a time.</p>
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">You get</legend>
       <div class="checks"><label><input type="checkbox" name="out" value="docx" checked> Word document (.docx)</label>
@@ -795,8 +920,7 @@ const MAKERS = {
       ${styleField("document")}`,
     wire() {},
     async submit(fd, form) {
-      const picked = [...form.querySelector("[name=pages]").files], st = $("#make-status"), ids = [];
-      for (const [i, f] of picked.entries()) { st.textContent = `Uploading ${i + 1} of ${picked.length}…`; ids.push((await uploadFile(f)).file_id); }
+      const ids = await readSlot(form, "pages", "the pages");
       const style_file_id = await readStyle(form);
       const job = await api("/api/make/digitize", { method: "POST", body: JSON.stringify({ file_ids: ids, outputs: fd.getAll("out"), language: fd.get("lang"), style_file_id }) });
       const r = await pollJob(job, j => j.total ? (j.stage === "building files" ? "Putting the documents together…"
@@ -812,21 +936,22 @@ const MAKERS = {
   },
   convert: {
     cta: "Convert", title: "Convert a file", sub: "Pick a file and the format you need. The original stays as it was.",
-    fields: () => `<label>File<input type="file" name="file" required></label>
+    fields: () => `${fileSlot("file", { label: "File" })}
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
     wire(form) {
-      form.querySelector("[name=file]").addEventListener("change", async e => {
-        const f = e.target.files[0], sel = form.querySelector("[name=target]");
-        const ext = (f?.name.split(".").pop() || "").toLowerCase();
+      form.addEventListener("slotchange", async e => {
+        if (e.target.dataset?.slot !== "file") return;
+        const ext = slotExt(form, "file"), sel = form.querySelector("[name=target]");
+        if (!ext) { sel.innerHTML = `<option value="">Choose a file first</option>`; sel.disabled = true; return; }
         const { targets } = await api(`/api/convert/targets?ext=${encodeURIComponent(ext)}`);
         sel.innerHTML = targets.length ? targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("") : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
         sel.disabled = !targets.length;
       });
     },
     async submit(fd, form) {
-      const f = await uploadFile(form.querySelector("[name=file]").files[0]);
+      const [fid] = await readSlot(form, "file", "a file");
       $("#make-status").textContent = "Converting…";
-      return api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: f.file_id, target: fd.get("target") }) });
+      return api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: fid, target: fd.get("target") }) });
     },
   },
   pdf: {
@@ -837,7 +962,7 @@ const MAKERS = {
         <option value="watermark">Add a watermark</option><option value="redact">Black out text for good</option>
         <option value="ocr">Make a scan searchable (English)</option><option value="protect">Lock with a password</option>
         <option value="compare">Compare two versions</option><option value="make_fillable">Make a printed form fillable</option></select></label>
-      <label><span id="pdf-files-label">PDF</span><input type="file" name="pdfs" accept="application/pdf,.pdf" required></label>
+      ${fileSlot("pdfs", { exts: ["pdf"], label: "PDF" })}
       <div data-for="watermark" hidden><label>Watermark text<input type="text" name="wm" maxlength="40" placeholder="DRAFT"></label></div>
       <div data-for="page_numbers" hidden><label>Position<select name="pos"><option value="center">Bottom centre</option><option value="right">Bottom right</option><option value="left">Bottom left</option></select></label></div>
       <div data-for="redact" hidden><label>Words or phrases, one per line<textarea name="words" placeholder="Jane Doe&#10;Project Falcon"></textarea></label>
@@ -847,17 +972,16 @@ const MAKERS = {
       <div data-for="protect" hidden><label>Password to open it<input type="text" name="pw" minlength="4" autocomplete="off"></label></div>`,
     wire(form) {
       const sync = () => {
-        const a = form.querySelector("[name=action]").value, many = a === "merge" || a === "compare", inp = form.querySelector("[name=pdfs]");
-        inp.multiple = many;
-        $("#pdf-files-label").textContent = a === "merge" ? "PDFs, in order (pick several)" : a === "compare" ? "Old version, then new version (pick both)" : "PDF";
+        const a = form.querySelector("[name=action]").value, many = a === "merge" || a === "compare", s = slotEl(form, "pdfs");
+        s.toggleAttribute("data-multiple", many); s.querySelector("input[type=file]").multiple = many;
+        s.querySelector(".slot-label").textContent = a === "merge" ? "PDFs, in order (pick several)" : a === "compare" ? "Old version, then new version (pick both)" : "PDF";
         form.querySelectorAll("[data-for]").forEach(d => d.hidden = d.dataset.for !== a);
       };
       form.querySelector("[name=action]").addEventListener("change", sync); sync();
     },
     async submit(fd, form) {
-      const a = fd.get("action"), picked = [...form.querySelector("[name=pdfs]").files];
-      if ((a === "merge" || a === "compare") && picked.length < 2) throw new Error("Pick at least two PDFs (hold Ctrl or ⌘ to select several).");
-      const ids = []; for (const f of picked) ids.push((await uploadFile(f)).file_id);
+      const a = fd.get("action"), ids = await readSlot(form, "pdfs", "a PDF");
+      if ((a === "merge" || a === "compare") && ids.length < 2) throw new Error("Pick at least two PDFs — several at once, or add them from your files.");
       return api("/api/make/pdf", { method: "POST", body: JSON.stringify({ action: a, file_ids: ids, text: fd.get("wm") || "DRAFT",
         position: fd.get("pos"), words: (fd.get("words") || "").split("\n"), patterns: fd.getAll("pat"), password: fd.get("pw") }) });
     },
@@ -964,17 +1088,35 @@ function editNative(list, n) {
 function openMaker(kind, opts = {}) {
   const m = MAKERS[kind], form = $("#make-form");
   if (account?.guest && AI_MAKERS.has(kind)) return accountCta(m.title);
-  form.innerHTML = `<h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
+  form.innerHTML = `<nav class="tool-switch" aria-label="Tools">${Object.keys(SLUGS).map(k => {
+      const name = esc(MAKERS[k].title.replace(/^New /, "").replace(/^./, c => c.toUpperCase()));
+      return k === kind ? `<span aria-current="page">${name}</span>` : `<button type="button" data-switch="${k}">${name}</button>`; }).join("")}</nav>
+    <h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
     <p class="status" id="make-status"></p>
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt"${m.altLoose ? " formnovalidate" : ""}>${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
   m.wire?.(form, opts);
-  if (opts.again) { try { const st = JSON.parse(sessionStorage.getItem("aice-mk:" + kind) || "null"); if (st) restoreForm(form, st); } catch {} }
+  wireSlots(form);
+  form.querySelector(".tool-switch").addEventListener("click", e => { const b = e.target.closest("[data-switch]"); if (b) switchTool(kind, b.dataset.switch, form); });
+  const back = opts.again || opts.draft;
+  if (back) {   // visszatérés: a beírt adatok + a fájlok (ugyanabban a munkamenetben a feltöltendők is)
+    let st = drafts[kind];
+    if (!st) { try { st = JSON.parse(sessionStorage.getItem("aice-mk:" + kind) || "null"); } catch {} }
+    if (st) {
+      restoreForm(form, st); restoreSlots(form, st.slots);
+      $("#make-status").textContent = (opts.draft ? "Your unfinished settings are back." : "Your last settings are filled in — change what you like and make it again.")
+        + (st.hadFiles && !st.slots ? " Pick the files again." : "");
+    }
+  }
   const [field, words] = MODES[kind] || [];
   if (field) {
-    if (opts.mode && !opts.again) { const r = form.querySelector(`[name=${field}][value=${opts.mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
+    if (opts.mode && !back) { const r = form.querySelector(`[name=${field}][value=${opts.mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
     form.querySelectorAll(`[name=${field}]`).forEach(r => r.addEventListener("change", () => {
       if (location.hash.startsWith("#/make/")) history.replaceState(null, "", makeLink(kind, r.value, opts.source));
     }));
+  }
+  if (!back) {
+    if (opts.source) { const tk = (opts.slot && (TAKES[kind] || []).find(([s]) => s === opts.slot)) || takesFor(kind, extOf(opts.source)); if (tk) presetSlot(form, tk[0], [opts.source]); }
+    applyCarry(kind, form);
   }
   form.onsubmit = async e => {
     if (!["go", "alt"].includes(e.submitter?.value)) return;
@@ -983,6 +1125,7 @@ function openMaker(kind, opts = {}) {
     $("#make-status").textContent = "Working on it — this takes a few seconds…";
     try {
       const r = await m.submit(new FormData(form), form, { alt: e.submitter.value === "alt" });
+      drafts[kind] = { ...formState(form), slots: slotSnapshot(form) };
       try {   // a Vissza (vagy a „Back to …” gomb) ide hoz vissza, a beírt adatokkal
         sessionStorage.setItem("aice-mk:" + kind, JSON.stringify(formState(form)));
         sessionStorage.setItem("aice-made:" + r.file_id, JSON.stringify({ kind, link: location.hash.startsWith("#/make/") ? location.hash.replace(/[?&]again=1/, "") : makeLink(kind) }));
@@ -994,7 +1137,8 @@ function openMaker(kind, opts = {}) {
       location.hash = "#/file/" + encodeURIComponent(r.file_id) + (r.edit ? "/edit" : "");
     } catch (err) { $("#make-status").textContent = err.message; go.disabled = false; if (alt) alt.disabled = false; }
   };
-  $("#drawer").showModal();
+  if (!$("#drawer").open) $("#drawer").showModal();
+  form.scrollTop = 0; $("#drawer").scrollTop = 0;
 }
 
 $("#drawer-x").addEventListener("click", () => $("#drawer").close());
