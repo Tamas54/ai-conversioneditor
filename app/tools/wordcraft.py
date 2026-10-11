@@ -126,21 +126,57 @@ async def run(
     }
 
 
-async def read(mode: str, file_id: Optional[str] = None, query: Optional[str] = None) -> dict[str, Any]:
+# Egy MCP-válasz felső határa: egy 345 oldalas regény szövege 1 MB, az inspect-je 800 KB —
+# egyben szétvetné a kliens kontextusát. Lapozás: offset + max_chars, next_offset a válaszban.
+DEFAULT_MAX_CHARS = 20_000
+
+
+async def read(
+    mode: str,
+    file_id: Optional[str] = None,
+    query: Optional[str] = None,
+    offset: int = 0,
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> dict[str, Any]:
     if mode not in READ_MODES:
         raise ValueError(f"read: {mode} (lehet: {', '.join(sorted(READ_MODES))})")
+    offset, max_chars = max(0, offset), max(1_000, max_chars)
     if mode == "commands":
         cmds = json.loads(await _cli("commands", "--json"))
-        if query:
-            q = query.lower()
-            cmds = [c for c in cmds if q in json.dumps(c, ensure_ascii=False).lower()]
-        return {"count": len(cmds), "commands": cmds}
+        if not query:
+            # 460 parancs teljes leírással 81 KB; az azonosítók ~9 KB. Paraméterek: query-vel.
+            return {"count": len(cmds), "ids": [c["id"] for c in cmds],
+                    "hint": "pass query (e.g. 'table', 'comment') for params and labels"}
+        q = query.lower()
+        cmds = [c for c in cmds if q in json.dumps(c, ensure_ascii=False).lower()]
+        page, nxt = _page_items(cmds, offset, max_chars)
+        return {"count": len(cmds), "commands": page, "offset": offset, "next_offset": nxt}
     if not file_id:
         raise ValueError(f"read={mode} file_id-t kér")
     out = await _cli(mode, str(_existing(file_id)))
     if mode == "text":
-        return {"text": out}
-    return json.loads(out)
+        chunk = out[offset:offset + max_chars]
+        end = offset + len(chunk)
+        return {"text": chunk, "offset": offset, "total_chars": len(out),
+                "next_offset": end if end < len(out) else None}
+    data = json.loads(out)
+    if mode == "inspect":
+        # A blokkokat lapozzuk (offset = blokk-index); a kis metaadatok mindig jönnek.
+        blocks = data.pop("blocks", [])
+        page, nxt = _page_items(blocks, offset, max_chars)
+        data.update({"blocks": page, "blocks_total": len(blocks), "offset": offset, "next_offset": nxt})
+    return data
+
+
+def _page_items(items: list[Any], offset: int, max_chars: int) -> tuple[list[Any], Optional[int]]:
+    """items[offset:]-ből annyit, amennyi JSON-ban max_chars alá fér (legalább egyet)."""
+    page, size, i = [], 0, offset
+    while i < len(items):
+        n = len(json.dumps(items[i], ensure_ascii=False))
+        if page and size + n > max_chars:
+            break
+        page.append(items[i]); size += n; i += 1
+    return page, (i if i < len(items) else None)
 
 
 async def convert_file(src: Path, dst: Path) -> None:

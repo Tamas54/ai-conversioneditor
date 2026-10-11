@@ -67,8 +67,8 @@ ENV WORDCRAFT_CLI=/opt/wordcraft/bin/wordcraft-cli \
 WORKDIR /app
 
 # --- Python deps ---
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt constraints.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements.txt -c /app/constraints.txt
 
 # --- App code ---
 COPY app /app/app

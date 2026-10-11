@@ -94,16 +94,6 @@ async def convert(
 
     out_id = new_file_id(tgt_fmt)
     out_path = output_path(out_id)
-    # Lineage metadata — best-effort (won't block on failure).
-    from app.storage import write_meta, display_label
-    src_label = (display_label(file_id) if file_id else
-                 (Path(source_url).name if source_url else "unknown"))
-    write_meta(
-        out_id,
-        source_file_id=file_id,
-        operation=f"convert→{tgt_fmt}",
-        label=f"{Path(src_label).stem}.{tgt_fmt}",
-    )
 
     if backend == "noop":
         shutil.copy2(src_path, out_path)
@@ -307,6 +297,17 @@ async def convert(
 
     else:
         raise RuntimeError(f"Backend {backend} not implemented")
+
+    # Lineage metadata — csak sikeres konverzió után (különben árva sidecar marad).
+    from app.storage import write_meta, display_label
+    src_label = (display_label(file_id) if file_id else
+                 (Path(source_url).name if source_url else "unknown"))
+    write_meta(
+        out_id,
+        source_file_id=file_id,
+        operation=f"convert→{tgt_fmt}",
+        label=f"{Path(src_label).stem}.{tgt_fmt}",
+    )
 
     size_kb = out_path.stat().st_size // 1024
     ms = int((time.time() - t0) * 1000)

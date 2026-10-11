@@ -263,6 +263,8 @@ async def wordcraft(
     template: Optional[str] = None,
     read: Optional[str] = None,
     query: Optional[str] = None,
+    offset: int = 0,
+    max_chars: int = 20000,
 ) -> dict:
     """
     Edit a document with the WordCraft Word engine: the same ~460 commands
@@ -283,12 +285,15 @@ async def wordcraft(
     save_format: docx (default) | pdf | odt | rtf | html | md | tex | txt | png.
 
     read instead of editing: "text" | "info" | "inspect" (structure JSON,
-    shows tracked-change runs) | "commands" (filter with `query`, e.g. "table").
+    shows tracked-change runs) | "commands" (ids only; `query`, e.g. "table",
+    gives params). text/inspect/commands are paged: pass the returned
+    `next_offset` as `offset` (chars for text, blocks for inspect);
+    `max_chars` caps one reply (default 20000).
     A human can open any docx in the dashboard editor (✏️) to continue by hand.
     """
     from app.tools import wordcraft as wc
     if read:
-        return await wc.read(read, file_id=file_id, query=query)
+        return await wc.read(read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
     return await wc.run(
         file_id=file_id, commands=commands, author=author,
         save_format=save_format, template=template,
