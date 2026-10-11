@@ -46,6 +46,11 @@ class Settings(BaseModel):
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     # Dashboard-belépés (üres = nyitott dashboard, csak helyi fejlesztéshez); a süti aláíró kulcsa.
     DASHBOARD_PASSWORD: str = os.getenv("DASHBOARD_PASSWORD", "")
+    # Termék (nemzetközi, angol felület): név, regisztráció, kreditek
+    PRODUCT_NAME: str = os.getenv("PRODUCT_NAME", "Studio")
+    SIGNUP_OPEN: bool = os.getenv("SIGNUP_OPEN", "1") not in ("0", "false", "no", "")
+    SIGNUP_CREDITS: int = int(os.getenv("SIGNUP_CREDITS", "0"))      # AI-kép nem jár ingyen
+    IMAGE_CREDIT_COST: int = int(os.getenv("IMAGE_CREDIT_COST", "1"))  # egy FLUX-kép ára kreditben
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", os.getenv("FILE_SIGNING_KEY", "change-me-in-railway"))
 
     # --- WordCraft (Rust Word-motor, upstream release-ből; Dockerfile tölti le) ---

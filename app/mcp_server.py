@@ -480,6 +480,51 @@ async def vectorcraft(
 
 
 @mcp.tool()
+async def office(
+    app: str,
+    file_id: Optional[str] = None,
+    commands: Optional[list] = None,
+    save_format: Optional[str] = None,
+    read: Optional[str] = None,
+    query: Optional[str] = None,
+    offset: int = 0,
+    max_chars: int = 20000,
+) -> dict:
+    """
+    Office engines, one tool. app = "deck" (PowerPoint-like, pptx) |
+    "pdf" (Acrobat-like) | "layout" (InDesign-like, .designcraft/.idml) |
+    "sheet" (Excel-like, xlsx/csv). Opens file_id (or starts empty),
+    runs `commands`, saves a NEW file_id in save_format (default: the
+    source format; deck → pptx, layout → pdf, sheet → xlsx).
+
+    deck: [{"command": "file.new", "params": {"blank": true}} (no empty
+      first slide), {"command": "slide.new", …},
+      {"command": "slide.new", "params": {"layout": "titleAndContent",
+      "title": …, "body": "line\nline"}}, {"command": "insert.picture",
+      "params": {"file_id": <img>, "rect": [x,y,w,h]}}, {"command":
+      "insert.chart", "params": {"type": "column", "categories": […],
+      "series": [{"name", "values"}]}}, then chart.options {title: null |
+      str, legend, dataLabels}]. save_format pdf/png exports.
+    sheet: range.setValues {range: "A1", values: [[…]]} (strings starting
+      with = are formulas), cell.set {cell, input}, insert.chart {range,
+      type}, data.sort. save_format csv/json/html converts.
+    pdf: commands are tool steps [{"tool": "redact_mark", "args": {"find":
+      "secret"}}, {"tool": "redact_apply", "args": {}}, {"tool":
+      "page_add_text", "args": {"page": 1, "text": …, "at": [x, y]}},
+      form_fill, page_rotate/delete/move, bookmark_add, page_number…];
+      the document is opened and saved for you.
+    layout: page layout commands (file.new {preset: "A4", pages,
+      facingPages, margins, bleed}…) → pdf/png/designcraft.
+    read: "info" | "text" (pdf text, sheet csv) | "commands" (ids; pass
+    `query` for params and descriptions — always look before guessing).
+    """
+    from app.tools import crafts
+    if read:
+        return await crafts.office_read(app, read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
+    return await crafts.office_run(app, file_id=file_id, commands=commands, save_format=save_format)
+
+
+@mcp.tool()
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -27,7 +28,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.mcp_server import mcp as _mcp_instance, mount_mcp
 from app.auth import auth_middleware, log_auth_state, router as auth_router
-from app.routes import files, upload, health, dashboard, preview, editor, reviews
+from app.routes import files, upload, health, dashboard, preview, editor, reviews, make, product
 from app.storage.cleanup import cleanup_loop
 from app.workers.pool import WorkerPool
 
@@ -86,6 +87,8 @@ app = FastAPI(
 )
 
 app.middleware("http")(auth_middleware)
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.include_router(auth_router)
 app.include_router(health.router)
 app.include_router(upload.router)
@@ -94,6 +97,8 @@ app.include_router(preview.router)
 app.include_router(dashboard.router)
 app.include_router(editor.router)
 app.include_router(reviews.router)
+app.include_router(make.router)
+app.include_router(product.router)
 mount_mcp(app)
 
 

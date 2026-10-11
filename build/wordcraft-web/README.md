@@ -76,3 +76,10 @@ Jókai-regény a javított buildben 344 oldal (gyári: 406), a címsorban nincs 
 
 Ugyanazon WordCraft-verzió új patch-változata: `-aice2`, `-aice3` … (a release-tag egyben a zip
 és a benne lévő mappa neve).
+
+
+## GitHub Actions (még nem aktív)
+A workflow itt van: `github-workflow.yml`. A repóba csak `workflow` jogú tokennel tölthető fel
+(`gh auth refresh -h github.com -s workflow`), utána: `git mv build/wordcraft-web/github-workflow.yml
+.github/workflows/wordcraft-web.yml`. Addig a release kézzel készül: `build.sh` helyben, majd
+`gh release create <tag> <zip> SHA256SUMS.txt`.

@@ -1,7 +1,7 @@
 """Kézi szerkesztők — a Craft-motorok WASM-buildje (változatlan upstream release-ek).
 
     /editor/{app}/            — az app index.html-je, beszúrt aice_bridge.js-sel
-                                (app: wordcraft | photocraft | vectorcraft)
+                                (app: wordcraft | photocraft | vectorcraft | deckcraft | pdfcraft | designcraft | gridcraft)
     /editor/{app}/{asset}     — wasm/js (előtömörített .gz, ha a kliens kéri)
     POST /api/editor/save     — a szerkesztő Mentés/Exportálás bájtjai → új output file_id
 
@@ -9,11 +9,11 @@ A dashboard iframe-ben nyitja: /editor/<app>/?src=<fájl-URL>&name=<fájlnév>&s
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -26,13 +26,16 @@ from app.tools import crafts
 from app.tools.wordcraft import SAVE_FORMATS as WORD_SAVE
 
 router = APIRouter()
+log = logging.getLogger("aice.editor")
 
 BRIDGE_JS = Path(__file__).parent.parent / "static" / "editor" / "aice_bridge.js"
 _ASSET_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MEDIA = {".wasm": "application/wasm", ".js": "text/javascript", ".html": "text/html"}
 _IMMUTABLE = "public, max-age=31536000, immutable"
 # Amit a szerkesztők menteni/exportálni tudnak (a mentés-végpont ezt engedi be).
-_SAVE_EXTS = WORD_SAVE | crafts.PHOTO_SAVE | crafts.VECTOR_SAVE
+_SAVE_EXTS = WORD_SAVE | crafts.PHOTO_SAVE | crafts.VECTOR_SAVE | crafts.OFFICE_SAVE
+# natív mentés → (motor, eredeti formátumok, amelyekre visszaalakítjuk)
+_OFFICE_ROUNDTRIP = {"deckcraft": ("deck", {"pptx"})}
 
 
 def _web_dirs() -> dict[str, Path]:
@@ -40,6 +43,7 @@ def _web_dirs() -> dict[str, Path]:
         "wordcraft": settings.WORDCRAFT_WEB_DIR,
         "photocraft": settings.PHOTOCRAFT_WEB_DIR,
         "vectorcraft": settings.VECTORCRAFT_WEB_DIR,
+        **{spec["exe"]: crafts.office_web_dir(spec["exe"]) for spec in crafts.OFFICE.values()},
     }
 
 
@@ -52,12 +56,6 @@ def _web_dir(app: str) -> Path:
     return d
 
 
-def _now_hu() -> datetime:
-    try:
-        return datetime.now(ZoneInfo("Europe/Budapest"))
-    except Exception:  # nincs tz-adatbázis a képben
-        return datetime.now()
-
 
 def editor_available() -> bool:
     return (settings.WORDCRAFT_WEB_DIR / "index.html").is_file()
@@ -66,7 +64,8 @@ def editor_available() -> bool:
 def crafts_status() -> dict[str, Any]:
     from app.tools import cutout, wordcraft
     clis = {"wordcraft": wordcraft.available(), "photocraft": crafts.photo_cli() is not None,
-            "vectorcraft": crafts.vector_cli() is not None}
+            "vectorcraft": crafts.vector_cli() is not None,
+            **{spec["exe"]: crafts.office_cli(a) is not None for a, spec in crafts.OFFICE.items()}}
     st: dict[str, Any] = {app: {"cli": clis[app], "editor": (d / "index.html").is_file()}
                           for app, d in _web_dirs().items()}
     st["cutout"] = cutout.available()
@@ -136,9 +135,24 @@ async def editor_save(
 
     fid = new_file_id(ext)
     await save_bytes(output_path(fid), data)
-    stamp = _now_hu().strftime("%H:%M")
-    label = f"{Path(fname).stem} (szerk. {stamp}).{ext}"
-    write_meta(fid, label=label, source_file_id=source, operation="kézi szerkesztés", original_filename=fname)
+    # A natív formátumú mentést (Ctrl+S) visszaalakítjuk az eredeti Office-formátumra, ha abból nyitották:
+    # a felhasználó pptx-et nyitott, pptx-et vár vissza (a .deckcraft csak a mi motorunknak olvasható).
+    want = _OFFICE_ROUNDTRIP.get(ext)
+    src_ext = source.rsplit(".", 1)[-1].lower() if source else ""
+    if want and src_ext in want[1]:
+        native, fid = output_path(fid), new_file_id(src_ext)
+        try:
+            await crafts.office_convert(want[0], native, output_path(fid))
+            ext, fname = src_ext, f"{Path(fname).stem}.{src_ext}"
+            data = output_path(fid).read_bytes()
+        except Exception as e:  # marad a natív mentés — az is megnyitható nálunk
+            log.warning("visszaalakítás %s → %s nem sikerült: %s", native.name, src_ext, e)
+            fid = native.name
+        else:
+            native.unlink(missing_ok=True)
+    stamp = datetime.utcnow().strftime("%H:%M")
+    label = f"{Path(fname).stem} (edited {stamp} UTC).{ext}"
+    write_meta(fid, label=label, source_file_id=source, operation="manual edit", original_filename=fname)
     result = {"file_id": fid, "url": public_url(fid), "size_kb": len(data) // 1024, "label": label}
     events.emit("tool_done", tool="editor_save", params={"source": source, "name": fname}, result=result)
     return result

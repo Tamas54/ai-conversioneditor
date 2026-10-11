@@ -18,7 +18,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 
-from app import events
+from app import events, tenancy
 from app.config import settings
 from app.brands import get_brand, list_brands
 from app.brands.renderers import (
@@ -62,11 +62,6 @@ def _pool(request: Request):
     return p
 
 
-@router.get("/", include_in_schema=False)
-async def root() -> HTMLResponse:
-    return HTMLResponse(
-        '<meta http-equiv="refresh" content="0; url=/dashboard">'
-    )
 
 
 @router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
@@ -122,10 +117,10 @@ def _list_dir(d: Path, kind: str, include_ephemeral: bool = False) -> list[dict[
 async def api_files(include_ephemeral: bool = False) -> dict[str, Any]:
     return {
         "inputs": _list_dir(
-            settings.DATA_DIR / "inputs", "input", include_ephemeral=include_ephemeral,
+            tenancy.user_root() / "inputs", "input", include_ephemeral=include_ephemeral,
         ),
         "outputs": _list_dir(
-            settings.DATA_DIR / "outputs", "output", include_ephemeral=include_ephemeral,
+            tenancy.user_root() / "outputs", "output", include_ephemeral=include_ephemeral,
         ),
     }
 
@@ -133,7 +128,7 @@ async def api_files(include_ephemeral: bool = False) -> dict[str, Any]:
 @router.delete("/api/files/{file_id}")
 async def api_delete_file(file_id: str) -> dict[str, Any]:
     removed = []
-    for d in (settings.DATA_DIR / "inputs", settings.DATA_DIR / "outputs"):
+    for d in (tenancy.user_root() / "inputs", tenancy.user_root() / "outputs"):
         p = d / file_id
         if p.exists():
             p.unlink()
@@ -425,9 +420,11 @@ async def api_agent_edit(request: Request, body: dict[str, Any]) -> dict[str, An
 
 @router.get("/api/events")
 async def api_events(request: Request):
+    uid = tenancy.current_user_id()
+
     async def event_generator():
-        # Replay history first
-        for evt in events.history():
+        # Replay history first (csak a saját munkaterület eseményei)
+        for evt in events.history(uid):
             if await request.is_disconnected():
                 return
             yield {"event": "history", "data": json.dumps(evt)}
@@ -439,6 +436,8 @@ async def api_events(request: Request):
                     return
                 try:
                     evt = await asyncio.wait_for(q.get(), timeout=15.0)
+                    if evt.get("uid") != uid:
+                        continue
                     yield {"event": "live", "data": json.dumps(evt)}
                 except asyncio.TimeoutError:
                     yield {"event": "ping", "data": "{}"}
@@ -457,7 +456,7 @@ async def api_status(request: Request) -> dict[str, Any]:
     return {
         "lo_warm": len(pool._lo_workers) if pool else 0,
         "chromium_ready": bool(pool and pool._browser),
-        "data_dir": str(settings.DATA_DIR),
+        "user": tenancy.current_user_id(),
         "siliconflow_configured": bool(settings.SILICONFLOW_API_KEY),
         "model_primary": settings.LLM_MODEL_PRIMARY,
         "model_fallback": settings.LLM_MODEL_FALLBACK,

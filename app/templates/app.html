@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{PRODUCT}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/product.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">{{PRODUCT}}</a>
+  <nav aria-label="Main">
+    <a href="#/" data-nav="home">Make</a>
+    <a href="#/files" data-nav="files">Files</a>
+    <a href="#/connect" data-nav="connect">Connect your AI</a>
+  </nav>
+  <span class="spacer"></span>
+  <a class="chip" id="credits" href="#/connect" title="Credits pay for AI-generated images">credits …</a>
+  <a class="chip" href="/logout">Sign out</a>
+</header>
+
+<main id="view"></main>
+
+<dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><form id="make-form" method="dialog"></form></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<template id="t-home">
+  <section class="mat"><div class="ruler-nums" aria-hidden="true"></div><div class="mat-inner">
+    <h1>What are we making?</h1>
+    <p class="lede">Pick a tool, answer a few questions, get a finished file. Fix anything by hand in the built-in editors — or let your own AI drive it.</p>
+    <div class="tools">
+      <button class="tool" data-make="deck"><span class="obj"><span class="paper o-deck"><i></i><i></i><i></i><b></b></span></span>
+        <span class="label">Presentation</span><span class="hint">Slides from a short brief, with photos and charts</span></button>
+      <button class="tool" data-make="social"><span class="obj"><span class="paper o-post"><div></div><span></span></span></span>
+        <span class="label">Social post</span><span class="hint">One design, every platform size at once</span></button>
+      <button class="tool" data-make="book"><span class="obj"><span class="o-book paper"><i></i><i></i></span></span>
+        <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF</span></button>
+      <button class="tool" data-make="photo"><span class="obj"><span class="paper o-photo"><div></div></span></span>
+        <span class="label">Photo</span><span class="hint">Cut out the subject, swap the background, enhance</span></button>
+      <button class="tool" data-make="print"><span class="obj"><span class="paper o-poster">Big<br>idea.</span></span>
+        <span class="label">Print design</span><span class="hint">Posters, flyers, report covers, certificates</span></button>
+      <button class="tool" data-make="pdf"><span class="obj"><span class="paper o-pdf"><i></i><i></i><i class="x"></i><i></i><i></i><b>PDF</b></span></span>
+        <span class="label">PDF tools</span><span class="hint">Merge, compress, black out, number, protect, to Word</span></button>
+    </div>
+  </div></section>
+  <section class="sheet">
+    <div class="row-head"><h2>Recent</h2><a class="small" href="#/files">All files</a></div>
+    <div class="files" id="recent"></div>
+  </section>
+</template>
+
+<template id="t-files">
+  <section class="sheet">
+    <div class="row-head"><h2>Files</h2>
+      <label class="btn" style="margin:0">Upload<input type="file" id="upload" hidden></label></div>
+    <div class="files" id="all-files"></div>
+  </section>
+</template>
+
+<template id="t-connect">
+  <section class="sheet" style="max-width:820px">
+    <h2>Connect your AI</h2>
+    <p class="muted">Claude, ChatGPT and other MCP clients can make and edit files here with your account. Create a key, then paste the address into your client.</p>
+    <div class="card">
+      <label>Key name<input type="text" id="key-name" placeholder="e.g. Claude on my laptop" maxlength="60"></label>
+      <button class="btn primary" id="key-create">Create key</button>
+      <div id="key-new" hidden style="margin-top:16px">
+        <p class="small"><strong>Copy it now</strong> — the key is shown only once.</p>
+        <div class="keybox" id="key-url"></div>
+        <p class="small muted" style="margin-top:10px">Claude Code: <span class="mono" id="key-cc"></span></p>
+      </div>
+      <ul class="keys" id="keys"></ul>
+    </div>
+    <h2 style="margin-top:32px">Credits</h2>
+    <p class="muted" id="credit-text"></p>
+  </section>
+</template>
+
+<template id="t-file">
+  <section class="work">
+    <div class="work-bar">
+      <a class="btn ghost" href="#/files" aria-label="Back to files">←</a>
+      <h2 id="file-name"></h2>
+      <span id="edit-btns"></span>
+      <a class="btn" id="btn-download" download>Download</a>
+      <button class="btn ghost" id="btn-delete">Delete</button>
+    </div>
+    <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+  </section>
+</template>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// [szerkesztő, gomb-felirat, formátumok] — egy formátumnál az első találat az elsődleges (pl. PDF: PDF-szerkesztő, aztán dizájn)
+const EDITORS = [
+  ["wordcraft", "Edit document", ["docx","doc","odt","rtf","md","html","htm","txt","tex"]],
+  ["deckcraft", "Edit slides", ["pptx","deckcraft"]],
+  ["pdfcraft", "Edit PDF", ["pdf"]],
+  ["gridcraft", "Edit sheet", ["xlsx","csv","tsv"]],
+  ["photocraft", "Edit image", ["png","jpg","jpeg","webp","psd","psb","tif","tiff","bmp","gif","exr","pcraft"]],
+  ["designcraft", "Edit layout", ["designcraft","idml"]],
+  ["vectorcraft", "Edit as design", ["svg","svgz","pdf","ai","eps","vectorcraft"]],
+];
+const editorsFor = ext => EDITORS.filter(([, , exts]) => exts.includes((ext || "").toLowerCase()));
+let account = null, files = [];
+
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3800); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}, ...opts });
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent("/app" + location.hash); throw new Error("signed out"); }
+  const data = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((data && data.detail) || data.error || `Request failed (${r.status})`);
+  return data;
+}
+
+// ---------- fiók ----------
+async function loadAccount() {
+  account = await api("/api/account");
+  $("#credits").textContent = account.credits === null ? "credits ∞" : `${account.credits} credits`;
+}
+
+// ---------- fájlok ----------
+async function loadFiles() {
+  const d = await api("/api/files");
+  files = [...(d.inputs || []), ...(d.outputs || [])].sort((a, b) => b.mtime - a.mtime);
+}
+const IMG = ["png","jpg","jpeg","webp","gif","bmp"];
+const REL = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" });
+function ago(ts) {
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "just now";
+  for (const [unit, n] of [["minute", 60], ["hour", 3600], ["day", 86400]])
+    if (s < n * (unit === "day" ? 7 : unit === "hour" ? 24 : 60)) return REL.format(-Math.floor(s / n), unit);
+  return new Date(ts * 1000).toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" });
+}
+const size = kb => kb < 1 ? "<1 kB" : kb < 1024 ? `${kb} kB` : `${(kb / 1024).toFixed(1)} MB`;
+function fileCard(f) {
+  return `<button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
+    <span class="name" title="${esc(f.label)}">${esc(f.label)}</span><span class="meta">${size(f.size_kb)} · ${ago(f.mtime)}</span></button>`;
+}
+const BANDS = { pptx: "#FF5A36", ppt: "#FF5A36", pdf: "#C2362B", docx: "#2F80ED", doc: "#2F80ED", odt: "#2F80ED",
+  xlsx: "#1E9E6A", csv: "#1E9E6A", md: "#5C6870", txt: "#5C6870", svg: "#8E44AD", vectorcraft: "#8E44AD", psd: "#2F5D7C" };
+function glyph(ext) {
+  const wide = ["pptx", "ppt", "key"].includes(ext);
+  return `<span class="glyph${wide ? " wide" : ""}" style="--band:${BANDS[ext] || "#5C6870"}"><i></i><i></i><i></i>${wide ? "" : "<i></i><i></i>"}<b>${esc(ext.toUpperCase())}</b></span>`;
+}
+function renderFiles(el, list) {
+  el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — make something above, or upload a file.</div>`;
+  el.querySelectorAll(".file").forEach(b => b.addEventListener("click", () => location.hash = "#/file/" + encodeURIComponent(b.dataset.id)));
+  // nincs bélyegkép (ismeretlen típus, render-hiba) → típus-ikon
+  el.querySelectorAll(".thumb img").forEach(img => img.addEventListener("error", () => { const t = img.parentElement; t.innerHTML = glyph(t.dataset.ext); }, { once: true }));
+}
+
+// ---------- nézetek ----------
+const views = {
+  async home() {
+    mount("t-home");
+    const nums = $(".ruler-nums"), w = $(".mat").clientWidth;   // vonalzó-számok 40 px-enként (1 = 1 cm)
+    nums.innerHTML = Array.from({ length: Math.floor(w / 40) }, (_, i) => i && i % 2 === 0 ? `<span style="left:${i * 40}px">${i / 2}</span>` : "").join("");
+    document.querySelectorAll("[data-make]").forEach(b => b.addEventListener("click", () => openMaker(b.dataset.make)));
+    await loadFiles(); renderFiles($("#recent"), files.slice(0, 10));
+  },
+  async files() {
+    mount("t-files");
+    $("#upload").addEventListener("change", async e => {
+      const f = e.target.files[0]; if (!f) return;
+      await uploadFile(f); toast(`Uploaded ${f.name}`); await views.files();
+    });
+    await loadFiles(); renderFiles($("#all-files"), files);
+  },
+  async connect() {
+    mount("t-connect");
+    await loadAccount();
+    const keysEl = $("#keys");
+    const drawKeys = () => keysEl.innerHTML = account.keys.map(k => `<li><span><strong>${esc(k.name || "key")}</strong> <span class="mono muted">${esc(k.prefix)}…</span></span>
+      <button class="btn ghost" data-revoke="${k.id}">Revoke</button></li>`).join("");
+    drawKeys();
+    keysEl.addEventListener("click", async e => {
+      const id = e.target.dataset.revoke; if (!id) return;
+      await api(`/api/account/keys/${id}`, { method: "DELETE" }); toast("Key revoked"); await loadAccount(); drawKeys();
+    });
+    $("#key-create").addEventListener("click", async () => {
+      const k = await api("/api/account/keys", { method: "POST", body: JSON.stringify({ name: $("#key-name").value }) });
+      $("#key-new").hidden = false; $("#key-url").textContent = k.mcp_url;
+      $("#key-cc").textContent = `claude mcp add --transport http ${account.product.toLowerCase().replace(/\W+/g, "-")} "${k.mcp_url}"`;
+      await loadAccount(); drawKeys();
+    });
+    $("#credit-text").textContent = account.credits === null
+      ? "Admin account — no limits."
+      : `You have ${account.credits} credits. One AI-generated image costs ${account.image_credit_cost}. Stock photos and your own images are free.`;
+  },
+  async file(id) {
+    mount("t-file");
+    await loadFiles();
+    const f = files.find(x => x.file_id === id);
+    if (!f) { $("#file-name").textContent = "This file is gone"; return; }
+    $("#file-name").textContent = f.label; $("#btn-download").href = f.url;
+    $("#file-frame").src = `/preview/${encodeURIComponent(f.file_id)}`;
+    const box = $("#edit-btns");
+    editorsFor(f.ext).forEach(([app, label], i) => {
+      const b = document.createElement("button");
+      b.className = i ? "btn ghost" : "btn"; b.textContent = label;
+      b.addEventListener("click", () => {
+        const src = f.url.slice(f.url.indexOf("/files/"));
+        const name = f.label.toLowerCase().endsWith("." + f.ext) ? f.label : `${f.label}.${f.ext}`;
+        const save = `/api/editor/save?source=${encodeURIComponent(f.file_id)}`;
+        $("#file-frame").src = `/editor/${app}/?src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}`;
+        box.replaceChildren();
+      });
+      box.append(b);
+    });
+    $("#btn-delete").addEventListener("click", async () => {
+      await api(`/api/files/${encodeURIComponent(f.file_id)}`, { method: "DELETE" }); toast("Deleted"); location.hash = "#/files";
+    });
+  },
+};
+function mount(id) { $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
+async function route() {
+  const [, name = "", arg] = location.hash.match(/^#\/([a-z]*)\/?(.*)$/) || [];
+  document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
+  document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
+  try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); }
+  catch (e) { if (e.message !== "signed out") toast(e.message); }
+}
+window.addEventListener("hashchange", route);
+window.addEventListener("message", e => {
+  if (e.origin !== location.origin || !e.data || e.data.source !== "wordcraft") return;
+  if (e.data.type === "saved") toast(`Saved as ${e.data.label || e.data.name}`);
+  if (e.data.type === "save_failed") toast("Couldn't save to your files — it was downloaded instead");
+});
+
+// ---------- feltöltés + képválasztó ----------
+async function uploadFile(file) {
+  const fd = new FormData(); fd.append("file", file);
+  return api("/api/upload", { method: "POST", body: fd });
+}
+function imagePicker(name, { allowNone = true, ai = true, label = "Image" } = {}) {
+  const opts = [["upload", "Upload"], ["stock", "Stock photo"]].concat(ai ? [["ai", "AI image"]] : []).concat(allowNone ? [["none", "None"]] : []);
+  return `<fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">${label}</legend>
+    <div class="seg" role="radiogroup">${opts.map(([v, t], i) => `<label><input type="radio" name="${name}-src" value="${v}" ${i === 1 ? "checked" : ""}><span>${t}</span></label>`).join("")}</div>
+    <input type="file" name="${name}-file" accept="image/*" hidden>
+    <input type="text" name="${name}-q" placeholder="What should it show? e.g. city skyline at dusk"></fieldset>`;
+}
+function wirePicker(form, name) {
+  const sync = () => {
+    const v = form.querySelector(`[name=${name}-src]:checked`).value;
+    form.querySelector(`[name=${name}-file]`).hidden = v !== "upload";
+    const q = form.querySelector(`[name=${name}-q]`); q.hidden = !(v === "stock" || v === "ai");
+    q.placeholder = v === "ai" ? `Describe the image — costs ${account?.image_credit_cost ?? 1} credit` : "Search words, e.g. city skyline";
+  };
+  form.querySelectorAll(`[name=${name}-src]`).forEach(r => r.addEventListener("change", sync)); sync();
+}
+async function readPicker(form, name) {
+  const v = form.querySelector(`[name=${name}-src]:checked`)?.value;
+  if (v === "upload") {
+    const f = form.querySelector(`[name=${name}-file]`).files[0]; if (!f) return null;
+    return { file_id: (await uploadFile(f)).file_id };
+  }
+  const q = form.querySelector(`[name=${name}-q]`)?.value.trim();
+  if (!q) return null;
+  return v === "ai" ? { ai: q } : v === "stock" ? { stock: q } : null;
+}
+const ACCENTS = ["#FF5A36", "#2F80ED", "#1E9E6A", "#8E44AD", "#F2B705", "#15191B"];
+const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Accent colour</legend>
+  <div class="swatches">${ACCENTS.map((c, i) => `<input type="radio" name="accent" value="${c}" style="--c:${c}" aria-label="${c}" ${i ? "" : "checked"}>`).join("")}</div></fieldset>`;
+
+// ---------- készítők ----------
+const MAKERS = {
+  deck: {
+    title: "New presentation", sub: "Describe it — the assistant writes the slides, picks layouts and finds pictures.",
+    fields: () => `<label>What is it about?<textarea name="brief" required placeholder="e.g. A 10-minute pitch for our community solar project: the problem, how it works, costs, timeline and the ask."></textarea></label>
+      <label>Slides<input type="number" name="slides" min="4" max="15" value="8"></label>
+      <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
+      <div class="seg"><label><input type="radio" name="images" value="stock" checked><span>Stock photos</span></label>
+      <label><input type="radio" name="images" value="ai"><span>AI images</span></label><label><input type="radio" name="images" value="none"><span>None</span></label></div></fieldset>
+      ${swatches()}`,
+    async submit(fd) { return api("/api/make/deck", { method: "POST", body: JSON.stringify({ brief: fd.get("brief"), slides: +fd.get("slides"), images: fd.get("images"), accent: fd.get("accent") }) }); },
+    wire() {},
+  },
+  social: {
+    title: "New social post", sub: "Headline + picture → every size you tick, ready to post.",
+    fields: () => `<label>Headline<input type="text" name="headline" required maxlength="120"></label>
+      <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
+      <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
+      <div class="checks"><label><input type="checkbox" name="sizes" value="square" checked> Square 1080×1080</label>
+      <label><input type="checkbox" name="sizes" value="landscape" checked> Landscape 1200×630</label>
+      <label><input type="checkbox" name="sizes" value="story"> Story 1080×1920</label></div>
+      ${imagePicker("img")}
+      <label class="checks" style="margin:0 0 10px"><span><input type="checkbox" name="cut"> Cut out my photo's subject and put it on a new background</span></label>
+      <div id="bg-wrap" hidden>${imagePicker("bg", { allowNone: false, label: "New background" })}</div>
+      ${swatches()}`,
+    wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
+    async submit(fd, form) {
+      const body = { headline: fd.get("headline"), subtitle: fd.get("subtitle"), handle: fd.get("handle"), sizes: fd.getAll("sizes"),
+        image: await readPicker(form, "img"), accent: fd.get("accent") };
+      if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
+      const r = await api("/api/make/social", { method: "POST", body: JSON.stringify(body) });
+      return { file_id: r.posts[0].files.find(f => f.file_id.endsWith(".png"))?.file_id || r.posts[0].file_id, n: r.posts.length };
+    },
+  },
+  book: {
+    title: "New book", sub: "Upload your manuscript (.docx with Heading 1 chapters). You get a book PDF with a cover; the text stays editable.",
+    fields: () => `<label>Manuscript (.docx)<input type="file" name="manuscript" accept=".docx" required></label>
+      <label>Title<input type="text" name="title" maxlength="120"></label>
+      <label>Author<input type="text" name="author" maxlength="80"></label>
+      <label>Trim size<select name="size"><option value="A5">A5 (148×210 mm)</option><option value="A4">A4</option></select></label>
+      ${imagePicker("cover", { label: "Cover image" })}`,
+    wire(form) { wirePicker(form, "cover"); },
+    async submit(fd, form) {
+      const m = await uploadFile(form.querySelector("[name=manuscript]").files[0]);
+      return api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover") }) });
+    },
+  },
+  photo: {
+    title: "Edit a photo", sub: "Upload a photo and choose what to do with it.",
+    fields: () => `<label>Photo<input type="file" name="photo" accept="image/*" required></label>
+      <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Action</legend>
+      <div class="seg"><label><input type="radio" name="action" value="remove_background" checked><span>Remove background</span></label>
+      <label><input type="radio" name="action" value="replace_background"><span>New background</span></label>
+      <label><input type="radio" name="action" value="enhance"><span>Enhance</span></label></div></fieldset>
+      <div id="pbg" hidden>${imagePicker("bg", { allowNone: false, label: "New background" })}<label>Background blur (px)<input type="number" name="blur" min="0" max="40" value="12"></label></div>`,
+    wire(form) { wirePicker(form, "bg"); form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", () => form.querySelector("#pbg").hidden = form.querySelector("[name=action]:checked").value !== "replace_background")); },
+    async submit(fd, form) {
+      const p = await uploadFile(form.querySelector("[name=photo]").files[0]);
+      return api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: p.file_id, action: fd.get("action"), background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
+    },
+  },
+  print: {
+    title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you.",
+    fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
+      <label>Title / name<input type="text" name="title" required maxlength="120"></label>
+      <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
+      <label>Text<textarea name="body" placeholder="Main text (flyers flow it into two columns)"></textarea></label>
+      <label>Date / place / author<input type="text" name="meta" maxlength="120" placeholder="e.g. 12 November · City Hall"></label>
+      ${imagePicker("img")}${swatches()}`,
+    wire(form) { wirePicker(form, "img"); },
+    async submit(fd, form) {
+      const t = fd.get("template"), img = await readPicker(form, "img");
+      const data = t === "certificate"
+        ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
+        : { title: fd.get("title"), subtitle: fd.get("subtitle"), body: fd.get("body"), date: fd.get("meta"), author: fd.get("meta"), image: img };
+      return api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent") }) });
+    },
+  },
+  pdf: {
+    title: "PDF tools", sub: "Pick a job, add your PDF — you get a new file; the original stays as it was.",
+    fields: () => `<label>Job<select name="action">
+        <option value="merge">Merge PDFs into one</option><option value="compress">Make the file smaller</option>
+        <option value="to_word">Convert to Word (.docx)</option><option value="page_numbers">Add page numbers</option>
+        <option value="watermark">Add a watermark</option><option value="redact">Black out text for good</option>
+        <option value="ocr">Make a scan searchable (English)</option><option value="protect">Lock with a password</option>
+        <option value="compare">Compare two versions</option></select></label>
+      <label><span id="pdf-files-label">PDF</span><input type="file" name="pdfs" accept="application/pdf,.pdf" required></label>
+      <div data-for="watermark" hidden><label>Watermark text<input type="text" name="wm" maxlength="40" placeholder="DRAFT"></label></div>
+      <div data-for="page_numbers" hidden><label>Position<select name="pos"><option value="center">Bottom centre</option><option value="right">Bottom right</option><option value="left">Bottom left</option></select></label></div>
+      <div data-for="redact" hidden><label>Words or phrases, one per line<textarea name="words" placeholder="Jane Doe&#10;Project Falcon"></textarea></label>
+        <div class="checks"><label><input type="checkbox" name="pat" value="email"> Email addresses</label><label><input type="checkbox" name="pat" value="phone"> Phone numbers</label>
+        <label><input type="checkbox" name="pat" value="credit-card"> Card numbers</label></div>
+        <p class="muted small" style="margin:6px 0 12px">The text is removed from the file, not just covered.</p></div>
+      <div data-for="protect" hidden><label>Password to open it<input type="text" name="pw" minlength="4" autocomplete="off"></label></div>`,
+    wire(form) {
+      const sync = () => {
+        const a = form.querySelector("[name=action]").value, many = a === "merge" || a === "compare", inp = form.querySelector("[name=pdfs]");
+        inp.multiple = many;
+        $("#pdf-files-label").textContent = a === "merge" ? "PDFs, in order (pick several)" : a === "compare" ? "Old version, then new version (pick both)" : "PDF";
+        form.querySelectorAll("[data-for]").forEach(d => d.hidden = d.dataset.for !== a);
+      };
+      form.querySelector("[name=action]").addEventListener("change", sync); sync();
+    },
+    async submit(fd, form) {
+      const a = fd.get("action"), picked = [...form.querySelector("[name=pdfs]").files];
+      if ((a === "merge" || a === "compare") && picked.length < 2) throw new Error("Pick at least two PDFs (hold Ctrl or ⌘ to select several).");
+      const ids = []; for (const f of picked) ids.push((await uploadFile(f)).file_id);
+      return api("/api/make/pdf", { method: "POST", body: JSON.stringify({ action: a, file_ids: ids, text: fd.get("wm") || "DRAFT",
+        position: fd.get("pos"), words: (fd.get("words") || "").split("\n"), patterns: fd.getAll("pat"), password: fd.get("pw") }) });
+    },
+  },
+};
+function openMaker(kind) {
+  const m = MAKERS[kind], form = $("#make-form");
+  form.innerHTML = `<h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
+    <p class="status" id="make-status"></p>
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">Make it</button></div>`;
+  m.wire(form);
+  form.onsubmit = async e => {
+    if (e.submitter?.value !== "go") return;
+    e.preventDefault();
+    const go = $("#make-go"); go.disabled = true; $("#make-status").textContent = "Working on it — this takes a few seconds…";
+    try {
+      const r = await m.submit(new FormData(form), form);
+      $("#drawer").close(); await loadAccount();
+      toast(r.n > 1 ? `Done — ${r.n} sizes are in your files` : "Done");
+      location.hash = "#/file/" + encodeURIComponent(r.file_id);
+    } catch (err) { $("#make-status").textContent = err.message; go.disabled = false; }
+  };
+  $("#drawer").showModal();
+}
+
+loadAccount().catch(() => {}); route();
+</script>
+</body>
+</html>

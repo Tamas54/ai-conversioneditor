@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from app import tenancy
 from app.storage import (
     display_label, input_path, output_path, verify_file_token,
 )
@@ -12,9 +13,11 @@ router = APIRouter()
 
 
 @router.get("/files/{file_id}")
-async def get_file(file_id: str, t: str = Query(..., description="signed token")):
-    if not verify_file_token(file_id, t):
+async def get_file(file_id: str, t: str = Query(..., description="signed token"),
+                   u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)")):
+    if not verify_file_token(file_id, t, uid=u):
         raise HTTPException(403, "invalid or expired token")
+    tenancy.set_user(u)  # a link aláírása igazolja: ennek a munkaterületnek a fájlja
     p = output_path(file_id)
     if not p.exists():
         p = input_path(file_id)

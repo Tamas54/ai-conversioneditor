@@ -75,10 +75,27 @@ ARG PHOTOCRAFT_WEB_SHA256=dfcbaac00f81f5d05ccffba36a14b320c1b1c7b23a4135fe54877f
 ARG VECTORCRAFT_VERSION=0.9.0
 ARG VECTORCRAFT_CLI_SHA256=afbc4a0904740dfd1208e717664eb294965055e74c227c2ac3dc53af502e46a4
 ARG VECTORCRAFT_WEB_SHA256=4ebe8829a22fa17975c96765dfe9812bd2834e3e721381b4b14abb802c4d7dc1
+# Office-motorok (ugyanaz a release-minta): DeckCraft · PdfCraft · DesignCraft · GridCraft
+ARG DECKCRAFT_VERSION=0.5.0
+ARG DECKCRAFT_CLI_SHA256=c2648c6071f631ecc6639ce6b7d60f68eed83ddeaba6b1559b07c5046863117c
+ARG DECKCRAFT_WEB_SHA256=49d6aa4871dbfe4e2dd4ebc367db8fbfe6df6db6ba49872e10058e13175c5f51
+ARG PDFCRAFT_VERSION=0.6.0
+ARG PDFCRAFT_CLI_SHA256=9a136e71e37b459ed5746dbe19a364ce84cf5d995c6f6c98af6147d818390a53
+ARG PDFCRAFT_WEB_SHA256=a957a75e35390fa8747ae97464b7a9f178cce61edda22b3b98764462060d15a5
+ARG DESIGNCRAFT_VERSION=0.6.0
+ARG DESIGNCRAFT_CLI_SHA256=abb661cd2fc53677d040fe0be3f241bbb8c0fad9619192a83109d53bd514bfb9
+ARG DESIGNCRAFT_WEB_SHA256=b43ebefc5b7900c8223953d632951308a347935adc6fad3ff00e4a7a1d050d63
+ARG GRIDCRAFT_VERSION=0.5.0
+ARG GRIDCRAFT_CLI_SHA256=e6505c2f929f9854c350a0df26189c4e56c8adf87cc61625f80d6a8eec2b628d
+ARG GRIDCRAFT_WEB_SHA256=fbd9dbc48694676812c7bbca7f5f2e776cbc52c37d8f425a2dc033b5d23ce606
 ARG ISNET_SHA256=60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
 RUN set -eux; cd /tmp; \
     for spec in "photocraft ${PHOTOCRAFT_VERSION} ${PHOTOCRAFT_CLI_SHA256} ${PHOTOCRAFT_WEB_SHA256}" \
-                "vectorcraft ${VECTORCRAFT_VERSION} ${VECTORCRAFT_CLI_SHA256} ${VECTORCRAFT_WEB_SHA256}"; do \
+                "vectorcraft ${VECTORCRAFT_VERSION} ${VECTORCRAFT_CLI_SHA256} ${VECTORCRAFT_WEB_SHA256}" \
+                "deckcraft ${DECKCRAFT_VERSION} ${DECKCRAFT_CLI_SHA256} ${DECKCRAFT_WEB_SHA256}" \
+                "pdfcraft ${PDFCRAFT_VERSION} ${PDFCRAFT_CLI_SHA256} ${PDFCRAFT_WEB_SHA256}" \
+                "designcraft ${DESIGNCRAFT_VERSION} ${DESIGNCRAFT_CLI_SHA256} ${DESIGNCRAFT_WEB_SHA256}" \
+                "gridcraft ${GRIDCRAFT_VERSION} ${GRIDCRAFT_CLI_SHA256} ${GRIDCRAFT_WEB_SHA256}"; do \
         set -- $spec; app=$1; ver=$2; \
         base="https://github.com/storytold/${app}/releases/download/v${ver}"; \
         curl -fsSL -o cli.tar.gz "$base/${app}-${ver}-linux-x86_64.tar.gz"; \
@@ -91,7 +108,7 @@ RUN set -eux; cd /tmp; \
         unzip -q web.zip; mv "${app}-web-${ver}" /opt/${app}-web; \
         gzip -9 -k /opt/${app}-web/*.wasm /opt/${app}-web/*.js; \
         rm -f cli.tar.gz web.zip; \
-        /opt/${app}/bin/${app}-cli --help >/dev/null; \
+        /opt/${app}/bin/${app}-cli --version >/dev/null; \
     done; \
     mkdir -p /opt/models; \
     curl -fsSL -o /opt/models/isnet-general-use.onnx \
@@ -101,6 +118,10 @@ ENV PHOTOCRAFT_CLI=/opt/photocraft/bin/photocraft-cli \
     PHOTOCRAFT_WEB_DIR=/opt/photocraft-web \
     VECTORCRAFT_CLI=/opt/vectorcraft/bin/vectorcraft-cli \
     VECTORCRAFT_WEB_DIR=/opt/vectorcraft-web \
+    DECKCRAFT_CLI=/opt/deckcraft/bin/deckcraft-cli DECKCRAFT_WEB_DIR=/opt/deckcraft-web \
+    PDFCRAFT_CLI=/opt/pdfcraft/bin/pdfcraft-cli PDFCRAFT_WEB_DIR=/opt/pdfcraft-web \
+    DESIGNCRAFT_CLI=/opt/designcraft/bin/designcraft-cli DESIGNCRAFT_WEB_DIR=/opt/designcraft-web \
+    GRIDCRAFT_CLI=/opt/gridcraft/bin/gridcraft-cli GRIDCRAFT_WEB_DIR=/opt/gridcraft-web \
     CUTOUT_MODEL_PATH=/opt/models/isnet-general-use.onnx
 
 WORKDIR /app

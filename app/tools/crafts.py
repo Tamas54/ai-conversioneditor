@@ -44,7 +44,7 @@ async def run_cli(exe: Optional[str], name: str, *args: str) -> str:
     if exe is None:
         raise RuntimeError(f"{name} nincs telepítve")
     # *_NO_PREFS: ne írjon felhasználói beállítást a konténerbe; a napló stderr-re megy.
-    env = {**os.environ, "WORDCRAFT_NO_PREFS": "1", "PHOTOCRAFT_NO_PREFS": "1", "VECTORCRAFT_NO_PREFS": "1"}
+    env = {**os.environ, **{f"{a}CRAFT_NO_PREFS": "1" for a in ("WORD", "PHOTO", "VECTOR", "DECK", "PDF", "DESIGN", "GRID")}}
     proc = await asyncio.create_subprocess_exec(
         exe, *args, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
@@ -262,3 +262,137 @@ def _json_lines(text: str) -> list[dict[str, Any]]:
             except ValueError:
                 pass
     return out
+
+
+# ---------- „office” motorok: DeckCraft (PowerPoint), PdfCraft (Acrobat), DesignCraft (InDesign), GridCraft (Excel) ----------
+# app-kulcsok: deck | pdf | layout (DesignCraft) | sheet (GridCraft)
+# Egy közös futtató, alkalmazásonkénti parancssor-szintaxissal (mind kész upstream release, Apache-2.0).
+
+OFFICE: dict[str, dict[str, Any]] = {
+    "deck":   {"exe": "deckcraft",   "open": {"pptx", "deckcraft"},
+               "save": {"pptx", "deckcraft", "pdf", "png", "jpeg", "jpg"}},
+    "pdf":    {"exe": "pdfcraft",    "open": {"pdf"}, "save": {"pdf"}},
+    "layout": {"exe": "designcraft", "open": {"designcraft", "idml"}, "save": {"designcraft", "pdf", "png"}},
+    "sheet":  {"exe": "gridcraft",   "open": {"xlsx", "csv", "tsv", "json"},
+               "save": {"xlsx", "csv", "tsv", "json", "html"}},
+}
+
+
+def office_cli(app: str) -> Optional[str]:
+    exe = OFFICE[app]["exe"]
+    return cli_path(os.getenv(f"{exe.upper()}_CLI", f"/opt/{exe}/bin/{exe}-cli"), f"{exe}-cli")
+
+
+def office_web_dir(app_exe: str) -> Path:
+    return Path(os.getenv(f"{app_exe.upper()}_WEB_DIR", f"/opt/{app_exe}-web"))
+
+
+OFFICE_SAVE = set().union(*(s["save"] for s in OFFICE.values()))
+
+
+async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optional[list[Command]] = None,
+                     save_format: Optional[str] = None) -> dict[str, Any]:
+    """Parancsok (deck/design/grid) vagy PDF-eszközlépések (pdf) egy dokumentumon → új output file_id."""
+    from app import tenancy
+    if app not in OFFICE:
+        raise ValueError(f"app: {app} (lehet: {', '.join(OFFICE)})")
+    spec, t0 = OFFICE[app], time.time()
+    src = existing(file_id) if file_id else None
+    if src and src.suffix.lstrip(".").lower() not in spec["open"]:
+        raise ValueError(f"{app} nem nyitja meg ezt: {src.suffix} (lehet: {', '.join(sorted(spec['open']))})")
+    fmt = (save_format or (src.suffix.lstrip(".") if src else {"deck": "pptx", "pdf": "pdf", "layout": "pdf", "sheet": "xlsx"}[app])).lower()
+    if fmt not in spec["save"]:
+        raise ValueError(f"save_format: {fmt} (lehet: {', '.join(sorted(spec['save']))})")
+    fid, out = _new_output(fmt, file_id, app, "")
+    exe, name = office_cli(app), f"{spec['exe']}-cli"
+    if app == "pdf":
+        if not src:
+            raise ValueError("a pdf-hez file_id kell")
+        steps = [{"tool": c["tool"], "args": c.get("args") or {}} for c in commands or []
+                 if isinstance(c, dict) and c.get("tool")]
+        await pdf_script([file_id], steps, out)
+        log_lines = ""
+    else:
+        args = ["run"] + (["--in", str(src)] if src else [])
+        for c in commands or []:
+            cid, params = split_command(c)
+            args += ["--cmd", f"{cid}={json.dumps(params, ensure_ascii=False)}" if params else cid]
+        if app == "sheet":
+            args += ["--out", str(out), "--quiet"]
+        elif app == "deck" and fmt in ("pptx", "deckcraft"):
+            args += ["--save", str(out)]
+        elif app == "layout" and fmt == "designcraft":
+            args += ["--cmd", f"file.save={json.dumps({'path': str(out)})}"]
+        else:
+            args += ["--export", str(out)]
+        log_lines = await run_cli(exe, name, *args)
+    if not out.exists():
+        raise RuntimeError(f"{name}: nem készült kimenet ({log_lines[-300:]})")
+    stem = Path(display_label(file_id)).stem if file_id else app
+    res = _finish(fid, file_id, app, stem)
+    res.update({"steps_run": len(commands or []), "ms_elapsed": int((time.time() - t0) * 1000)})
+    return res
+
+
+async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path, save: bool = True) -> str:
+    """PdfCraft lépéssor: a file_ids sorban doc 1…n-ként nyílik meg; a lépések args-ában a "$out" a
+    kimeneti útvonal, a {"file_id": …} paraméter útvonallá oldódik; save=True → a végén doc 1 mentése out-ba."""
+    from app import tenancy
+    from app.storage import temp_path
+    script = [{"tool": "doc_open", "args": {"path": str(existing(f))}} for f in file_ids]
+    for st in steps:
+        args = resolve_file_ids(dict(st.get("args") or {}))
+        args = {k: (str(out) if v == "$out" else v) for k, v in args.items()}
+        if file_ids and st["tool"] != "doc_combine":
+            args.setdefault("doc", 1)
+        script.append({"tool": st["tool"], "args": args})
+    if save:
+        script.append({"tool": "doc_save", "args": {"doc": 1, "path": str(out), "full": True}})
+    tmp = temp_path(new_file_id("json"))
+    tmp.write_text(json.dumps(script, ensure_ascii=False))
+    try:
+        return await run_cli(office_cli("pdf"), "pdfcraft-cli", "run", "--script", str(tmp), "--root", str(tenancy.user_root()))
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+async def office_read(app: str, mode: str, file_id: Optional[str] = None, query: Optional[str] = None,
+                      offset: int = 0, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
+    if app not in OFFICE:
+        raise ValueError(f"app: {app} (lehet: {', '.join(OFFICE)})")
+    exe, name = office_cli(app), f"{OFFICE[app]['exe']}-cli"
+    if mode == "commands":
+        if app == "pdf":
+            raw = json.loads(await run_cli(exe, name, "tools"))
+            items = [{"tool": t["name"], "description": t.get("description", "")[:240],
+                      "params": list((t.get("input_schema") or {}).get("properties", {}))} for t in raw]
+        elif app == "sheet":
+            items = json.loads(await run_cli(exe, name, "commands", "--json"))
+        else:
+            items = json.loads(await run_cli(exe, name, "commands"))
+        key = "tool" if app == "pdf" else "id"
+        if not query:
+            return {"count": len(items), "ids": [i.get(key) for i in items], "hint": "pass query for params and descriptions"}
+        q = query.lower()
+        hits = [i for i in items if q in json.dumps(i, ensure_ascii=False).lower()]
+        page, nxt = page_items(hits, max(0, offset), max(1_000, max_chars))
+        return {"count": len(hits), "items": page, "offset": offset, "next_offset": nxt}
+    if not file_id:
+        raise ValueError(f"read={mode} file_id-t kér")
+    path = str(existing(file_id))
+    if mode == "info":
+        out = await run_cli(exe, name, *(["info", path, "--json"] if app == "sheet" else ["info", path]))
+        try:
+            return json.loads(out)
+        except ValueError:
+            return {"info": out[:max_chars]}
+    if mode == "text":
+        out = await run_cli(exe, name, *(["text", path] if app == "pdf" else ["cat", path, "--csv"] if app == "sheet" else ["info", path]))
+        chunk = out[offset:offset + max_chars]
+        return {"text": chunk, "offset": offset, "total_chars": len(out),
+                "next_offset": offset + len(chunk) if offset + len(chunk) < len(out) else None}
+    raise ValueError("read: info | text | commands")
+
+
+async def office_convert(app: str, src: Path, dst: Path) -> None:
+    await run_cli(office_cli(app), f"{OFFICE[app]['exe']}-cli", "convert", str(src), str(dst))

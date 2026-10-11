@@ -16,7 +16,8 @@ async def cleanup_loop():
     ttl = settings.FILE_RETENTION_DAYS * 86400  # megőrzés (a link-TTL külön: FILE_TTL_HOURS)
     while True:
         try:
-            removed = _sweep(settings.DATA_DIR, ttl)
+            from app import tenancy
+            removed = sum(_sweep(root, ttl) for root in tenancy.all_roots())
             if removed:
                 log.info("Cleanup: removed %d files", removed)
         except asyncio.CancelledError:

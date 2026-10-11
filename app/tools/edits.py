@@ -19,7 +19,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from app.storage import (
     input_path,

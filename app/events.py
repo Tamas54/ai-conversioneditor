@@ -18,10 +18,12 @@ _subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
 
 def emit(kind: str, **payload: Any) -> dict[str, Any]:
+    from app import tenancy
     evt = {
         "id": uuid.uuid4().hex[:8],
         "ts": time.time(),
         "kind": kind,
+        "uid": tenancy.current_user_id(),  # a feliratkozó csak a saját eseményeit kapja
         **payload,
     }
     _history.append(evt)
@@ -33,8 +35,8 @@ def emit(kind: str, **payload: Any) -> dict[str, Any]:
     return evt
 
 
-def history() -> list[dict[str, Any]]:
-    return list(_history)
+def history(uid: str | None = None) -> list[dict[str, Any]]:
+    return [e for e in _history if uid is None or e.get("uid") == uid]
 
 
 def subscribe() -> asyncio.Queue[dict[str, Any]]:

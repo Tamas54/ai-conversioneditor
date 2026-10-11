@@ -92,7 +92,19 @@ async def generate_image(
     """Generate an image from a text prompt. Saves to outputs/ and returns
     image_file_id ready for insert_image / pptx insertion."""
     t0 = time.time()
-    img_bytes = await v.generate_image(prompt, model=model, size=size)
+    # AI-kép kreditbe kerül (admin korlátlan); hiba esetén visszajár
+    from app import db, tenancy
+    from app.config import settings
+    uid = tenancy.current_user_id()
+    charged = db.enabled() and uid != tenancy.ADMIN_ID and settings.IMAGE_CREDIT_COST > 0
+    if charged:
+        await db.credits_spend(uid, settings.IMAGE_CREDIT_COST, "image_generation", ref=prompt[:80])
+    try:
+        img_bytes = await v.generate_image(prompt, model=model, size=size)
+    except Exception:
+        if charged:
+            await db.credits_add(uid, settings.IMAGE_CREDIT_COST, "refund: image generation failed", ref=prompt[:80])
+        raise
     fid = new_file_id(_image_ext(img_bytes))
     with open(output_path(fid), "wb") as f:
         f.write(img_bytes)
