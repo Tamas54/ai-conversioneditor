@@ -42,7 +42,7 @@ def _para_text(p) -> str:
 def summary(file_id: str) -> dict[str, Any]:
     path = existing(file_id)
     if not path.suffix.lower() in (".docx", ".docm", ".dotx"):
-        raise ValueError("read=review DOCX-re működik")
+        raise ValueError("read=review works on DOCX files")
     with zipfile.ZipFile(path) as z:
         doc = etree.fromstring(z.read("word/document.xml"))
         comments_xml = z.read("word/comments.xml") if "word/comments.xml" in z.namelist() else None

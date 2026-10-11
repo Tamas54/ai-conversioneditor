@@ -428,17 +428,17 @@ async def history(
     from app import db
     if action == "lineage":
         if not file_id:
-            raise ValueError("lineage file_id-t kér")
+            raise ValueError("lineage needs a file_id")
         return await db.lineage(file_id)
     if action == "inbox":
         return {"open": await db.review_list("open", file_id=file_id)}
     if action == "request":
         if not file_id:
-            raise ValueError("request file_id-t kér")
+            raise ValueError("request needs a file_id")
         return await db.review_create(file_id, note, "claude")
     if action == "resolve":
         if review_id is None:
-            raise ValueError("resolve review_id-t kér")
+            raise ValueError("resolve needs a review_id")
         return await db.review_resolve(int(review_id), resolution_file_id, note)
     raise ValueError("action: lineage | inbox | request | resolve")
 
@@ -461,7 +461,7 @@ async def design(
       poster        {title, subtitle?, body?, image?, date?, place?, footer?}   size A4|A3|A5
       flyer         {title, kicker?, subtitle?, image?, body (2 columns), highlights[≤3]?, cta?, contact?}
       report_cover  {title, subtitle?, organization?, author?, date?, image?}
-      certificate   {recipient, title?="Oklevél", lead?, text, place?, date?, signatures[{name, role}]}  (landscape)
+      certificate   {recipient, title?="Certificate", lead?, text, place?, date?, signatures[{name, role}]}  (landscape)
       social        {title, subtitle?, handle?, image?}   size landscape (1200×630) | square | story
       booklet       {title, subtitle?, organization?, author?, date?, cover_image?,
                      sections[{heading, text, image?}]}   long text flows onto extra pages

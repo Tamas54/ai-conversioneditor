@@ -47,7 +47,7 @@ def available() -> bool:
 async def _cli(*args: str) -> str:
     exe = cli_path()
     if exe is None:
-        raise RuntimeError("wordcraft-cli nincs telepítve (WORDCRAFT_CLI)")
+        raise RuntimeError("wordcraft-cli isn't installed (WORDCRAFT_CLI)")
     # WORDCRAFT_NO_PREFS: ne írjon ~/.config-ot, a napló stderr-re megy.
     env = {**os.environ, "WORDCRAFT_NO_PREFS": "1"}
     proc = await asyncio.create_subprocess_exec(
@@ -59,10 +59,10 @@ async def _cli(*args: str) -> str:
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
-        raise RuntimeError(f"wordcraft-cli {args[0]}: időtúllépés ({settings.WORDCRAFT_TIMEOUT_S}s)")
+        raise RuntimeError(f"wordcraft-cli {args[0]}: timed out after {settings.WORDCRAFT_TIMEOUT_S}s")
     if proc.returncode != 0:
         msg = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip()
-        raise RuntimeError(msg or f"wordcraft-cli {args[0]}: kilépési kód {proc.returncode}")
+        raise RuntimeError(msg or f"wordcraft-cli {args[0]}: exit code {proc.returncode}")
     return out.decode("utf-8", "replace")
 
 
@@ -79,7 +79,7 @@ def _cmd_arg(c: Command) -> str:
         return c.strip()
     cmd = c.get("command") or c.get("id")
     if not cmd:
-        raise ValueError(f"parancs id hiányzik: {c!r}")
+        raise ValueError(f"Command id missing: {c!r}")
     params = c.get("params")
     if isinstance(params, dict) and params.get("file_id"):
         # Feltöltött/generált fájl file_id-vel (pl. insert.picture): a szerver oldja fel útvonalra —
@@ -100,14 +100,14 @@ async def run(
     t0 = time.time()
     fmt = save_format.lower().lstrip(".")
     if fmt not in SAVE_FORMATS:
-        raise ValueError(f"save_format: {fmt} (lehet: {', '.join(sorted(SAVE_FORMATS))})")
+        raise ValueError(f"save_format: {fmt} (choose from {', '.join(sorted(SAVE_FORMATS))})")
     args = ["run"]
     if file_id:
         args += ["--file", str(_existing(file_id))]
     else:
         tpl = template or "blank"
         if tpl not in TEMPLATES:
-            raise ValueError(f"template: {tpl} (lehet: {', '.join(sorted(TEMPLATES))})")
+            raise ValueError(f"template: {tpl} (choose from {', '.join(sorted(TEMPLATES))})")
         args += ["--template", tpl]
     if author:
         args += ["--author", author]
@@ -143,7 +143,7 @@ async def read(
     max_chars: int = DEFAULT_MAX_CHARS,
 ) -> dict[str, Any]:
     if mode not in READ_MODES:
-        raise ValueError(f"read: {mode} (lehet: {', '.join(sorted(READ_MODES))})")
+        raise ValueError(f"read: {mode} (choose from {', '.join(sorted(READ_MODES))})")
     offset, max_chars = max(0, offset), max(1_000, max_chars)
     if mode == "commands":
         cmds = json.loads(await _cli("commands", "--json"))
@@ -156,7 +156,7 @@ async def read(
         page, nxt = _page_items(cmds, offset, max_chars)
         return {"count": len(cmds), "commands": page, "offset": offset, "next_offset": nxt}
     if not file_id:
-        raise ValueError(f"read={mode} file_id-t kér")
+        raise ValueError(f"read={mode} needs a file_id")
     if mode == "review":
         from app.tools import review
         return review.summary(file_id)

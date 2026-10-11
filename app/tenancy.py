@@ -27,7 +27,7 @@ def current_user_id() -> str:
 
 def set_user(uid: str):
     if uid != ADMIN_ID and not _UID_RE.match(uid):
-        raise ValueError(f"érvénytelen felhasználó-azonosító: {uid!r}")
+        raise ValueError(f"Invalid user id: {uid!r}")
     return _current.set(uid)
 
 

@@ -40,20 +40,19 @@ log = logging.getLogger("aice.mtmt")
 
 
 _CITATION_EXTRACT_PROMPT = """\
-Olvasd el a következő szöveget, és sorolj fel MINDEN benne található
-tudományos hivatkozást (idézet, lábjegyzet, irodalomjegyzék-tétel).
+Read the text below and list EVERY scholarly reference in it (citation, footnote, bibliography entry).
 
-Szigorú JSON formátumban válaszolj:
+Reply in strict JSON:
 {{
   "citations": [
     {{
-      "authors": ["Vezetéknév Keresztnév", ...],
+      "authors": ["Family-name Given-name", ...],
       "title": "string or null",
       "year": "string or null (4-digit if known)",
       "journal_or_publisher": "string or null",
       "volume": "string or null",
       "issue": "string or null",
-      "pages": "string or null (pl. '120-145')",
+      "pages": "string or null (e.g. '120-145')",
       "doi": "string or null",
       "isbn": "string or null",
       "kind": "journal | book | chapter | thesis | conference | other",
@@ -62,20 +61,21 @@ Szigorú JSON formátumban válaszolj:
   ]
 }}
 
-Szabályok:
-  - Ha egy hivatkozás többször előfordul, csak EGYSZER szerepeljen
-  - "et al." / "és tsai." → csak az első szerző + üres marad a többi név
-  - Évszám pontos 4 jegyű forma (ha a forrás azt adja meg)
-  - DOI: csak a 10.xxxx/yyyy alakot, "doi:" prefix nélkül
-  - NE találj ki adatokat — ha nincs benne, írj null-t
-  - Üres "citations": [] ha nincs hivatkozás
+Rules:
+  - a reference that appears several times is listed ONCE
+  - "et al." (or its equivalent in the text's language) → only the first author
+  - the year in exact 4-digit form when the source gives it
+  - DOI only in the 10.xxxx/yyyy form, without a "doi:" prefix
+  - do NOT invent data — write null when it isn't there
+  - "citations": [] when there are none
+  - keep names and titles as written in the text (its own language)
 
-A szöveg:
+The text:
 ---
 {source}
 ---
 
-Csak a JSON-t add vissza, semmi mást.
+Return only the JSON, nothing else.
 """
 
 

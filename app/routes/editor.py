@@ -50,9 +50,9 @@ def _web_dirs() -> dict[str, Path]:
 def _web_dir(app: str) -> Path:
     d = _web_dirs().get(app)
     if d is None:
-        raise HTTPException(404, f"ismeretlen szerkesztő: {app}")
+        raise HTTPException(404, f"Unknown editor: {app}")
     if not (d / "index.html").is_file():
-        raise HTTPException(503, f"a(z) {app} web-build nincs telepítve")
+        raise HTTPException(503, f"The {app} editor isn't installed on this server.")
     return d
 
 
@@ -118,18 +118,18 @@ async def editor_asset(app: str, asset: str, request: Request):
 @router.post("/api/editor/save")
 async def editor_save(
     request: Request,
-    name: str = Query(..., description="a szerkesztő által adott fájlnév"),
+    name: str = Query(..., description="file name given by the editor"),
     source: Optional[str] = Query(None, description="a megnyitott eredeti file_id"),
 ) -> dict[str, Any]:
     data = await request.body()
     if not data:
-        raise HTTPException(400, "üres törzs")
+        raise HTTPException(400, "Empty file.")
     if len(data) > settings.EDITOR_MAX_SAVE_MB * 1024 * 1024:
         raise HTTPException(413, f"nagyobb, mint {settings.EDITOR_MAX_SAVE_MB} MB")
     fname = Path(name).name or "document.docx"
     ext = Path(fname).suffix.lstrip(".").lower()
     if ext not in _SAVE_EXTS:
-        raise HTTPException(400, f"nem várt formátum: .{ext}")
+        raise HTTPException(400, f"Unexpected file type: .{ext}")
     if source and not (input_path(source).exists() or output_path(source).exists()):
         source = None
 

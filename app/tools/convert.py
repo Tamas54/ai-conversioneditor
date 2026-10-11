@@ -84,17 +84,17 @@ async def convert(
     if engine == "wordcraft":
         from app.tools import wordcraft
         if src_fmt not in wordcraft.OPEN_FORMATS or tgt_fmt not in wordcraft.SAVE_FORMATS:
-            raise ValueError(f"engine=wordcraft: {src_fmt} → {tgt_fmt} nem támogatott")
+            raise ValueError(f"engine=wordcraft: {src_fmt} → {tgt_fmt} is not supported")
         backend = "wordcraft"
     elif engine in ("photocraft", "vectorcraft"):
         from app.tools import crafts
         opens, saves = ((crafts.PHOTO_OPEN, crafts.PHOTO_SAVE) if engine == "photocraft"
                         else (crafts.VECTOR_OPEN, crafts.VECTOR_SAVE))
         if src_fmt not in opens or tgt_fmt not in saves:
-            raise ValueError(f"engine={engine}: {src_fmt} → {tgt_fmt} nem támogatott")
+            raise ValueError(f"engine={engine}: {src_fmt} → {tgt_fmt} is not supported")
         backend = engine
     elif engine:
-        raise ValueError(f"ismeretlen engine: {engine} (lehet: wordcraft, photocraft, vectorcraft)")
+        raise ValueError(f"Unknown engine: {engine} (choose wordcraft, photocraft or vectorcraft)")
     else:
         backend = route(src_fmt, tgt_fmt, use_browser=use_browser)
     log.info("convert: %s → %s via %s", src_fmt, tgt_fmt, backend)

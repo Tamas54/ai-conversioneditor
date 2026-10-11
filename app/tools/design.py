@@ -90,7 +90,7 @@ def _theme(data: dict[str, Any], theme: Optional[dict], brand: Optional[str]) ->
         from app.brands import get_brand
         b = get_brand(brand)
         if b is None:
-            raise ValueError(f"ismeretlen brand: {brand}")
+            raise ValueError(f"Unknown brand: {brand}")
         t.update(primary=b.colors.primary, accent=b.colors.accent, bg=b.colors.body_bg, panel=b.colors.panel_bg,
                  text=b.colors.text_primary, muted=b.colors.text_muted)
     t.update({k: v for k, v in (theme or {}).items() if k in DEFAULT_THEME and v})
@@ -196,10 +196,10 @@ def _certificate(d: Doc, data, t, img):
     d.rect(34, 34, W - 68, H - 68, t["accent"], opacity=12)
     d.rect(40, 40, W - 80, H - 80, "#FFFDF7")
     c = dict(w=W - 160, align="center")
-    d.text(80, H * 0.13, (data.get("title") or "Oklevél").upper(), size=40, font=t["font_heading"], style="Bold",
+    d.text(80, H * 0.13, (data.get("title") or "Certificate").upper(), size=40, font=t["font_heading"], style="Bold",
            color=t["primary"], h=56, tracking=150, **c)
     d.rect(W / 2 - 40, H * 0.255, 80, 3, t["accent"])
-    d.text(80, H * 0.3, data.get("lead", "Ezt az oklevelet"), size=15, font=t["font_body"], color=t["muted"], h=24, **c)
+    d.text(80, H * 0.3, data.get("lead", "This certificate is presented to"), size=15, font=t["font_body"], color=t["muted"], h=24, **c)
     d.text(80, H * 0.36, data.get("recipient", ""), size=38, font=t["font_heading"], style="Bold Italic",
            color=t["text"], h=56, fit="shrinkText", **c)
     d.text(80, H * 0.5, data.get("text", ""), size=15, font=t["font_body"], color=t["text"], h=H * 0.14,
@@ -306,7 +306,7 @@ def _frame_aspect(template: str, w: float, h: float) -> float:
 async def render(template: str, data: dict[str, Any], *, size: Optional[str] = None, theme: Optional[dict] = None,
                  brand: Optional[str] = None, export: Optional[list[str]] = None) -> dict[str, Any]:
     if template not in TEMPLATES:
-        raise ValueError(f"ismeretlen sablon: {template} (lehet: {', '.join(sorted(TEMPLATES))})")
+        raise ValueError(f"Unknown template: {template} (choose from {', '.join(sorted(TEMPLATES))})")
     t = _theme(data, theme, brand)
     if template == "social":
         w, h = {"landscape": (1200, 630), "square": (1080, 1080), "story": (1080, 1920)}.get(size or "landscape", (1200, 630))

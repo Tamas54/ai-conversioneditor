@@ -38,7 +38,7 @@ def temp_path(name: str | None = None) -> Path:
 def _safe(file_id: str) -> str:
     # file_id sosem tartalmazhat útvonalat (más munkaterület / ../ elérése ellen)
     if not file_id or "/" in file_id or "\\" in file_id or file_id.startswith("."):
-        raise FileNotFoundError(f"érvénytelen file_id: {file_id!r}")
+        raise FileNotFoundError(f"Invalid file_id: {file_id!r}")
     return file_id
 
 

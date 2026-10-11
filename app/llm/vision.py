@@ -193,9 +193,9 @@ async def generate_image(
     try:
         w, h = (int(v) for v in size.lower().split("x"))
     except ValueError:
-        raise ValueError(f"size: 'SZÉLESSÉGxMAGASSÁG' kell (pl. 1792x1024), nem {size!r}")
+        raise ValueError(f"size must be WIDTHxHEIGHT (e.g. 1792x1024), not {size!r}")
     if not (256 <= w <= 2048 and 256 <= h <= 2048):
-        raise ValueError(f"size: 256–2048 px oldalanként ({size})")
+        raise ValueError(f"size: 256–2048 px per side ({size})")
     payload = {
         "model": model,
         "prompt": prompt,

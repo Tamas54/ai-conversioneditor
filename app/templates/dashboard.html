@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="hu">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <title>ai-conversioneditor — dashboard</title>
@@ -149,7 +149,7 @@
     display: flex; flex-direction: column; gap: 6px;
   }
   .chat-log:empty::before {
-    content: "Mondd Kiminek mit csináljon a kiválasztott fájllal — a tool-okat magától hívja.";
+    content: "Tell the agent what to do with the selected file — it calls the tools itself.";
     color: var(--muted); font-style: italic; font-size: 12px;
     align-self: center; padding: 24px 12px; text-align: center;
   }
@@ -402,66 +402,66 @@
 
 <header>
   <h1>ai-conversioneditor</h1>
-  <a class="pill ok" href="/app" title="A termék új felülete (Make · Files · Connect your AI)" style="text-decoration:none;white-space:nowrap;flex:none">→ új felület</a>
+  <a class="pill ok" href="/app" title="The product app (Make · Files · Connect your AI)" style="text-decoration:none;white-space:nowrap;flex:none">→ Open the app</a>
   <div class="status">
     <span class="pill" id="status-lo">lo: ?</span>
     <span class="pill" id="status-chromium">chrome: ?</span>
     <span class="pill" id="status-llm">llm: ?</span>
     <span class="pill" id="status-events">events: …</span>
     <span class="pill" id="status-wc" title="WordCraft (Rust Word-motor)">wordcraft: ?</span>
-    <span class="pill" id="status-inbox" title="Nyitott „vissza Claude-nak” kérések" style="cursor:pointer">📨 –</span>
+    <span class="pill" id="status-inbox" title="Open review requests for Claude" style="cursor:pointer">📨 –</span>
   </div>
   <span style="flex:1"></span>
   <div class="toolbar">
-    <span class="selected-name" id="header-file-label">— válassz fájlt —</span>
+    <span class="selected-name" id="header-file-label">— pick a file —</span>
     <span class="sep"></span>
     <input type="file" id="upload-input" style="display:none">
-    <button class="icon-btn" id="btn-upload" title="Fájl feltöltése">
+    <button class="icon-btn" id="btn-upload" title="Upload a file">
       <span>⬆</span><span class="lbl">Upload</span>
     </button>
-    <button class="icon-btn" id="btn-edit" title="Kézi szerkesztés (WordCraft)" style="display:none">
-      <span>✏️</span><span class="lbl">Szerkesztés</span>
+    <button class="icon-btn" id="btn-edit" title="Edit by hand" style="display:none">
+      <span>✏️</span><span class="lbl">Edit</span>
     </button>
-    <button class="icon-btn" id="btn-review" title="Visszaküldés Claude-nak lektorálásra (megjegyzéssel)" disabled>
+    <button class="icon-btn" id="btn-review" title="Send back to Claude for review (with a note)" disabled>
       <span>📨</span><span class="lbl">Claude-nak</span>
     </button>
-    <button class="icon-btn" id="btn-history" title="Verziótörténet (forráslánc és leszármazottak)" disabled>
+    <button class="icon-btn" id="btn-history" title="Version history (sources and descendants)" disabled>
       <span>🕘</span>
     </button>
-    <a class="icon-btn primary" id="btn-download" title="Eredeti fájl letöltése"
+    <a class="icon-btn primary" id="btn-download" title="Download the original file"
        href="#" download style="display:none">
-      <span>⬇</span><span class="lbl">Letöltés</span>
+      <span>⬇</span><span class="lbl">Download</span>
     </a>
-    <button class="icon-btn danger" id="btn-delete" title="Aktuális fájl törlése" disabled>
+    <button class="icon-btn danger" id="btn-delete" title="Delete this file" disabled>
       <span>🗑</span>
     </button>
-    <button class="icon-btn" id="btn-refresh" title="Lista frissítése">
+    <button class="icon-btn" id="btn-refresh" title="Refresh the list">
       <span>↻</span>
     </button>
-    <a class="icon-btn" href="/logout" title="Kilépés"><span>⎋</span></a>
+    <a class="icon-btn" href="/logout" title="Sign out"><span>⎋</span></a>
   </div>
 </header>
 
 <div class="layout" id="layout">
 
   <aside class="files">
-    <div class="scroll" id="files-list"><div style="color:var(--muted);padding:12px">Töltés…</div></div>
+    <div class="scroll" id="files-list"><div style="color:var(--muted);padding:12px">Loading…</div></div>
   </aside>
 
   <main class="preview">
     <div class="title">
-      <span>PREVIEW — <span class="name" id="preview-name">(válassz fájlt)</span></span>
+      <span>PREVIEW — <span class="name" id="preview-name">(pick a file)</span></span>
       <span>
         <a id="preview-download" href="#" target="_blank" style="display:none">⬇ download</a>
       </span>
     </div>
-    <div id="preview-area" class="preview-empty">Válassz egy fájlt a bal oldali listából.</div>
+    <div id="preview-area" class="preview-empty">Pick a file from the list on the left.</div>
   </main>
 
   <aside class="events">
     <div class="title">
-      <span>AKTIVITÁS</span>
-      <button id="btn-clear-events" title="Töröl">×</button>
+      <span>ACTIVITY</span>
+      <button id="btn-clear-events" title="Clear">×</button>
     </div>
     <div class="scroll" id="events-list"></div>
   </aside>
@@ -469,8 +469,8 @@
   <section class="chat">
     <div class="chat-log" id="chat-log"></div>
     <div class="chat-input-row">
-      <textarea id="chat-input" rows="1" placeholder="Mondd Kiminek mit csináljon a kiválasztott fájllal… (Ctrl+Enter küld)"></textarea>
-      <button id="chat-send" class="primary" disabled>Küld</button>
+      <textarea id="chat-input" rows="1" placeholder="Tell the agent what to do with the selected file… (Ctrl+Enter sends)"></textarea>
+      <button id="chat-send" class="primary" disabled>Send</button>
     </div>
   </section>
 
@@ -484,7 +484,7 @@
     <div class="field"><label>Replacement</label><input type="text" id="fr-replacement"></div>
     <div class="field"><label><input type="checkbox" id="fr-regex"> regex</label></div>
     <div class="actions-row">
-      <button onclick="closeModal('modal-fr')">Mégse</button>
+      <button onclick="closeModal('modal-fr')">Cancel</button>
       <button class="primary" id="fr-go">Futtat</button>
     </div>
   </div>
@@ -493,10 +493,10 @@
 <div class="modal-bg" id="modal-ds">
   <div class="modal">
     <h2>Delete section</h2>
-    <div class="field"><label>Heading szövege</label><input type="text" id="ds-heading"></div>
-    <div class="field"><label>Level (üres = bármi)</label><input type="number" id="ds-level" min="1" max="6"></div>
+    <div class="field"><label>Heading text</label><input type="text" id="ds-heading"></div>
+    <div class="field"><label>Level (empty = any)</label><input type="number" id="ds-level" min="1" max="6"></div>
     <div class="actions-row">
-      <button onclick="closeModal('modal-ds')">Mégse</button>
+      <button onclick="closeModal('modal-ds')">Cancel</button>
       <button class="primary" id="ds-go">Futtat</button>
     </div>
   </div>
@@ -507,7 +507,7 @@
     <h2>Delete PDF pages</h2>
     <div class="field"><label>Range (pl. <code>3,5-7</code>)</label><input type="text" id="dp-range" placeholder="3,5-7"></div>
     <div class="actions-row">
-      <button onclick="closeModal('modal-dp')">Mégse</button>
+      <button onclick="closeModal('modal-dp')">Cancel</button>
       <button class="primary" id="dp-go">Futtat</button>
     </div>
   </div>
@@ -515,12 +515,12 @@
 
 <div class="modal-bg" id="modal-ai">
   <div class="modal">
-    <h2>AI edit — 1-shot tervezés (Kimi K2.6)</h2>
-    <div class="field"><label>Természetes nyelvű utasítás</label>
-      <textarea id="ai-instruction" rows="5" placeholder="pl. Töröld a 'Bevezetés' szekciót és a 'Konklúzió' címet írd át 'Összegzés'-re"></textarea>
+    <h2>AI edit — one-shot plan</h2>
+    <div class="field"><label>Instruction in plain words</label>
+      <textarea id="ai-instruction" rows="5" placeholder="e.g. Delete the 'Introduction' section and rename the 'Conclusion' heading to 'Summary'"></textarea>
     </div>
-    <div class="field"><label><input type="checkbox" id="ai-confidence" checked> require confidence ≥ 0.7 (különben csak terv, nincs futtatás)</label></div>
-    <div class="field"><label>Visszaadás formátuma (üres = eredeti)</label>
+    <div class="field"><label><input type="checkbox" id="ai-confidence" checked> require confidence ≥ 0.7 (otherwise only the plan, nothing runs)</label></div>
+    <div class="field"><label>Return format (empty = original)</label>
       <select id="ai-return-format">
         <option value="">(eredeti)</option>
         <option value="pdf">pdf</option>
@@ -530,7 +530,7 @@
       </select>
     </div>
     <div class="actions-row">
-      <button onclick="closeModal('modal-ai')">Mégse</button>
+      <button onclick="closeModal('modal-ai')">Cancel</button>
       <button class="primary" id="ai-go">Futtat</button>
     </div>
   </div>
@@ -540,20 +540,20 @@
   <div class="modal" style="width:560px">
     <h2>🤖 Autonomous edit — Kimi tool-use loop</h2>
     <div class="field" style="color:var(--muted);font-size:11px;margin-bottom:10px">
-      Kimi K2.6 iteratívan dolgozik: olvas → szerkeszt → ellenőriz → folytat.
-      Kreatív feladatokat is elvállal (átírás, új szekciók generálása, tónus változtatás, összegzés).
-      Az aktivitás-panelen jobboldalt valós időben látod, hogy mit csinál.
+      The agent works step by step: read → edit → check → continue.
+      It also takes creative jobs (rewriting, new sections, changing the tone, summaries).
+      The activity panel on the right shows what it does, live.
     </div>
-    <div class="field"><label>Természetes nyelvű utasítás (lehet komplex / kreatív)</label>
-      <textarea id="agent-instruction" rows="6" placeholder="pl. Modernizáld ennek a CV-nek a tónusát: tedd egy fokkal magabiztosabbá, írj 1 mondatos summary-t a tetejére, és a 'Skills' szekciót csoportosítsd kategóriákba (frontend / backend / devops)"></textarea>
+    <div class="field"><label>Instruction in plain words (can be complex or creative)</label>
+      <textarea id="agent-instruction" rows="6" placeholder="e.g. Modernise the tone of this CV: a notch more confident, a one-sentence summary at the top, and tighten the Skills section."></textarea>
     </div>
     <div class="field" style="display:flex;gap:14px">
       <span><label>max iter</label> <input type="number" id="agent-max-iters" value="12" min="1" max="40" style="width:70px"></span>
       <span><label>wall budget (s)</label> <input type="number" id="agent-budget" value="120" min="20" max="600" style="width:80px"></span>
     </div>
     <div class="actions-row">
-      <button onclick="closeModal('modal-agent')">Mégse</button>
-      <button class="primary" id="agent-go">🚀 Indít</button>
+      <button onclick="closeModal('modal-agent')">Cancel</button>
+      <button class="primary" id="agent-go">🚀 Start</button>
     </div>
   </div>
 </div>
@@ -561,19 +561,19 @@
 <div class="modal-bg" id="modal-review">
   <div class="modal">
     <h3>📨 Vissza Claude-nak</h3>
-    <div class="field"><label>Fájl</label><div id="rv-file" style="font-weight:600"></div></div>
-    <div class="field"><label>Mit nézzen át / mit csináljon?</label>
-      <textarea id="rv-note" rows="5" placeholder="pl. Átírtam a 2. fejezetet és megjegyzéseket hagytam — fogadd el, ami jó, a kommentekre válaszolj."></textarea></div>
-    <div class="actions"><button onclick="closeModal('modal-review')">Mégse</button>
-      <button class="primary" id="rv-go">Küldés</button></div>
+    <div class="field"><label>File</label><div id="rv-file" style="font-weight:600"></div></div>
+    <div class="field"><label>What should Claude review or do?</label>
+      <textarea id="rv-note" rows="5" placeholder="e.g. I rewrote chapter 2 and left comments — accept what works and answer the comments."></textarea></div>
+    <div class="actions"><button onclick="closeModal('modal-review')">Cancel</button>
+      <button class="primary" id="rv-go">Send</button></div>
   </div>
 </div>
 
 <div class="modal-bg" id="modal-history">
   <div class="modal">
-    <h3>🕘 Verziótörténet</h3>
+    <h3>🕘 Version history</h3>
     <div id="hist-body" style="max-height:60vh;overflow:auto;font-size:13px"></div>
-    <div class="actions"><button onclick="closeModal('modal-history')">Bezár</button></div>
+    <div class="actions"><button onclick="closeModal('modal-history')">Close</button></div>
   </div>
 </div>
 
@@ -623,8 +623,8 @@ async function pollStatus() {
     editorsReady = Object.fromEntries(Object.keys(EDITORS).map(a => [a, !!(cr[a] && cr[a].editor)]));
     const all = Object.keys(EDITORS);
     const ok = all.filter(a => cr[a] && cr[a].cli && cr[a].editor);
-    $("status-wc").textContent = `crafts: ${ok.length}/${all.length}${cr.cutout ? " +kivágás" : ""}`;
-    $("status-wc").title = all.map(a => `${EDITORS[a].label}: ${ok.includes(a) ? "ok" : "HIÁNYZIK"}`).join("\n") + "\n(CLI + szerkesztő), ISNet-kivágás";
+    $("status-wc").textContent = `crafts: ${ok.length}/${all.length}${cr.cutout ? " +cutout" : ""}`;
+    $("status-wc").title = all.map(a => `${EDITORS[a].label}: ${ok.includes(a) ? "ok" : "MISSING"}`).join("\n") + "\n(CLI + editor), ISNet cutout";
     $("status-wc").className = "pill " + (ok.length === all.length ? "ok" : "err");
     updateEditButton();
   } catch (e) {
@@ -648,7 +648,7 @@ async function refreshFiles() {
     if (!items.length) {
       const empty = document.createElement("div");
       empty.className = "group-empty";
-      empty.textContent = "(üres)";
+      empty.textContent = "(empty)";
       root.appendChild(empty);
       return;
     }
@@ -662,7 +662,7 @@ async function refreshFiles() {
       const opLine = f.operation
         ? `<span class="fop">${escapeHtml(f.operation)}</span>` : "";
       const lineage = f.source_file_id
-        ? `<div class="flineage" data-source="${f.source_file_id}" title="ugrás a forrásra">${escapeHtml(f.source_label || f.source_file_id)}</div>`
+        ? `<div class="flineage" data-source="${f.source_file_id}" title="go to the source">${escapeHtml(f.source_label || f.source_file_id)}</div>`
         : "";
       el.innerHTML = `
         <div class="ficon ${iconKindFor(f)}">${renderIcon(f)}</div>
@@ -694,7 +694,7 @@ async function refreshFiles() {
   renderGroup("OUTPUTS", d.outputs || []);
 
   if (!(d.inputs || []).length && !(d.outputs || []).length) {
-    root.innerHTML = '<div style="color:var(--muted);padding:12px">Üres. Tölts fel valamit lent ⬆</div>';
+    root.innerHTML = '<div style="color:var(--muted);padding:12px">Nothing here yet — upload something ⬆</div>';
   }
 }
 
@@ -725,7 +725,7 @@ function renderIcon(f) {
 
 function flashFile(fileId) {
   const el = document.querySelector(`.file-card[data-file-id="${CSS.escape(fileId)}"]`);
-  if (!el) { toast("forrás nem található (törölhették)", "err"); return; }
+  if (!el) { toast("source not found (it may have been deleted)", "err"); return; }
   el.scrollIntoView({behavior: "smooth", block: "center"});
   el.classList.remove("flash");
   void el.offsetWidth;  // restart animation
@@ -751,7 +751,7 @@ function selectFile(f) {
   const ext = (f.ext || "").toLowerCase();
   const showBadge = RENDERED_AS_PDF.has(ext);
   const badgeHtml = showBadge
-    ? `<div class="preview-badge show">PDF előnézet — eredeti <b>${ext.toUpperCase()}</b> letöltéséhez ⬇ Letöltés fent</div>`
+    ? `<div class="preview-badge show">PDF preview — download the original <b>${ext.toUpperCase()}</b> with ⬇ Download above</div>`
     : "";
   area.innerHTML = `${badgeHtml}<iframe src="/preview/${f.file_id}"></iframe>`;
   // Header toolbar: enable file-specific actions, prominent label.
@@ -760,13 +760,13 @@ function selectFile(f) {
   $("header-file-label").title = f.file_id;
   $("btn-download").href = f.url;
   $("btn-download").style.display = "inline-flex";
-  $("btn-download").title = `Letölt: ${labelText}`;
+  $("btn-download").title = `Download: ${labelText}`;
   $("btn-delete").disabled = false;
   $("btn-review").disabled = false;
   $("btn-history").disabled = false;
-  $("btn-delete").title = `Töröl: ${labelText}`;
+  $("btn-delete").title = `Delete: ${labelText}`;
   $("chat-send").disabled = !$("chat-input").value.trim();
-  $("chat-input").placeholder = `Mit csináljon Kimi ezzel: ${labelText}? (Ctrl+Enter küld)`;
+  $("chat-input").placeholder = `What should the agent do with ${labelText}? (Ctrl+Enter sends)`;
   updateEditButton();
   refreshFiles();
   if (f.source_file_id) setTimeout(() => flashFile(f.source_file_id), 200);
@@ -798,13 +798,13 @@ function updateEditButton() {
   const app = editorFor(selectedFileMeta && selectedFileMeta.ext);
   $("btn-edit").style.display = (editing || app) ? "inline-flex" : "none";
   $("btn-edit").innerHTML = editing
-    ? '<span>👁</span><span class="lbl">Előnézet</span>'
-    : `<span>✏️</span><span class="lbl">Szerkesztés · ${app ? EDITORS[app].label : ""}</span>`;
+    ? '<span>👁</span><span class="lbl">Preview</span>'
+    : `<span>✏️</span><span class="lbl">Edit · ${app ? EDITORS[app].label : ""}</span>`;
 }
 
 function confirmLeaveEditor() {
   return !(editing && editorDirty) ||
-    confirm("A szerkesztőben lehet nem mentett módosítás (Fájl › Mentés / Ctrl+S).\nElhagyod?");
+    confirm("The editor may have unsaved changes (File › Save / Ctrl+S).\nLeave anyway?");
 }
 
 function setEditing(on) {
@@ -823,7 +823,7 @@ function openEditor(f) {
   const app = editorFor(f.ext);
   if (!app) return;
   setEditing(true);
-  $("preview-name").textContent = `✏️ ${EDITORS[app].label} · ${label} — Mentés (Ctrl+S) / Export = új verzió a listában`;
+  $("preview-name").textContent = `✏️ ${EDITORS[app].label} · ${label} — Save (Ctrl+S) / Export = a new version in the list`;
   const area = $("preview-area");
   area.className = "preview-frame";
   area.innerHTML = `<iframe src="/editor/${app}/?${qs}" allow="clipboard-read; clipboard-write; fullscreen"></iframe>`;
@@ -845,8 +845,8 @@ window.addEventListener("message", async (e) => {
     toast(`mentve: ${m.label || m.name}`, "ok");
     await refreshFiles();
     setTimeout(() => flashFile(m.file_id), 200);
-  } else if (m.type === "save_failed") toast(`mentés a szerverre sikertelen (${m.error}) — letöltésként ment`, "err");
-  else if (m.type === "open_failed") toast(`megnyitás sikertelen: ${m.error}`, "err");
+  } else if (m.type === "save_failed") toast(`couldn't save to the server (${m.error}) — downloaded instead`, "err");
+  else if (m.type === "open_failed") toast(`couldn't open: ${m.error}`, "err");
 });
 
 window.addEventListener("beforeunload", (e) => {
@@ -872,7 +872,7 @@ function eventLineHtml(evt) {
   const detailObj = {...evt};
   delete detailObj.id; delete detailObj.ts; delete detailObj.kind;
   if (Object.keys(detailObj).length) {
-    detail = `<details><summary>részletek</summary><pre>${JSON.stringify(detailObj, null, 2)}</pre></details>`;
+    detail = `<details><summary>details</summary><pre>${JSON.stringify(detailObj, null, 2)}</pre></details>`;
   }
   return `<div class="event ${evt.kind}">
     <div class="head"><span class="kind">${title}</span><span class="ts">${t}</span></div>
@@ -923,7 +923,7 @@ $("upload-input").addEventListener("change", async e => {
   const r = await fetch("/api/upload", { method: "POST", body: fd });
   if (!r.ok) { toast("upload failed", "err"); return; }
   const d = await r.json();
-  toast(`feltöltve: ${file.name} (${d.size_kb} kB)`, "ok");
+  toast(`uploaded: ${file.name} (${d.size_kb} kB)`, "ok");
   e.target.value = "";
   await refreshFiles();
   // Auto-select the just-uploaded file
@@ -937,20 +937,20 @@ $("btn-refresh").addEventListener("click", refreshFiles);
 $("btn-delete").addEventListener("click", async () => {
   if (!selectedFileId) return;
   const label = selectedFileMeta ? (selectedFileMeta.label || selectedFileId) : selectedFileId;
-  if (!confirm(`Tényleg törlöd?\n${label}`)) return;
+  if (!confirm(`Delete this file?\n${label}`)) return;
   setEditing(false); updateEditButton();
   const r = await fetch(`/api/files/${selectedFileId}`, { method: "DELETE" });
   if (!r.ok) { toast("delete failed", "err"); return; }
-  toast("törölve", "ok");
+  toast("deleted", "ok");
   selectedFileId = null; selectedFileMeta = null;
-  $("preview-name").textContent = "(válassz fájlt)";
+  $("preview-name").textContent = "(pick a file)";
   $("preview-download").style.display = "none";
   $("btn-download").style.display = "none";
   $("btn-delete").disabled = true;
-  $("header-file-label").textContent = "— válassz fájlt —";
+  $("header-file-label").textContent = "— pick a file —";
   $("header-file-label").className = "selected-name";
   $("preview-area").className = "preview-empty";
-  $("preview-area").innerHTML = "Válassz egy fájlt a bal oldali listából.";
+  $("preview-area").innerHTML = "Pick a file from the list on the left.";
   await refreshFiles();
 });
 
@@ -970,15 +970,15 @@ function appendChatMsg(text, kind = "bot") {
 async function sendChat() {
   const text = $("chat-input").value.trim();
   if (!text) return;
-  if (!selectedFileId) { toast("Előbb válassz fájlt!", "err"); return; }
-  if (agentRunning) { toast("Még fut az előző kérés…", "err"); return; }
+  if (!selectedFileId) { toast("Pick a file first.", "err"); return; }
+  if (agentRunning) { toast("The previous request is still running…", "err"); return; }
 
   appendChatMsg(text, "user");
   $("chat-input").value = "";
   $("chat-input").style.height = "auto";
   $("chat-send").disabled = true;
   agentRunning = true;
-  appendChatMsg(`🤖 Kimi dolgozik a fájlon: ${selectedFileMeta?.label || selectedFileId}`, "bot status");
+  appendChatMsg(`🤖 Working on: ${selectedFileMeta?.label || selectedFileId}`, "bot status");
 
   try {
     const r = await fetch("/api/agent_edit", {
@@ -1078,13 +1078,13 @@ $("rv-go").addEventListener("click", async () => {
   const r = await fetch("/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ file_id: selectedFileId, note: $("rv-note").value }) });
   closeModal("modal-review");
-  if (!r.ok) { toast("nem sikerült (" + r.status + ")", "err"); return; }
-  toast("elküldve Claude-nak — a history(inbox) tool-ban látja", "ok");
+  if (!r.ok) { toast("didn't work (" + r.status + ")", "err"); return; }
+  toast("sent to Claude — it shows up in the history (inbox) tool", "ok");
   refreshInbox();
 });
 function histRow(v, cur) {
   const t = v.created_at ? new Date(v.created_at).toLocaleString("hu-HU") : "";
-  const del = v.deleted_at ? ' <span style="color:var(--err)">(törölve)</span>' : "";
+  const del = v.deleted_at ? ' <span style="color:var(--err)">(deleted)</span>' : "";
   const me = v.file_id === cur ? ' style="font-weight:700"' : "";
   return `<div${me} data-fid="${escapeHtml(v.file_id)}" class="hist-row" title="${escapeHtml(v.file_id)}">
     ${escapeHtml(v.label || v.file_id)} <span class="fop">${escapeHtml(v.operation || "")}</span>
@@ -1093,22 +1093,22 @@ function histRow(v, cur) {
 $("btn-history").addEventListener("click", async () => {
   if (!selectedFileId) return;
   const r = await fetch(`/api/history/${encodeURIComponent(selectedFileId)}`);
-  if (!r.ok) { toast("nincs verziótörténet (" + r.status + ")", "err"); return; }
+  if (!r.ok) { toast("no version history (" + r.status + ")", "err"); return; }
   const d = await r.json();
   const anc = d.ancestors.map(v => histRow(v, selectedFileId)).join('<div style="color:var(--muted);padding-left:8px">↓</div>');
-  const desc = d.descendants.length ? "<h4>Belőle készült</h4>" + d.descendants.map(v => histRow(v, selectedFileId)).join("") : "";
-  $("hist-body").innerHTML = (anc || "<i>Erről a fájlról nincs bejegyzés (a verziónapló 10-11 óta gyűjt).</i>") + desc;
+  const desc = d.descendants.length ? "<h4>Made from it</h4>" + d.descendants.map(v => histRow(v, selectedFileId)).join("") : "";
+  $("hist-body").innerHTML = (anc || "<i>No history for this file yet.</i>") + desc;
   $("hist-body").querySelectorAll(".hist-row").forEach(el => el.addEventListener("click", async () => {
     const list = await fetch("/api/files").then(x => x.json());
     const f = [...(list.inputs || []), ...(list.outputs || [])].find(x => x.file_id === el.dataset.fid);
-    if (f) { closeModal("modal-history"); selectFile(f); } else toast("ez a fájl már nincs meg", "err");
+    if (f) { closeModal("modal-history"); selectFile(f); } else toast("this file no longer exists", "err");
   }));
   openModal("modal-history");
 });
 $("status-inbox").addEventListener("click", async () => {
   const items = JSON.parse($("status-inbox").dataset.items || "[]");
-  if (!items.length) { toast("nincs nyitott kérés", ""); return; }
-  $("hist-body").innerHTML = "<h4>Nyitott kérések Claude felé</h4>" + items.map(i =>
+  if (!items.length) { toast("no open requests", ""); return; }
+  $("hist-body").innerHTML = "<h4>Open requests for Claude</h4>" + items.map(i =>
     `<div class="hist-row" data-fid="${escapeHtml(i.file_id)}">#${i.id} · ${escapeHtml(i.file_label || i.file_id)}
      <div style="color:var(--muted)">${escapeHtml(i.note || "")}</div></div>`).join("");
   $("hist-body").querySelectorAll(".hist-row").forEach(el => el.addEventListener("click", async () => {

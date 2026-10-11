@@ -118,7 +118,7 @@ def _apply_cover(slide, brand: Brand, brief_meta: dict, slide_width, slide_heigh
                 break
 
     # Use brief_meta override if provided
-    title = brief_meta.get("title") or existing_title or "Cím"
+    title = brief_meta.get("title") or existing_title or "Title"
     subtitle = brief_meta.get("subtitle") or existing_subtitle or ""
 
     # Wipe out any existing shapes on the cover (we're rebuilding it)

@@ -35,29 +35,28 @@ log = logging.getLogger("aice.term_consistency")
 
 
 _AUTO_DETECT_PROMPT = """\
-Olvasd el a következő dokumentum szövegét, és sorold fel azokat a
-KIFEJEZÉSEKET amelyeknél fontos a következetes használat. Például:
-  - Definiált jogi terminusok (Megrendelő, Vevő, Ügyfél, Szerződő Fél)
-  - Tulajdonnevek (cégnév, terméknév, helynév)
-  - Technikai terminusok
-  - Rövidítések és teljes alakok
+Read the document text below and list the TERMS whose consistent use matters, for example:
+  - defined legal terms (Customer, Buyer, Client, Contracting Party)
+  - proper names (company, product and place names)
+  - technical terms
+  - abbreviations and their full forms
 
-NE sorold fel a hétköznapi szavakat (ami, amely, ezért stb.).
-Maximum 20 kifejezést adj meg.
+Do NOT list everyday words. Give at most 20 terms, written exactly as the document writes them
+(in the document's own language).
 
-Szigorú JSON formátumban válaszolj:
+Reply in strict JSON:
 {{
   "terms": [
-    {{"canonical": "preferált forma", "kind": "legal|proper_noun|technical|abbreviation"}}
+    {{"canonical": "preferred form", "kind": "legal|proper_noun|technical|abbreviation"}}
   ]
 }}
 
-A szöveg:
+The text:
 ---
 {source}
 ---
 
-Csak a JSON-t add vissza, semmi mást.
+Return only the JSON, nothing else.
 """
 
 

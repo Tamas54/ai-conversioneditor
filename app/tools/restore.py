@@ -157,13 +157,13 @@ def align(ref: Path, moving: bytes, dst: Path) -> int:
         k2, d2 = orb.detectAndCompute(g2, None)
         matches = sorted(cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(d2, d1), key=lambda x: x.distance)[:800]
         if len(matches) < 20:
-            raise ValueError("kevés egyezés")
+            raise ValueError("too few matches")
         src = np.float32([k2[x.queryIdx].pt for x in matches])
         dst_pts = np.float32([k1[x.trainIdx].pt for x in matches])
         Hm, inl = cv2.findHomography(src, dst_pts, cv2.RANSAC, 4.0)
         n = int(inl.sum()) if inl is not None else 0
         if Hm is None or n < 25:
-            raise ValueError(f"kevés inlier ({n})")
+            raise ValueError(f"too few inliers ({n})")
         out = cv2.warpPerspective(m, Hm, (W_, H_), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
         cover = cv2.warpPerspective(np.full(m.shape[:2], 255, np.uint8), Hm, (W_, H_), flags=cv2.INTER_NEAREST)
         # ahol az AI-kép nem fed: vékony szélen (≤2%) a szélső pixel ismétlése (különben az eredeti csíkja

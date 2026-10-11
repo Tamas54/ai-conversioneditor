@@ -2230,7 +2230,7 @@ async def _tool_docx_add_bulleted_list(state, args, pool):
 async def _tool_docx_add_signature_block(state, args, pool):
     out = await docx_builder.docx_add_signature_block(
         state.current_fid,
-        label=args.get("label", "aláírás"),
+        label=args.get("label", "Signature"),
         alignment=args.get("alignment", "right"),
         dots=int(args.get("dots", 50)),
     )
@@ -2798,7 +2798,7 @@ async def _tool_parse_with_quality(state: AgentState, args: dict, pool) -> dict:
 async def _tool_wordcraft_commands(state: AgentState, args: dict, pool) -> dict:
     from app.tools import wordcraft as wc
     out = await wc.run(file_id=state.current_fid, commands=args.get("commands") or [],
-                       author=args.get("author") or "Kimi (szerkesztő)")
+                       author=args.get("author") or "AI editor")
     state.current_fid = out["file_id"]
     return {"file_id": out["file_id"], "commands_run": out["commands_run"], "ms": out["ms_elapsed"]}
 

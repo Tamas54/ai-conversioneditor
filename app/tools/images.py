@@ -65,7 +65,7 @@ async def _get(url: str, **kw) -> httpx.Response:
 async def _download(url: str) -> bytes:
     r = await _get(url)
     if len(r.content) > _MAX_DOWNLOAD:
-        raise ValueError(f"kép túl nagy: {url}")
+        raise ValueError(f"Image too large: {url}")
     return r.content
 
 
@@ -100,14 +100,14 @@ async def _commons(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
             continue
         meta = ii.get("extmetadata") or {}
         lic = (meta.get("LicenseShortName") or {}).get("value", "szabad licenc")
-        who = _re.sub(r"<[^>]+>", "", _html.unescape((meta.get("Artist") or {}).get("value", ""))).strip() or "ismeretlen szerző"
+        who = _re.sub(r"<[^>]+>", "", _html.unescape((meta.get("Artist") or {}).get("value", ""))).strip() or "unknown author"
         try:
             data = await _download(ii.get("thumburl") or ii["url"])
         except Exception as e:
             log.info("commons letöltés kihagyva (%s): %s", ii.get("url"), e)
             continue
-        return data, f"Fotó: {who[:80]} (Wikimedia Commons), {lic} — {ii.get('descriptionurl', ii['url'])}"
-    raise ValueError(f"nincs Commons-találat: {query!r}")
+        return data, f"Photo: {who[:80]} (Wikimedia Commons), {lic} — {ii.get('descriptionurl', ii['url'])}"
+    raise ValueError(f"No Wikimedia Commons result for {query!r}")
 
 
 async def _stock_progressive(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
@@ -115,7 +115,7 @@ async def _stock_progressive(query: str, aspect: Optional[float]) -> tuple[bytes
     újrapróbál (az utolsó szavak a legkevésbé lényegesek), és csak a végén hibázik."""
     words = query.split()
     tries = [query] + [" ".join(words[:n]) for n in (4, 3, 2) if len(words) > n]
-    last: Exception = ValueError(f"nincs stockkép: {query!r}")
+    last: Exception = ValueError(f"No stock photo for {query!r}")
     for q in dict.fromkeys(tries):
         try:
             return await _stock(q, aspect)
@@ -141,7 +141,7 @@ async def _openverse(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
     r = await _get("https://api.openverse.org/v1/images/", params=params)
     results = [x for x in r.json().get("results", []) if (x.get("width") or 0) >= 1000]
     if not results:
-        raise ValueError(f"nincs stockkép erre: {query!r}")
+        raise ValueError(f"No stock photo for {query!r}")
     for hit in results[:5]:
         try:
             data = await _download(_wikimedia_thumb(hit["url"], 1600))
@@ -149,9 +149,9 @@ async def _openverse(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
             log.info("stock letöltés kihagyva (%s): %s", hit.get("url"), e)
             continue
         lic = f"CC {hit.get('license', '').upper()} {hit.get('license_version') or ''}".strip()
-        who = hit.get("creator") or "ismeretlen szerző"
-        return data, f"Fotó: {who} ({hit.get('source')}), {lic} — {hit.get('foreign_landing_url') or hit['url']}"
-    raise ValueError(f"egyik stockkép sem tölthető le: {query!r}")
+        who = hit.get("creator") or "unknown author"
+        return data, f"Photo: {who} ({hit.get('source')}), {lic} — {hit.get('foreign_landing_url') or hit['url']}"
+    raise ValueError(f"None of the stock photos for {query!r} could be downloaded")
 
 
 def _crop_to(data_or_path: Union[bytes, Path], aspect: Optional[float], max_px: int) -> Path:
@@ -188,7 +188,7 @@ async def resolve(spec: ImageSpec, *, aspect: Optional[float] = None, max_px: in
     if spec.get("stock"):
         data, credit = await _stock_progressive(spec["stock"], aspect)
         return ResolvedImage(await asyncio.to_thread(_crop_to, data, aspect, max_px), credit, None)
-    raise ValueError(f"ismeretlen képforrás: {spec!r} (file_id | url | generate | stock)")
+    raise ValueError(f"Unknown image source: {spec!r} (file_id | url | generate | stock)")
 
 
 async def resolve_many(items: list[tuple[ImageSpec, Optional[float]]], concurrency: int = 4) -> list[ResolvedImage]:

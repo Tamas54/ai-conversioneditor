@@ -208,7 +208,7 @@ def mark_deleted_bg(file_id: str) -> None:
 async def lineage(file_id: str) -> dict[str, Any]:
     """Az ősök lánca (forrásról forrásra a gyökérig) és a közvetlen/távoli leszármazottak."""
     if not enabled():
-        raise RuntimeError("nincs Postgres (DATABASE_URL)")
+        raise RuntimeError("No database configured (DATABASE_URL).")
     ancestors = await _rows(
         """WITH RECURSIVE up AS (
              SELECT *, 0 AS depth FROM file_versions WHERE file_id = %s AND owner_id IS NOT DISTINCT FROM %s
@@ -231,9 +231,9 @@ async def lineage(file_id: str) -> dict[str, Any]:
 
 async def review_create(file_id: str, note: Optional[str], requested_by: Optional[str]) -> dict[str, Any]:
     if not enabled():
-        raise RuntimeError("nincs Postgres (DATABASE_URL)")
+        raise RuntimeError("No database configured (DATABASE_URL).")
     if not await _owns(file_id):
-        raise ValueError(f"nincs ilyen fájl ebben a munkaterületben: {file_id}")
+        raise ValueError(f"No such file in this workspace: {file_id}")
     rows = await _rows("""INSERT INTO review_requests (file_id, note, requested_by) VALUES (%s, %s, %s)
                           RETURNING id, file_id, note, status, requested_by, created_at""", (file_id, note, requested_by))
     return rows[0]
@@ -241,7 +241,7 @@ async def review_create(file_id: str, note: Optional[str], requested_by: Optiona
 
 async def review_list(status: Optional[str] = "open", file_id: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
     if not enabled():
-        raise RuntimeError("nincs Postgres (DATABASE_URL)")
+        raise RuntimeError("No database configured (DATABASE_URL).")
     where, params = ["v.owner_id IS NOT DISTINCT FROM %s"], [_owner()]
     if status:
         where.append("r.status = %s"); params.append(status)
@@ -254,14 +254,14 @@ async def review_list(status: Optional[str] = "open", file_id: Optional[str] = N
 
 async def review_resolve(review_id: int, resolution_file_id: Optional[str], note: Optional[str]) -> dict[str, Any]:
     if not enabled():
-        raise RuntimeError("nincs Postgres (DATABASE_URL)")
+        raise RuntimeError("No database configured (DATABASE_URL).")
     rows = await _rows("""UPDATE review_requests r SET status = 'done', resolved_at = now(),
                             resolution_file_id = %s, resolution_note = %s
                           FROM file_versions v
                           WHERE r.id = %s AND v.file_id = r.file_id AND v.owner_id IS NOT DISTINCT FROM %s
                           RETURNING r.*""", (resolution_file_id, note, review_id, _owner()))
     if not rows:
-        raise ValueError(f"nincs ilyen kérés: {review_id}")
+        raise ValueError(f"No such review request: {review_id}")
     return rows[0]
 
 

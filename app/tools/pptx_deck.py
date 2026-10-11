@@ -38,7 +38,7 @@ def _theme(spec: dict[str, Any]) -> dict[str, str]:
         from app.brands import get_brand
         b = get_brand(spec["brand"])
         if b is None:
-            raise ValueError(f"ismeretlen brand: {spec['brand']}")
+            raise ValueError(f"Unknown brand: {spec['brand']}")
         t.update(primary=b.colors.primary, accent=b.colors.accent, bg=b.colors.body_bg, panel=b.colors.panel_bg,
                  text=b.colors.text_primary, muted=b.colors.text_muted,
                  font_heading=b.fonts.heading, font_body=b.fonts.body)
@@ -183,7 +183,7 @@ def _section(slide, s, t, img, closing=False):
     if s.get("number") is not None and not closing:
         _text(slide, M_IN, 1.5, 4, 1.4, f"{int(s['number']):02d}", size=72, font=t["font_heading"],
               color=t["accent"], bold=True)
-    title = s.get("title") or ("Köszönöm!" if closing else "")
+    title = s.get("title") or ("Thank you!" if closing else "")
     _text(slide, M_IN, 2.9, W_IN - 2 * M_IN, 1.6, title, size=_title_size(title, 46), font=t["font_heading"],
           color="#FFFFFF", bold=True, anchor="bottom", align="center" if closing else "left")
     if s.get("subtitle"):
@@ -382,10 +382,10 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
     t0 = time.time()
     slides = spec.get("slides") or []
     if not slides:
-        raise ValueError("slides: legalább egy dia kell")
+        raise ValueError("slides: at least one slide is needed")
     bad = [s.get("layout") for s in slides if s.get("layout") not in LAYOUTS]
     if bad:
-        raise ValueError(f"ismeretlen layout: {bad} (lehet: {', '.join(sorted(LAYOUTS))})")
+        raise ValueError(f"Unknown layout: {bad} (choose from {', '.join(sorted(LAYOUTS))})")
     t = _theme(spec)
 
     reqs = _requests(slides)

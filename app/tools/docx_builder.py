@@ -281,7 +281,7 @@ async def docx_add_bulleted_list(
 
 async def docx_add_signature_block(
     file_id: str,
-    label: str = "aláírás",
+    label: str = "Signature",
     *,
     alignment: str = "right",
     dots: int = 50,

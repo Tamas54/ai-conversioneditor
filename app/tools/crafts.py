@@ -42,7 +42,7 @@ def cli_path(configured: str, name: str) -> Optional[str]:
 
 async def run_cli(exe: Optional[str], name: str, *args: str) -> str:
     if exe is None:
-        raise RuntimeError(f"{name} nincs telepítve")
+        raise RuntimeError(f"{name} isn't installed on this server")
     # *_NO_PREFS: ne írjon felhasználói beállítást a konténerbe; a napló stderr-re megy.
     env = {**os.environ, **{f"{a}CRAFT_NO_PREFS": "1" for a in ("WORD", "PHOTO", "VECTOR", "DECK", "PDF", "DESIGN", "GRID")}}
     proc = await asyncio.create_subprocess_exec(
@@ -53,10 +53,10 @@ async def run_cli(exe: Optional[str], name: str, *args: str) -> str:
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
-        raise RuntimeError(f"{name} {args[0]}: időtúllépés ({settings.WORDCRAFT_TIMEOUT_S}s)")
+        raise RuntimeError(f"{name} {args[0]}: timed out after {settings.WORDCRAFT_TIMEOUT_S}s")
     if proc.returncode != 0:
         msg = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip()
-        raise RuntimeError(msg or f"{name} {args[0]}: kilépési kód {proc.returncode}")
+        raise RuntimeError(msg or f"{name} {args[0]}: exit code {proc.returncode}")
     return out.decode("utf-8", "replace")
 
 
@@ -82,7 +82,7 @@ def split_command(c: Command) -> tuple[str, Optional[dict[str, Any]]]:
         return cid, (json.loads(raw) if raw else None)
     cid = c.get("command") or c.get("id")
     if not cid:
-        raise ValueError(f"parancs id hiányzik: {c!r}")
+        raise ValueError(f"Command id missing: {c!r}")
     return str(cid), resolve_file_ids(c.get("params"))
 
 
@@ -135,17 +135,17 @@ async def photo_run(
     from app.storage import temp_path
     t0 = time.time()
     if not file_id and not new:
-        raise ValueError("file_id vagy new (pl. {\"width\": 1200, \"height\": 800}) kell")
+        raise ValueError("Give file_id, or new (e.g. {\"width\": 1200, \"height\": 800})")
     src = existing(file_id) if file_id else None
     src_ext = src.suffix.lstrip(".").lower() if src else "png"
     fmt = (save_format or ("png" if remove_background and not background_file_id else src_ext)).lower().lstrip(".")
     if fmt not in PHOTO_SAVE:
-        raise ValueError(f"save_format: {fmt} (lehet: {', '.join(sorted(PHOTO_SAVE))})")
+        raise ValueError(f"save_format: {fmt} (choose from {', '.join(sorted(PHOTO_SAVE))})")
     tmp: list[Path] = []
     try:
         if remove_background:
             if not src:
-                raise ValueError("remove_background file_id-t kér")
+                raise ValueError("remove_background needs a file_id")
             from app.tools import cutout
             cut = temp_path(f"{new_file_id('png')}")
             await cutout.remove_background(src, cut)
@@ -155,7 +155,7 @@ async def photo_run(
         steps: list[tuple[str, Optional[dict[str, Any]]]] = []
         if background_file_id:
             if not src:
-                raise ValueError("background_file_id egy meglévő képhez (file_id) kell")
+                raise ValueError("background_file_id needs an existing image (file_id)")
             from PIL import Image
             with Image.open(src) as a, Image.open(existing(background_file_id)) as b:
                 # „cover”: a háttér a teljes vásznat kitölti; +8 %, hogy az elmosás széle ne látsszon
@@ -189,7 +189,7 @@ async def photo_read(mode: str, file_id: Optional[str] = None, query: Optional[s
                               query, offset, max_chars)
     if mode == "info":
         if not file_id:
-            raise ValueError("read=info file_id-t kér")
+            raise ValueError("read=info needs a file_id")
         return json.loads(await run_cli(photo_cli(), "photocraft-cli", "info", str(existing(file_id)), "--compact"))
     raise ValueError("read: info | commands")
 
@@ -208,7 +208,7 @@ async def vector_run(
     formats = [f.lower().lstrip(".") for f in (export or ["pdf"])]
     bad = [f for f in formats if f not in VECTOR_SAVE]
     if bad:
-        raise ValueError(f"export: {bad} (lehet: {', '.join(sorted(VECTOR_SAVE))})")
+        raise ValueError(f"export: {bad} (choose from {', '.join(sorted(VECTOR_SAVE))})")
     args = ["run"] + (["--in", str(existing(file_id))] if file_id else [])
     for c in commands or []:
         cid, params = split_command(c)
@@ -225,7 +225,7 @@ async def vector_run(
     if scale:
         args += ["--scale", str(scale)]
     log_lines = await run_cli(vector_cli(), "vectorcraft-cli", *args)
-    stem = Path(display_label(file_id)).stem if file_id else "dizajn"
+    stem = Path(display_label(file_id)).stem if file_id else "design"
     files = [_finish(fid, file_id, "vectorcraft", stem) for fid in outs]
     return {"files": files, "file_id": files[0]["file_id"], "commands_run": len(commands or []),
             "ms_elapsed": int((time.time() - t0) * 1000),
@@ -239,7 +239,7 @@ async def vector_read(mode: str, file_id: Optional[str] = None, query: Optional[
                               query, offset, max_chars)
     if mode == "info":
         if not file_id:
-            raise ValueError("read=info file_id-t kér")
+            raise ValueError("read=info needs a file_id")
         return json.loads(await run_cli(vector_cli(), "vectorcraft-cli", "info", str(existing(file_id))))
     raise ValueError("read: info | commands")
 
@@ -295,19 +295,19 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
     """Parancsok (deck/design/grid) vagy PDF-eszközlépések (pdf) egy dokumentumon → új output file_id."""
     from app import tenancy
     if app not in OFFICE:
-        raise ValueError(f"app: {app} (lehet: {', '.join(OFFICE)})")
+        raise ValueError(f"app: {app} (choose from {', '.join(OFFICE)})")
     spec, t0 = OFFICE[app], time.time()
     src = existing(file_id) if file_id else None
     if src and src.suffix.lstrip(".").lower() not in spec["open"]:
-        raise ValueError(f"{app} nem nyitja meg ezt: {src.suffix} (lehet: {', '.join(sorted(spec['open']))})")
+        raise ValueError(f"{app} can't open {src.suffix} files (it opens {', '.join(sorted(spec['open']))})")
     fmt = (save_format or (src.suffix.lstrip(".") if src else {"deck": "pptx", "pdf": "pdf", "layout": "pdf", "sheet": "xlsx"}[app])).lower()
     if fmt not in spec["save"]:
-        raise ValueError(f"save_format: {fmt} (lehet: {', '.join(sorted(spec['save']))})")
+        raise ValueError(f"save_format: {fmt} (choose from {', '.join(sorted(spec['save']))})")
     fid, out = _new_output(fmt, file_id, app, "")
     exe, name = office_cli(app), f"{spec['exe']}-cli"
     if app == "pdf":
         if not src:
-            raise ValueError("a pdf-hez file_id kell")
+            raise ValueError("pdf needs a file_id")
         steps = [{"tool": c["tool"], "args": c.get("args") or {}} for c in commands or []
                  if isinstance(c, dict) and c.get("tool")]
         await pdf_script([file_id], steps, out)
@@ -327,7 +327,7 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
             args += ["--export", str(out)]
         log_lines = await run_cli(exe, name, *args)
     if not out.exists():
-        raise RuntimeError(f"{name}: nem készült kimenet ({log_lines[-300:]})")
+        raise RuntimeError(f"{name}: no output was produced ({log_lines[-300:]})")
     stem = Path(display_label(file_id)).stem if file_id else app
     res = _finish(fid, file_id, app, stem)
     res.update({"steps_run": len(commands or []), "ms_elapsed": int((time.time() - t0) * 1000)})
@@ -359,7 +359,7 @@ async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path
 async def office_read(app: str, mode: str, file_id: Optional[str] = None, query: Optional[str] = None,
                       offset: int = 0, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
     if app not in OFFICE:
-        raise ValueError(f"app: {app} (lehet: {', '.join(OFFICE)})")
+        raise ValueError(f"app: {app} (choose from {', '.join(OFFICE)})")
     exe, name = office_cli(app), f"{OFFICE[app]['exe']}-cli"
     if mode == "commands":
         if app == "pdf":
@@ -378,7 +378,7 @@ async def office_read(app: str, mode: str, file_id: Optional[str] = None, query:
         page, nxt = page_items(hits, max(0, offset), max(1_000, max_chars))
         return {"count": len(hits), "items": page, "offset": offset, "next_offset": nxt}
     if not file_id:
-        raise ValueError(f"read={mode} file_id-t kér")
+        raise ValueError(f"read={mode} needs a file_id")
     path = str(existing(file_id))
     if mode == "info":
         out = await run_cli(exe, name, *(["info", path, "--json"] if app == "sheet" else ["info", path]))

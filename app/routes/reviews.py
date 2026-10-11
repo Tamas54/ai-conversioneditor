@@ -12,7 +12,7 @@ router = APIRouter()
 
 def _need_db() -> None:
     if not db.enabled():
-        raise HTTPException(503, "nincs Postgres (DATABASE_URL)")
+        raise HTTPException(503, "No database configured (DATABASE_URL).")
 
 
 @router.get("/api/history/{file_id}")
@@ -31,7 +31,7 @@ async def api_reviews(status: Optional[str] = "open", file_id: Optional[str] = N
 async def api_review_create(body: dict[str, Any]) -> dict[str, Any]:
     _need_db()
     if not body.get("file_id"):
-        raise HTTPException(400, "file_id kell")
+        raise HTTPException(400, "file_id is required")
     row = await db.review_create(body["file_id"], (body.get("note") or "").strip() or None, "dashboard")
     events.emit("review_requested", file_id=row["file_id"], review_id=row["id"], note=row.get("note"))
     return row
