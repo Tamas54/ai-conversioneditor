@@ -274,6 +274,11 @@ async def wordcraft(
        {"command": "select.text", "params": {"text": "old"}},
        {"command": "text.insert", "params": {"text": "new"}}]
     author: name on tracked changes and comments (e.g. "Claude (copyedit)").
+    edit.replaceAll: ALWAYS pass "matchCase" explicitly. Find options carry
+      over between commands (like Word's dialog), and a case-insensitive
+      replace does not keep the found text's capitals ("az X" → "Az X").
+    Build a TOC (references.toc) after review.acceptAll: on a document with
+      pending changes it lists deleted and inserted text side by side.
     No file_id → starts from `template` (blank|sample|letter|resume|report).
     save_format: docx (default) | pdf | odt | rtf | html | md | tex | txt | png.
 
