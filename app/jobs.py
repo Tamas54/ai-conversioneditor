@@ -7,7 +7,6 @@ de a drága rész — az oldalankénti OCR — a Postgres ocr_cache-ben megmarad
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import logging
 import time
 import uuid
@@ -50,8 +49,9 @@ def start(kind: str, work: Callable[[Progress], Awaitable[dict[str, Any]]]) -> d
             job.update(status="failed", error=getattr(e, "detail", None) or str(e)[:300])
         job["finished"] = time.time()
 
-    # a tenancy (melyik felhasználó tárhelye) a háttérfeladatba is átmegy
-    job["_task"] = asyncio.get_running_loop().create_task(run(), context=contextvars.copy_context())
+    # a task létrehozáskor a futó kontextus másolatát kapja → a tenancy (melyik felhasználó tárhelye) átmegy.
+    # (context= paramétert NEM adunk: élesben Python 3.10 + uvloop, ott nincs ilyen paraméter.)
+    job["_task"] = asyncio.get_running_loop().create_task(run())
     return _public(job)
 
 
