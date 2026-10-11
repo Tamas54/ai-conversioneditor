@@ -44,7 +44,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # SHA256-ot a release SHA256SUMS.txt-jéből kell átírni.
 ARG WORDCRAFT_VERSION=0.5.0
 ARG WORDCRAFT_CLI_SHA256=994bb376479ef6d76735cf4029e5ef3c2d52a85a4c9acde2b37c33b19c570203
-ARG WORDCRAFT_WEB_SHA256=196d0070fec6572238298e211ac4a3ea0510b7a0ac8d6096a5ee59f2ff69f85d
+# A webes szerkesztő a SAJÁT buildünk (build/wordcraft-web: Caladea/Carlito befordítva, Discord-gomb
+# nélkül) — release: github.com/Tamas54/ai-conversioneditor/releases/tag/wordcraft-web-0.5.0-aice1
+ARG WORDCRAFT_WEB_TAG=wordcraft-web-0.5.0-aice1
+ARG WORDCRAFT_WEB_SHA256=181c06e415e292b56e07e1ecdd241f31bfac979e56c1eabe7ff6c67151b1b005
 RUN set -eux; \
     base="https://github.com/storytold/wordcraft/releases/download/v${WORDCRAFT_VERSION}"; \
     cd /tmp; \
@@ -54,10 +57,10 @@ RUN set -eux; \
     tar xzf wc.tar.gz --strip-components=1 -C /opt/wordcraft \
         "wordcraft-${WORDCRAFT_VERSION}-linux-x86_64/bin/wordcraft-cli" \
         "wordcraft-${WORDCRAFT_VERSION}-linux-x86_64/share/doc/wordcraft"; \
-    curl -fsSL -o web.zip "$base/wordcraft-web-${WORDCRAFT_VERSION}.zip"; \
+    curl -fsSL -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${WORDCRAFT_WEB_TAG}/${WORDCRAFT_WEB_TAG}.zip"; \
     echo "${WORDCRAFT_WEB_SHA256}  web.zip" | sha256sum -c -; \
     unzip -q web.zip; \
-    mv "wordcraft-web-${WORDCRAFT_VERSION}" /opt/wordcraft-web; \
+    mv "${WORDCRAFT_WEB_TAG}" /opt/wordcraft-web; \
     gzip -9 -k /opt/wordcraft-web/*.wasm /opt/wordcraft-web/*.js; \
     rm -f wc.tar.gz web.zip; \
     WORDCRAFT_NO_PREFS=1 /opt/wordcraft/bin/wordcraft-cli --version

@@ -62,6 +62,9 @@ def _preview_filename(file_id: str, ext: str) -> str:
     return f"{stem}.{ext}"
 
 
+WORDCRAFT_PREVIEW_FORMATS = {"docx", "doc", "odt", "rtf"}
+
+
 @router.get("/preview/{file_id}")
 async def preview(file_id: str, request: Request):
     src = _resolve(file_id)
@@ -101,6 +104,16 @@ async def preview(file_id: str, request: Request):
     # LibreOffice-renderable → convert to PDF (cached by mtime)
     if fmt in LO_PREVIEW_FORMATS:
         cache_path = PREVIEW_DIR / f"{file_id}_{mtime}.pdf"
+        if not cache_path.exists() and fmt in WORDCRAFT_PREVIEW_FORMATS:
+            # Word-szerű dokumentum: a WordCraft ms-ok alatt rajzol, és ugyanúgy tördel, mint a
+            # szerkesztő (Caladea/Carlito mindkettőben); hibánál marad a LibreOffice.
+            try:
+                from app.tools import wordcraft
+                if wordcraft.available():
+                    await wordcraft.convert_file(src, cache_path)
+            except Exception as e:
+                log.warning("WordCraft-előnézet nem sikerült (%s), LibreOffice jön: %s", file_id, e)
+                cache_path.unlink(missing_ok=True)
         if not cache_path.exists():
             pool = getattr(request.app.state, "pool", None)
             if not pool:
