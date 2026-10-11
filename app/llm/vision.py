@@ -187,11 +187,20 @@ async def generate_image(
     Returns the raw PNG/JPG bytes of the FIRST generated image."""
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
+    # A SiliconFlow a `size`-t figyelmen kívül hagyja; a FLUX.2-pro csak width/height-ot követ
+    # (image_size-t sem — 10-11 mérés: mindig 1024×1024 jött). image_size a többi modellnek.
+    try:
+        w, h = (int(v) for v in size.lower().split("x"))
+    except ValueError:
+        raise ValueError(f"size: 'SZÉLESSÉGxMAGASSÁG' kell (pl. 1792x1024), nem {size!r}")
+    if not (256 <= w <= 2048 and 256 <= h <= 2048):
+        raise ValueError(f"size: 256–2048 px oldalanként ({size})")
     payload = {
         "model": model,
         "prompt": prompt,
-        "n": n,
-        "size": size,
+        "width": w,
+        "height": h,
+        "image_size": f"{w}x{h}",
     }
     last_exc: Optional[Exception] = None
     async for attempt in AsyncRetrying(

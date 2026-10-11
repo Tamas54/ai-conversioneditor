@@ -310,6 +310,56 @@ async def wordcraft(
 
 
 @mcp.tool()
+async def pptx_build(spec: dict) -> dict:
+    """
+    Build a whole 16:9 PowerPoint deck in ONE call, designed and illustrated.
+    spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
+            text, muted, font_heading, font_body}, "slides": [...]}
+    Slide layouts (each may carry "notes"):
+      cover {title, subtitle?, kicker?, image?}   section {title, subtitle?, number?, image?}
+      bullets {title, bullets[], text?, image?}    image_left|image_right {title, bullets[]|text, image}
+      full_image {image, title?, caption?}         quote {quote, author?, image?}
+      stats {title, stats:[{value, label}] ≤4}     chart {title, chart_type, categories, series}
+      table {title, headers, rows}                 gallery {title, images[≤4], captions?}
+      closing {title?, subtitle?}
+    image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
+            | {"stock": "<search words>"} (free CC photos, credit goes to notes).
+    Images are cropped to their frame; FLUX images generate in parallel.
+    Preview a slide with pptx_render_slide.
+    """
+    from app.tools import pptx_deck
+    return await pptx_deck.build(spec)
+
+
+@mcp.tool()
+async def design(
+    template: str,
+    data: dict,
+    size: Optional[str] = None,
+    theme: Optional[dict] = None,
+    brand: Optional[str] = None,
+    export: Optional[list[str]] = None,
+) -> dict:
+    """
+    Designed print/social pieces from templates (VectorCraft) → PDF + PNG
+    (export: pdf | png | svg | jpg). One call, no layout work.
+    template / data:
+      poster        {title, subtitle?, body?, image?, date?, place?, footer?}   size A4|A3|A5
+      flyer         {title, kicker?, subtitle?, image?, body (2 columns), highlights[≤3]?, cta?, contact?}
+      report_cover  {title, subtitle?, organization?, author?, date?, image?}
+      certificate   {recipient, title?="Oklevél", lead?, text, place?, date?, signatures[{name, role}]}  (landscape)
+      social        {title, subtitle?, handle?, image?}   size landscape (1200×630) | square | story
+      booklet       {title, subtitle?, organization?, author?, date?, cover_image?,
+                     sections[{heading, text, image?}]}   long text flows onto extra pages
+    image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"} | {"stock": "<words>"}
+    theme {primary, accent, bg, text, muted} or brand=<name>. Titles shrink to fit.
+    Edit the result by hand in the dashboard (✏️ Vector on the PDF).
+    """
+    from app.tools import design as dz
+    return await dz.render(template, data, size=size, theme=theme, brand=brand, export=export)
+
+
+@mcp.tool()
 async def photocraft(
     file_id: Optional[str] = None,
     commands: Optional[list] = None,
@@ -735,7 +785,8 @@ async def generate_image(
 ) -> dict:
     """Generate an image from text via SiliconFlow image-gen (FLUX.2-pro
     by default). Useful for: missing figures, conceptual illustrations,
-    decorative covers. size ∈ {1024x1024, 1792x1024, 1024x1792}.
+    decorative covers. size "WIDTHxHEIGHT", 256–2048 px a side, e.g.
+    1792x1024 (wide), 1024x1792 (tall), 1024x1024, 1600x900 (16:9 slide).
     Returns image_file_id usable in insert_image."""
     return await vision_ops.generate_image(prompt, model=model, size=size)
 

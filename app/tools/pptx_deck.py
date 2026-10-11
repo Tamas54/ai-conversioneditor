@@ -1,0 +1,419 @@
+"""Egész PPTX-pakli EGY hívásból: 16:9, egységes dizájn, képekkel (file_id / URL / FLUX / stock).
+
+    spec = {
+      "title": "…", "footer": "…"?, "brand": "<brand név>"? | "theme": {primary, accent, bg, text, muted,
+               font_heading, font_body}?,
+      "slides": [ {"layout": "cover", "title", "subtitle"?, "image"?}, … ]
+    }
+
+Elrendezések: cover · section · bullets (+image) · image_left · image_right · full_image · quote (+image)
+· stats · chart · table · gallery · closing. Minden diához "notes" (előadói jegyzet) adható; a stockképek
+forrásmegjelölése automatikusan a jegyzetbe kerül.
+
+A betűk alapból Cambria / Calibri: a PowerPointban megvannak, a szerveren a metrikailag egyező
+Caladea / Carlito rajzolja az előnézetet, így a tördelés mindkét helyen ugyanaz.
+"""
+from __future__ import annotations
+
+import time
+from typing import Any, Optional
+
+from app.storage import output_path, public_url, write_meta
+from app.storage.files import new_file_id
+from app.tools import images
+
+LAYOUTS = {"cover", "section", "bullets", "image_left", "image_right", "full_image", "quote",
+           "stats", "chart", "table", "gallery", "closing"}
+DEFAULT_THEME = {
+    "primary": "#14213D", "accent": "#FCA311", "bg": "#FFFFFF", "panel": "#F4F5F7",
+    "text": "#1E2430", "muted": "#6B7280", "font_heading": "Cambria", "font_body": "Calibri",
+}
+W_IN, H_IN, M_IN = 13.333, 7.5, 0.6
+_FULL = W_IN / H_IN
+
+
+def _theme(spec: dict[str, Any]) -> dict[str, str]:
+    t = dict(DEFAULT_THEME)
+    if spec.get("brand"):
+        from app.brands import get_brand
+        b = get_brand(spec["brand"])
+        if b is None:
+            raise ValueError(f"ismeretlen brand: {spec['brand']}")
+        t.update(primary=b.colors.primary, accent=b.colors.accent, bg=b.colors.body_bg, panel=b.colors.panel_bg,
+                 text=b.colors.text_primary, muted=b.colors.text_muted,
+                 font_heading=b.fonts.heading, font_body=b.fonts.body)
+    t.update({k: v for k, v in (spec.get("theme") or {}).items() if k in DEFAULT_THEME and v})
+    return t
+
+
+def _image_aspect(s: dict[str, Any]) -> Optional[float]:
+    lay = s.get("layout")
+    if lay in ("cover", "full_image", "section", "closing"):
+        return _FULL
+    if lay == "bullets":
+        return 5.2 / H_IN
+    if lay in ("image_left", "image_right"):
+        return (W_IN / 2) / H_IN
+    if lay == "quote":
+        return 4.6 / H_IN
+    return None
+
+
+def _requests(slides: list[dict[str, Any]]) -> list[tuple[tuple[int, int], Any, Optional[float]]]:
+    reqs = []
+    for i, s in enumerate(slides):
+        if s.get("layout") == "gallery":
+            for j, img in enumerate((s.get("images") or [])[:4]):
+                reqs.append(((i, j), img, 1.5))
+        elif s.get("image"):
+            reqs.append(((i, -1), s["image"], _image_aspect(s)))
+    return reqs
+
+
+# ---------- rajzoló segédek (python-pptx) ----------
+
+def _rgb(hexstr: str):
+    from pptx.dml.color import RGBColor
+    h = hexstr.lstrip("#")
+    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _rect(slide, x, y, w, h, color: str, alpha: Optional[float] = None):
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.oxml.ns import qn
+    from pptx.util import Inches
+    shp = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = _rgb(color)
+    shp.line.fill.background()
+    shp.shadow.inherit = False
+    if alpha is not None:  # átlátszóság: <a:alpha> a srgbClr alá (a python-pptx nem ad rá API-t)
+        clr = shp.fill._xPr.find(qn("a:solidFill")).find(qn("a:srgbClr"))
+        a = clr.makeelement(qn("a:alpha"), {"val": str(int(alpha * 100000))})
+        clr.append(a)
+    return shp
+
+
+def _text(slide, x, y, w, h, text, *, size, font, color, bold=False, italic=False, align="left",
+          anchor="top", spacing=1.1, tracking=None):
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+    from pptx.util import Inches, Pt
+    tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+    tf.vertical_anchor = {"top": MSO_ANCHOR.TOP, "middle": MSO_ANCHOR.MIDDLE, "bottom": MSO_ANCHOR.BOTTOM}[anchor]
+    for n, line in enumerate(str(text).split("\n")):
+        p = tf.paragraphs[0] if n == 0 else tf.add_paragraph()
+        p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[align]
+        p.line_spacing = spacing
+        r = p.add_run()
+        r.text = line
+        f = r.font
+        f.size, f.name, f.bold, f.italic, f.color.rgb = Pt(size), font, bold, italic, _rgb(color)
+    return tb
+
+
+def _bullets(slide, x, y, w, h, items, t, size):
+    from pptx.util import Inches, Pt
+    tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+    for n, item in enumerate(items):
+        p = tf.paragraphs[0] if n == 0 else tf.add_paragraph()
+        p.line_spacing = 1.15
+        p.space_after = Pt(size * 0.7)
+        dot = p.add_run(); dot.text = "■  "
+        dot.font.size, dot.font.color.rgb, dot.font.name = Pt(size * 0.55), _rgb(t["accent"]), t["font_body"]
+        r = p.add_run(); r.text = str(item)
+        r.font.size, r.font.name, r.font.color.rgb = Pt(size), t["font_body"], _rgb(t["text"])
+
+
+def _picture(slide, path, x, y, w, h):
+    from pptx.util import Inches
+    return slide.shapes.add_picture(str(path), Inches(x), Inches(y), Inches(w), Inches(h))
+
+
+def _title_size(text: str, big: int = 36) -> int:
+    n = len(text or "")
+    return big if n <= 32 else big - 6 if n <= 55 else big - 10
+
+
+def _bullet_size(items: list) -> int:
+    longest = max((len(str(i)) for i in items), default=0)
+    if len(items) <= 4 and longest <= 70:
+        return 22
+    return 19 if len(items) <= 6 else 16
+
+
+def _heading(slide, s, t, x=M_IN, w=W_IN - 2 * M_IN):
+    title = s.get("title") or ""
+    _text(slide, x, 0.55, w, 1.0, title, size=_title_size(title), font=t["font_heading"], color=t["primary"],
+          bold=True, anchor="bottom")
+    _rect(slide, x, 1.68, 0.9, 0.07, t["accent"])
+
+
+# ---------- elrendezések ----------
+
+def _cover(slide, s, t, img):
+    if img:
+        _picture(slide, img.path, 0, 0, W_IN, H_IN)
+        # a kép látsszon: enyhe teljes sötétítés + a cím mögött sötétebb sáv (olvashatóság)
+        _rect(slide, 0, 0, W_IN, H_IN, "#000000", alpha=0.18)
+        _rect(slide, 0, 1.35, W_IN * 0.62, 4.6, t["primary"], alpha=0.62)
+    else:
+        _rect(slide, 0, 0, W_IN, H_IN, t["primary"])
+    _rect(slide, M_IN + 0.05, 4.05, 1.2, 0.09, t["accent"])
+    title = s.get("title") or ""
+    _text(slide, M_IN, 1.6, W_IN - 2 * M_IN, 2.35, title, size=_title_size(title, 54), font=t["font_heading"],
+          color="#FFFFFF", bold=True, anchor="bottom", spacing=1.0)
+    if s.get("subtitle"):
+        _text(slide, M_IN, 4.35, W_IN - 2.5 * M_IN, 1.4, s["subtitle"], size=22, font=t["font_body"], color="#F1F1F1")
+    if s.get("kicker"):
+        _text(slide, M_IN, 1.6, 7, 0.5, s["kicker"].upper(), size=14, font=t["font_body"], color=t["accent"], bold=True)
+
+
+def _section(slide, s, t, img, closing=False):
+    if img:
+        _picture(slide, img.path, 0, 0, W_IN, H_IN)
+        _rect(slide, 0, 0, W_IN, H_IN, t["primary"], alpha=0.78)
+    else:
+        _rect(slide, 0, 0, W_IN, H_IN, t["primary"])
+    if s.get("number") is not None and not closing:
+        _text(slide, M_IN, 1.5, 4, 1.4, f"{int(s['number']):02d}", size=72, font=t["font_heading"],
+              color=t["accent"], bold=True)
+    title = s.get("title") or ("Köszönöm!" if closing else "")
+    _text(slide, M_IN, 2.9, W_IN - 2 * M_IN, 1.6, title, size=_title_size(title, 46), font=t["font_heading"],
+          color="#FFFFFF", bold=True, anchor="bottom", align="center" if closing else "left")
+    if s.get("subtitle"):
+        _text(slide, M_IN, 4.7, W_IN - 2 * M_IN, 1.2, s["subtitle"], size=20, font=t["font_body"], color="#E8E8E8",
+              align="center" if closing else "left")
+
+
+def _bullets_layout(slide, s, t, img):
+    items = s.get("bullets") or []
+    text_w = (W_IN - 5.2 - 2 * M_IN + 0.2) if img else (W_IN - 2 * M_IN)
+    _heading(slide, s, t, w=text_w)
+    if s.get("text"):
+        _text(slide, M_IN, 2.05, text_w, 1.0, s["text"], size=18, font=t["font_body"], color=t["muted"])
+    _bullets(slide, M_IN, 2.15 + (0.95 if s.get("text") else 0), text_w, 4.6, items, t, _bullet_size(items))
+    if img:
+        _picture(slide, img.path, W_IN - 5.2, 0, 5.2, H_IN)
+
+
+def _image_side(slide, s, t, img, left: bool):
+    half = W_IN / 2
+    if img:
+        _picture(slide, img.path, 0 if left else half, 0, half, H_IN)
+    x = half + M_IN if left else M_IN
+    w = half - 2 * M_IN
+    _heading(slide, s, t, x=x, w=w)
+    if s.get("bullets"):
+        _bullets(slide, x, 2.15, w, 4.6, s["bullets"], t, min(20, _bullet_size(s["bullets"])))
+    elif s.get("text"):
+        _text(slide, x, 2.15, w, 4.6, s["text"], size=19, font=t["font_body"], color=t["text"], spacing=1.25)
+
+
+def _full_image(slide, s, t, img):
+    if img:
+        _picture(slide, img.path, 0, 0, W_IN, H_IN)
+    _rect(slide, 0, H_IN - 1.9, W_IN, 1.9, "#000000", alpha=0.55)
+    if s.get("title"):
+        _text(slide, M_IN, H_IN - 1.75, W_IN - 2 * M_IN, 0.8, s["title"], size=30, font=t["font_heading"],
+              color="#FFFFFF", bold=True, anchor="bottom")
+    if s.get("caption"):
+        _text(slide, M_IN, H_IN - 0.9, W_IN - 2 * M_IN, 0.6, s["caption"], size=15, font=t["font_body"], color="#E5E5E5")
+
+
+def _quote(slide, s, t, img):
+    x0 = 4.6 + M_IN if img else 1.4
+    if img:
+        _picture(slide, img.path, 0, 0, 4.6, H_IN)
+    _text(slide, x0 - 0.05, 0.55, 1.5, 1.3, "„", size=110, font=t["font_heading"], color=t["accent"], bold=True)
+    q = s.get("quote") or ""
+    _text(slide, x0, 2.45, W_IN - x0 - M_IN - (0 if img else 0.8), 3.1, q,
+          size=34 if len(q) < 120 else 26, font=t["font_heading"], color=t["primary"], italic=True, spacing=1.15)
+    if s.get("author"):
+        _text(slide, x0, 5.7, W_IN - x0 - M_IN, 0.6, "— " + s["author"], size=18, font=t["font_body"], color=t["muted"])
+
+
+def _stats(slide, s, t):
+    _heading(slide, s, t)
+    stats = (s.get("stats") or [])[:4]
+    if not stats:
+        return
+    col = (W_IN - 2 * M_IN) / len(stats)
+    for n, st in enumerate(stats):
+        x = M_IN + n * col
+        _rect(slide, x + 0.05, 2.55, col - 0.3, 3.6, t["panel"])
+        _rect(slide, x + 0.05, 2.55, 0.08, 3.6, t["accent"])
+        val = str(st.get("value", ""))
+        _text(slide, x + 0.35, 2.9, col - 0.8, 1.5, val, size=48 if len(val) <= 7 else 36, font=t["font_heading"],
+              color=t["primary"], bold=True, anchor="bottom")
+        _text(slide, x + 0.35, 4.55, col - 0.8, 1.4, st.get("label", ""), size=17, font=t["font_body"], color=t["muted"])
+
+
+def _chart(slide, s, t):
+    from pptx.chart.data import CategoryChartData, XyChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+    from pptx.util import Inches, Pt
+    _heading(slide, s, t)
+    kind = {"column": XL_CHART_TYPE.COLUMN_CLUSTERED, "bar": XL_CHART_TYPE.BAR_CLUSTERED, "line": XL_CHART_TYPE.LINE_MARKERS,
+            "pie": XL_CHART_TYPE.PIE, "doughnut": XL_CHART_TYPE.DOUGHNUT, "area": XL_CHART_TYPE.AREA,
+            "scatter": XL_CHART_TYPE.XY_SCATTER}.get(s.get("chart_type", "column"), XL_CHART_TYPE.COLUMN_CLUSTERED)
+    series = s.get("series") or []
+    if kind == XL_CHART_TYPE.XY_SCATTER:
+        data = XyChartData()
+        for se in series:
+            ser = data.add_series(se.get("name", "Sorozat"))
+            for x, y in se.get("points") or []:
+                ser.add_data_point(float(x), float(y))
+    else:
+        data = CategoryChartData()
+        data.categories = s.get("categories") or []
+        for se in series:
+            data.add_series(se.get("name", "Sorozat"), se.get("values", []))
+    gf = slide.shapes.add_chart(kind, Inches(M_IN), Inches(2.0), Inches(W_IN - 2 * M_IN), Inches(5.0), data)
+    ch = gf.chart
+    ch.font.size, ch.font.name = Pt(14), t["font_body"]
+    ch.has_title = False  # a dia címe a cím; a sorozatnévből gyártott diagramcím zavaró
+    ch.has_legend = len(series) > 1 or kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT)
+    if ch.has_legend:
+        ch.legend.position, ch.legend.include_in_layout = XL_LEGEND_POSITION.BOTTOM, False
+    pal = [t["primary"], t["accent"], "#2E7D6B", "#8E44AD", "#C0392B", "#7F8C8D"]
+    plot = ch.plots[0]
+    if kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT):
+        for k, pt in enumerate(plot.series[0].points if plot.series else []):
+            pt.format.fill.solid(); pt.format.fill.fore_color.rgb = _rgb(pal[k % len(pal)])
+        return
+    for k, ser in enumerate(plot.series):
+        c = _rgb(pal[k % len(pal)])
+        if kind in (XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.XY_SCATTER):
+            from pptx.enum.chart import XL_MARKER_STYLE
+            ser.marker.style, ser.marker.size = XL_MARKER_STYLE.CIRCLE, 9
+            ser.marker.format.fill.solid(); ser.marker.format.fill.fore_color.rgb = c
+            ser.marker.format.line.color.rgb = c
+            if kind == XL_CHART_TYPE.XY_SCATTER:
+                ser.format.line.fill.background()
+            else:
+                ser.format.line.color.rgb, ser.format.line.width = c, Pt(3)
+        else:
+            ser.format.fill.solid(); ser.format.fill.fore_color.rgb = c
+
+
+def _table(slide, s, t):
+    from pptx.util import Inches, Pt
+    _heading(slide, s, t)
+    headers, rows = s.get("headers") or [], s.get("rows") or []
+    ncols = max([len(headers)] + [len(r) for r in rows] + [1])
+    shape = slide.shapes.add_table(len(rows) + (1 if headers else 0), ncols, Inches(M_IN), Inches(2.1),
+                                   Inches(W_IN - 2 * M_IN), Inches(0.5 * (len(rows) + 1)))
+    tbl = shape.table
+    size = 16 if len(rows) <= 8 else 13
+    all_rows = ([headers] if headers else []) + rows
+    for r, row in enumerate(all_rows):
+        for c in range(ncols):
+            cell = tbl.cell(r, c)
+            cell.text = str(row[c]) if c < len(row) else ""
+            head = bool(headers) and r == 0
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _rgb(t["primary"] if head else (t["panel"] if r % 2 == 0 else t["bg"]))
+            for p in cell.text_frame.paragraphs:
+                for run in p.runs:
+                    run.font.size, run.font.name, run.font.bold = Pt(size), t["font_body"], head
+                    run.font.color.rgb = _rgb("#FFFFFF" if head else t["text"])
+
+
+def _gallery(slide, s, t, imgs):
+    _heading(slide, s, t)
+    caps = s.get("captions") or []
+    n = max(1, len(imgs))
+    gap = 0.3
+    w = (W_IN - 2 * M_IN - gap * (n - 1)) / n
+    h = min(w / 1.5, 4.3)
+    for k, img in enumerate(imgs):
+        x = M_IN + k * (w + gap)
+        _picture(slide, img.path, x, 2.2, w, h)
+        if k < len(caps):
+            _text(slide, x, 2.3 + h, w, 0.7, caps[k], size=14, font=t["font_body"], color=t["muted"])
+
+
+def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float = M_IN):
+    color = "#D0D4DA" if dark else t["muted"]
+    _text(slide, W_IN - M_IN - 1.5, H_IN - 0.45, 1.5, 0.3, f"{n} / {total}", size=11, font=t["font_body"],
+          color=color, align="right")
+    if footer:
+        _text(slide, left, H_IN - 0.45, 8, 0.3, footer, size=11, font=t["font_body"], color=color)
+
+
+# ---------- belépési pont ----------
+
+async def build(spec: dict[str, Any]) -> dict[str, Any]:
+    from pptx import Presentation
+    from pptx.util import Inches
+    t0 = time.time()
+    slides = spec.get("slides") or []
+    if not slides:
+        raise ValueError("slides: legalább egy dia kell")
+    bad = [s.get("layout") for s in slides if s.get("layout") not in LAYOUTS]
+    if bad:
+        raise ValueError(f"ismeretlen layout: {bad} (lehet: {', '.join(sorted(LAYOUTS))})")
+    t = _theme(spec)
+
+    reqs = _requests(slides)
+    resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
+    by_slot = {r[0]: img for r, img in zip(reqs, resolved)}
+    try:
+        prs = Presentation()
+        prs.slide_width, prs.slide_height = Inches(W_IN), Inches(H_IN)
+        blank = prs.slide_layouts[6]
+        total = len(slides)
+        for i, s in enumerate(slides):
+            slide = prs.slides.add_slide(blank)
+            lay = s["layout"]
+            img = by_slot.get((i, -1))
+            bg = slide.background.fill
+            bg.solid(); bg.fore_color.rgb = _rgb(t["bg"])
+            if lay == "cover":
+                _cover(slide, s, t, img)
+            elif lay in ("section", "closing"):
+                _section(slide, s, t, img, closing=lay == "closing")
+            elif lay == "bullets":
+                _bullets_layout(slide, s, t, img)
+            elif lay in ("image_left", "image_right"):
+                _image_side(slide, s, t, img, left=lay == "image_left")
+            elif lay == "full_image":
+                _full_image(slide, s, t, img)
+            elif lay == "quote":
+                _quote(slide, s, t, img)
+            elif lay == "stats":
+                _stats(slide, s, t)
+            elif lay == "chart":
+                _chart(slide, s, t)
+            elif lay == "table":
+                _table(slide, s, t)
+            elif lay == "gallery":
+                _gallery(slide, s, t, [by_slot[(i, j)] for j in range(len((s.get("images") or [])[:4]))])
+            if lay not in ("cover",):
+                # bal oldali képnél a lábléc a kép mellé kerül (ne a fotóra)
+                left = (W_IN / 2 if lay == "image_left" else 4.6 if lay == "quote" and img else 0) + M_IN
+                _footer(slide, i + 1, total, t, spec.get("footer"), dark=lay in ("section", "closing", "full_image"), left=left)
+            credits = [x.attribution for (si, _), x in by_slot.items() if si == i and x.attribution]
+            notes = "\n".join(filter(None, [s.get("notes"), *credits]))
+            if notes:
+                slide.notes_slide.notes_text_frame.text = notes
+        fid = new_file_id("pptx")
+        prs.save(str(output_path(fid)))
+    finally:
+        for x in resolved:
+            x.path.unlink(missing_ok=True)
+    title = spec.get("title") or (slides[0].get("title") if slides else "") or "pakli"
+    write_meta(fid, operation="pptx_build", label=f"{title[:50]}.pptx")
+    return {
+        "file_id": fid, "url": public_url(fid), "slides": len(slides),
+        "size_kb": output_path(fid).stat().st_size // 1024,
+        "images": [{"slot": f"{i + 1}" + (f".{j + 1}" if j >= 0 else ""), "file_id": x.source_file_id,
+                    "credit": x.attribution} for ((i, j), x) in by_slot.items()],
+        "ms_elapsed": int((time.time() - t0) * 1000),
+    }
