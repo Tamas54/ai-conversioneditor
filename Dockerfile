@@ -20,6 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu \
     fonts-noto \
     fonts-noto-cjk \
+    # Cambria/Calibri metrikai megfelelői: nélkülük a LO DejaVu Serifet, a WordCraft Liberation
+    # Serifet tesz a Word-dokumentumokba (325 vs 390 oldal ugyanarra; velük 342 vs 344)
+    fonts-crosextra-caladea \
+    fonts-crosextra-carlito \
     # WeasyPrint runtime deps:
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
