@@ -279,6 +279,10 @@ async def wordcraft(
     Files in params: pass "file_id" instead of a path, e.g.
       {"command": "insert.picture", "params": {"file_id": <image>, "width": 430}}.
     Jump to the n-th paragraph (1-based) with edit.goto {"paragraph": n}.
+    After insert.picture the picture stays SELECTED: run caret.end before
+      text.newParagraph, or Enter replaces (deletes) it.
+    para.alignCenter/Left/Right TOGGLE like Word's buttons; to set an
+      alignment use para.align {"value": "center"}.
     edit.replaceAll: ALWAYS pass "matchCase" explicitly. Find options carry
       over between commands (like Word's dialog), and a case-insensitive
       replace does not keep the found text's capitals ("az X" → "Az X").
