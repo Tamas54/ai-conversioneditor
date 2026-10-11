@@ -17,7 +17,8 @@ async def cleanup_loop():
     while True:
         try:
             from app import tenancy
-            removed = sum(_sweep(root, ttl) for root in tenancy.all_roots())
+            removed = sum(_sweep(root, 86400 if root.name.startswith(tenancy.GUEST_PREFIX) and root.parent.name == "u" else ttl)
+                          for root in tenancy.all_roots())   # vendég: 1 nap
             if removed:
                 log.info("Cleanup: removed %d files", removed)
         except asyncio.CancelledError:

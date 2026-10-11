@@ -33,6 +33,27 @@ router = APIRouter()
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/")
+
+# Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
+_GUEST_OK = (
+    ("GET", "/app"), ("GET", "/editor/"), ("GET", "/preview/"), ("GET", "/api/thumb/"), ("GET", "/api/files"),
+    ("GET", "/api/account"), ("GET", "/api/convert/targets"), ("GET", "/api/forms/fields"), ("GET", "/api/jobs/"),
+    ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
+    ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
+    ("POST", "/api/make/fill_form"), ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),
+)
+GUEST_MAX_UPLOAD_MB = 25
+_GUEST_POSTS, _GUEST_WINDOW_S = 60, 10 * 60          # vendég POST-ok IP-nként (feltöltés + gyártás)
+_guest_posts: dict[str, deque] = defaultdict(deque)
+ACCOUNT_NEEDED = "This uses AI — create a free account to use it."
+
+
+def _guest_ok(request: Request) -> bool:
+    path, method = request.url.path, request.method
+    if path == "/" and method == "GET":
+        return True
+    return any(method == m and (path == p or path.startswith(p if p.endswith("/") else p + "/") or path == p.rstrip("/"))
+               for m, p in _GUEST_OK) or (method == "GET" and path.startswith("/api/files/"))
 _FAIL_LIMIT, _FAIL_WINDOW_S = 10, 15 * 60          # hibás belépés IP-nként
 _SIGNUP_LIMIT, _SIGNUP_WINDOW_S = 5, 60 * 60       # regisztráció IP-nként
 _fails: dict[str, deque[float]] = defaultdict(deque)
@@ -51,8 +72,11 @@ def _sign(msg: str) -> str:
     return hmac.new(_secret(), msg.encode(), hashlib.sha256).hexdigest()[:40]
 
 
-def new_session(uid: str = tenancy.ADMIN_ID) -> str:
-    exp = int(time.time()) + SESSION_TTL_S
+GUEST_TTL_S = 24 * 3600
+
+
+def new_session(uid: str = tenancy.ADMIN_ID, ttl: int = 0) -> str:
+    exp = int(time.time()) + (ttl or SESSION_TTL_S)
     return f"{uid}.{exp}.{_sign(f'sess|{uid}|{exp}')}"
 
 
@@ -128,6 +152,21 @@ async def auth_middleware(request: Request, call_next):
         uid = session_uid(request.cookies.get(COOKIE))
     if uid is None and not settings.DASHBOARD_PASSWORD:
         uid = tenancy.ADMIN_ID  # helyi fejlesztés jelszó nélkül
+    new_guest = None
+    if uid is None and _guest_ok(request):
+        uid = new_guest = tenancy.new_guest_id()        # első látogatás: vendég-munkaterület, aláírt sütiben
+    if uid is not None and tenancy.is_guest(uid):
+        if not _guest_ok(request):
+            if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+                return RedirectResponse(f"/signup?next={quote(path)}", status_code=303)
+            return JSONResponse({"detail": ACCOUNT_NEEDED, "account_required": True}, status_code=401)
+        if request.method in ("POST", "DELETE"):
+            ip = _client_ip(request)
+            if _limited(_guest_posts, ip, _GUEST_POSTS, _GUEST_WINDOW_S):
+                return JSONResponse({"detail": "Slow down a little — or create a free account for higher limits."}, status_code=429)
+            _guest_posts[ip].append(time.time())
+            if path == "/api/upload" and int(request.headers.get("content-length") or 0) > GUEST_MAX_UPLOAD_MB * 1024 * 1024:
+                return JSONResponse({"detail": f"Files up to {GUEST_MAX_UPLOAD_MB} MB without an account."}, status_code=413)
     if uid is None:
         if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
             nxt = path + (f"?{request.url.query}" if request.url.query else "")
@@ -137,9 +176,13 @@ async def auth_middleware(request: Request, call_next):
         return RedirectResponse("/app", status_code=303)
     token = tenancy.set_user(uid)
     try:
-        return await call_next(request)
+        resp = await call_next(request)
     finally:
         tenancy.reset(token)
+    if new_guest:
+        resp.set_cookie(COOKIE, new_session(new_guest, ttl=GUEST_TTL_S), max_age=GUEST_TTL_S, httponly=True,
+                        secure=request.url.scheme == "https", samesite="lax")
+    return resp
 
 
 def log_auth_state() -> None:
@@ -187,7 +230,8 @@ _PW = '<label>Password<input type="password" name="password" autocomplete="{ac}"
 
 @router.get("/login", include_in_schema=False)
 async def login_page(next: str = "/app", error: str = "") -> HTMLResponse:
-    alt = 'No account yet? <a href="/signup">Create one</a>' if settings.SIGNUP_OPEN else ""
+    alt = ('No account yet? <a href="/signup">Create one</a> · ' if settings.SIGNUP_OPEN else "") + \
+          '<a href="/app">Look around without an account</a>'
     fields = _EMAIL.replace(" required", "") + _PW.format(ac="current-password", min=1)
     return _page("Sign in", "/login", fields, "Sign in", alt, next, error)
 
@@ -210,6 +254,7 @@ async def login(request: Request, password: str = Form(...), email: str = Form("
         log.warning("sikertelen belépés: %s", ip)
         return RedirectResponse(f"/login?next={quote(nxt)}&error={quote('Wrong email or password.')}", 303)
     _fails[ip].clear()
+    await _adopt_guest(request, uid)
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(uid), max_age=SESSION_TTL_S, httponly=True,
                     secure=request.url.scheme == "https", samesite="lax")
@@ -223,7 +268,7 @@ async def signup_page(next: str = "/app", error: str = "") -> HTMLResponse:
     fields = ('<label>Name<input type="text" name="name" autocomplete="name" maxlength="80"></label>'
               + _EMAIL + _PW.format(ac="new-password", min=10))
     return _page("Create your account", "/signup", fields, "Create account",
-                 'Already have an account? <a href="/login">Sign in</a>', next, error)
+                 'Already have an account? <a href="/login">Sign in</a> · <a href="/app">Not now</a>', next, error)
 
 
 @router.post("/signup", include_in_schema=False)
@@ -244,15 +289,29 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     _signups[ip].append(time.time())
     if settings.SIGNUP_CREDITS:
         await db.credits_add(user["id"], 0, "signup")  # napló-sor a kezdő egyenlegről
+    await _adopt_guest(request, user["id"])
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(user["id"]), max_age=SESSION_TTL_S, httponly=True,
                     secure=request.url.scheme == "https", samesite="lax")
     return resp
 
 
+async def _adopt_guest(request: Request, uid: str) -> None:
+    """Ha vendégként dolgozott, a fájljai a (most létrejött / belépett) fiókba kerülnek."""
+    guest = session_uid(request.cookies.get(COOKIE))
+    if guest and tenancy.is_guest(guest) and uid != guest:
+        from app import db
+        moved = tenancy.migrate(guest, uid)
+        try:
+            await db.reassign_owner(guest, uid)
+        except Exception:
+            log.warning("vendég-verziók átírása nem sikerült", exc_info=True)
+        log.info("vendég %s → %s: %d fájl", guest, uid, moved)
+
+
 @router.get("/logout", include_in_schema=False)
 async def logout():
-    resp = RedirectResponse("/login", status_code=303)
+    resp = RedirectResponse("/app", status_code=303)
     resp.delete_cookie(COOKIE)
     return resp
 
@@ -270,14 +329,16 @@ def _require_db():
 async def api_account(request: Request) -> dict:
     uid = tenancy.current_user_id()
     from app import db
-    user = await db.user_get(uid) if db.enabled() else None
+    guest = tenancy.is_guest(uid)
+    user = await db.user_get(uid) if db.enabled() and not guest else None
     base = settings.PUBLIC_BASE_URL.rstrip("/")
     return {
+        "guest": guest, "guest_max_upload_mb": GUEST_MAX_UPLOAD_MB if guest else None,
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
         "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
-        "keys": await db.api_key_list(uid) if db.enabled() else [],
+        "keys": await db.api_key_list(uid) if db.enabled() and not guest else [],
         "mcp_url": f"{base}/mcp", "product": settings.PRODUCT_NAME,
     }
 

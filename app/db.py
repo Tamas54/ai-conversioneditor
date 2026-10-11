@@ -376,3 +376,9 @@ async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str) -> 
     await _rows("INSERT INTO ocr_cache (sha256, prompt_ver, model, text) VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT (sha256, prompt_ver, model) DO NOTHING", (sha256, prompt_ver, model, text))
 
+
+async def reassign_owner(src_uid: str, dst_uid: str) -> None:
+    """Vendég → fiók: a verziótörténet sorai az új tulajdonoshoz."""
+    if enabled():
+        await _rows("UPDATE file_versions SET owner_id = %s WHERE owner_id = %s", (dst_uid, src_uid))
+

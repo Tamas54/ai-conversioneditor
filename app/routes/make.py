@@ -71,6 +71,9 @@ async def _credits_left() -> Optional[int]:
 
 def _fail(e: Exception) -> HTTPException:
     from app import db
+    if isinstance(e, db.InsufficientCredits) and tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        return HTTPException(401, ACCOUNT_NEEDED)
     if isinstance(e, db.InsufficientCredits):
         return HTTPException(402, "Not enough credits for AI images. Use stock photos or your own images, or add credits.")
     log.exception("make failed")
@@ -447,3 +450,28 @@ async def make_fill_form(body: dict[str, Any]) -> dict[str, Any]:
     res = {"file_id": out_id, "url": public_url(out_id), "label": label, "size_kb": output_path(out_id).stat().st_size // 1024, **info}
     events.emit("tool_done", tool="make_fill_form", result={"file_id": out_id})
     return res
+
+
+# ---------- Szavas, de pontos fotószerkesztés (rétegzett PSD; tömegesen egy terv minden képre) ----------
+
+@router.post("/api/make/photo_edit")
+async def make_photo_edit(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_ids[], instruction, logo_file_id?, formats?: ["psd","jpg"], plan?: [lépések] (külső AI saját terve)}"""
+    from app import jobs
+    from app.tools import photo_edit
+    ids = [i for i in body.get("file_ids") or ([body["file_id"]] if body.get("file_id") else []) if i]
+    if not ids:
+        raise HTTPException(400, "Add a photo.")
+    instruction = (body.get("instruction") or "").strip()
+    steps = body.get("plan")
+    if not instruction and not steps:
+        raise HTTPException(400, "Describe the edit, e.g. “crop to 4:5, warmer, headline ‘Summer sale’ at the top, logo bottom right”.")
+    formats = [f for f in body.get("formats") or ["psd", "jpg"] if f in ("psd", "jpg", "png", "webp")] or ["psd", "jpg"]
+    limit = 1000 if tenancy.current_user_id() == tenancy.ADMIN_ID else 200
+    ids = ids[:limit]
+
+    async def work(progress):
+        res = await photo_edit.run(ids, instruction, body.get("logo_file_id"), formats, steps=steps, progress=progress)
+        events.emit("tool_done", tool="make_photo_edit", result={"files": [f["file_id"] for f in res["files"]]})
+        return res
+    return jobs.start("photo_edit", work)

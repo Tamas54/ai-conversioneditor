@@ -45,6 +45,37 @@ def user_root(uid: str | None = None) -> Path:
     return root
 
 
+GUEST_PREFIX = "g"          # a regisztrált azonosító hex (0-9a-f), így a „g…” sosem ütközik
+
+
+def new_guest_id() -> str:
+    import secrets
+    return GUEST_PREFIX + secrets.token_hex(8)
+
+
+def is_guest(uid: str | None = None) -> bool:
+    uid = uid or _current.get()
+    return uid.startswith(GUEST_PREFIX) and uid != ADMIN_ID
+
+
+def migrate(src_uid: str, dst_uid: str) -> int:
+    """Vendég → fiók: a vendég fájljai (inputs/outputs, meta-fájlokkal) átkerülnek a fiók tárhelyére."""
+    import shutil
+    if not is_guest(src_uid) or src_uid == dst_uid:
+        return 0
+    src, dst = settings.DATA_DIR / "u" / src_uid, user_root(dst_uid)
+    moved = 0
+    for sub in ("inputs", "outputs"):
+        for f in (src / sub).glob("*") if (src / sub).is_dir() else []:
+            target = dst / sub / f.name
+            if f.is_file() and not target.exists():
+                shutil.move(str(f), str(target))
+                moved += 1
+    shutil.rmtree(src, ignore_errors=True)
+    _ready.discard(src)
+    return moved
+
+
 def all_roots() -> list[Path]:
     """Minden munkaterület gyökere (takarításhoz)."""
     roots = [settings.DATA_DIR]

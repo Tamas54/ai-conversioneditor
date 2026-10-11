@@ -214,3 +214,9 @@ dialog.drawer::backdrop { background: rgba(10, 22, 16, .45); }
   .topbar nav { order: 5; width: 100%; margin: 2px 0 0 -12px; }
   .topbar .chip { padding: 7px 9px; }
 }
+
+.ai-badge { font: 700 9px/1 var(--f-mono); font-style: normal; letter-spacing: .06em; padding: 3px 5px; border-radius: 4px;
+  background: var(--signal); color: #fff; vertical-align: 3px; margin-left: 4px; }
+.chip-cta { background: var(--signal); color: #fff; border-color: transparent; }
+.chips .chip { cursor: pointer; font: 500 12px/1 var(--f-body); padding: 7px 10px; }
+.chips .chip:hover { border-color: var(--mat); }

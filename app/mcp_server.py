@@ -581,6 +581,41 @@ async def pdf_form(
 
 
 @mcp.tool()
+async def photo_edit(
+    file_ids: Optional[list[str]] = None,
+    instruction: Optional[str] = None,
+    plan: Optional[list[dict]] = None,
+    logo_file_id: Optional[str] = None,
+    formats: Optional[list[str]] = None,
+    job_id: Optional[str] = None,
+) -> dict:
+    """
+    Precise photo editing from words — NOT a repaint. The photo stays; every
+    step becomes its own layer in a PSD (adjustment layers with masks, type
+    layers, the logo as an embedded layer), plus a JPG. All file_ids get the
+    SAME edit (batch). instruction e.g. "Instagram 4:5, warmer, darker sky,
+    headline 'Summer sale' at the top, logo bottom right".
+    Or pass your own plan (skip our planner): steps from
+      crop {aspect 1:1|4:5|16:9|9:16|3:2|4:3, focus center|top|bottom|left|right},
+      resize {long_edge}, auto, sharpen {amount}, light {exposure, contrast,
+      brightness}, color {vibrance, saturation, warmth}, look {name warm|cool|
+      tealOrange|bleachBypass|fadedFilm|monoContrast|crossProcess, strength},
+      black_white, sky {exposure, saturation, contrast}, vignette {amount},
+      background {remove | stock | ai | color, blur}, logo {position,
+      width_pct, margin_pct}, text {text, position, size small|medium|large|
+      huge, color, weight, shadow}.
+    Returns a job: call again with job_id until status "done"; result.plan
+    is the plan used — tweak it and send it back as plan to adjust.
+    """
+    from app import jobs
+    if job_id:
+        return await jobs.job_status(job_id)
+    from app.routes.make import make_photo_edit
+    return await make_photo_edit({"file_ids": file_ids or [], "instruction": instruction, "plan": plan,
+                                  "logo_file_id": logo_file_id, "formats": formats})
+
+
+@mcp.tool()
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:

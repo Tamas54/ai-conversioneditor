@@ -18,7 +18,9 @@
   </nav>
   <span class="spacer"></span>
   <a class="chip" id="credits" href="#/connect" title="Credits pay for AI-generated images">credits …</a>
-  <a class="chip" href="/logout">Sign out</a>
+  <a class="chip" href="/logout" id="signout">Sign out</a>
+  <a class="chip" href="/login?next=/app" id="signin" hidden>Sign in</a>
+  <a class="chip chip-cta" href="/signup?next=/app" id="signup" hidden>Create free account</a>
 </header>
 
 <main id="view"></main>
@@ -32,7 +34,7 @@
     <p class="lede">Pick a tool, answer a few questions, get a finished file. Fix anything by hand in the built-in editors — or let your own AI drive it.</p>
     <div class="tools">
       <button class="tool" data-make="deck"><span class="obj"><span class="paper o-deck"><i></i><i></i><i></i><b></b></span></span>
-        <span class="label">Presentation</span><span class="hint">Slides from a short brief, with photos and charts</span></button>
+        <span class="label">Presentation <em class="ai-badge">AI</em></span><span class="hint">Slides from a short brief, with photos and charts</span></button>
       <button class="tool" data-make="social"><span class="obj"><span class="paper o-post"><div></div><span></span></span></span>
         <span class="label">Social post</span><span class="hint">One design, every platform size at once</span></button>
       <button class="tool" data-make="print"><span class="obj"><span class="paper o-poster">Big<br>idea.</span></span>
@@ -42,7 +44,7 @@
       <button class="tool" data-make="book"><span class="obj"><span class="o-book paper"><i></i><i></i></span></span>
         <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF</span></button>
       <button class="tool" data-make="scan"><span class="obj"><span class="o-scan"><span class="paper"><i></i><i></i><i></i><i></i><i></i></span></span></span>
-        <span class="label">Scan to text</span><span class="hint">Old books and photographed pages → Word, a new PDF, searchable PDF</span></button>
+        <span class="label">Scan to text <em class="ai-badge">AI</em></span><span class="hint">Old books and photographed pages → Word, a new PDF, searchable PDF</span></button>
       <button class="tool" data-make="pdf"><span class="obj"><span class="paper o-pdf"><i></i><i></i><i class="x"></i><i></i><i></i><b>PDF</b></span></span>
         <span class="label">PDF tools</span><span class="hint">Merge, compress, black out, number, protect, to Word</span></button>
       <button class="tool" data-make="convert"><span class="obj"><span class="o-convert"><span class="paper a">DOCX</span><span class="paper b">PDF</span><b>⇄</b></span></span>
@@ -126,6 +128,29 @@ async function api(path, opts = {}) {
 async function loadAccount() {
   account = await api("/api/account");
   $("#credits").textContent = account.credits === null ? "credits ∞" : `${account.credits} credits`;
+  for (const [id, show] of [["credits", !account.guest], ["signout", !account.guest], ["signin", account.guest], ["signup", account.guest]])
+    $("#" + id).hidden = !show;
+  document.body.classList.toggle("guest", !!account.guest);
+}
+const AI_NOTE = "This uses AI — create a free account to use it.";
+const AI_MAKERS = new Set(["deck", "scan"]);
+function accountCta(title) {
+  const form = $("#make-form");
+  form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
+    <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn primary" href="/signup?next=/app">Create free account</a></div>`;
+  form.onsubmit = null; $("#drawer").showModal();
+}
+// hosszú munka (job) követése: a státuszsort frissíti, a végén az eredményt adja
+async function pollJob(job, label) {
+  const st = $("#make-status");
+  while (job.status === "running") {
+    if (st) st.textContent = label(job);
+    await new Promise(r => setTimeout(r, 2000));
+    job = await api(`/api/jobs/${job.id}`);
+  }
+  if (job.status !== "done") throw new Error(job.error || "Something went wrong — try again.");
+  return job.result;
 }
 
 // ---------- fájlok ----------
@@ -176,10 +201,15 @@ const views = {
       await uploadFile(f); toast(`Uploaded ${f.name}`); await views.files();
     });
     await loadFiles(); renderFiles($("#all-files"), files);
+    if (account?.guest) $("#all-files").insertAdjacentHTML("beforebegin", `<p class="muted small" style="margin:-6px 0 14px">You're working as a guest: files are kept for 24 hours and uploads up to ${account.guest_max_upload_mb} MB. <a href="/signup?next=/app">Create a free account</a> to keep them.</p>`);
   },
   async connect() {
     mount("t-connect");
     await loadAccount();
+    if (account.guest) {
+      $("#view").querySelector(".sheet").insertAdjacentHTML("afterbegin", `<div class="empty" style="margin-bottom:20px">Connecting your own AI (Claude, ChatGPT, Cursor…) needs an account — it gets a personal key. <a href="/signup?next=/app%23/connect">Create a free account</a></div>`);
+      return;
+    }
     const keysEl = $("#keys");
     const drawKeys = () => keysEl.innerHTML = account.keys.map(k => `<li><span><strong>${esc(k.name || "key")}</strong> <span class="mono muted">${esc(k.prefix)}…</span></span>
       <button class="btn ghost" data-revoke="${k.id}">Revoke</button></li>`).join("");
@@ -262,7 +292,7 @@ async function uploadFile(file) {
   return api("/api/upload", { method: "POST", body: fd });
 }
 function imagePicker(name, { allowNone = true, ai = true, label = "Image" } = {}) {
-  const opts = [["upload", "Upload"], ["stock", "Stock photo"]].concat(ai ? [["ai", "AI image"]] : []).concat(allowNone ? [["none", "None"]] : []);
+  const opts = [["upload", "Upload"], ["stock", "Stock photo"]].concat(ai ? [["ai", account?.guest ? "AI image · account" : "AI image"]] : []).concat(allowNone ? [["none", "None"]] : []);
   return `<fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">${label}</legend>
     <div class="seg" role="radiogroup">${opts.map(([v, t], i) => `<label><input type="radio" name="${name}-src" value="${v}" ${i === 1 ? "checked" : ""}><span>${t}</span></label>`).join("")}</div>
     <input type="file" name="${name}-file" accept="image/*" hidden>
@@ -339,17 +369,45 @@ const MAKERS = {
     },
   },
   photo: {
-    title: "Edit a photo", sub: "Upload a photo and choose what to do with it.",
-    fields: () => `<label>Photo<input type="file" name="photo" accept="image/*" required></label>
-      <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Action</legend>
-      <div class="seg"><label><input type="radio" name="action" value="remove_background" checked><span>Remove background</span></label>
+    cta: "Edit", title: "Edit photos", sub: "Say what should change. You get a layered Photoshop file (PSD) — every step on its own layer — plus a JPG. Add several photos and they all get the same edit.",
+    fields: () => `<label>Photos<input type="file" name="photos" accept="image/*" multiple required></label>
+      <label>What should change? <em class="ai-badge">AI</em><textarea name="instruction" placeholder="e.g. Instagram 4:5, a bit warmer, darker dramatic sky, headline ‘Summer sale −30%’ at the top, our logo bottom right"></textarea></label>
+      <div class="chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:-6px 0 14px">${["Instagram 4:5", "Square 1:1", "Warmer, more vivid", "Black & white, high contrast", "Cinematic teal & orange look", "Dramatic sky", "Brighter, fix exposure", "Remove the background, white backdrop", "Headline at the top"]
+        .map(c => `<button type="button" class="chip" data-chip="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+      <label>Logo (optional)<input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg"></label>
+      <details style="margin:0 0 12px"><summary style="cursor:pointer;font-weight:600;font-size:13px">Or a quick fix without AI</summary>
+      <div class="seg" style="margin-top:8px"><label><input type="radio" name="action" value="" checked><span>None</span></label>
+      <label><input type="radio" name="action" value="remove_background"><span>Remove background</span></label>
       <label><input type="radio" name="action" value="replace_background"><span>New background</span></label>
-      <label><input type="radio" name="action" value="enhance"><span>Enhance</span></label></div></fieldset>
-      <div id="pbg" hidden>${imagePicker("bg", { allowNone: false, label: "New background" })}<label>Background blur (px)<input type="number" name="blur" min="0" max="40" value="12"></label></div>`,
-    wire(form) { wirePicker(form, "bg"); form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", () => form.querySelector("#pbg").hidden = form.querySelector("[name=action]:checked").value !== "replace_background")); },
+      <label><input type="radio" name="action" value="enhance"><span>Enhance</span></label></div>
+      <div id="pbg" hidden style="margin-top:10px">${imagePicker("bg", { allowNone: false, label: "New background" })}<label>Background blur (px)<input type="number" name="blur" min="0" max="40" value="12"></label></div></details>`,
+    wire(form) {
+      wirePicker(form, "bg");
+      form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", () => form.querySelector("#pbg").hidden = form.querySelector("[name=action]:checked").value !== "replace_background"));
+      form.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => {
+        const ta = form.querySelector("[name=instruction]"); ta.value = (ta.value.trim() ? ta.value.trim().replace(/[.,]?$/, ", ") : "") + b.dataset.chip; ta.focus();
+      }));
+    },
     async submit(fd, form) {
-      const p = await uploadFile(form.querySelector("[name=photo]").files[0]);
-      return api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: p.file_id, action: fd.get("action"), background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
+      const photos = [...form.querySelector("[name=photos]").files], instr = (fd.get("instruction") || "").trim(), action = fd.get("action");
+      if (!instr && !action) throw new Error("Describe the edit, or pick a quick fix.");
+      if (instr && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
+      const st = $("#make-status"), ids = [];
+      for (const [i, f] of photos.entries()) { st.textContent = `Uploading ${i + 1} of ${photos.length}…`; ids.push((await uploadFile(f)).file_id); }
+      if (instr) {
+        const logoFile = form.querySelector("[name=logo]").files[0];
+        const logo = logoFile ? (await uploadFile(logoFile)).file_id : null;
+        const job = await api("/api/make/photo_edit", { method: "POST", body: JSON.stringify({ file_ids: ids, instruction: instr, logo_file_id: logo }) });
+        const r = await pollJob(job, j => j.stage === "planning the edit" ? "Planning the edit…" : `Editing photo ${Math.min(j.done + 1, j.total)} of ${j.total}…`);
+        const jpg = r.files.find(x => /\.(jpe?g|png)$/.test(x.file_id)) || r.files[0];
+        return { file_id: jpg.file_id, n: r.files.length, msg: `${r.summary || "Done"} — layered PSD in your files` };
+      }
+      let last;
+      for (const [i, id] of ids.entries()) {
+        st.textContent = `Working on photo ${i + 1} of ${ids.length}…`;
+        last = await api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: id, action, background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
+      }
+      return { ...last, n: ids.length };
     },
   },
   print: {
@@ -387,14 +445,10 @@ const MAKERS = {
     async submit(fd, form) {
       const picked = [...form.querySelector("[name=pages]").files], st = $("#make-status"), ids = [];
       for (const [i, f] of picked.entries()) { st.textContent = `Uploading ${i + 1} of ${picked.length}…`; ids.push((await uploadFile(f)).file_id); }
-      let job = await api("/api/make/digitize", { method: "POST", body: JSON.stringify({ file_ids: ids, outputs: fd.getAll("out"), language: fd.get("lang") }) });
-      while (job.status === "running") {
-        st.textContent = job.total ? (job.stage === "building files" ? "Putting the documents together…" : `Reading page ${Math.min(job.done + 1, job.total)} of ${job.total}…`) : "Preparing the pages…";
-        await new Promise(r => setTimeout(r, 2000));
-        job = await api(`/api/jobs/${job.id}`);
-      }
-      if (job.status !== "done") throw new Error(job.error || "Something went wrong — try again.");
-      const r = job.result;
+      const job = await api("/api/make/digitize", { method: "POST", body: JSON.stringify({ file_ids: ids, outputs: fd.getAll("out"), language: fd.get("lang") }) });
+      const r = await pollJob(job, j => j.total ? (j.stage === "building files" ? "Putting the documents together…"
+        : j.stage === "reading the form" ? `Reading the form, page ${Math.min(j.done + 1, j.total)} of ${j.total}…`
+        : `Reading page ${Math.min(j.done + 1, j.total)} of ${j.total}…`) : "Preparing the pages…");
       if (r.truncated) toast(`Only the first ${r.pages} pages were read — send the rest as a second batch.`);
       const parts = [`Read ${r.pages} page${r.pages > 1 ? "s" : ""}`];
       if (r.words) parts.push(`${r.words.toLocaleString("en")} words`);
@@ -494,6 +548,7 @@ function openFill(f, fields) {
 }
 function openMaker(kind) {
   const m = MAKERS[kind], form = $("#make-form");
+  if (account?.guest && AI_MAKERS.has(kind)) return accountCta(m.title);
   form.innerHTML = `<h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
     <p class="status" id="make-status"></p>
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
