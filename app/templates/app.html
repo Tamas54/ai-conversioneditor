@@ -142,6 +142,7 @@
     <div class="work-bar">
       <a class="btn ghost" id="btn-back" href="#/files" aria-label="Back">←</a>
       <h2 id="file-name"></h2>
+      <a class="btn ghost" id="made-back" hidden></a>
       <span id="edit-btns"></span>
       <span class="convert-to" id="convert-to" hidden><select id="convert-fmt" aria-label="Convert to"></select><button class="btn ghost" id="btn-convert">Convert</button></span>
       <a class="btn" id="btn-download" download>Download</a>
@@ -372,15 +373,26 @@ const views = {
   async file(arg) {
     const [id, sub, wantApp] = arg.split("/");
     mount("t-file");
+    editorDirty = false;
     await loadFiles();
     const f = files.find(x => x.file_id === id);
     if (!f) { $("#file-name").textContent = "This file is gone"; return; }
+    cur = f;
     $("#file-name").textContent = f.label; $("#btn-download").href = f.url;
-    $("#btn-print").addEventListener("click", () => printFile(f.file_id));
+    try {
+      const made = JSON.parse(sessionStorage.getItem("aice-made:" + f.file_id) || "null");
+      if (made && MAKERS[made.kind]) {
+        const a = $("#made-back"), title = MAKERS[made.kind].title.replace(/^New /, "");
+        a.hidden = false; a.textContent = `‹ Back to ${title[0].toUpperCase() + title.slice(1)}`;
+        a.title = "Back to the window you made this in — your settings are kept";
+        a.href = made.link + (made.link.includes("?") ? "&" : "?") + "again=1";
+      }
+    } catch {}
+    $("#btn-print").addEventListener("click", () => printFile(cur.file_id));
     for (const id of ["#btn-back", "#btn-close"]) {      // kilépés oda, ahonnan jött (címlap vagy Files)
       const a = $(id); a.href = lastPlace;
       a.addEventListener("click", e => {
-        if (/\/editor\//.test($("#file-frame").getAttribute("src") || "") && !confirm("Close the editor? Changes you haven't saved will be lost.")) e.preventDefault();
+        if (editorDirty && !confirm("Close the editor? Changes you haven't saved will be lost.")) e.preventDefault();
       });
     }
     $("#file-frame").src = `/preview/${encodeURIComponent(f.file_id)}`;
@@ -456,7 +468,8 @@ views.make = async arg => {    // #/make/<eszköz>[/<mód>][?src=<file_id>] — 
   if (!kind) { location.replace("#/"); return; }
   if (!mounted) { history.replaceState(null, "", "#/"); await views.home(); history.replaceState(null, "", "#/make/" + arg); }
   const mode = MODES[kind] && Object.entries(MODES[kind][1]).find(([, w]) => w === modeSlug)?.[0];
-  openMaker(kind, { mode, source: new URLSearchParams(qs).get("src") || undefined });
+  const q = new URLSearchParams(qs);
+  openMaker(kind, { mode, source: q.get("src") || undefined, again: !!(history.state?.again || q.get("again")) });
 };
 async function route() {
   const [, name = "", arg] = location.hash.match(/^#\/([a-z]*)\/?(.*)$/) || [];
@@ -468,9 +481,20 @@ async function route() {
   catch (e) { if (e.message !== "signed out") toast(e.message); }
 }
 window.addEventListener("hashchange", route);
+let cur = null, editorDirty = false;   // a fájlnézet aktuális fájlja (szerkesztőben mentés után az új verzió)
 window.addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data || e.data.source !== "wordcraft") return;
-  if (e.data.type === "saved") toast(`Saved as ${e.data.label || e.data.name}`);
+  if (e.data.type === "touched") editorDirty = true;
+  if (e.data.type === "saved") {
+    toast(`Saved as ${e.data.label || e.data.name}`);
+    editorDirty = false;
+    if (cur && e.data.file_id && e.data.file_id !== cur.file_id) {   // innentől a mentett verzió az aktuális (letöltés, nyomtatás, változtatás)
+      cur = { ...cur, file_id: e.data.file_id, label: e.data.label || cur.label, url: e.data.url || cur.url };
+      $("#file-name").textContent = cur.label; if (e.data.url) $("#btn-download").href = e.data.url;
+      const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
+      history.replaceState(history.state, "", `#/file/${encodeURIComponent(cur.file_id)}` + (app ? `/edit/${app}` : ""));
+    }
+  }
   if (e.data.type === "save_failed") toast("Couldn't save to your files — it was downloaded instead");
 });
 
@@ -866,13 +890,16 @@ async function wireRevise(f) {
   form.onsubmit = async e => {
     e.preventDefault();
     const instruction = input.value.trim(); if (!instruction && !styleId) { input.focus(); return; }
+    if (editorDirty) { st.textContent = "Save your edits in the editor first (File → Save) — then the change builds on them."; return; }
+    const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
     const go = $("#rev-go"); go.disabled = true; input.disabled = true;
     try {
-      const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: f.file_id, instruction, style_file_id: styleId }) });
+      const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, instruction, style_file_id: styleId }) });
       const r = await pollJob(job, () => "Working on it…", st);
       toast(r.summary || "Done — new version");
       await loadAccount();
-      location.hash = "#/file/" + encodeURIComponent(r.file_id);
+      const sameEditor = app && editorsFor(r.file_id.split(".").pop()).some(([a]) => a === app);   // szerkesztőből: ott marad
+      location.hash = "#/file/" + encodeURIComponent(r.file_id) + (sameEditor ? `/edit/${app}` : "");
     } catch (err) { st.textContent = err.message; go.disabled = false; input.disabled = false; }
   };
 }
@@ -914,6 +941,21 @@ function openFill(f, fields) {
   openMaker("fill");
 }
 const t0 = tpl => tpl === "certificate" ? "Recipient name" : "Your title here";   // helyőrző, ha a szerkesztőben írja be
+// a fiók kitöltése: mentés sikeres készítéskor, visszatöltés, ha a felhasználó visszajön (fájlt a böngésző nem enged)
+function formState(form) {
+  return { hadFiles: [...form.querySelectorAll("input[type=file]")].some(i => i.files.length),
+    values: [...form.elements].filter(e => e.name && e.type !== "file" && e.tagName !== "BUTTON").map(e => [e.name, e.type, e.value, e.checked]) };
+}
+function restoreForm(form, st) {
+  for (const [name, type, value, checked] of st.values || []) {
+    form.querySelectorAll(`[name="${CSS.escape(name)}"]`).forEach(e => {
+      if (type === "radio" || type === "checkbox") { if (e.value === value) e.checked = checked; }
+      else if (e.type === type) e.value = value;
+    });
+  }
+  form.querySelectorAll("input[type=radio]:checked, input[type=checkbox]").forEach(e => e.dispatchEvent(new Event("change", { bubbles: true })));
+  $("#make-status").textContent = "Your last settings are filled in — change what you like and make it again." + (st.hadFiles ? " Pick the files again." : "");
+}
 // „Make & edit”: a natív (VectorCraft) dizájnfájl rögtön a dizájn-szerkesztőben nyílik
 function editNative(list, n) {
   const nat = (list || []).find(f => f.file_id.endsWith(".vectorcraft")) || list[0];
@@ -926,9 +968,10 @@ function openMaker(kind, opts = {}) {
     <p class="status" id="make-status"></p>
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt"${m.altLoose ? " formnovalidate" : ""}>${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
   m.wire?.(form, opts);
+  if (opts.again) { try { const st = JSON.parse(sessionStorage.getItem("aice-mk:" + kind) || "null"); if (st) restoreForm(form, st); } catch {} }
   const [field, words] = MODES[kind] || [];
   if (field) {
-    if (opts.mode) { const r = form.querySelector(`[name=${field}][value=${opts.mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
+    if (opts.mode && !opts.again) { const r = form.querySelector(`[name=${field}][value=${opts.mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
     form.querySelectorAll(`[name=${field}]`).forEach(r => r.addEventListener("change", () => {
       if (location.hash.startsWith("#/make/")) history.replaceState(null, "", makeLink(kind, r.value, opts.source));
     }));
@@ -940,7 +983,12 @@ function openMaker(kind, opts = {}) {
     $("#make-status").textContent = "Working on it — this takes a few seconds…";
     try {
       const r = await m.submit(new FormData(form), form, { alt: e.submitter.value === "alt" });
-      if (location.hash.startsWith("#/make/")) history.replaceState(null, "", underMaker);   // a Vissza ne nyissa újra a fiókot
+      try {   // a Vissza (vagy a „Back to …” gomb) ide hoz vissza, a beírt adatokkal
+        sessionStorage.setItem("aice-mk:" + kind, JSON.stringify(formState(form)));
+        sessionStorage.setItem("aice-made:" + r.file_id, JSON.stringify({ kind, link: location.hash.startsWith("#/make/") ? location.hash.replace(/[?&]again=1/, "") : makeLink(kind) }));
+      } catch {}
+      if (location.hash.startsWith("#/make/")) history.replaceState({ again: true }, "", location.hash);
+      keepMakeLink = true;
       $("#drawer").close(); await loadAccount();
       toast(r.msg || (r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
       location.hash = "#/file/" + encodeURIComponent(r.file_id) + (r.edit ? "/edit" : "");
@@ -964,7 +1012,11 @@ $("#make-form").addEventListener("invalid", e => {      // a böngésző buboré
   $("#make-status").textContent = name ? `Fill in “${name}” first.` : "Fill in the highlighted field first.";
   el.scrollIntoView({ block: "center", behavior: "smooth" });
 }, true);
-$("#drawer").addEventListener("close", () => { if (location.hash.startsWith("#/make/")) history.replaceState(null, "", underMaker); });
+let keepMakeLink = false;   // sikeres készítés után a fiók linkje marad az előzményekben (a Vissza oda hoz)
+$("#drawer").addEventListener("close", () => {
+  if (keepMakeLink) { keepMakeLink = false; return; }
+  if (location.hash.startsWith("#/make/")) history.replaceState(null, "", underMaker);
+});
 $("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
   if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();
 });
