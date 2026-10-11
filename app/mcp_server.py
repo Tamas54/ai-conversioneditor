@@ -616,6 +616,30 @@ async def photo_edit(
 
 
 @mcp.tool()
+async def restore_photos(
+    file_ids: Optional[list[str]] = None,
+    colorize: Optional[bool] = None,
+    split_prints: bool = True,
+    job_id: Optional[str] = None,
+) -> dict:
+    """
+    Restore old photos (family albums): scratches, dust, stains, tears,
+    fading and blur. split_prints=true finds every print on a photographed
+    album page and straightens it. colorize: true/false, or omit = colourise
+    black-and-white prints only. Each photo becomes a layered PSD — the
+    ORIGINAL at the bottom, "Restored (AI)" above it (aligned pixel for
+    pixel), "Colour (AI)" on top in Color blend mode — plus a JPG, so a face
+    the AI got wrong can be masked back to the original. Costs credits
+    (1 per photo, +1 to colourise). Returns a job: call again with job_id.
+    """
+    from app import jobs
+    if job_id:
+        return await jobs.job_status(job_id)
+    from app.routes.make import make_restore
+    return await make_restore({"file_ids": file_ids or [], "colorize": colorize, "split_prints": split_prints})
+
+
+@mcp.tool()
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:

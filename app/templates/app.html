@@ -40,7 +40,7 @@
       <button class="tool" data-make="print"><span class="obj"><span class="paper o-poster">Big<br>idea.</span></span>
         <span class="label">Print design</span><span class="hint">Posters, flyers, report covers, certificates</span></button>
       <button class="tool" data-make="photo"><span class="obj"><span class="paper o-photo"><div></div></span></span>
-        <span class="label">Photo</span><span class="hint">Cut out the subject, swap the background, enhance</span></button>
+        <span class="label">Photos</span><span class="hint">Edit with words, restore old family photos, cut out</span></button>
       <button class="tool" data-make="book"><span class="obj"><span class="o-book paper"><i></i><i></i></span></span>
         <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF</span></button>
       <button class="tool" data-make="scan"><span class="obj"><span class="o-scan"><span class="paper"><i></i><i></i><i></i><i></i><i></i></span></span></span>
@@ -369,31 +369,48 @@ const MAKERS = {
     },
   },
   photo: {
-    cta: "Edit", title: "Edit photos", sub: "Say what should change. You get a layered Photoshop file (PSD) — every step on its own layer — plus a JPG. Add several photos and they all get the same edit.",
+    cta: "Go", title: "Photos", sub: "Every result is a layered Photoshop file (PSD) plus a JPG — nothing is lost, every step can be undone by hand.",
     fields: () => `<label>Photos<input type="file" name="photos" accept="image/*" multiple required></label>
+      <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
+      <label><input type="radio" name="mode" value="restore"><span>Restore old photos</span></label>
+      <label><input type="radio" name="mode" value="quick"><span>Quick fix</span></label></div>
+      <div data-mode="restore" hidden>
+        <p class="muted small" style="margin:0 0 10px">Scratches, dust, stains, tears, fading and blur are repaired. Photograph a whole album page and every picture on it is found and straightened. The original stays as the bottom layer, so anything the AI got wrong can be brought back. <em class="ai-badge">AI</em> ${account?.image_credit_cost ?? 1} credit per photo, +${account?.image_credit_cost ?? 1} to colourise.</p>
+        <div class="checks"><label><input type="checkbox" name="colorize" checked> Colourise black-and-white photos</label>
+        <label><input type="checkbox" name="split" checked> Several pictures on one photo — find each one</label></div></div>
+      <div data-mode="edit">
       <label>What should change? <em class="ai-badge">AI</em><textarea name="instruction" placeholder="e.g. Instagram 4:5, a bit warmer, darker dramatic sky, headline ‘Summer sale −30%’ at the top, our logo bottom right"></textarea></label>
       <div class="chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:-6px 0 14px">${["Instagram 4:5", "Square 1:1", "Warmer, more vivid", "Black & white, high contrast", "Cinematic teal & orange look", "Dramatic sky", "Brighter, fix exposure", "Remove the background, white backdrop", "Headline at the top"]
         .map(c => `<button type="button" class="chip" data-chip="${esc(c)}">${esc(c)}</button>`).join("")}</div>
-      <label>Logo (optional)<input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg"></label>
-      <details style="margin:0 0 12px"><summary style="cursor:pointer;font-weight:600;font-size:13px">Or a quick fix without AI</summary>
-      <div class="seg" style="margin-top:8px"><label><input type="radio" name="action" value="" checked><span>None</span></label>
+      <label>Logo (optional)<input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg"></label></div>
+      <div data-mode="quick" hidden>
+      <div class="seg" style="margin-top:2px"><label><input type="radio" name="action" value="enhance" checked><span>Enhance</span></label>
       <label><input type="radio" name="action" value="remove_background"><span>Remove background</span></label>
-      <label><input type="radio" name="action" value="replace_background"><span>New background</span></label>
-      <label><input type="radio" name="action" value="enhance"><span>Enhance</span></label></div>
-      <div id="pbg" hidden style="margin-top:10px">${imagePicker("bg", { allowNone: false, label: "New background" })}<label>Background blur (px)<input type="number" name="blur" min="0" max="40" value="12"></label></div></details>`,
+      <label><input type="radio" name="action" value="replace_background"><span>New background</span></label></div>
+      <div id="pbg" hidden style="margin-top:10px">${imagePicker("bg", { allowNone: false, label: "New background" })}<label>Background blur (px)<input type="number" name="blur" min="0" max="40" value="12"></label></div></div>`,
     wire(form) {
       wirePicker(form, "bg");
+      const syncMode = () => { const m = form.querySelector("[name=mode]:checked").value;
+        form.querySelectorAll("[data-mode]").forEach(d => d.hidden = d.dataset.mode !== m); };
+      form.querySelectorAll("[name=mode]").forEach(r => r.addEventListener("change", syncMode));
       form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", () => form.querySelector("#pbg").hidden = form.querySelector("[name=action]:checked").value !== "replace_background"));
       form.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => {
         const ta = form.querySelector("[name=instruction]"); ta.value = (ta.value.trim() ? ta.value.trim().replace(/[.,]?$/, ", ") : "") + b.dataset.chip; ta.focus();
       }));
     },
     async submit(fd, form) {
-      const photos = [...form.querySelector("[name=photos]").files], instr = (fd.get("instruction") || "").trim(), action = fd.get("action");
-      if (!instr && !action) throw new Error("Describe the edit, or pick a quick fix.");
-      if (instr && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
+      const mode = fd.get("mode"), photos = [...form.querySelector("[name=photos]").files];
+      const instr = mode === "edit" ? (fd.get("instruction") || "").trim() : "", action = mode === "quick" ? fd.get("action") : "";
+      if (mode === "edit" && !instr) throw new Error("Describe the edit — or use a quick fix.");
+      if (mode !== "quick" && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
       const st = $("#make-status"), ids = [];
       for (const [i, f] of photos.entries()) { st.textContent = `Uploading ${i + 1} of ${photos.length}…`; ids.push((await uploadFile(f)).file_id); }
+      if (mode === "restore") {
+        const job = await api("/api/make/restore", { method: "POST", body: JSON.stringify({ file_ids: ids, colorize: fd.get("colorize") ? null : false, split_prints: !!fd.get("split") }) });
+        const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the pictures…");
+        await loadAccount();
+        return { file_id: r.file_id, n: r.files.length, msg: `Restored ${r.photos} picture${r.photos > 1 ? "s" : ""} — layered PSDs are in your files` };
+      }
       if (instr) {
         const logoFile = form.querySelector("[name=logo]").files[0];
         const logo = logoFile ? (await uploadFile(logoFile)).file_id : null;

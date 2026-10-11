@@ -475,3 +475,29 @@ async def make_photo_edit(body: dict[str, Any]) -> dict[str, Any]:
         events.emit("tool_done", tool="make_photo_edit", result={"files": [f["file_id"] for f in res["files"]]})
         return res
     return jobs.start("photo_edit", work)
+
+
+# ---------- Régi fotók helyreállítása (album): rétegzett PSD + JPG, opcionálisan színezve ----------
+
+@router.post("/api/make/restore")
+async def make_restore(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_ids[], colorize?: true|false|null (null = fekete-fehérnél igen), split_prints?: bool}"""
+    from app import jobs
+    from app.tools import restore
+    ids = [i for i in body.get("file_ids") or [] if i]
+    if not ids:
+        raise HTTPException(400, "Add photos of the old pictures (or scans, or a whole album page).")
+    colorize = body.get("colorize")
+    split = bool(body.get("split_prints", True))
+    left = await _credits_left()
+    if left is not None and left < settings.IMAGE_CREDIT_COST:
+        raise HTTPException(402, f"Restoring needs credits ({settings.IMAGE_CREDIT_COST} per photo, +{settings.IMAGE_CREDIT_COST} to colourise); you have {left}.")
+
+    async def work(progress):
+        try:
+            res = await restore.run(ids[:50], colorize, split, progress)
+        except Exception as e:
+            raise _fail(e)
+        events.emit("tool_done", tool="make_restore", result={"files": [f["file_id"] for f in res["files"]]})
+        return res
+    return jobs.start("restore", work)

@@ -97,6 +97,11 @@ async def collect_pages(file_ids: list[str], workdir: Path, limit: int) -> list[
         elif ext in _IMG:
             dst = workdir / f"f{i:03d}.jpg"
             await asyncio.to_thread(_image_page, src, dst)
+            try:   # telefonnal fotózott oldal: papír megkeresése, perspektíva kiegyenesítése (szkennen nincs változás)
+                from app.tools.forms import straighten
+                await asyncio.to_thread(straighten, dst, dst)
+            except Exception:
+                log.warning("kiegyenesítés nem sikerült: %s", dst.name, exc_info=True)
             pages.append(dst)
         else:
             raise ValueError(f"{display_label(fid)}: use photos/scans (JPG, PNG, TIFF…) or a scanned PDF.")
