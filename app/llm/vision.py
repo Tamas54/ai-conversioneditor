@@ -89,7 +89,7 @@ def image_to_data_url(path: Path, long_edge: Optional[int] = None) -> str:
 
 
 async def _call(messages: list[dict[str, Any]], *, response_format: Optional[dict] = None,
-                max_tokens: int = 4096) -> str:
+                max_tokens: int = 4096, model: Optional[str] = None) -> str:
     """Call Kimi K2.6 vision via SiliconFlow.
 
     SiliconFlow Kimi K2.6 vision endpoint returns HTTP 500 when called with
@@ -100,7 +100,7 @@ async def _call(messages: list[dict[str, Any]], *, response_format: Optional[dic
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
     payload: dict[str, Any] = {
-        "model": settings.LLM_MODEL_VISION,  # Kimi K2.6 — magyar OCR-ban messze a legpontosabb
+        "model": model or settings.LLM_MODEL_VISION,  # Kimi K2.6 — leírás/kérdés; OCR: settings.OCR_MODEL
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.1,

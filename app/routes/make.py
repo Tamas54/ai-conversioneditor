@@ -389,6 +389,8 @@ async def make_digitize(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(400, "Pick at least one result: Word, new PDF, searchable PDF or text.")
     lang = (body.get("language") or "").strip() or None
     limit = 1000 if tenancy.current_user_id() == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES
+    if body.get("max_pages"):            # „csak az első N oldal” (próba, mintafejezet)
+        limit = max(1, min(limit, int(body["max_pages"])))
 
     async def work(progress):
         res = await digitize.digitize(ids, outputs, lang, limit, progress)

@@ -24,9 +24,12 @@ from app.storage.files import new_file_id
 
 log = logging.getLogger("aice.digitize")
 
-PROMPT_VER = "book-v4"
-# Mérve (tests/ocr_book_bench.py, Ammianus 1916, kézi etalon 226 szó): Kimi-K2.6 2048 px 2,2% szóhiba,
-# 1280 px 3,1%; Qwen3.8-27B 4,9% / 6,2% (és modernizálja a régi helyesírást); ABBYY-réteg 9,3%.
+PROMPT_VER = "book-v5"
+# Mérve 10-11 (tests/ocr_book_bench.py; etalon: Ammianus 1916 kézi átirat + 3 Jókai-fotó pontos szöveggel, 2048 px):
+#   DeepSeek-V4.1-Flash 1,8% régi / 4,6% össz., 14 s/oldal, ~0,09 ¢/oldal  ← alap
+#   Kimi-K2.6           2,2% / 4,5%, 37 s, ~0,65 ¢      GLM-5.3-Flash 3,5% / 5,8%, 30 s, ~0,16 ¢
+#   Qwen3.8-27B 4,9–40% (modernizál, kihagy), ABBYY-réteg 9,3%, Kimi-K3 üres szöveg.
+# A DeepSeek ábrát csak „először a képek” sorrendű utasítással jelöl megbízhatóan (ezért ilyen a prompt).
 OCR_EDGE = 2048
 FIGURE_KEEP = {"illustration", "photo", "map", "diagram", "ornament", "emblem", "chart", "table"}
 OUTPUTS = {"docx", "pdf", "searchable_pdf", "txt", "md"}
@@ -35,8 +38,15 @@ _CONCURRENCY = 8
 _FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
           "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
 
-_PROMPT = """Transcribe this scanned page.{hint}
-Rules:
+_PROMPT = """You are digitising a scanned page.{hint}
+Step 1 — pictures. Look for anything that is not running text: illustrations, engravings, photos, maps,
+diagrams, charts, decorative ornaments, vignettes, headpieces, publisher's emblems, and also library stamps and
+handwriting. For EACH one write exactly one line in this exact format (integers 0–1000 = thousandths of the page
+width and height, origin top left; draw the box generously so nothing is cut off):
+[[FIGURE kind x0 y0 x1 y1 | caption]]
+kind is one word: illustration, photo, map, diagram, chart, ornament, emblem, stamp, handwriting or other;
+caption = the printed caption, or a few words saying what it shows.
+Step 2 — transcribe the page:
 - Copy the text exactly as printed: keep the original spelling, punctuation and language. Do not translate,
   modernise or correct anything.
 - Join the lines of a paragraph into one line; rejoin words hyphenated at the end of a line.
@@ -45,18 +55,12 @@ Rules:
 - Centred display text (title page, half-title, dedication, motto, imprint) goes between a line ":::center"
   and a line ":::", one printed line per line.
 - Leave out running heads (the book or chapter title repeated at the top of the page), page numbers and
-  printer's marks.
+  printer's marks. Never transcribe the text of stamps or handwriting.
 - Footnotes go after the page text, each on its own line as "[^1]: text"; mark the place in the text as [^1].
 - A table becomes a Markdown table. An illegible word becomes [?].
-- Every picture-like thing on the page gets a line of its own, where it appears:
-  [[FIGURE kind x0 y0 x1 y1 | caption]]
-  kind = illustration, photo, map, diagram, chart, ornament, emblem, stamp (a library or ownership stamp),
-  handwriting (notes, signatures, pen or pencil marks) or other;
-  x0 y0 x1 y1 = its box in thousandths of the page width and height (0–1000, origin top left), drawn
-  generously so nothing is cut off; caption = the printed caption, or a few words saying what it shows.
-  Never transcribe the text of stamps or handwriting into the page text.
-- If the page has no text, reply with nothing.
-Output only the transcription: no comments, no code fences."""
+- Put each [[FIGURE …]] line from step 1 where the picture stands in the text (before the text that follows it).
+- If the page has no text and no pictures, reply with nothing.
+Output only the result: no comments, no code fences."""
 
 
 # ---------- oldalak ----------
@@ -109,7 +113,7 @@ async def _ocr_page(path: Path, hint: Optional[str]) -> tuple[str, bool]:
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     ver = PROMPT_VER + (f":{hint}" if hint else "")
     try:
-        cached = await db.ocr_cache_get(sha, ver, settings.LLM_MODEL_VISION)
+        cached = await db.ocr_cache_get(sha, ver, settings.OCR_MODEL)
     except Exception:
         cached = None
     if cached is not None:
@@ -118,12 +122,24 @@ async def _ocr_page(path: Path, hint: Optional[str]) -> tuple[str, bool]:
         {"type": "text", "text": _PROMPT.format(hint=f" The text is in {hint}." if hint else "")},
         {"type": "image_url", "image_url": {"url": vision.image_to_data_url(path, long_edge=OCR_EDGE)}},
     ]}]
-    text = _clean(await vision._call(msgs, max_tokens=6000))
+    text = _clean(await _vision_text(msgs))
     try:
-        await db.ocr_cache_put(sha, ver, settings.LLM_MODEL_VISION, text)
+        await db.ocr_cache_put(sha, ver, settings.OCR_MODEL, text)
     except Exception:
         log.warning("ocr_cache írás nem sikerült", exc_info=True)
     return text, False
+
+
+async def _vision_text(msgs: list[dict[str, Any]]) -> str:
+    """OCR_MODEL (alap: DeepSeek-V4.1-Flash), hibánál a régi vision-modell (Kimi-K2.6)."""
+    from app.llm import vision
+    try:
+        return await vision._call(msgs, max_tokens=6000, model=settings.OCR_MODEL)
+    except Exception as e:
+        if settings.OCR_MODEL == settings.LLM_MODEL_VISION:
+            raise
+        log.warning("OCR %s nem válaszolt (%s) — tartalék: %s", settings.OCR_MODEL, e, settings.LLM_MODEL_VISION)
+        return await vision._call(msgs, max_tokens=6000)
 
 
 def _clean(s: str) -> str:
@@ -135,7 +151,16 @@ def _clean(s: str) -> str:
 
 # ---------- ábrák ----------
 
-_FIG = re.compile(r"^\[\[FIGURE\s+(?:([a-z]+)\s+)?(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*(?:\|\s*(.*?))?\]\]\s*$", re.M)
+# engedékeny: a „FIGURE” szó és a kind elmaradhat, a koordináta lehet 0–1 tört is (a modellek néha így írják)
+_NUM = r"(\d+(?:\.\d+)?)"
+_FIG = re.compile(r"^\s*\[\[(?:FIGURE\s+)?(?:([a-z]+)\s+)?" + r"[,\s]+".join([_NUM] * 4) + r"\s*(?:\|\s*(.*?))?\]\]\s*$", re.M | re.I)
+
+
+def _box(m: re.Match) -> tuple[int, int, int, int]:
+    v = [float(m.group(i)) for i in range(2, 6)]
+    if max(v) <= 1.0:
+        v = [x * 1000 for x in v]
+    return tuple(int(x) for x in v)
 
 
 def _crop_figure(page: Path, box: tuple[int, int, int, int], dst: Path) -> bool:
@@ -217,7 +242,7 @@ def place_figures(texts: list[str], pages: list[Path], figdir: Path) -> tuple[li
                 return f"[Figure: {caption}]" if caption else "[Figure]"
             k += 1
             dst = figdir / f"p{n:04d}-{k}.jpg"
-            if not _crop_figure(page, tuple(int(m.group(i)) for i in range(2, 6)), dst):
+            if not _crop_figure(page, _box(m), dst):
                 return ""
             kept += 1
             return f"\n\n![{caption}]({dst.name})\n\n"     # külön bekezdés → pandoc ábraként, középre
@@ -234,9 +259,19 @@ _END = re.compile(r"[.!?:;…\"'”»)\]]$")
 def assemble(pages: list[str]) -> str:
     """Oldalak → egy Markdown. Oldalhatáron folytatódó bekezdés/elválasztás összeillesztve;
     lábjegyzet-azonosítók oldalanként egyediek ([^1] → [^p3-1])."""
+    # élőfej, amit a modell címsornak jelölt („## BEVEZETÉS I.”): ugyanaz a (számok nélküli) első sor ≥2 oldalon
+    keys = [_head_key(p) for p in pages]
+    repeated = {k for k in keys if k and keys.count(k) >= 2}
+    seen: set[str] = set()
     out = ""
     for n, page in enumerate(pages, 1):
-        page = re.sub(r"\[\^(\w+)\]", lambda m: f"[^p{n}-{m.group(1)}]", _drop_running_head(page.strip()) if n > 1 else page.strip())
+        page = page.strip()
+        k = keys[n - 1]
+        if k in repeated:
+            if k in seen:            # az első előfordulás a valódi fejezetcím, a későbbiek élőfejek
+                page = page.partition("\n")[2].lstrip("\n")
+            seen.add(k)
+        page = re.sub(r"\[\^(\w+)\]", lambda m: f"[^p{n}-{m.group(1)}]", _drop_running_head(page) if n > 1 else page)
         if not page:
             continue
         body, notes = _split_notes(page)
@@ -257,6 +292,16 @@ def assemble(pages: list[str]) -> str:
     defined = set(re.findall(r"^\[\^([\w-]+)\]:", out, flags=re.M))
     out = re.sub(r"\[\^(p\d+-(\w+))\](?!:)", lambda m: m.group(0) if m.group(1) in defined else f"^{m.group(2)}^", out)
     return out.strip() + "\n"
+
+
+def _head_key(page: str) -> str:
+    """Az oldal első sora összehasonlítható formában (# jelek, számok, római számok, írásjelek nélkül)."""
+    first = page.strip().partition("\n")[0]
+    if len(first) > 80 or first.startswith(("!", "[[", "|", ":::")):
+        return ""
+    s = re.sub(r"[#\d.,;:()\[\]\-–—]+", " ", first).lower()
+    s = re.sub(r"\b[ivxlcdm]+\b", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 _ROMAN = re.compile(r"^[\dIVXLCDM\s.,;:\-–—]+$")

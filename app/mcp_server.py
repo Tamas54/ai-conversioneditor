@@ -529,6 +529,7 @@ async def digitize(
     file_ids: Optional[list[str]] = None,
     outputs: Optional[list[str]] = None,
     language: Optional[str] = None,
+    max_pages: Optional[int] = None,
     job_id: Optional[str] = None,
 ) -> dict:
     """
@@ -541,7 +542,8 @@ async def digitize(
     Start: file_ids = page photos/scans in order, or scanned PDFs;
     outputs ⊆ ["docx", "pdf" (new typeset A5 book), "searchable_pdf"
     (original pages + invisible text layer), "txt", "md"] (default docx);
-    language = hint, e.g. "Hungarian". Returns a job — a long book takes
+    language = hint, e.g. "Hungarian"; max_pages = only the first N pages
+    (a sample chapter). Returns a job — a long book takes
     minutes: call again with job_id until status is "done" (result.files)
     or "failed". Pages already read are cached, so a rerun is cheap.
     """
@@ -549,7 +551,8 @@ async def digitize(
     if job_id:
         return await jobs.job_status(job_id)
     from app.routes.make import make_digitize
-    return await make_digitize({"file_ids": file_ids or [], "outputs": outputs or ["docx"], "language": language})
+    return await make_digitize({"file_ids": file_ids or [], "outputs": outputs or ["docx"], "language": language,
+                                "max_pages": max_pages})
 
 
 @mcp.tool()

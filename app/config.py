@@ -53,6 +53,8 @@ class Settings(BaseModel):
     IMAGE_CREDIT_COST: int = int(os.getenv("IMAGE_CREDIT_COST", "1"))  # egy FLUX-kép ára kreditben
     # Digitalizálás (OCR): oldalkorlát munkánként a nem-admin felhasználónak (az OCR LLM-hívás, ~0,2 ¢/oldal)
     OCR_MAX_PAGES: int = int(os.getenv("OCR_MAX_PAGES", "60"))
+    # Digitalizálás OCR-modellje (mérve 10-11: DeepSeek-V4.1-Flash = Kimi-K2.6 pontosság, 2,7× gyorsabb, ~7× olcsóbb)
+    OCR_MODEL: str = os.getenv("OCR_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash")
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", os.getenv("FILE_SIGNING_KEY", "change-me-in-railway"))
 
     # --- WordCraft (Rust Word-motor, upstream release-ből; Dockerfile tölti le) ---
