@@ -248,6 +248,26 @@ async def make_book(body: dict[str, Any]) -> dict[str, Any]:
     fid = body.get("file_id")
     if not fid:
         raise HTTPException(400, "Upload your manuscript (.docx) first.")
+    if body.get("style_file_id"):          # „olyan legyen, mint ez” — a kézirat a minta stílusaival, WordCraft-tal szedve
+        import asyncio
+        from pathlib import Path as _P
+        from app.storage import display_label, output_path, public_url, write_meta
+        from app.storage.files import new_file_id
+        from app.tools import doc_style, wordcraft
+        from app.tools.crafts import existing as _existing
+        try:
+            ref = await doc_style.reference_for(body["style_file_id"])
+            styled = new_file_id("docx")
+            await asyncio.to_thread(doc_style.apply_style, _existing(fid), ref, output_path(styled))
+            write_meta(styled, source_file_id=fid, operation="restyle", label=f"{_P(display_label(fid)).stem} (styled).docx")
+            pdf = new_file_id("pdf")
+            await wordcraft.convert_file(output_path(styled), output_path(pdf))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _fail(e)
+        write_meta(pdf, source_file_id=styled, operation="book", label=f"{body.get('title') or _P(display_label(fid)).stem}.pdf")
+        return {"file_id": pdf, "url": public_url(pdf), "size_kb": output_path(pdf).stat().st_size // 1024, "docx": styled}
     try:
         doc = Document(str(existing(fid)))
     except Exception:
@@ -406,6 +426,7 @@ async def make_digitize(body: dict[str, Any]) -> dict[str, Any]:
     if not outputs:
         raise HTTPException(400, "Pick at least one result: Word, new PDF, searchable PDF or text.")
     lang = (body.get("language") or "").strip() or None
+    style_id = body.get("style_file_id")
     limit = 1000 if tenancy.current_user_id() == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES
     if body.get("max_pages"):            # „csak az első N oldal” (próba, mintafejezet)
         limit = max(1, min(limit, int(body["max_pages"])))
@@ -419,7 +440,7 @@ async def make_digitize(body: dict[str, Any]) -> dict[str, Any]:
 
     async def work(progress):
         try:
-            res = await digitize.digitize(ids, outputs, lang, limit, progress, on_pages=on_pages)
+            res = await digitize.digitize(ids, outputs, lang, limit, progress, on_pages=on_pages, style_file_id=style_id)
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="make_digitize", result={"files": [f["file_id"] for f in res["files"]],
@@ -629,6 +650,10 @@ async def make_document(body: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(400, f"Unknown template: {tpl}")
         try:
             out = await wordcraft.run(template=tpl)
+            if body.get("style_file_id"):
+                from app.tools import doc_style
+                ref = await doc_style.reference_for(body["style_file_id"])
+                await asyncio.to_thread(doc_style.apply_style, output_path(out["file_id"]), ref, output_path(out["file_id"]))
         except Exception as e:
             raise _fail(e)
         names = {"blank": "Untitled", "letter": "Letter", "report": "Report", "resume": "CV", "sample": "Sample"}
@@ -662,7 +687,11 @@ async def make_document(body: dict[str, Any]) -> dict[str, Any]:
         src = temp_path(new_file_id("md"))
         src.write_text(md, "utf-8")
         fid = new_file_id("docx")
-        ref = await asyncio.to_thread(_doc_reference)
+        if body.get("style_file_id"):
+            from app.tools import doc_style
+            ref = await doc_style.reference_for(body["style_file_id"])
+        else:
+            ref = await asyncio.to_thread(_doc_reference)
         await asyncio.to_thread(pypandoc.convert_file, str(src), "docx", outputfile=str(output_path(fid)),
                                 extra_args=["--wrap=none", f"--reference-doc={ref}"])
         src.unlink(missing_ok=True)

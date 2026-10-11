@@ -285,3 +285,9 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .use i { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--mat) var(--w), var(--rule) var(--w)); }
 @media (max-width: 900px) { .plan-cards, .plans-grid2 { grid-template-columns: 1fr; } }
 .plans .seg span { white-space: nowrap; }
+
+.style-field { border-top: 1px dashed var(--rule); padding-top: 12px; margin-top: 4px; }
+.style-field .small { font-weight: 400; }
+/* a rácsos címkében se nyúljon szét az AI-jelvény */
+.ai-badge { display: inline-block; width: max-content; justify-self: start; align-self: center; }
+label > .ai-badge { margin: -2px 0 2px; }

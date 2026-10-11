@@ -460,7 +460,7 @@ def _book_reference() -> Path:
 
 
 async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs: list[str], pages: list[Path],
-                        texts: list[str], source_id: str, stem: str) -> list[dict[str, Any]]:
+                        texts: list[str], source_id: str, stem: str, style_file_id: Optional[str] = None) -> list[dict[str, Any]]:
     import pypandoc
     from app.tools import wordcraft
     files: list[tuple[str, str]] = []           # (file_id, címke)
@@ -473,7 +473,11 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
             md_path = figdir / "book.md"
             md_path.write_text(to_pandoc(md_img), "utf-8")
             docx_path = work / "book.docx"
-            ref = await asyncio.to_thread(_book_reference)
+            if style_file_id:                     # „olyan legyen, mint ez a dokumentumom” — a minta a sablon
+                from app.tools import doc_style
+                ref = await doc_style.reference_for(style_file_id)
+            else:
+                ref = await asyncio.to_thread(_book_reference)
             await asyncio.to_thread(pypandoc.convert_file, str(md_path), "docx", outputfile=str(docx_path),
                                     extra_args=["--wrap=none", f"--resource-path={figdir}", f"--reference-doc={ref}",
                                                 "--metadata", f"title-meta={title}"])
@@ -502,7 +506,7 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
 
 
 async def digitize(file_ids: list[str], outputs: list[str], language: Optional[str], max_pages: int,
-                   progress: Callable[[int, int, str], None], on_pages=None) -> dict[str, Any]:
+                   progress: Callable[[int, int, str], None], on_pages=None, style_file_id: Optional[str] = None) -> dict[str, Any]:
     outputs = [o for o in outputs if o in OUTPUTS] or ["docx"]
     work = temp_path(new_file_id("scan"))
     work.mkdir(parents=True)
@@ -557,7 +561,8 @@ async def digitize(file_ids: list[str], outputs: list[str], language: Optional[s
         md_img, md = assemble(with_img), assemble(plain_pages)
         if not md.strip():
             raise ValueError("No text found on these pages.")
-        files += await build_outputs(md, md_img, figdir, title_of(md, stem), outputs, pages, plain_pages, file_ids[0], stem)
+        files += await build_outputs(md, md_img, figdir, title_of(md, stem), outputs, pages, plain_pages, file_ids[0], stem,
+                                     style_file_id=style_file_id)
         return {"files": files, "file_id": files[0]["file_id"], "pages": len(pages), "pages_cached": cached, "figures": figures,
                 "fields": form_info.get("fields", []),
                 "truncated": truncated, "words": len(to_plain(md).split())}

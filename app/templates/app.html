@@ -436,6 +436,16 @@ const ACCENTS = ["#FF5A36", "#2F80ED", "#1E9E6A", "#8E44AD", "#F2B705", "#15191B
 const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Accent colour</legend>
   <div class="swatches">${ACCENTS.map((c, i) => `<input type="radio" name="accent" value="${c}" style="--c:${c}" aria-label="${c}" ${i ? "" : "checked"}>`).join("")}</div></fieldset>`;
 
+// stílusminta: „olyan legyen, mint ez” — egy saját dokumentum, valaki más pptx-e, egy PDF vagy kép
+const styleField = (what = "document") => `<label class="style-field">Style example <span class="muted small">(optional) — a ${what} whose look you want: Word, PDF, pptx or a picture</span>
+  <input type="file" name="style" accept=".docx,.odt,.rtf,.pdf,.pptx,image/*"></label>`;
+async function readStyle(form) {
+  const f = form.querySelector("[name=style]")?.files[0];
+  if (!f) return null;
+  $("#make-status").textContent = "Reading the style example…";
+  return (await uploadFile(f)).file_id;
+}
+
 // ---------- készítők ----------
 const MAKERS = {
   doc: {
@@ -449,9 +459,11 @@ const MAKERS = {
         <label>What should it be? <em class="ai-badge">AI</em><select name="kind"><option value="letter">Letter</option><option value="report">Report</option>
           <option value="article">Article</option><option value="proposal">Proposal</option><option value="memo">Memo</option><option value="cv">CV / résumé</option><option value="other">Something else</option></select></label>
         <label>Brief<textarea name="brief" placeholder="e.g. A friendly letter to our tenants: the courtyard is being renovated from 3 to 14 November, cars must park on the street; thank them for their patience."></textarea></label></div>
-      <div data-dmode="open" hidden><label>Document<input type="file" name="docfile" accept=".docx,.doc,.odt,.rtf,.md,.txt,.html"></label></div>`,
+      <div data-dmode="open" hidden><label>Document<input type="file" name="docfile" accept=".docx,.doc,.odt,.rtf,.md,.txt,.html"></label></div>
+      <div data-dmode-style>${styleField("document")}</div>`,
     wire(form) {
-      const sync = () => { const m = form.querySelector("[name=dmode]:checked").value; form.querySelectorAll("[data-dmode]").forEach(d => d.hidden = d.dataset.dmode !== m); };
+      const sync = () => { const m = form.querySelector("[name=dmode]:checked").value; form.querySelectorAll("[data-dmode]").forEach(d => d.hidden = d.dataset.dmode !== m);
+        form.querySelector("[data-dmode-style]").hidden = m === "open"; };
       form.querySelectorAll("[name=dmode]").forEach(r => r.addEventListener("change", sync));
     },
     async submit(fd, form) {
@@ -462,10 +474,12 @@ const MAKERS = {
         r = await uploadFile(f);
       } else if (m === "brief") {
         if (account?.guest) throw new Error(AI_NOTE);
+        const style_file_id = await readStyle(form);
         $("#make-status").textContent = "Writing…";
-        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "brief", kind: fd.get("kind"), brief: fd.get("brief") }) });
+        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "brief", kind: fd.get("kind"), brief: fd.get("brief"), style_file_id }) });
       } else {
-        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "template", template: fd.get("template") }) });
+        const style_file_id = await readStyle(form);
+        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "template", template: fd.get("template"), style_file_id }) });
       }
       try { sessionStorage.setItem("aice-autoedit", r.file_id); } catch {}
       return { ...r, msg: m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…" };
@@ -478,8 +492,12 @@ const MAKERS = {
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
       <div class="seg"><label><input type="radio" name="images" value="stock" checked><span>Stock photos</span></label>
       <label><input type="radio" name="images" value="ai"><span>AI images</span></label><label><input type="radio" name="images" value="none"><span>None</span></label></div></fieldset>
-      ${swatches()}`,
-    async submit(fd) { return api("/api/make/deck", { method: "POST", body: JSON.stringify({ brief: fd.get("brief"), slides: +fd.get("slides"), images: fd.get("images"), accent: fd.get("accent") }) }); },
+      ${swatches()}${styleField("deck")}`,
+    async submit(fd, form) {
+      const style_file_id = await readStyle(form);
+      $("#make-status").textContent = "Writing the slides…";
+      return api("/api/make/deck", { method: "POST", body: JSON.stringify({ brief: fd.get("brief"), slides: +fd.get("slides"), images: fd.get("images"), accent: fd.get("accent"), style_file_id }) });
+    },
     wire() {},
   },
   social: {
@@ -509,11 +527,12 @@ const MAKERS = {
       <label>Title<input type="text" name="title" maxlength="120"></label>
       <label>Author<input type="text" name="author" maxlength="80"></label>
       <label>Trim size<select name="size"><option value="A5">A5 (148×210 mm)</option><option value="A4">A4</option></select></label>
-      ${imagePicker("cover", { label: "Cover image" })}`,
+      ${imagePicker("cover", { label: "Cover image" })}${styleField("book or document")}`,
     wire(form) { wirePicker(form, "cover"); },
     async submit(fd, form) {
       const m = await uploadFile(form.querySelector("[name=manuscript]").files[0]);
-      return api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover") }) });
+      const style_file_id = await readStyle(form);
+      return api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover"), style_file_id }) });
     },
   },
   photo: {
@@ -605,12 +624,14 @@ const MAKERS = {
       <label>Language<select name="lang"><option value="">Detect automatically</option><option>English</option><option>German</option>
         <option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Dutch</option>
         <option>Polish</option><option>Czech</option><option>Hungarian</option><option>Romanian</option><option>Swedish</option><option>Latin</option></select></label>
-      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised.</p>`,
+      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised.</p>
+      ${styleField("document")}`,
     wire() {},
     async submit(fd, form) {
       const picked = [...form.querySelector("[name=pages]").files], st = $("#make-status"), ids = [];
       for (const [i, f] of picked.entries()) { st.textContent = `Uploading ${i + 1} of ${picked.length}…`; ids.push((await uploadFile(f)).file_id); }
-      const job = await api("/api/make/digitize", { method: "POST", body: JSON.stringify({ file_ids: ids, outputs: fd.getAll("out"), language: fd.get("lang") }) });
+      const style_file_id = await readStyle(form);
+      const job = await api("/api/make/digitize", { method: "POST", body: JSON.stringify({ file_ids: ids, outputs: fd.getAll("out"), language: fd.get("lang"), style_file_id }) });
       const r = await pollJob(job, j => j.total ? (j.stage === "building files" ? "Putting the documents together…"
         : j.stage === "reading the form" ? `Reading the form, page ${Math.min(j.done + 1, j.total)} of ${j.total}…`
         : `Reading page ${Math.min(j.done + 1, j.total)} of ${j.total}…`) : "Preparing the pages…");

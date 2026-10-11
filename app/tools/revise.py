@@ -125,9 +125,10 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
     stem = Path(display_label(file_id)).stem.split(" (")[0]
     request = request.strip()
     theme = None
-    if style_file_id:
+    if style_file_id and ext == "pptx":
         from app.tools import style_ref
         theme = await style_ref.theme_from(style_file_id)
+    if style_file_id:
         request = request or "Restyle it like the example."
     if not request:
         raise ValueError("Say what should change.")
@@ -142,12 +143,32 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
     elif ext in DOCS or (ext == "pdf" and _docx_source(file_id)):
         from app.tools import doc_revise
         docx_id = file_id if ext in DOCS else _docx_source(file_id)
+        if ext not in ("docx",) and ext in DOCS:      # odt/rtf/md → docx munkapéldány
+            from app.tools import wordcraft
+            conv = new_file_id("docx")
+            await wordcraft.convert_file(crafts.existing(docx_id), output_path(conv))
+            write_meta(conv, source_file_id=docx_id, operation="convert", extra={"ephemeral": True})
+            docx_id = conv
+        styled_note = ""
+        if style_file_id:                              # „olyan stílusú, mint ez” — a minta stílusai + oldalbeállítása
+            import asyncio
+            from app.tools import doc_style
+            ref = await doc_style.reference_for(style_file_id)
+            styled = new_file_id("docx")
+            await asyncio.to_thread(doc_style.apply_style, crafts.existing(docx_id), ref, output_path(styled))
+            write_meta(styled, source_file_id=docx_id, operation="restyle", extra={"ephemeral": True})
+            docx_id, styled_note = styled, "Restyled like the example. "
         new_docx = new_file_id("docx")
-        r = await doc_revise.revise(docx_id, request, output_path(new_docx))
-        if not r["handled"]:
-            new_docx = await _agent(pool, docx_id, request)
-            r["summary"] = "Done by the editing agent."
-        summary = r.get("summary") or ""
+        if style_file_id and request.strip() == "Restyle it like the example.":
+            import shutil
+            shutil.copy(crafts.existing(docx_id), output_path(new_docx))
+            r = {"summary": ""}
+        else:
+            r = await doc_revise.revise(docx_id, request, output_path(new_docx))
+            if not r["handled"]:
+                new_docx = await _agent(pool, docx_id, request)
+                r["summary"] = "Done by the editing agent."
+        summary = styled_note + (r.get("summary") or "")
         if ext == "pdf":                                  # a PDF a Word-forrásból újra (ugyanazzal a szedéssel)
             out_id = new_file_id("pdf")
             await _docx_to_pdf(new_docx, output_path(out_id), _meta(file_id))
