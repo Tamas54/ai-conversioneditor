@@ -33,6 +33,8 @@
     <h1>What are we making?</h1>
     <p class="lede">Pick a tool, answer a few questions, get a finished file. Fix anything by hand in the built-in editors — or let your own AI drive it.</p>
     <div class="tools">
+      <button class="tool" data-make="doc"><span class="obj"><span class="paper o-doc"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>
+        <span class="label">Document</span><span class="hint">Write or edit like in Word — letters, reports, CVs; start blank or from a brief</span></button>
       <button class="tool" data-make="deck"><span class="obj"><span class="paper o-deck"><i></i><i></i><i></i><b></b></span></span>
         <span class="label">Presentation <em class="ai-badge">AI</em></span><span class="hint">Slides from a short brief, with photos and charts</span></button>
       <button class="tool" data-make="social"><span class="obj"><span class="paper o-post"><div></div><span></span></span></span>
@@ -276,6 +278,9 @@ const views = {
       });
       box.append(b);
     });
+    try {   // „Document → New / Open”: rögtön a szerkesztő nyíljon
+      if (sessionStorage.getItem("aice-autoedit") === f.file_id) { sessionStorage.removeItem("aice-autoedit"); box.querySelector("button")?.click(); }
+    } catch {}
     if (f.ext === "pdf") api(`/api/forms/fields?file_id=${encodeURIComponent(f.file_id)}`).then(({ fields }) => {
       if (!fields.length) return;
       const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Fill in";
@@ -352,6 +357,39 @@ const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend st
 
 // ---------- készítők ----------
 const MAKERS = {
+  doc: {
+    cta: "Open", title: "Document", sub: "Write and edit like in Word. Anything you open here can also be changed by asking — “make the headings blue”, “add a table of contents”.",
+    fields: () => `<div class="seg" style="margin:0 0 16px"><label><input type="radio" name="dmode" value="template" checked><span>New</span></label>
+      <label><input type="radio" name="dmode" value="brief"><span>From a brief</span></label>
+      <label><input type="radio" name="dmode" value="open"><span>Open a file</span></label></div>
+      <div data-dmode="template"><label>Start from<select name="template"><option value="blank">Blank page</option><option value="letter">Letter</option>
+        <option value="report">Report</option><option value="resume">CV / résumé</option></select></label></div>
+      <div data-dmode="brief" hidden>
+        <label>What should it be? <em class="ai-badge">AI</em><select name="kind"><option value="letter">Letter</option><option value="report">Report</option>
+          <option value="article">Article</option><option value="proposal">Proposal</option><option value="memo">Memo</option><option value="cv">CV / résumé</option><option value="other">Something else</option></select></label>
+        <label>Brief<textarea name="brief" placeholder="e.g. A friendly letter to our tenants: the courtyard is being renovated from 3 to 14 November, cars must park on the street; thank them for their patience."></textarea></label></div>
+      <div data-dmode="open" hidden><label>Document<input type="file" name="docfile" accept=".docx,.doc,.odt,.rtf,.md,.txt,.html"></label></div>`,
+    wire(form) {
+      const sync = () => { const m = form.querySelector("[name=dmode]:checked").value; form.querySelectorAll("[data-dmode]").forEach(d => d.hidden = d.dataset.dmode !== m); };
+      form.querySelectorAll("[name=dmode]").forEach(r => r.addEventListener("change", sync));
+    },
+    async submit(fd, form) {
+      const m = fd.get("dmode");
+      let r;
+      if (m === "open") {
+        const f = form.querySelector("[name=docfile]").files[0]; if (!f) throw new Error("Choose a document.");
+        r = await uploadFile(f);
+      } else if (m === "brief") {
+        if (account?.guest) throw new Error(AI_NOTE);
+        $("#make-status").textContent = "Writing…";
+        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "brief", kind: fd.get("kind"), brief: fd.get("brief") }) });
+      } else {
+        r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "template", template: fd.get("template") }) });
+      }
+      try { sessionStorage.setItem("aice-autoedit", r.file_id); } catch {}
+      return { ...r, msg: m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…" };
+    },
+  },
   deck: {
     title: "New presentation", sub: "Describe it — the assistant writes the slides, picks layouts and finds pictures.",
     fields: () => `<label>What is it about?<textarea name="brief" required placeholder="e.g. A 10-minute pitch for our community solar project: the problem, how it works, costs, timeline and the ask."></textarea></label>

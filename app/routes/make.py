@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -546,3 +547,110 @@ async def make_revise(request: Request, body: dict[str, Any]) -> dict[str, Any]:
 async def revisions(file_id: str) -> dict[str, Any]:
     from app.tools import revise
     return {"history": revise.history(file_id)}
+
+
+# ---------- Dokumentum (Word-szerű): sablonból, vagy pár mondatból (AI) ----------
+
+_DOC_SYSTEM = """You write documents. Reply with the document only, in Markdown: "# " title, "## " headings, normal
+paragraphs, "- " lists, Markdown tables where useful. No preamble, no closing remarks, no code fences.
+Write in the language of the brief. For a letter: sender block, date, recipient, salutation, body, closing, name.
+Use only the facts in the brief — never invent specifics (what work is done, prices, names, dates, places). Where the
+brief is silent, stay general or leave a [placeholder] the writer fills in."""
+DOC_KINDS = {"letter": "a letter", "report": "a report", "article": "an article", "cv": "a CV / résumé", "memo": "a memo",
+             "proposal": "a proposal", "other": "a document"}
+_DOC_REF: Optional[Path] = None
+
+
+def _doc_reference() -> Path:
+    """Pandoc referencia-docx általános dokumentumhoz: A4, Carlito (Calibri-metrika) 11 pt, sötét címsorok —
+    a pandoc alapja kék, Letter méretű."""
+    global _DOC_REF
+    if _DOC_REF and _DOC_REF.exists():
+        return _DOC_REF
+    import subprocess
+    import tempfile
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.shared import Mm, Pt, RGBColor
+    path = Path(tempfile.gettempdir()) / "aice_doc_reference.docx"
+    subprocess.run(["pandoc", "-o", str(path), "--print-default-data-file", "reference.docx"], capture_output=True, check=True)
+    doc = Document(str(path))
+    for sec in doc.sections:
+        sec.page_width, sec.page_height = Mm(210), Mm(297)
+        sec.left_margin = sec.right_margin = Mm(25)
+        sec.top_margin, sec.bottom_margin = Mm(22), Mm(22)
+    st = {x.name: x for x in doc.styles}
+    for name in ("Normal", "Body Text", "First Paragraph", "Compact"):
+        if name in st:
+            st[name].font.name, st[name].font.size = "Carlito", Pt(11)
+            st[name].font.color.rgb = RGBColor(0x1E, 0x24, 0x30)
+            st[name].paragraph_format.space_after = Pt(6)
+    for lvl, size in (("Title", 24), ("Heading 1", 18), ("Heading 2", 14), ("Heading 3", 12)):
+        if lvl in st:
+            st[lvl].font.name, st[lvl].font.size, st[lvl].font.bold = "Caladea", Pt(size), True
+            st[lvl].font.color.rgb = RGBColor(0x1E, 0x44, 0x36)
+    for el in doc.styles.element.iter(qn("w:rFonts")):
+        for a in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+            el.attrib.pop(qn(a), None)
+    doc.save(str(path))
+    _DOC_REF = path
+    return path
+
+
+@router.post("/api/make/document")
+async def make_document(body: dict[str, Any]) -> dict[str, Any]:
+    """{mode: "template", template: blank|letter|report|resume|sample} vagy {mode: "brief", brief, kind?}."""
+    import asyncio
+    import pypandoc
+    from app.storage import output_path, public_url, temp_path, write_meta
+    from app.storage.files import new_file_id
+    from app.tools import wordcraft
+    mode = body.get("mode") or "template"
+    if mode == "template":
+        tpl = body.get("template") or "blank"
+        if tpl not in wordcraft.TEMPLATES:
+            raise HTTPException(400, f"Unknown template: {tpl}")
+        try:
+            out = await wordcraft.run(template=tpl)
+        except Exception as e:
+            raise _fail(e)
+        names = {"blank": "Untitled", "letter": "Letter", "report": "Report", "resume": "CV", "sample": "Sample"}
+        write_meta(out["file_id"], operation="new document", label=f"{names.get(tpl, tpl)}.docx")
+        return out
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    brief = (body.get("brief") or "").strip()
+    if len(brief) < 10:
+        raise HTTPException(400, "Describe the document in a sentence or two.")
+    kind = DOC_KINDS.get(body.get("kind") or "other", "a document")
+    from app.llm.siliconflow import _call_model
+    try:
+        md = ""
+        for model in (settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY):
+            try:
+                md = await _call_model(model, [{"role": "system", "content": _DOC_SYSTEM},
+                                               {"role": "user", "content": f"Write {kind}.\n\nBrief:\n{brief}"}], thinking=False,
+                                         json_mode=False)
+                if md.strip():
+                    break
+            except Exception as e:
+                log.warning("dokumentum-írás (%s): %s", model, e)
+        md = md.strip().removeprefix("```markdown").removeprefix("```").removesuffix("```").strip()
+        if not md:
+            raise RuntimeError("The assistant returned nothing — try again.")
+        title = next((l[2:].strip() for l in md.splitlines() if l.startswith("# ")), kind.split(" ", 1)[1].capitalize())
+        src = temp_path(new_file_id("md"))
+        src.write_text(md, "utf-8")
+        fid = new_file_id("docx")
+        ref = await asyncio.to_thread(_doc_reference)
+        await asyncio.to_thread(pypandoc.convert_file, str(src), "docx", outputfile=str(output_path(fid)),
+                                extra_args=["--wrap=none", f"--reference-doc={ref}"])
+        src.unlink(missing_ok=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _fail(e)
+    write_meta(fid, operation="new document (AI)", label=f"{title[:60]}.docx", extra={"brief": brief[:500]})
+    events.emit("tool_done", tool="make_document", result={"file_id": fid})
+    return {"file_id": fid, "url": public_url(fid), "size_kb": output_path(fid).stat().st_size // 1024}

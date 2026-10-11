@@ -79,7 +79,7 @@ def _strip_json_fences(s: str) -> str:
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
-async def _call_model(model: str, messages: list[dict], thinking: bool = True) -> str:
+async def _call_model(model: str, messages: list[dict], thinking: bool = True, json_mode: bool = True) -> str:
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
 
@@ -93,7 +93,7 @@ async def _call_model(model: str, messages: list[dict], thinking: bool = True) -
             json={
                 "model": model,
                 "messages": messages,
-                "response_format": {"type": "json_object"},
+                **({"response_format": {"type": "json_object"}} if json_mode else {}),   # szabad szöveghez (levél) ki
                 "temperature": 0.2,
                 "max_tokens": 4096,
                 # gondolkodás nélkül ~2,5× gyorsabb (pakli-vázlat GLM-5.3-Flash: 30,8 s → 12,1 s, 10-11)

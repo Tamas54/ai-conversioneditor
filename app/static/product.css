@@ -75,7 +75,7 @@ body.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px
 .mat .lede { color: #C9DCD1; max-width: 56ch; margin: 0 0 52px; font-size: 18px; }
 .ruler-nums { position: absolute; top: 13px; left: 0; right: 0; height: 12px; font: 500 9px/1 var(--f-mono); color: var(--tick); opacity: .7; pointer-events: none; }
 .ruler-nums span { position: absolute; transform: translateX(-50%); }
-.tools { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 44px 22px; }
+.tools { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 44px 22px; }
 .tool { all: unset; cursor: pointer; display: grid; gap: 12px; justify-items: center; align-content: start; text-align: center; }
 .tool .obj { height: 168px; width: 100%; display: grid; place-items: center; }
 .tool .label { font: 700 17px/1.2 var(--f-display); color: #fff; }
@@ -118,6 +118,13 @@ body.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px
 .o-pdf i:nth-child(2) { width: 80%; } .o-pdf i:nth-child(4) { width: 64%; }
 .o-pdf i.x { height: 9px; background: var(--ink); width: 72%; border-radius: 1px; }
 .o-pdf b { position: absolute; left: 10px; bottom: 10px; font: 700 9px/1 var(--f-mono); color: #fff; background: #C2362B; padding: 4px 5px; border-radius: 2px; }
+
+/* Dokumentum: A4-es lap, kék Word-szalag a tetején, címsor + bekezdéssorok */
+.o-doc { width: 92px; aspect-ratio: 1/1.414; transform: rotate(-2deg); display: grid; align-content: start; gap: 6px; padding: 26px 12px 0;
+  background: linear-gradient(#2F80ED 0 12px, var(--paper) 12px); }
+.o-doc i { display: block; height: 3px; border-radius: 1px; background: #D6DCD7; }
+.o-doc i:first-child { height: 6px; width: 62%; background: var(--ink); margin-bottom: 3px; }
+.o-doc i:nth-child(3) { width: 88%; } .o-doc i:nth-child(5) { width: 72%; } .o-doc i:nth-child(6) { width: 40%; }
 
 /* Szkennelés: sárgult könyvoldal kamera-keresőben (sarokjelek) */
 .o-scan { position: relative; padding: 12px; transform: rotate(-2deg); }
