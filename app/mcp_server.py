@@ -53,6 +53,13 @@ log = logging.getLogger("aice.mcp")
 # DNS-rebinding protection is irrelevant and only breaks things.
 mcp = FastMCP(
     "ai-conversioneditor",
+    instructions=(
+        "Make and edit real files (Word, PowerPoint, PDF, images/PSD, designs). Every file in a result carries "
+        "`edit_url`: give it to the person — it opens that file in the matching built-in editor (Word-like, "
+        "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
+        "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
+        "a manuscript → a Word-typeset book (design template=book)."
+    ),
     streamable_http_path="/",
     stateless_http=True,
     json_response=True,
@@ -62,10 +69,45 @@ mcp = FastMCP(
 )
 
 
+_EDITABLE = {"docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pptx", "deckcraft", "pdf", "xlsx", "csv", "tsv",
+             "png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "svg", "vectorcraft", "ai", "eps", "designcraft", "idml"}
+
+
+def _links(res):
+    """Minden fájl-eredmény mellé `edit_url`: az ember ezzel a fájlt rögtön a megfelelő szerkesztőben nyitja meg."""
+    base = settings.PUBLIC_BASE_URL.rstrip("/")
+
+    def walk(o, depth=0):
+        if depth > 5:
+            return
+        if isinstance(o, dict):
+            fid = o.get("file_id")
+            if isinstance(fid, str) and "." in fid and fid.rsplit(".", 1)[1].lower() in _EDITABLE and "edit_url" not in o:
+                o["edit_url"] = f"{base}/app#/file/{fid}/edit"
+            for v in list(o.values()):
+                walk(v, depth + 1)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, depth + 1)
+    walk(res)
+    return res
+
+
+def linked(fn):
+    """Eszköz-burkoló: az eredményhez hozzáteszi a szerkesztő-linkeket (az aláírás és a leírás marad)."""
+    import functools
+
+    @functools.wraps(fn)
+    async def w(*a, **k):
+        return _links(await fn(*a, **k))
+    return w
+
+
 _CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
 
 
 @mcp.tool()
+@linked
 async def upload_from_url(url: str, filename: Optional[str] = None) -> dict:
     """
     Upload a file by fetching its public URL — the SERVER does the GET,
@@ -104,6 +146,7 @@ async def upload_from_url(url: str, filename: Optional[str] = None) -> dict:
 
 
 @mcp.tool()
+@linked
 async def upload_chunk(
     upload_id: str,
     chunk_index: int,
@@ -171,6 +214,7 @@ async def upload_chunk(
 
 
 @mcp.tool()
+@linked
 async def upload_file(filename: str, content_base64: str) -> dict:
     """
     Upload a file to the editor and get back a `file_id`.
@@ -219,6 +263,7 @@ async def upload_file(filename: str, content_base64: str) -> dict:
 
 
 @mcp.tool()
+@linked
 async def convert(
     target_format: str,
     file_id: Optional[str] = None,
@@ -262,6 +307,7 @@ async def convert(
 
 
 @mcp.tool()
+@linked
 async def wordcraft(
     file_id: Optional[str] = None,
     commands: Optional[list] = None,
@@ -305,7 +351,7 @@ async def wordcraft(
     gives params). text/inspect/commands are paged: pass the returned
     `next_offset` as `offset` (chars for text, blocks for inspect);
     `max_chars` caps one reply (default 20000).
-    A human can open any docx in the dashboard editor (✏️) to continue by hand.
+    A human can continue by hand in the Word editor: give them the result's edit_url.
     """
     from app.tools import wordcraft as wc
     if read:
@@ -317,6 +363,7 @@ async def wordcraft(
 
 
 @mcp.tool()
+@linked
 async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] = None,
                      instructions: Optional[str] = None, slides: Optional[int] = None,
                      images: str = "stock", template_file_id: Optional[str] = None) -> dict:
@@ -359,6 +406,7 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
 
 
 @mcp.tool()
+@linked
 async def history(
     action: str = "inbox",
     file_id: Optional[str] = None,
@@ -396,6 +444,7 @@ async def history(
 
 
 @mcp.tool()
+@linked
 async def design(
     template: str,
     data: dict,
@@ -406,7 +455,8 @@ async def design(
 ) -> dict:
     """
     Designed print/social pieces from templates (VectorCraft) → PDF + PNG
-    (export: pdf | png | svg | jpg). One call, no layout work.
+    (export: pdf | png | svg | jpg | vectorcraft — the editable design file,
+    text stays text; its edit_url opens it in the design editor). One call.
     template / data:
       poster        {title, subtitle?, body?, image?, date?, place?, footer?}   size A4|A3|A5
       flyer         {title, kicker?, subtitle?, image?, body (2 columns), highlights[≤3]?, cta?, contact?}
@@ -415,15 +465,26 @@ async def design(
       social        {title, subtitle?, handle?, image?}   size landscape (1200×630) | square | story
       booklet       {title, subtitle?, organization?, author?, date?, cover_image?,
                      sections[{heading, text, image?}]}   long text flows onto extra pages
+      book          {file_id (manuscript .docx, Heading 1 chapters), title?, author?, cover_image?,
+                     style_file_id?}  size A5|A4 → a WORD-typeset book (title page, book type) + its PDF;
+                     the person checks it in the Word editor (edit_url) before publishing
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"} | {"stock": "<words>"}
     theme {primary, accent, bg, text, muted} or brand=<name>. Titles shrink to fit.
-    Edit the result by hand in the dashboard (✏️ Vector on the PDF).
     """
+    if template == "book":
+        from app.routes.make import make_book
+        cover = data.get("cover_image")
+        return await make_book({"file_id": data.get("file_id"), "title": data.get("title"), "author": data.get("author"),
+                                "size": size or "A5", "style_file_id": data.get("style_file_id"),
+                                "cover": {"file_id": cover} if isinstance(cover, str) else
+                                         ({"stock": cover["stock"]} if isinstance(cover, dict) and cover.get("stock") else
+                                          {"ai": cover["generate"]} if isinstance(cover, dict) and cover.get("generate") else None)})
     from app.tools import design as dz
     return await dz.render(template, data, size=size, theme=theme, brand=brand, export=export)
 
 
 @mcp.tool()
+@linked
 async def photocraft(
     file_id: Optional[str] = None,
     commands: Optional[list] = None,
@@ -468,6 +529,7 @@ async def photocraft(
 
 
 @mcp.tool()
+@linked
 async def vectorcraft(
     file_id: Optional[str] = None,
     commands: Optional[list] = None,
@@ -505,6 +567,7 @@ async def vectorcraft(
 
 
 @mcp.tool()
+@linked
 async def office(
     app: str,
     file_id: Optional[str] = None,
@@ -550,6 +613,7 @@ async def office(
 
 
 @mcp.tool()
+@linked
 async def digitize(
     file_ids: Optional[list[str]] = None,
     outputs: Optional[list[str]] = None,
@@ -582,6 +646,7 @@ async def digitize(
 
 
 @mcp.tool()
+@linked
 async def pdf_form(
     file_id: str,
     values: Optional[dict] = None,
@@ -606,6 +671,7 @@ async def pdf_form(
 
 
 @mcp.tool()
+@linked
 async def photo_edit(
     file_ids: Optional[list[str]] = None,
     instruction: Optional[str] = None,
@@ -641,6 +707,7 @@ async def photo_edit(
 
 
 @mcp.tool()
+@linked
 async def restore_photos(
     file_ids: Optional[list[str]] = None,
     colorize: Optional[bool] = None,
@@ -665,6 +732,7 @@ async def restore_photos(
 
 
 @mcp.tool()
+@linked
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:
@@ -673,6 +741,7 @@ async def find_replace(
 
 
 @mcp.tool()
+@linked
 async def delete_section(
     file_id: str, heading: str, level: Optional[int] = None
 ) -> dict:
@@ -682,36 +751,42 @@ async def delete_section(
 
 
 @mcp.tool()
+@linked
 async def insert_after(file_id: str, anchor: str, content: str) -> dict:
     """Insert content after a heading (DOCX) or after a line (MD)."""
     return await t_insert_after(file_id, anchor, content)
 
 
 @mcp.tool()
+@linked
 async def replace_heading(file_id: str, old_title: str, new_title: str) -> dict:
     """Replace a heading's text while preserving its level."""
     return await t_replace_heading(file_id, old_title, new_title)
 
 
 @mcp.tool()
+@linked
 async def delete_pages(file_id: str, page_range: str) -> dict:
     """Delete pages from a PDF. Range examples: '3', '1-5', '1,3,5-7'."""
     return await t_delete_pages(file_id, page_range)
 
 
 @mcp.tool()
+@linked
 async def merge(file_ids: list[str], target_format: str = "pdf") -> dict:
     """Merge multiple files (currently PDF) into one."""
     return await t_merge(file_ids, target_format)
 
 
 @mcp.tool()
+@linked
 async def extract(file_id: str, mode: str = "text") -> dict:
     """Extract text or tables from a PDF/DOCX. modes: 'text'|'tables'."""
     return await t_extract(file_id, mode)
 
 
 @mcp.tool()
+@linked
 async def edit_with_instruction(
     file_id: str,
     instruction: str,
@@ -745,6 +820,7 @@ async def edit_with_instruction(
 
 
 @mcp.tool()
+@linked
 async def docx_render_pages(
     file_id: str, page_indices: Optional[list[int]] = None, dpi: int = 110,
 ) -> dict:
@@ -759,6 +835,7 @@ async def docx_render_pages(
 
 
 @mcp.tool()
+@linked
 async def insert_image(
     file_id: str, anchor: str, image_file_id: str,
     width_inches: Optional[float] = None,
@@ -786,6 +863,7 @@ async def insert_image(
 
 
 @mcp.tool()
+@linked
 async def pptx_render_slide(
     file_id: str, slide_index: Optional[int] = None, dpi: int = 110,
 ) -> dict:
@@ -803,6 +881,7 @@ async def pptx_render_slide(
 
 
 @mcp.tool()
+@linked
 async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> dict:
     """Read all visible text from an image (handwriting OK). language_hint
     helps weak-light photos: 'Hungarian', 'English', etc."""
@@ -810,6 +889,7 @@ async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> 
 
 
 @mcp.tool()
+@linked
 async def describe_image(image_file_id: str, question: Optional[str] = None) -> dict:
     """Free-form Q&A on an image (Kimi K2.6 vision). Default: detailed
     description. Pass `question` for targeted queries: 'is there overlap?',
@@ -818,6 +898,7 @@ async def describe_image(image_file_id: str, question: Optional[str] = None) -> 
 
 
 @mcp.tool()
+@linked
 async def extract_table_from_image(image_file_id: str) -> dict:
     """Extract a table from an image as structured rows. Returns
     {headers: [...], rows: [[...], ...]}."""
@@ -825,6 +906,7 @@ async def extract_table_from_image(image_file_id: str) -> dict:
 
 
 @mcp.tool()
+@linked
 async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
     """OCR a photographed table and save as a real XLSX (one shot).
     Returns the new XLSX file_id."""
@@ -832,6 +914,7 @@ async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
 
 
 @mcp.tool()
+@linked
 async def generate_image(
     prompt: str,
     size: str = "1024x1024",
@@ -851,6 +934,7 @@ async def generate_image(
 
 
 @mcp.tool()
+@linked
 async def generate_chart_image(
     chart_type: str,
     categories: list[str],
@@ -875,6 +959,7 @@ async def generate_chart_image(
 
 
 @mcp.tool()
+@linked
 async def chart_redraw(
     image_file_id: str,
     palette: Optional[list[str]] = None,
