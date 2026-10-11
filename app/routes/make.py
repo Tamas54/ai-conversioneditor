@@ -75,7 +75,7 @@ def _fail(e: Exception) -> HTTPException:
         from app.auth import ACCOUNT_NEEDED
         return HTTPException(401, ACCOUNT_NEEDED)
     if isinstance(e, db.InsufficientCredits):
-        return HTTPException(402, "Not enough credits for AI images. Use stock photos or your own images, or add credits.")
+        return HTTPException(402, "Not enough credits — this step uses AI. Add credits, or use stock photos and the steps without AI.")
     log.exception("make failed")
     return HTTPException(500, str(e)[:300])
 
@@ -116,12 +116,20 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(400, "Describe the presentation in a sentence or two.")
     n = max(4, min(15, int(body.get("slides") or 8)))
     mode = body.get("images") or "stock"
+    style = None
+    if body.get("style_file_id"):          # „ilyen stílusú pptx” — téma a mintából (pptx téma / PDF / kép)
+        from app.tools import style_ref
+        try:
+            style = await style_ref.theme_from(body["style_file_id"])
+        except Exception as e:
+            log.warning("stílusminta: %s", e)
     if mode == "ai":  # az LLM-vázlat ELŐTT: kredit nélkül ne várjon fél percet a semmire
         left = await _credits_left()
         if left is not None and left < settings.IMAGE_CREDIT_COST:
             raise HTTPException(402, f"AI images need credits (you have {left}). Choose stock photos or add credits.")
     try:
-        spec = await _llm_json(_DECK_SYSTEM, f"Brief:\n{brief}\n\nMake exactly {n} slides.")
+        style_note = f"\n\nMatch this visual style and tone: {style['mood']}" if style and style.get("mood") else ""
+        spec = await _llm_json(_DECK_SYSTEM, f"Brief:\n{brief}\n\nMake exactly {n} slides.{style_note}")
         slides = [s for s in spec.get("slides") or [] if isinstance(s, dict) and s.get("layout") in pptx_deck.LAYOUTS]
         if not slides:
             raise HTTPException(502, "The assistant returned no usable slides — try again or rephrase the brief.")
@@ -140,7 +148,9 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
             else:
                 s["image"] = {"stock": q}
         deck = {"title": spec.get("title") or slides[0].get("title"), "footer": spec.get("footer"), "slides": slides}
-        if body.get("accent"):
+        if style:
+            deck["theme"] = {k: v for k, v in style.items() if k != "mood"}
+        elif body.get("accent"):
             deck["theme"] = {"accent": body["accent"]}
         out = await pptx_deck.build(deck)
     except HTTPException:
@@ -471,7 +481,10 @@ async def make_photo_edit(body: dict[str, Any]) -> dict[str, Any]:
     ids = ids[:limit]
 
     async def work(progress):
-        res = await photo_edit.run(ids, instruction, body.get("logo_file_id"), formats, steps=steps, progress=progress)
+        try:
+            res = await photo_edit.run(ids, instruction, body.get("logo_file_id"), formats, steps=steps, progress=progress)
+        except Exception as e:
+            raise _fail(e)
         events.emit("tool_done", tool="make_photo_edit", result={"files": [f["file_id"] for f in res["files"]]})
         return res
     return jobs.start("photo_edit", work)
@@ -501,3 +514,35 @@ async def make_restore(body: dict[str, Any]) -> dict[str, Any]:
         events.emit("tool_done", tool="make_restore", result={"files": [f["file_id"] for f in res["files"]]})
         return res
     return jobs.start("restore", work)
+
+
+# ---------- „Kérj változtatást”: iteratív szerkesztés, minden kérés új verzió ----------
+
+@router.post("/api/make/revise")
+async def make_revise(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id, instruction, style_file_id?} → job; az eredmény új verzió (meta: instruction, summary)."""
+    from app import jobs
+    from app.tools import revise
+    fid = body.get("file_id")
+    if not fid:
+        raise HTTPException(400, "Choose a file.")
+    instruction = (body.get("instruction") or "").strip()
+    if not instruction and not body.get("style_file_id"):
+        raise HTTPException(400, "Say what should change.")
+    pool = getattr(request.app.state, "pool", None)
+
+    async def work(progress):
+        progress(0, 1, "working")
+        try:
+            res = await revise.revise(pool, fid, instruction, body.get("style_file_id"))
+        except Exception as e:
+            raise _fail(e)
+        events.emit("tool_done", tool="make_revise", result={"file_id": res["file_id"]})
+        return res
+    return jobs.start("revise", work)
+
+
+@router.get("/api/revisions")
+async def revisions(file_id: str) -> dict[str, Any]:
+    from app.tools import revise
+    return {"history": revise.history(file_id)}

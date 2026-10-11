@@ -176,7 +176,7 @@ async def resolve(spec: ImageSpec, *, aspect: Optional[float] = None, max_px: in
         spec = {"file_id": spec}
     if spec.get("file_id"):
         p = existing(spec["file_id"])
-        return ResolvedImage(await asyncio.to_thread(_crop_to, p, aspect, max_px), None, spec["file_id"])
+        return ResolvedImage(await asyncio.to_thread(_crop_to, p, aspect, max_px), spec.get("credit"), spec["file_id"])
     if spec.get("url"):
         data = await _download(spec["url"])
         return ResolvedImage(await asyncio.to_thread(_crop_to, data, aspect, max_px), spec.get("credit"), None)

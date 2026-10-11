@@ -349,6 +349,26 @@ def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float =
 
 # ---------- belépési pont ----------
 
+def _persist_spec(spec: dict[str, Any], by_slot: dict) -> dict[str, Any]:
+    """A spec másolata, amelyben minden kép {file_id, credit}: a stockképet rejtett (ephemeral) fájlként mentjük,
+    így az újraépítés ugyanazt a képet kapja (nem keres újra, a generáltat nem fizeti újra)."""
+    import copy
+    import shutil
+    saved = copy.deepcopy(spec)
+    for (i, j), x in by_slot.items():
+        fid = x.source_file_id
+        if not fid:
+            fid = new_file_id("jpg")
+            shutil.copy(x.path, output_path(fid))
+            write_meta(fid, operation="deck image", label=f"slide {i + 1} image.jpg", extra={"ephemeral": True, "credit": x.attribution})
+        ref = {"file_id": fid, **({"credit": x.attribution} if x.attribution else {})}
+        if j < 0:
+            saved["slides"][i]["image"] = ref
+        else:
+            saved["slides"][i]["images"][j] = ref
+    return saved
+
+
 async def build(spec: dict[str, Any]) -> dict[str, Any]:
     from pptx import Presentation
     from pptx.util import Inches
@@ -405,11 +425,13 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
                 slide.notes_slide.notes_text_frame.text = notes
         fid = new_file_id("pptx")
         prs.save(str(output_path(fid)))
+        saved = _persist_spec(spec, by_slot)
     finally:
         for x in resolved:
             x.path.unlink(missing_ok=True)
     title = spec.get("title") or (slides[0].get("title") if slides else "") or "pakli"
-    write_meta(fid, operation="pptx_build", label=f"{title[:50]}.pptx")
+    # a pakli leírása (a képek már fájlként) — ebből iterál a „kérj változtatást” (újraépítés új képkeresés nélkül)
+    write_meta(fid, operation="pptx_build", label=f"{title[:50]}.pptx", extra={"deck_spec": saved})
     return {
         "file_id": fid, "url": public_url(fid), "slides": len(slides),
         "size_kb": output_path(fid).stat().st_size // 1024,

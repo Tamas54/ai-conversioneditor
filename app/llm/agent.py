@@ -346,6 +346,22 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "find_stock_photo",
+            "description": (
+                "Find a real, freely licensed photo (Wikimedia Commons / Openverse) and save it — FREE, prefer it "
+                "over generate_image for real places, buildings, animals, objects, landscapes. Returns "
+                "image_file_id usable in insert_image, plus the credit line to print under it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "2-4 plain English words, e.g. 'Colosseum Rome'"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "generate_image",
             "description": (
                 "Generate an image from a text prompt via SiliconFlow image-gen "
@@ -2539,6 +2555,14 @@ async def _tool_generate_chart_image(state: AgentState, args: dict, pool) -> dic
     )
 
 
+async def _tool_find_stock_photo(state: AgentState, args: dict, pool) -> dict:
+    from app.routes.make import _materialize
+    from app.storage import read_meta
+    fid = await _materialize({"stock": args["query"]})
+    credit = (read_meta(fid) or {}).get("credit") or (read_meta(fid) or {}).get("extra", {}).get("credit")
+    return {"image_file_id": fid, "credit": credit}
+
+
 async def _tool_generate_image(state: AgentState, args: dict, pool) -> dict:
     return await vision_ops.generate_image(
         args["prompt"],
@@ -2816,6 +2840,7 @@ TOOL_HANDLERS: dict[str, Callable[[AgentState, dict, Any], Awaitable[dict]]] = {
     "insert_image": _tool_insert_image,
     "convert_format": _tool_convert_format,
     "generate_image": _tool_generate_image,
+    "find_stock_photo": _tool_find_stock_photo,
     "generate_chart_image": _tool_generate_chart_image,
     "ocr_image": _tool_ocr_image,
     "describe_image": _tool_describe_image,
@@ -2952,8 +2977,11 @@ async def _call_llm(model: str, messages: list[dict], tools: list[dict]) -> dict
         "tools": tools,
         "tool_choice": "auto",
         "temperature": 0.2,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
     }
+    if "DeepSeek" in model:
+        # alapból gondolkodik: a keretet elhasználja, és üres válasszal (eszközhívás nélkül) áll meg
+        payload["enable_thinking"] = False
     last_exc: Optional[Exception] = None
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(6),
@@ -2998,14 +3026,18 @@ async def _call_llm(model: str, messages: list[dict], tools: list[dict]) -> dict
 
 
 async def _call_with_fallback(messages: list[dict], tools: list[dict]) -> tuple[dict, str]:
-    """Try primary, fall back on V4-Pro on 500/parse error."""
-    try:
-        data = await _call_llm(settings.LLM_MODEL_PRIMARY, messages, tools)
-        return data, settings.LLM_MODEL_PRIMARY
-    except Exception as e:
-        log.warning("primary model failed (%s) — falling back", e)
-        data = await _call_llm(settings.LLM_MODEL_FALLBACK, messages, tools)
-        return data, f"{settings.LLM_MODEL_FALLBACK}_fallback"
+    """AGENT_MODEL (DeepSeek V4.1 Flash), hibánál LLM_MODEL_PRIMARY, végül LLM_MODEL_FALLBACK."""
+    chain = [m for i, m in enumerate((settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY, settings.LLM_MODEL_FALLBACK))
+             if m and m not in (settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY, settings.LLM_MODEL_FALLBACK)[:i]]
+    last: Exception = RuntimeError("no model")
+    for k, model in enumerate(chain):
+        try:
+            data = await _call_llm(model, messages, tools)
+            return data, model if k == 0 else f"{model}_fallback"
+        except Exception as e:
+            last = e
+            log.warning("agent model %s failed (%s) — next", model, e)
+    raise last
 
 
 # ============================================================

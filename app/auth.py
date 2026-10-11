@@ -38,6 +38,7 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
 _GUEST_OK = (
     ("GET", "/app"), ("GET", "/editor/"), ("GET", "/preview/"), ("GET", "/api/thumb/"), ("GET", "/api/files"),
     ("GET", "/api/account"), ("GET", "/api/convert/targets"), ("GET", "/api/forms/fields"), ("GET", "/api/jobs/"),
+    ("GET", "/api/revisions"),
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
     ("POST", "/api/make/fill_form"), ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),

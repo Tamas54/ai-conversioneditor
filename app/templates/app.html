@@ -95,6 +95,15 @@
       <button class="btn ghost" id="btn-delete">Delete</button>
     </div>
     <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+    <form class="revise" id="revise" hidden>
+      <ol class="versions" id="versions" aria-label="Versions"></ol>
+      <div class="rev-row">
+        <input id="rev-input" autocomplete="off" placeholder="Ask for a change — e.g. “on page 22 add a photo of the Colosseum”, “remove the grass in front of the animal”">
+        <label class="btn ghost rev-style" title="Attach a style example: a pptx, pdf or picture whose look you want"><span id="rev-style-name">Style example</span><input type="file" id="rev-style" hidden accept=".pptx,.pdf,.docx,image/*"></label>
+        <button class="btn primary" id="rev-go">Apply <em class="ai-badge">AI</em></button>
+      </div>
+      <p class="status small" id="rev-status"></p>
+    </form>
   </section>
 </template>
 
@@ -142,8 +151,7 @@ function accountCta(title) {
   form.onsubmit = null; $("#drawer").showModal();
 }
 // hosszú munka (job) követése: a státuszsort frissíti, a végén az eredményt adja
-async function pollJob(job, label) {
-  const st = $("#make-status");
+async function pollJob(job, label, st = $("#make-status")) {
   while (job.status === "running") {
     if (st) st.textContent = label(job);
     await new Promise(r => setTimeout(r, 2000));
@@ -266,6 +274,7 @@ const views = {
         catch (e) { toast(e.message); b.disabled = false; b.textContent = "Convert"; }
       });
     }).catch(() => {});
+    wireRevise(f);
     $("#btn-delete").addEventListener("click", async () => {
       await api(`/api/files/${encodeURIComponent(f.file_id)}`, { method: "DELETE" }); toast("Deleted"); location.hash = "#/files";
     });
@@ -527,6 +536,44 @@ const MAKERS = {
     },
   },
 };
+// „Kérj változtatást”: minden kérés új verzió; a lánc (eredeti → v2 → v3…) a fájlnézet alján
+const REVISABLE = ["jpg", "jpeg", "png", "webp", "psd", "tif", "tiff", "docx", "odt", "doc", "rtf", "md", "pptx", "pdf"];
+async function wireRevise(f) {
+  if (!REVISABLE.includes(f.ext)) return;
+  const form = $("#revise"), input = $("#rev-input"), st = $("#rev-status");
+  form.hidden = false;
+  if (account?.guest) {
+    input.disabled = true; $("#rev-go").disabled = true;
+    input.placeholder = "Asking for changes uses AI — create a free account to try it";
+  }
+  const { history } = await api(`/api/revisions?file_id=${encodeURIComponent(f.file_id)}`).catch(() => ({ history: [] }));
+  $("#versions").innerHTML = history.length > 1 ? history.map((h, i) => {
+    const cur = h.file_id === f.file_id;
+    const tip = h.instruction ? `${h.instruction}${h.summary ? " — " + h.summary : ""}` : "The original";
+    return `<li><a href="#/file/${encodeURIComponent(h.file_id)}" title="${esc(tip)}" ${cur ? 'aria-current="true"' : ""}>${i ? "v" + (i + 1) : "Original"}</a>${cur && h.instruction ? `<span class="muted">“${esc(h.instruction.slice(0, 90))}”</span>` : ""}</li>`;
+  }).join("") : "";
+  let styleId = null;
+  $("#rev-style").addEventListener("change", async e => {
+    const sf = e.target.files[0]; if (!sf) return;
+    $("#rev-style-name").textContent = "Uploading…";
+    styleId = (await uploadFile(sf)).file_id;
+    $("#rev-style-name").textContent = `Style: ${sf.name.slice(0, 18)}`;
+    if (!input.value.trim()) input.value = "Restyle it like the example.";
+  });
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const instruction = input.value.trim(); if (!instruction && !styleId) { input.focus(); return; }
+    const go = $("#rev-go"); go.disabled = true; input.disabled = true;
+    try {
+      const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: f.file_id, instruction, style_file_id: styleId }) });
+      const r = await pollJob(job, () => "Working on it…", st);
+      toast(r.summary || "Done — new version");
+      await loadAccount();
+      location.hash = "#/file/" + encodeURIComponent(r.file_id);
+    } catch (err) { st.textContent = err.message; go.disabled = false; input.disabled = false; }
+  };
+}
+
 // kitöltő űrlap a PDF saját mezőiből (név → címke: a mezőnévből olvasható alak)
 function openFill(f, fields) {
   // a nyomtatott felirat (a mező tooltipje, ékezetekkel) — ha nincs, a mezőnévből

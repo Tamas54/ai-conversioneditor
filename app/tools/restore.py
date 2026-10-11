@@ -164,9 +164,15 @@ def align(ref: Path, moving: bytes, dst: Path) -> int:
         n = int(inl.sum()) if inl is not None else 0
         if Hm is None or n < 25:
             raise ValueError(f"kevés inlier ({n})")
-        out = cv2.warpPerspective(m, Hm, (W_, H_), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT)
+        out = cv2.warpPerspective(m, Hm, (W_, H_), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
         cover = cv2.warpPerspective(np.full(m.shape[:2], 255, np.uint8), Hm, (W_, H_), flags=cv2.INTER_NEAREST)
-        out[cover == 0] = r[cover == 0]       # ahol az AI-kép nem fed (szél), az eredeti pixel marad — nem elkent másolat
+        # ahol az AI-kép nem fed: vékony szélen (≤2%) a szélső pixel ismétlése (különben az eredeti csíkja
+        # látszik, pl. a kitörölt fűszál), nagyobb hiánynál (a modell kivágott) az eredeti pixel marad
+        band = max(2, int(0.02 * min(W_, H_)))
+        inner = np.zeros((H_, W_), bool)
+        inner[band:H_ - band, band:W_ - band] = True
+        use_orig = (cover == 0) & inner
+        out[use_orig] = r[use_orig]
     except Exception as e:
         log.warning("ráillesztés nem sikerült (%s) — átméretezés", e)
         out, n = cv2.resize(m, (W_, H_), interpolation=cv2.INTER_CUBIC), 0
@@ -182,12 +188,12 @@ def _is_mono(path: Path) -> bool:
     return float(np.std(hsv[:, :, 0][hsv[:, :, 1] > 40])) < 12 if (hsv[:, :, 1] > 40).mean() > 0.05 else True
 
 
-async def _charge(n: int, ref: str) -> bool:
+async def _charge(n: int, ref: str, reason: str = "photo restoration") -> bool:
     from app import db, tenancy
     uid = tenancy.current_user_id()
     charged = db.enabled() and uid != tenancy.ADMIN_ID and settings.IMAGE_CREDIT_COST > 0
     if charged:
-        await db.credits_spend(uid, settings.IMAGE_CREDIT_COST * n, "photo restoration", ref=ref)
+        await db.credits_spend(uid, settings.IMAGE_CREDIT_COST * n, reason, ref=ref)
     return charged
 
 
@@ -238,6 +244,8 @@ async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_i
     jpg_id = new_file_id("jpg")
     await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "convert", str(output_path(psd["file_id"])), str(output_path(jpg_id)),
                          "--quality", "92")
+    from app.tools import ai_label
+    ai_label.label(output_path(jpg_id), ai_label.EDITED, "Restored" + (" and colourised" if color else "") + " with AI (FLUX.1 Kontext)")
     label = f"{stem} (restored{', colour' if color else ''}).jpg"
     write_meta(jpg_id, source_file_id=source_id, operation="restore", label=label)
     return [{"file_id": jpg_id, "url": public_url(jpg_id), "label": label, "colorized": color, "aligned_points": inliers,

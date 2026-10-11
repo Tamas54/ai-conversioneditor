@@ -20,6 +20,7 @@ Lépések (plan.steps), sorrendjüket a végrehajtó rendezi (pixel → korrekci
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -35,7 +36,7 @@ ASPECTS = {"1:1": (1, 1), "4:5": (4, 5), "5:4": (5, 4), "16:9": (16, 9), "9:16":
 LOOKS = {"warm", "cool", "tealOrange", "bleachBypass", "fadedFilm", "monoContrast", "crossProcess", "dayForNight"}
 TEXT_SIZE = {"small": 0.035, "medium": 0.06, "large": 0.09, "huge": 0.13}
 FONT = "Noto Sans"
-_ORDER = ["background", "crop", "resize", "auto", "sharpen", "light", "color", "sky", "look", "black_white",
+_ORDER = ["ai_edit", "background", "crop", "resize", "auto", "sharpen", "light", "color", "sky", "look", "black_white",
           "vignette", "logo", "text"]
 
 _PLAN_PROMPT = """You plan precise photo edits for a Photoshop-like engine. You do NOT paint or generate the image;
@@ -52,6 +53,9 @@ you choose steps from this list (all optional, use only what the request needs):
   {"op":"vignette","amount":0-100}
   {"op":"background","remove":true} or {"op":"background","stock":"2-4 words"} or {"op":"background","ai":"prompt"} or {"op":"background","color":"#rrggbb"}, optional "blur":px
   {"op":"logo","position":"top-left|top-right|bottom-left|bottom-right|top|bottom","width_pct":5-40,"margin_pct":2-10}   (only if a logo is provided)
+  {"op":"ai_edit","instruction":"..."}   (generative retouch: remove or add objects, change content, e.g. "remove the
+      translucent grass blades in front of the animal", "remove the people in the background"; only when the other
+      steps cannot do it — it costs a credit. To put something BEHIND the subject prefer background {stock|ai}.)
   {"op":"text","text":"...","position":"top|center|bottom|top-left|top-right|bottom-left|bottom-right","size":"small|medium|large|huge","color":"#rrggbb","weight":400-900,"shadow":true|false}
 Look at the photo: put text where it does not cover the subject (e.g. over sky or empty space), pick a text colour
 that contrasts with that area, keep the subject in a crop. Use moderate values unless asked for strong ones.
@@ -98,6 +102,8 @@ def clean_steps(steps: list[Any], has_logo: bool) -> list[dict[str, Any]]:
         if op == "look" and s.get("name") not in LOOKS:
             continue
         if op == "text" and not str(s.get("text") or "").strip():
+            continue
+        if op == "ai_edit" and not str(s.get("instruction") or "").strip():
             continue
         for k, (lo, hi) in {"exposure": (-2, 2), "contrast": (-50, 100), "brightness": (-100, 100), "vibrance": (-100, 100),
                             "saturation": (-100, 100), "warmth": (-100, 100), "strength": (0, 100), "amount": (0, 100),
@@ -265,7 +271,17 @@ async def edit_one(file_id: str, steps: list[dict[str, Any]], logo_file_id: Opti
     from app.tools import crafts
     src = crafts.existing(file_id)
     logo = crafts.existing(logo_file_id) if logo_file_id else None
-    cmds, extra = await build_commands(src, steps, logo)
+    ai_steps = [s for s in steps if s["op"] == "ai_edit"]
+    ai_layers: list[dict[str, Any]] = []
+    if ai_steps:
+        ai_layers = await _ai_edits(src, [s["instruction"] for s in ai_steps])
+    rest = [s for s in steps if s["op"] != "ai_edit"]
+    if ai_steps or any(s["op"] == "background" for s in rest):
+        # beillesztett réteg (AI-retus / új háttér) után az aktív réteg smart object: a pixelműveletek
+        # (auto, élesítés) nem futnak rajta — a korrekciós rétegek igen, azok maradnak
+        rest = [s for s in rest if s["op"] not in ("auto", "sharpen")]
+    cmds, extra = await build_commands(src, rest, logo)
+    cmds = ai_layers + cmds
     bg = extra.get("background") or {}
     kw: dict[str, Any] = {}
     if bg:
@@ -290,11 +306,45 @@ async def edit_one(file_id: str, steps: list[dict[str, Any]], logo_file_id: Opti
         await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "convert", str(output_path(psd["file_id"])), str(output_path(fid)),
                              *(["--quality", "90"] if fmt in ("jpg", "jpeg", "webp") else []))
         write_meta(fid, source_file_id=file_id, operation="photo edit", label=f"{Path(display_label(file_id)).stem} (edited).{fmt}")
+        if ai_steps or (bg.get("ai")):
+            from app.tools import ai_label
+            ai_label.label(output_path(fid), ai_label.EDITED, "Edited with AI: " + "; ".join(
+                [s["instruction"] for s in ai_steps] + (["generated background"] if bg.get("ai") else [])))
         out.append({"file_id": fid, "url": public_url(fid), "size_kb": output_path(fid).stat().st_size // 1024})
     from app.storage import display_label, write_meta
     write_meta(psd["file_id"], source_file_id=file_id, operation="photo edit (layers)",
                label=f"{Path(display_label(file_id)).stem} (edited, layers).psd")
     return out if "psd" in formats else out[1:] or out
+
+
+async def _ai_edits(src: Path, instructions: list[str]) -> list[dict[str, Any]]:
+    """Generatív retus (FLUX.1-Kontext-pro) egymás után; minden eredmény az eredetire illesztve, külön rétegként
+    (az eredeti alatta marad → maszkkal bármi visszahozható). Kredit: lépésenként IMAGE_CREDIT_COST."""
+    from PIL import Image
+    from app.storage import temp_path
+    from app.storage.files import new_file_id
+    from app.tools import restore
+    W, H = _size(src)
+    cur = temp_path(new_file_id("png"))
+    with Image.open(src) as im:
+        from PIL import ImageOps
+        ImageOps.exif_transpose(im).convert("RGB").save(cur)
+    cmds: list[dict[str, Any]] = []
+    for k, ins in enumerate(instructions, 1):
+        charged = await restore._charge(1, ins[:80], "AI retouch")
+        try:
+            raw = await restore._kontext(cur, f"{ins.strip().rstrip('.')}. Change nothing else: keep the same subject, "
+                                              "pose, colours, lighting, framing and every other detail exactly as they are.")
+        except Exception:
+            if charged:
+                await restore._refund(1, ins[:80])
+            raise
+        nxt = temp_path(new_file_id("png"))
+        await asyncio.to_thread(restore.align, cur, raw, nxt)
+        cmds += [{"command": "file.placeEmbedded", "params": {"path": str(nxt), "scale": 100, "fit": False, "center": [W / 2, H / 2]}},
+                 {"command": "layer.renameLayer", "params": {"name": f"AI edit: {ins.strip()[:60]}"}}]
+        cur = nxt
+    return cmds
 
 
 async def run(file_ids: list[str], request: str, logo_file_id: Optional[str], formats: list[str],

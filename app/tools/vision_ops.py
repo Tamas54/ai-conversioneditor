@@ -108,6 +108,8 @@ async def generate_image(
     fid = new_file_id(_image_ext(img_bytes))
     with open(output_path(fid), "wb") as f:
         f.write(img_bytes)
+    from app.tools import ai_label
+    ai_label.label(output_path(fid), ai_label.GENERATED, f"Generated with AI ({model.split('/')[-1]})")
     from app.storage import write_meta
     write_meta(fid, operation="generate_image", label=f"{prompt[:40].strip()}.{fid.rsplit('.', 1)[1]}",
                extra={"prompt": prompt, "model": model, "size": size})
