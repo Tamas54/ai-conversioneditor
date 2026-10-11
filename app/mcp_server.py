@@ -243,7 +243,12 @@ async def convert(
     docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page).
     engine="photocraft": images (psd/png/jpg/webp/tif/exr…, PSD layers kept
     when saving psd). engine="vectorcraft": svg/pdf/ai/eps → pdf/svg/png/eps.
+    pptx → docx makes a Word HANDOUT: each slide's picture, title, text,
+    tables and speaker notes.
     """
+    if file_id and file_id.lower().endswith(".pptx") and target_format.lower().lstrip(".") == "docx":
+        from app.tools import deck_handout            # pptx → docx = Word-kiosztmány
+        return await deck_handout.build(file_id)
     return await t_convert(
         _pool(),
         file_id=file_id,
@@ -312,9 +317,18 @@ async def wordcraft(
 
 
 @mcp.tool()
-async def pptx_build(spec: dict) -> dict:
+async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] = None,
+                     instructions: Optional[str] = None, slides: Optional[int] = None,
+                     images: str = "stock", template_file_id: Optional[str] = None) -> dict:
     """
     Build a whole 16:9 PowerPoint deck in ONE call, designed and illustrated.
+    EITHER give `spec` (you write the slides, below) OR `from_document` =
+    the file_id of a docx/odt/rtf/md/txt/html/pdf: the server turns that
+    document into slides — its headings become slides, its facts and its
+    own pictures are kept (`instructions` e.g. "10-minute talk for the
+    board", `slides` 4–15 or omit for auto, `images` stock|ai|doc|none,
+    `template_file_id` a .pptx/.potx to build on). Typical chain: write and
+    revise a document, then from_document, then pptx revisions.
     spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
             text, muted, font_heading, font_body}, "slides": [...]}
     "template_file_id": an uploaded .pptx/.potx used as the FULL template —
@@ -332,7 +346,15 @@ async def pptx_build(spec: dict) -> dict:
     Images are cropped to their frame; FLUX images generate in parallel.
     Preview a slide with pptx_render_slide.
     """
+    if from_document:
+        from app.routes.make import make_deck
+        return await make_deck({"mode": "document", "source_file_id": from_document, "brief": instructions or "",
+                                "slides": slides, "images": images, "style_file_id": template_file_id})
+    if not spec:
+        raise ValueError("Give either spec or from_document.")
     from app.tools import pptx_deck
+    if template_file_id and not spec.get("template_file_id"):
+        spec["template_file_id"] = template_file_id
     return await pptx_deck.build(spec)
 
 

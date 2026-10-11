@@ -13,6 +13,7 @@ Képforrás (image/background/cover): {"file_id"} | {"stock": "words"} | {"ai": 
 from __future__ import annotations
 
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -109,67 +110,159 @@ For each slide that should have a picture set "image": {"query": "2-4 plain Engl
 search, concrete and visual (e.g. "wind turbines", "team meeting"). Cover and full_image always get an image."""
 
 
+_FROM_DOC = """
+The user gives a DOCUMENT to turn into this deck. Follow its structure — its main headings become sections or slides,
+in order — and keep its key facts, names, numbers and wording. Use ONLY what the document says: no invented facts.
+Write in the language of the document (unless the user's instructions ask for another).
+The document's pictures are marked [picture DOCIMG#k]. Put a picture on the slide where it belongs by setting
+"image": "DOCIMG#k" (each at most once; prefer them to stock photos). Tables and figures may become table or chart slides."""
+
+
+async def _deck_style(body: dict[str, Any], ai_ok: bool) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+    """A stílusminta: (teljes sablon file_id, vagy téma). pptx-sablon / pptx-téma AI nélkül; PDF/kép témája AI-val."""
+    sid = body.get("style_file_id")
+    if not sid:
+        return None, None
+    is_pptx = str(sid).lower().endswith((".pptx", ".potx"))
+    if is_pptx and body.get("use_template", True):
+        from app.tools import pptx_template
+        from app.tools.crafts import existing as _ex
+        if pptx_template.usable(_ex(sid)):          # dizájn a mesterdián → teljes sablon; különben téma
+            return sid, None
+    if not is_pptx and not ai_ok:
+        return None, None
+    from app.tools import style_ref
+    try:
+        return None, await style_ref.theme_from(sid)
+    except Exception as e:
+        log.warning("stílusminta: %s", e)
+        return None, None
+
+
+def _deck_look(deck: dict[str, Any], template_id: Optional[str], style: Optional[dict[str, Any]], accent: Optional[str]) -> None:
+    if template_id:                    # pptx-minta = teljes sablon (elrendezés, háttér, logó, betű, szín)
+        deck["template_file_id"] = template_id
+    elif style:
+        deck["theme"] = {k: v for k, v in style.items() if k != "mood"}
+    elif accent:
+        deck["theme"] = {"accent": accent}
+
+
 @router.post("/api/make/deck")
 async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
+    """Három mód: blank (üres pakli, AI nélkül → rögtön a szerkesztő), brief (leírásból), document (egy meglévő
+    dokumentumból — szerkezet, tények és képek a dokumentumból)."""
     from app.tools import pptx_deck
+    mode = body.get("mode") or ("document" if body.get("source_file_id") else "brief")
+    if mode == "blank":
+        template_id, style = await _deck_style(body, ai_ok=not tenancy.is_guest())
+        title = (body.get("title") or "").strip()[:120] or "Presentation title"
+        deck = {"title": title, "slides": [
+            {"layout": "cover", "title": title, "subtitle": "Subtitle"},
+            {"layout": "bullets", "title": "Slide title", "bullets": ["First point", "Second point", "Third point"]}]}
+        _deck_look(deck, template_id, style, body.get("accent"))
+        try:
+            out = await pptx_deck.build(deck)
+        except Exception as e:
+            raise _fail(e)
+        events.emit("tool_done", tool="make_deck", result={"file_id": out["file_id"]})
+        return out
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
     brief = (body.get("brief") or "").strip()
-    if len(brief) < 10:
+    source = None
+    if mode == "document":
+        if not body.get("source_file_id"):
+            raise HTTPException(400, "Choose the document to make slides from.")
+        from app.tools import doc_source
+        try:
+            source = await doc_source.read(body["source_file_id"])
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(400, str(e))
+    elif len(brief) < 10:
         raise HTTPException(400, "Describe the presentation in a sentence or two.")
+    auto = source is not None and not body.get("slides")
     n = max(4, min(15, int(body.get("slides") or 8)))
     from app import billing
     await billing.use("deck")
-    mode = body.get("images") or "stock"
-    style = None
-    template_id = None
-    if str(body.get("style_file_id") or "").lower().endswith((".pptx", ".potx")) and body.get("use_template", True):
-        from app.tools import pptx_template
-        from app.tools.crafts import existing as _ex
-        if pptx_template.usable(_ex(body["style_file_id"])):     # dizájn a mesterdián → teljes sablon; különben téma
-            template_id = body["style_file_id"]
-    if body.get("style_file_id") and not template_id:   # „ilyen stílusú” — téma a mintából (PDF / kép / Word)
-        from app.tools import style_ref
-        try:
-            style = await style_ref.theme_from(body["style_file_id"])
-        except Exception as e:
-            log.warning("stílusminta: %s", e)
-    if mode == "ai":  # az LLM-vázlat ELŐTT: kredit nélkül ne várjon fél percet a semmire
+    pics = body.get("images") or "stock"          # stock | ai | doc (csak a dokumentum képei) | none
+    template_id, style = await _deck_style(body, ai_ok=True)
+    if pics == "ai":  # az LLM-vázlat ELŐTT: kredit nélkül ne várjon fél percet a semmire
         left = await _credits_left()
         if left is not None and left < settings.IMAGE_CREDIT_COST:
             raise HTTPException(402, f"AI images need credits (you have {left}). Choose stock photos or add credits.")
     try:
         style_note = f"\n\nMatch this visual style and tone: {style['mood']}" if style and style.get("mood") else ""
-        spec = await _llm_json(_DECK_SYSTEM, f"Brief:\n{brief}\n\nMake exactly {n} slides.{style_note}")
+        count = "Choose the number of slides (5 to 15) to fit the document." if auto else f"Make exactly {n} slides."
+        if source:
+            user = ((f"Instructions from the user: {brief}\n\n" if brief else "") + count + style_note
+                    + f"\n\nDOCUMENT “{source['title']}”" + (" (long — only its first part is given)" if source["truncated"] else "")
+                    + f":\n{source['text']}")
+            spec = await _llm_json(_DECK_SYSTEM + _FROM_DOC, user)
+        else:
+            spec = await _llm_json(_DECK_SYSTEM, f"Brief:\n{brief}\n\n{count}{style_note}")
         slides = [s for s in spec.get("slides") or [] if isinstance(s, dict) and s.get("layout") in pptx_deck.LAYOUTS]
         if not slides:
             raise HTTPException(502, "The assistant returned no usable slides — try again or rephrase the brief.")
-        wanted = [s for s in slides if isinstance(s.get("image"), dict)]
-        if mode == "ai":
+        doc_pics = {p["token"]: p["file_id"] for p in (source or {}).get("pictures", [])}
+        used: set[str] = set()
+
+        def doc_pic(v: Any) -> Optional[str]:
+            tok = v if isinstance(v, str) else (v.get("doc") or v.get("query")) if isinstance(v, dict) else None
+            tok = (re.search(r"DOCIMG#\d+", str(tok or "")) or [None])[0]
+            if tok in doc_pics and tok not in used:
+                used.add(tok)
+                return doc_pics[tok]
+            return None
+        for s in slides:                   # a dokumentum képei: a helyükre (galériában is)
+            if isinstance(s.get("images"), list):
+                s["images"] = [{"file_id": f} for f in (doc_pic(x) for x in s["images"]) if f]
+        wanted = [s for s in slides if isinstance(s.get("image"), dict) and not doc_pic_peek(s.get("image"), doc_pics)]
+        if pics == "ai":
             left = await _credits_left()
             if left is not None and left < len(wanted) * settings.IMAGE_CREDIT_COST:
                 raise HTTPException(402, f"This deck needs {len(wanted) * settings.IMAGE_CREDIT_COST} credits for AI images; "
                                          f"you have {left}. Choose stock photos or add credits.")
         for s in slides:
-            q = (s.get("image") or {}).get("query") if isinstance(s.get("image"), dict) else None
-            if mode == "none" or not q:
+            img = s.get("image")
+            fid = doc_pic(img) if img is not None else None
+            if fid:
+                s["image"] = {"file_id": fid}
+                continue
+            q = img.get("query") if isinstance(img, dict) else None
+            if pics in ("none", "doc") or not q or "DOCIMG#" in str(q):
                 s.pop("image", None)
-            elif mode == "ai":
+            elif pics == "ai":
                 s["image"] = {"generate": f"{q}, editorial photograph, natural light, no text"}
             else:
                 s["image"] = {"stock": q}
         deck = {"title": spec.get("title") or slides[0].get("title"), "footer": spec.get("footer"), "slides": slides}
-        if template_id:                    # pptx-minta = teljes sablon (elrendezés, háttér, logó, betű, szín)
-            deck["template_file_id"] = template_id
-        elif style:
-            deck["theme"] = {k: v for k, v in style.items() if k != "mood"}
-        elif body.get("accent"):
-            deck["theme"] = {"accent": body["accent"]}
+        _deck_look(deck, template_id, style, body.get("accent"))
         out = await pptx_deck.build(deck)
     except HTTPException:
         raise
     except Exception as e:
         raise _fail(e)
+    if source:
+        from app.storage import write_meta
+        write_meta(out["file_id"], source_file_id=body["source_file_id"], operation="slides from document")
     events.emit("tool_done", tool="make_deck", result={"file_id": out["file_id"]})
     return out
+
+
+def doc_pic_peek(v: Any, doc_pics: dict[str, str]) -> bool:
+    """Dokumentum-kép-e a kép-spec (a kreditszámláláshoz — nem fogyasztja el a jelölőt)."""
+    return bool(re.search(r"DOCIMG#\d+", str(v or ""))) and any(t in str(v) for t in doc_pics)
+
+
+def _label_outputs(res: dict[str, Any], stem: str) -> None:
+    """A dizájn-kimenetek neve a címből (a motor belső „dizajn” neve helyett) — png, pdf, szerkeszthető .vectorcraft."""
+    from app.storage import write_meta
+    for f in res.get("files") or []:
+        ext = f["file_id"].rsplit(".", 1)[-1]
+        f["label"] = f"{stem}.{ext}"
+        write_meta(f["file_id"], label=f["label"])
 
 
 @router.post("/api/make/social")
@@ -193,7 +286,8 @@ async def make_social(body: dict[str, Any]) -> dict[str, Any]:
             res = await design.render("social", {"title": headline, "subtitle": body.get("subtitle"),
                                                  "handle": body.get("handle"), "image": image},
                                       size=size, theme={"accent": body["accent"]} if body.get("accent") else None,
-                                      export=["png", "pdf"])
+                                      export=["png", "pdf", *(["vectorcraft"] if body.get("editable") else [])])
+            _label_outputs(res, f"{headline[:60]} ({size})")
             files.append({"size": size, **res})
     except HTTPException:
         raise
@@ -212,9 +306,11 @@ async def make_design(body: dict[str, Any]) -> dict[str, Any]:
             data[k] = _image_spec(data[k])
     try:
         out = await design.render(body.get("template") or "poster", data, size=body.get("size"),
-                                  theme={"accent": body["accent"]} if body.get("accent") else None)
+                                  theme={"accent": body["accent"]} if body.get("accent") else None,
+                                  export=["pdf", "png", *(["vectorcraft"] if body.get("editable") else [])])
     except Exception as e:
         raise _fail(e)
+    _label_outputs(out, (data.get("title") or data.get("recipient") or str(body.get("template") or "design"))[:60])
     events.emit("tool_done", tool="make_design", result={"file_id": out["file_id"]})
     return out
 
@@ -247,15 +343,88 @@ async def make_photo(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _book_front(path: Path, title: str, author: Optional[str], cover: Optional[Path], size: str, ink: bool = True) -> None:
+    """Könyv-docx eleje: címoldal (borítókép, cím, szerző), utána új oldalon a szöveg; A4-nél A4-es oldal.
+    ink: a címoldal fekete betűs (a saját könyvsablonnál — a pandoc Title/Subtitle stílusa kék)."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Mm, RGBColor
+    doc = Document(str(path))
+    if size == "A4":
+        for sec in doc.sections:
+            sec.page_width, sec.page_height = Mm(210), Mm(297)
+            sec.left_margin = sec.right_margin = Mm(25)
+            sec.top_margin = sec.bottom_margin = Mm(22)
+    sec = doc.sections[0]
+    width = sec.page_width - sec.left_margin - sec.right_margin
+    styles = {s.name for s in doc.styles}
+    new = []
+    if cover and cover.exists():
+        p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.add_run().add_picture(str(cover), width=width)
+        new.append(p)
+    p = doc.add_paragraph(title, style="Title" if "Title" in styles else None); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    new.append(p)
+    if author:
+        p = doc.add_paragraph(author, style="Subtitle" if "Subtitle" in styles else None); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        new.append(p)
+    if ink:
+        for p in new:
+            for r in p.runs:
+                r.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+    body = doc.element.body
+    for k, p in enumerate(new):                     # a dokumentum ELEJÉRE
+        body.remove(p._p)
+        body.insert(k, p._p)
+    # a szöveg új oldalon kezdődjön — de ha az első bekezdés stílusa eleve új oldalon kezd (fejezetcím), ne legyen üres oldal
+    first = next((p for p in doc.paragraphs[len(new):] if p.text.strip()), None)
+    if first is not None:
+        st, pbb = first.style, first.paragraph_format.page_break_before
+        while pbb is None and st is not None:
+            pbb, st = st.paragraph_format.page_break_before, st.base_style
+        if not pbb:
+            first.paragraph_format.page_break_before = True
+    doc.save(str(path))
+
+
 @router.post("/api/make/book")
 async def make_book(body: dict[str, Any]) -> dict[str, Any]:
-    """Kézirat (DOCX) → könyv-PDF: borító + fejezetenként oldal(ak), folyó szöveggel."""
+    """Kézirat (DOCX) → KÖNYV a Word-szerkesztőben: könyvszedés (A5/A4, könyvbetű, címoldal borítóval) docx-ben,
+    amit kiadás előtt át lehet nézni és szerkeszteni, + PDF mellé. layout="booklet": a régi dizájnos füzet-PDF."""
     from docx import Document
     from app.tools import design
     from app.tools.crafts import existing
     fid = body.get("file_id")
     if not fid:
         raise HTTPException(400, "Upload your manuscript (.docx) first.")
+    if body.get("layout") != "booklet":
+        import asyncio
+        from app.storage import display_label, output_path, public_url, write_meta
+        from app.storage.files import new_file_id
+        from app.tools import digitize, doc_style, wordcraft
+        if not str(fid).lower().endswith(".docx"):
+            raise HTTPException(400, "The manuscript must be a .docx file.")
+        title = (body.get("title") or "").strip() or Path(display_label(fid)).stem
+        try:
+            ref = (await doc_style.reference_for(body["style_file_id"]) if body.get("style_file_id")
+                   else await asyncio.to_thread(digitize._book_reference))
+            styled = new_file_id("docx")
+            await asyncio.to_thread(doc_style.apply_style, existing(fid), ref, output_path(styled))
+            cover_id = await _materialize(_image_spec(body.get("cover")))
+            await asyncio.to_thread(_book_front, output_path(styled), title, (body.get("author") or "").strip() or None,
+                                    existing(cover_id) if cover_id else None, body.get("size") or "A5",
+                                    not body.get("style_file_id"))
+            pdf = new_file_id("pdf")
+            await wordcraft.convert_file(output_path(styled), output_path(pdf))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _fail(e)
+        write_meta(styled, source_file_id=fid, operation="book", label=f"{title} (book).docx")
+        write_meta(pdf, source_file_id=styled, operation="book", label=f"{title}.pdf")
+        events.emit("tool_done", tool="make_book", result={"file_id": styled})
+        return {"file_id": styled, "url": public_url(styled), "pdf": pdf, "pdf_url": public_url(pdf),
+                "size_kb": output_path(styled).stat().st_size // 1024}
     if body.get("style_file_id"):          # „olyan legyen, mint ez” — a kézirat a minta stílusaival, WordCraft-tal szedve
         import asyncio
         from pathlib import Path as _P
@@ -398,6 +567,22 @@ async def make_pdf(body: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------- Convert (bármi → bármi) ----------
+
+@router.post("/api/make/handout")
+async def make_handout(body: dict[str, Any]) -> dict[str, Any]:
+    """Pakli → Word-kiosztmány (diakép + szöveg + jegyzetek), AI nélkül."""
+    from app.tools import deck_handout
+    if not body.get("file_id"):
+        raise HTTPException(400, "Choose a presentation.")
+    try:
+        out = await deck_handout.build(body["file_id"], slide_images=body.get("slide_images", True) is not False)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise _fail(e)
+    events.emit("tool_done", tool="make_handout", result={"file_id": out["file_id"]})
+    return out
+
 
 @router.get("/api/convert/targets")
 async def convert_targets(ext: str) -> dict[str, Any]:

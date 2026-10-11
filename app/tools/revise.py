@@ -226,9 +226,9 @@ def _docx_source(pdf_id: str) -> Optional[str]:
 async def _docx_to_pdf(docx_id: str, dst: Path, pdf_meta: dict[str, Any]) -> None:
     """Ugyanaz a szedés, ami az eredeti PDF-et adta: könyv → booklet-sablon; különben WordCraft."""
     from app.tools import crafts, wordcraft
-    if pdf_meta.get("operation") in ("design", "booklet") or "book" in str(pdf_meta.get("operation", "")):
+    if pdf_meta.get("operation") in ("design", "booklet"):     # a régi dizájnos füzet (az új könyv már Word-szedés)
         from app.routes.make import make_book
-        r = await make_book({"file_id": docx_id})
+        r = await make_book({"file_id": docx_id, "layout": "booklet"})
         dst.write_bytes(crafts.existing(r["file_id"]).read_bytes())
         return
     await wordcraft.convert_file(crafts.existing(docx_id), dst)

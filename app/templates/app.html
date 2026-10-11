@@ -197,7 +197,15 @@ async function loadAccount() {
   document.body.classList.toggle("guest", !!account.guest);
 }
 const AI_NOTE = "This uses AI — create a free account to use it.";
-const AI_MAKERS = new Set(["deck", "scan"]);
+const AI_MAKERS = new Set(["scan"]);
+const SLUGS = { doc: "document", deck: "presentation", social: "social-post", print: "print-design", photo: "photos",
+  book: "book", scan: "scan-to-text", pdf: "pdf-tools", convert: "convert" };
+const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
+  doc: ["dmode", { template: "new", brief: "from-brief", open: "open" }],
+  deck: ["pmode", { blank: "new", brief: "from-brief", document: "from-document", open: "open" }],
+  photo: ["mode", { edit: "edit", restore: "restore", quick: "quick-fix", open: "open" }],
+};
+const makeLink = (kind, mode, src) => `#/make/${SLUGS[kind]}` + (mode && MODES[kind] ? `/${MODES[kind][1][mode]}` : "") + (src ? `?src=${encodeURIComponent(src)}` : "");       // a Presentationnek van AI nélküli módja (New / Open a file)
 function accountCta(title) {
   const form = $("#make-form");
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
@@ -323,8 +331,8 @@ const views = {
     mount("t-home");
     const nums = $(".ruler-nums"), w = $(".mat").clientWidth;   // vonalzó-számok 40 px-enként (1 = 1 cm)
     nums.innerHTML = Array.from({ length: Math.floor(w / 40) }, (_, i) => i && i % 2 === 0 ? `<span style="left:${i * 40}px">${i / 2}</span>` : "").join("");
-    document.querySelectorAll("[data-make]").forEach(b => b.addEventListener("click", () => openMaker(b.dataset.make)));
-    document.querySelectorAll("[data-try]").forEach(b => b.addEventListener("click", () => openMaker(b.dataset.try)));
+    document.querySelectorAll("[data-make]").forEach(b => b.addEventListener("click", () => location.hash = makeLink(b.dataset.make)));
+    document.querySelectorAll("[data-try]").forEach(b => b.addEventListener("click", () => location.hash = makeLink(b.dataset.try)));
     await loadFiles(); renderFiles($("#recent"), files.slice(0, 10));
   },
   async files() {
@@ -361,7 +369,8 @@ const views = {
       ? "Admin account — no limits."
       : `You have ${account.credits} credits. One AI-generated image costs ${account.image_credit_cost}. Stock photos and your own images are free.`;
   },
-  async file(id) {
+  async file(arg) {
+    const [id, sub, wantApp] = arg.split("/");
     mount("t-file");
     await loadFiles();
     const f = files.find(x => x.file_id === id);
@@ -379,7 +388,10 @@ const views = {
     editorsFor(f.ext).forEach(([app, label], i) => {
       const b = document.createElement("button");
       b.className = i ? "btn ghost" : "btn"; b.textContent = label;
+      b.dataset.app = app;
       b.addEventListener("click", () => {
+        const link = `#/file/${encodeURIComponent(f.file_id)}/edit/${app}`;   // saját link; a Vissza az előnézetre lép
+        if (location.hash !== link) history[b.dataset.auto ? "replaceState" : "pushState"](null, "", link);   // auto-nyitásnál ne legyen Vissza-csapda
         const src = f.url.slice(f.url.indexOf("/files/"));
         const name = f.label.toLowerCase().endsWith("." + f.ext) ? f.label : `${f.label}.${f.ext}`;
         const save = `/api/editor/save?source=${encodeURIComponent(f.file_id)}`;
@@ -388,9 +400,27 @@ const views = {
       });
       box.append(b);
     });
-    try {   // „Document → New / Open”: rögtön a szerkesztő nyíljon
-      if (sessionStorage.getItem("aice-autoedit") === f.file_id) { sessionStorage.removeItem("aice-autoedit"); box.querySelector("button")?.click(); }
-    } catch {}
+    if (["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pdf"].includes(f.ext)) {   // dokumentum → pakli
+      const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = "Make slides";
+      b.title = "Turn this document into a presentation";
+      b.addEventListener("click", () => location.hash = makeLink("deck", "document", f.file_id));
+      box.append(b);
+    }
+    if (f.ext === "pptx") {                                     // pakli → Word-kiosztmány
+      const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = "Make a handout";
+      b.title = "A Word document with every slide, its text and your speaker notes";
+      b.addEventListener("click", async () => {
+        b.disabled = true; b.textContent = "Making the handout…";
+        try { const r = await api("/api/make/handout", { method: "POST", body: JSON.stringify({ file_id: f.file_id }) });
+              toast(`Handout ready — ${r.label}`); location.hash = "#/file/" + encodeURIComponent(r.file_id); }
+        catch (e) { toast(e.message); b.disabled = false; b.textContent = "Make a handout"; }
+      });
+      box.append(b);
+    }
+    if (sub === "edit") {
+      const b = box.querySelector(`button[data-app="${wantApp}"]`) || box.querySelector("button[data-app]");
+      if (b) { b.dataset.auto = "1"; b.click(); }
+    }
     if (f.ext === "pdf") api(`/api/forms/fields?file_id=${encodeURIComponent(f.file_id)}`).then(({ fields }) => {
       if (!fields.length) return;
       const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Fill in";
@@ -415,11 +445,23 @@ const views = {
     });
   },
 };
-function mount(id) { $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
+let mounted = "";
+function mount(id) { mounted = id; $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
 let lastPlace = "#/";          // ahová a fájlnézet „bezárás” gombja visz
+let underMaker = "#/";         // a készítő-fiók alatti nézet linkje — bezáráskor ide áll vissza a cím
+views.make = async arg => {    // #/make/<eszköz>[/<mód>][?src=<file_id>] — közvetlen linkkel a címlap fölött nyílik
+  const [path, qs = ""] = arg.split("?");
+  const [slug, modeSlug] = path.split("/");
+  const kind = Object.keys(SLUGS).find(k => SLUGS[k] === slug);
+  if (!kind) { location.replace("#/"); return; }
+  if (!mounted) { history.replaceState(null, "", "#/"); await views.home(); history.replaceState(null, "", "#/make/" + arg); }
+  const mode = MODES[kind] && Object.entries(MODES[kind][1]).find(([, w]) => w === modeSlug)?.[0];
+  openMaker(kind, { mode, source: new URLSearchParams(qs).get("src") || undefined });
+};
 async function route() {
   const [, name = "", arg] = location.hash.match(/^#\/([a-z]*)\/?(.*)$/) || [];
-  if (name !== "file") lastPlace = location.hash || "#/";
+  if (name !== "make") { underMaker = location.hash || "#/"; if ($("#drawer").open) $("#drawer").close(); }
+  if (!["file", "make"].includes(name)) lastPlace = location.hash || "#/";
   document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
   document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
   try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); }
@@ -515,27 +557,74 @@ const MAKERS = {
         const style_file_id = await readStyle(form);
         r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "template", template: fd.get("template"), style_file_id }) });
       }
-      try { sessionStorage.setItem("aice-autoedit", r.file_id); } catch {}
-      return { ...r, msg: m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…" };
+      return { ...r, edit: true, msg: m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…" };
     },
   },
   deck: {
-    title: "New presentation", sub: "Describe it — the assistant writes the slides, picks layouts and finds pictures.",
-    fields: () => `<label>What is it about?<textarea name="brief" required placeholder="e.g. A 10-minute pitch for our community solar project: the problem, how it works, costs, timeline and the ask."></textarea></label>
-      <label>Slides<input type="number" name="slides" min="4" max="15" value="8"></label>
+    title: "Presentation", sub: "Build slides like in PowerPoint — start blank, from a brief, or from a document you already have.",
+    fields: () => `<div class="seg" style="margin:0 0 16px"><label><input type="radio" name="pmode" value="blank"><span>New</span></label>
+      <label><input type="radio" name="pmode" value="brief" checked><span>From a brief</span></label>
+      <label><input type="radio" name="pmode" value="document"><span>From a document</span></label>
+      <label><input type="radio" name="pmode" value="open"><span>Open a file</span></label></div>
+      <div data-pmode="blank" hidden><label>Title<input type="text" name="title" maxlength="120" placeholder="e.g. Quarterly review"></label>
+        <p class="muted small" style="margin:-6px 0 12px">Opens straight in the slide editor.</p></div>
+      <div data-pmode="brief"><label>What is it about? <em class="ai-badge">AI</em><textarea name="brief" placeholder="e.g. A 10-minute pitch for our community solar project: the problem, how it works, costs, timeline and the ask."></textarea></label></div>
+      <div data-pmode="document" hidden>
+        <label>Document <em class="ai-badge">AI</em><select name="source"></select></label>
+        <label>…or upload one<input type="file" name="srcfile" accept=".docx,.doc,.odt,.rtf,.md,.txt,.html,.pdf"></label>
+        <label>What should the deck do? <span class="muted small" style="font-weight:400">(optional)</span><textarea name="dbrief" style="min-height:70px" placeholder="e.g. A 10-minute talk for the board — keep the numbers"></textarea></label>
+        <p class="muted small" style="margin:-6px 0 12px">Its headings become slides; its facts, tables and pictures are kept.</p></div>
+      <div data-pmode="open" hidden><label>Presentation<input type="file" name="pfile" accept=".pptx,.ppt,.odp"></label></div>
+      <div data-pmode-ai><label>Slides<select name="slides"><option value="">Automatic</option>${Array.from({ length: 12 }, (_, i) => `<option>${i + 4}</option>`).join("")}</select></label>
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
       <div class="seg"><label><input type="radio" name="images" value="stock" checked><span>Stock photos</span></label>
-      <label><input type="radio" name="images" value="ai"><span>AI images</span></label><label><input type="radio" name="images" value="none"><span>None</span></label></div></fieldset>
-      ${swatches()}${styleField("deck")}`,
-    async submit(fd, form) {
-      const style_file_id = await readStyle(form);
-      $("#make-status").textContent = "Writing the slides…";
-      return api("/api/make/deck", { method: "POST", body: JSON.stringify({ brief: fd.get("brief"), slides: +fd.get("slides"), images: fd.get("images"), accent: fd.get("accent"), style_file_id }) });
+      <label><input type="radio" name="images" value="ai"><span>AI images</span></label><label><input type="radio" name="images" value="none"><span>None</span></label></div></fieldset></div>
+      <div data-pmode-look>${swatches()}${styleField("deck")}</div>`,
+    wire(form, o = {}) {
+      const DOC = ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pdf"];
+      const docs = files.filter(f => DOC.includes(f.ext));
+      form.querySelector("[name=source]").innerHTML = docs.length
+        ? docs.map(f => `<option value="${esc(f.file_id)}"${f.file_id === o.source ? " selected" : ""}>${esc(f.label)}</option>`).join("")
+        : `<option value="">No documents yet — upload one below</option>`;
+      const sync = () => { const m = form.querySelector("[name=pmode]:checked").value;
+        form.querySelectorAll("[data-pmode]").forEach(d => d.hidden = d.dataset.pmode !== m);
+        form.querySelector("[data-pmode-ai]").hidden = !["brief", "document"].includes(m);
+        form.querySelector("[data-pmode-look]").hidden = m === "open"; };
+      form.querySelectorAll("[name=pmode]").forEach(r => r.addEventListener("change", sync));
+      const start = o.mode || (account?.guest ? "blank" : "brief");
+      form.querySelector(`[name=pmode][value=${start}]`).checked = true; sync();
     },
-    wire() {},
+    async submit(fd, form) {
+      const m = fd.get("pmode");
+      let r;
+      if (m === "open") {
+        const f = form.querySelector("[name=pfile]").files[0]; if (!f) throw new Error("Choose a presentation.");
+        r = await uploadFile(f);
+      } else if (m === "blank") {
+        const style_file_id = await readStyle(form);
+        r = await api("/api/make/deck", { method: "POST", body: JSON.stringify({ mode: "blank", title: fd.get("title"), accent: fd.get("accent"), style_file_id }) });
+      } else {
+        if (account?.guest) throw new Error(AI_NOTE);
+        const body = { mode: m, images: fd.get("images"), accent: fd.get("accent"), slides: +fd.get("slides") || null };
+        if (m === "document") {
+          const up = form.querySelector("[name=srcfile]").files[0];
+          body.source_file_id = up ? (await uploadFile(up)).file_id : fd.get("source");
+          if (!body.source_file_id) throw new Error("Choose a document, or upload one.");
+          body.brief = fd.get("dbrief") || "";
+        } else {
+          body.brief = fd.get("brief") || "";
+          if (body.brief.trim().length < 10) throw new Error("Describe the presentation in a sentence or two.");
+        }
+        body.style_file_id = await readStyle(form);
+        $("#make-status").textContent = m === "document" ? "Reading the document and writing the slides…" : "Writing the slides…";
+        r = await api("/api/make/deck", { method: "POST", body: JSON.stringify(body) });
+        return { ...r, msg: "Done — fix anything in the slide editor, or ask for changes below" };
+      }
+      return { ...r, edit: true, msg: "Opening the slide editor…" };
+    },
   },
   social: {
-    title: "New social post", sub: "Headline + picture → every size you tick, ready to post.",
+    alt: "Make & edit", title: "New social post", sub: "Headline + picture → every size you tick, ready to post. “Make & edit” opens it in the design editor to fine-tune.",
     fields: () => `<label>Headline<input type="text" name="headline" required maxlength="120"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
@@ -547,17 +636,20 @@ const MAKERS = {
       <div id="bg-wrap" hidden>${imagePicker("bg", { allowNone: false, label: "New background" })}</div>
       ${swatches()}`,
     wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
-    async submit(fd, form) {
+    async submit(fd, form, opts = {}) {
       const body = { headline: fd.get("headline"), subtitle: fd.get("subtitle"), handle: fd.get("handle"), sizes: fd.getAll("sizes"),
-        image: await readPicker(form, "img"), accent: fd.get("accent") };
+        image: await readPicker(form, "img"), accent: fd.get("accent"), editable: !!opts.alt };
       if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
       const r = await api("/api/make/social", { method: "POST", body: JSON.stringify(body) });
+      if (opts.alt) return editNative(r.posts[0].files, r.posts.length);
       return { file_id: r.posts[0].files.find(f => f.file_id.endsWith(".png"))?.file_id || r.posts[0].file_id, n: r.posts.length };
     },
   },
   book: {
-    title: "New book", sub: "Upload your manuscript (.docx with Heading 1 chapters). You get a book PDF with a cover; the text stays editable.",
+    cta: "Make the book", title: "New book", sub: "Upload your manuscript (.docx with Heading 1 chapters). It opens typeset in the Word editor so you can check every page before you publish — the PDF is made alongside.",
     fields: () => `<label>Manuscript (.docx)<input type="file" name="manuscript" accept=".docx" required></label>
+      <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="layout" value="book" checked><span>Book — check it in Word</span></label>
+      <label><input type="radio" name="layout" value="booklet"><span>Designed booklet (PDF)</span></label></div>
       <label>Title<input type="text" name="title" maxlength="120"></label>
       <label>Author<input type="text" name="author" maxlength="80"></label>
       <label>Trim size<select name="size"><option value="A5">A5 (148×210 mm)</option><option value="A4">A4</option></select></label>
@@ -566,15 +658,19 @@ const MAKERS = {
     async submit(fd, form) {
       const m = await uploadFile(form.querySelector("[name=manuscript]").files[0]);
       const style_file_id = await readStyle(form);
-      return api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover"), style_file_id }) });
+      $("#make-status").textContent = "Typesetting the book…";
+      const r = await api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover"), style_file_id, layout: fd.get("layout") }) });
+      return fd.get("layout") === "booklet" ? r : { ...r, edit: true, msg: "Your book is open in the editor — the PDF is in your files too" };
     },
   },
   photo: {
-    cta: "Go", title: "Photos", sub: "Every result is a layered Photoshop file (PSD) plus a JPG — nothing is lost, every step can be undone by hand.",
+    cta: "Go", alt: "Go & edit", title: "Photos", sub: "Every result is a layered Photoshop file (PSD) plus a JPG — nothing is lost, every step can be undone by hand. “Go & edit” opens the result in the photo editor.",
     fields: () => `<label>Photos<input type="file" name="photos" accept="image/*" multiple required></label>
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
       <label><input type="radio" name="mode" value="restore"><span>Restore old photos</span></label>
-      <label><input type="radio" name="mode" value="quick"><span>Quick fix</span></label></div>
+      <label><input type="radio" name="mode" value="quick"><span>Quick fix</span></label>
+      <label><input type="radio" name="mode" value="open"><span>Open in editor</span></label></div>
+      <div data-mode="open" hidden><p class="muted small" style="margin:-4px 0 12px">Opens in the photo editor — layers, selections, adjustments, text, like in Photoshop.</p></div>
       <div data-mode="restore" hidden>
         <p class="muted small" style="margin:0 0 10px">Scratches, dust, stains, tears, fading and blur are repaired. Photograph a whole album page and every picture on it is found and straightened. The original stays as the bottom layer, so anything the AI got wrong can be brought back. <em class="ai-badge">AI</em> ${account?.image_credit_cost ?? 1} credit per photo, +${account?.image_credit_cost ?? 1} to colourise.</p>
         <div class="checks"><label><input type="checkbox" name="colorize" checked> Colourise black-and-white photos</label>
@@ -599,8 +695,14 @@ const MAKERS = {
         const ta = form.querySelector("[name=instruction]"); ta.value = (ta.value.trim() ? ta.value.trim().replace(/[.,]?$/, ", ") : "") + b.dataset.chip; ta.focus();
       }));
     },
-    async submit(fd, form) {
+    async submit(fd, form, opts = {}) {
       const mode = fd.get("mode"), photos = [...form.querySelector("[name=photos]").files];
+      if (!photos.length) throw new Error("Choose a photo.");
+      if (mode === "open") {
+        const ids = [];
+        for (const f of photos) ids.push((await uploadFile(f)).file_id);
+        return { file_id: ids[0], n: ids.length, edit: true, msg: ids.length > 1 ? "Opening the first one — the others are in your files" : "Opening the photo editor…" };
+      }
       const instr = mode === "edit" ? (fd.get("instruction") || "").trim() : "", action = mode === "quick" ? fd.get("action") : "";
       if (mode === "edit" && !instr) throw new Error("Describe the edit — or use a quick fix.");
       if (mode !== "quick" && account?.guest) throw new Error(AI_NOTE + " Quick fixes work without one.");
@@ -610,6 +712,8 @@ const MAKERS = {
         const job = await api("/api/make/restore", { method: "POST", body: JSON.stringify({ file_ids: ids, colorize: fd.get("colorize") ? null : false, split_prints: !!fd.get("split") }) });
         const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the pictures…");
         await loadAccount();
+        const psd = r.files.find(x => x.file_id.endsWith(".psd"));
+        if (opts.alt && psd) return { file_id: psd.file_id, n: r.files.length, edit: true, msg: "Opening the restored picture in the photo editor…" };
         return { file_id: r.file_id, n: r.files.length, msg: `Restored ${r.photos} picture${r.photos > 1 ? "s" : ""} — layered PSDs are in your files` };
       }
       if (instr) {
@@ -618,6 +722,8 @@ const MAKERS = {
         const job = await api("/api/make/photo_edit", { method: "POST", body: JSON.stringify({ file_ids: ids, instruction: instr, logo_file_id: logo }) });
         const r = await pollJob(job, j => j.stage === "planning the edit" ? "Planning the edit…" : `Editing photo ${Math.min(j.done + 1, j.total)} of ${j.total}…`);
         const jpg = r.files.find(x => /\.(jpe?g|png)$/.test(x.file_id)) || r.files[0];
+        const psd = r.files.find(x => x.file_id.endsWith(".psd"));
+        if (opts.alt && psd) return { file_id: psd.file_id, n: r.files.length, edit: true, msg: `${r.summary || "Done"} — every step is its own layer` };
         return { file_id: jpg.file_id, n: r.files.length, msg: `${r.summary || "Done"} — layered PSD in your files` };
       }
       let last;
@@ -625,11 +731,11 @@ const MAKERS = {
         st.textContent = `Working on photo ${i + 1} of ${ids.length}…`;
         last = await api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: id, action, background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
       }
-      return { ...last, n: ids.length };
+      return { ...last, n: ids.length, edit: !!opts.alt };
     },
   },
   print: {
-    title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you.",
+    alt: "Make & edit", title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. “Make & edit” opens it in the design editor.",
     fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
       <label>Title / name<input type="text" name="title" required maxlength="120"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
@@ -637,12 +743,13 @@ const MAKERS = {
       <label>Date / place / author<input type="text" name="meta" maxlength="120" placeholder="e.g. 12 November · City Hall"></label>
       ${imagePicker("img")}${swatches()}`,
     wire(form) { wirePicker(form, "img"); },
-    async submit(fd, form) {
+    async submit(fd, form, opts = {}) {
       const t = fd.get("template"), img = await readPicker(form, "img");
       const data = t === "certificate"
         ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
         : { title: fd.get("title"), subtitle: fd.get("subtitle"), body: fd.get("body"), date: fd.get("meta"), author: fd.get("meta"), image: img };
-      return api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent") }) });
+      const r = await api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent"), editable: !!opts.alt }) });
+      return opts.alt ? editNative(r.files, 1) : r;
     },
   },
   scan: {
@@ -804,28 +911,43 @@ function openFill(f, fields) {
   };
   openMaker("fill");
 }
-function openMaker(kind) {
+// „Make & edit”: a natív (VectorCraft) dizájnfájl rögtön a dizájn-szerkesztőben nyílik
+function editNative(list, n) {
+  const nat = (list || []).find(f => f.file_id.endsWith(".vectorcraft")) || list[0];
+  return { file_id: nat.file_id, n, edit: true, msg: "Opening the design editor…" };
+}
+function openMaker(kind, opts = {}) {
   const m = MAKERS[kind], form = $("#make-form");
   if (account?.guest && AI_MAKERS.has(kind)) return accountCta(m.title);
   form.innerHTML = `<h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
     <p class="status" id="make-status"></p>
-    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
-  m.wire(form);
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt">${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
+  m.wire?.(form, opts);
+  const [field, words] = MODES[kind] || [];
+  if (field) {
+    if (opts.mode) { const r = form.querySelector(`[name=${field}][value=${opts.mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
+    form.querySelectorAll(`[name=${field}]`).forEach(r => r.addEventListener("change", () => {
+      if (location.hash.startsWith("#/make/")) history.replaceState(null, "", makeLink(kind, r.value, opts.source));
+    }));
+  }
   form.onsubmit = async e => {
-    if (e.submitter?.value !== "go") return;
+    if (!["go", "alt"].includes(e.submitter?.value)) return;
     e.preventDefault();
-    const go = $("#make-go"); go.disabled = true; $("#make-status").textContent = "Working on it — this takes a few seconds…";
+    const go = $("#make-go"), alt = $("#make-alt"); go.disabled = true; if (alt) alt.disabled = true;
+    $("#make-status").textContent = "Working on it — this takes a few seconds…";
     try {
-      const r = await m.submit(new FormData(form), form);
+      const r = await m.submit(new FormData(form), form, { alt: e.submitter.value === "alt" });
+      if (location.hash.startsWith("#/make/")) history.replaceState(null, "", underMaker);   // a Vissza ne nyissa újra a fiókot
       $("#drawer").close(); await loadAccount();
       toast(r.msg || (r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
-      location.hash = "#/file/" + encodeURIComponent(r.file_id);
-    } catch (err) { $("#make-status").textContent = err.message; go.disabled = false; }
+      location.hash = "#/file/" + encodeURIComponent(r.file_id) + (r.edit ? "/edit" : "");
+    } catch (err) { $("#make-status").textContent = err.message; go.disabled = false; if (alt) alt.disabled = false; }
   };
   $("#drawer").showModal();
 }
 
 $("#drawer-x").addEventListener("click", () => $("#drawer").close());
+$("#drawer").addEventListener("close", () => { if (location.hash.startsWith("#/make/")) history.replaceState(null, "", underMaker); });
 $("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
   if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();
 });

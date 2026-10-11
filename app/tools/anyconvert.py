@@ -26,7 +26,7 @@ DOCS = {"docx", "doc", "odt", "rtf", "md", "html", "htm", "txt"}
 SLIDES = {"pptx", "ppt", "odp"}
 SHEETS = {"xlsx", "xls", "ods", "csv", "tsv"}
 IMAGES = {"png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "psd"}
-VECTORS = {"svg", "ai", "eps"}
+VECTORS = {"svg", "ai", "eps", "vectorcraft"}
 
 LABELS = {
     "pdf": "PDF", "docx": "Word (.docx)", "odt": "OpenDocument (.odt)", "rtf": "Rich Text (.rtf)",
@@ -43,8 +43,8 @@ def targets_for(ext: str) -> list[str]:
         return [t for t in ("pdf", "docx", "odt", "rtf", "md", "html", "txt", "epub") if t != ext]
     if ext == "pdf":
         return ["docx", "txt", "html", "rtf", "jpg", "png"]
-    if ext in SLIDES:
-        return [t for t in ("pdf", "pptx", "odp", "png") if t != ext]
+    if ext in SLIDES:          # pptx → docx = Word-kiosztmány (diakép + szöveg + jegyzetek)
+        return [t for t in ("pdf", "pptx", "odp", "png", *(("docx",) if ext == "pptx" else ())) if t != ext]
     if ext in SHEETS:
         return [t for t in ("xlsx", "csv", "pdf", "html", "json", "ods", "tsv") if t != ext]
     if ext in IMAGES:
@@ -124,6 +124,9 @@ async def convert_any(pool, file_id: str, target: str) -> dict[str, Any]:
     target = target.lower().lstrip(".")
     if target not in targets_for(ext):
         raise ValueError(f"Can't convert .{ext} to .{target}. Options: {', '.join(targets_for(ext)) or 'none'}.")
+    if ext == "pptx" and target == "docx":
+        from app.tools import deck_handout
+        return await deck_handout.build(file_id)
     stem = Path(display_label(file_id)).stem
     work: Optional[Path] = None
     out_ext = target

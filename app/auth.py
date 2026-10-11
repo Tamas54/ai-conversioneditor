@@ -41,7 +41,8 @@ _GUEST_OK = (
     ("GET", "/api/revisions"), ("GET", "/api/billing/plans"),
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
-    ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"), ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),
+    ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),
+    ("POST", "/api/make/deck"), ("POST", "/api/make/handout"),          # deck: vendégnek csak az üres pakli (AI nélkül) ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),
 )
 GUEST_MAX_UPLOAD_MB = 25
 _GUEST_POSTS, _GUEST_WINDOW_S = 60, 10 * 60          # vendég POST-ok IP-nként (feltöltés + gyártás)
