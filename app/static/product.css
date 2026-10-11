@@ -2,7 +2,7 @@
    vonalzó-osztással és a rajta fekvő papírtárgyakkal), minden más csendes. */
 :root {
   --mat: #1E4436; --mat-deep: #163428; --mat-line: rgba(226, 241, 232, .07); --tick: #8DB5A2;
-  --paper: #FBFBF8; --paper-2: #F1F2EE; --rule: #DCE0DA; --ink: #15191B; --graphite: #5C6870;
+  --paper: #FBFBF8; --paper-2: #F1F2EE; --card: #FFFFFF; --rule: #DCE0DA; --ink: #15191B; --graphite: #5C6870;
   --signal: #FF5A36; --signal-deep: #E2431F; --ok: #2E8B57; --err: #C2362B;
   --f-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --f-body: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
@@ -11,7 +11,7 @@
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --paper: #191D1E; --paper-2: #202526; --rule: #2E3436; --ink: #ECEFEC; --graphite: #9AA6AC; color-scheme: dark; }
+  :root { --paper: #191D1E; --paper-2: #202526; --card: #22282A; --rule: #2E3436; --ink: #ECEFEC; --graphite: #9AA6AC; color-scheme: dark; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -240,7 +240,7 @@ dialog.drawer::backdrop { background: rgba(10, 22, 16, .45); }
 .versions a { font: 600 11px/1 var(--f-mono); padding: 5px 7px; border-radius: 6px; border: 1px solid var(--rule); color: var(--ink); text-decoration: none; }
 .versions a[aria-current] { background: var(--mat); color: #fff; border-color: var(--mat); }
 @media (max-width: 600px) { .rev-row { flex-wrap: wrap; } .rev-row input { flex-basis: 100%; } }
-.rev-row input { padding: 11px 13px; border: 1px solid var(--rule); border-radius: 10px; font: inherit; background: #fff; }
+.rev-row input { padding: 11px 13px; border: 1px solid var(--rule); border-radius: 10px; font: inherit; background: var(--card); }
 .rev-row input:focus-visible { outline: 0; border-color: var(--mat); box-shadow: 0 0 0 3px rgba(30, 68, 54, .18); }
 body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 
@@ -255,7 +255,7 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .try-title { font: 700 22px/1.2 var(--f-display); margin: 0 0 16px; }
 .try { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .try button { all: unset; cursor: pointer; display: grid; gap: 8px; align-content: start; padding: 16px 16px 18px; border-radius: 14px;
-  background: #fff; border: 1px solid var(--rule); font-size: 14.5px; line-height: 1.4; color: var(--ink); transition: transform .15s, border-color .15s; }
+  background: var(--card); border: 1px solid var(--rule); font-size: 14.5px; line-height: 1.4; color: var(--ink); transition: transform .15s, border-color .15s; }
 .try button span { font: 600 10.5px/1 var(--f-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--signal); }
 .try button:hover, .try button:focus-visible { border-color: var(--mat); transform: translateY(-2px); }
 .connect-note { margin: 22px 0 0; }
@@ -265,7 +265,7 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 /* csomagok */
 .plans .row-head .seg { margin: 0; }
 .plan-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 18px 0 40px; }
-.plan { background: #fff; border: 1px solid var(--rule); border-radius: 16px; padding: 22px 22px 24px; display: grid; gap: 12px; align-content: start; }
+.plan { background: var(--card); border: 1px solid var(--rule); border-radius: 16px; padding: 22px 22px 24px; display: grid; gap: 12px; align-content: start; }
 .plan.pick { border-color: var(--mat); box-shadow: 0 0 0 3px rgba(30, 68, 54, .12); }
 .plan.cur { background: var(--paper-2); }
 .plan h3 { margin: 0; font: 700 20px/1 var(--f-display); }
@@ -276,7 +276,7 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .badge-cur { font: 600 12px/1 var(--f-mono); color: var(--mat); }
 .plans-h { font: 700 18px/1.2 var(--f-display); margin: 0 0 12px; }
 .packs { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 40px; }
-.pack { display: flex; align-items: center; gap: 14px; background: #fff; border: 1px solid var(--rule); border-radius: 14px; padding: 14px 16px; }
+.pack { display: flex; align-items: center; gap: 14px; background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 14px 16px; }
 .pack b { font: 800 26px/1 var(--f-display); } .pack span { font: 600 16px/1 var(--f-body); color: var(--graphite); }
 .plans-grid2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; }
 .costs { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
