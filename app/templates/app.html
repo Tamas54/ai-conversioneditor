@@ -1127,6 +1127,7 @@ const TAKES = {
 const USES = [   // a fájlnézet „Use in…” menüje: [eszköz, mód, fájlhely, kiterjesztések, felirat]
   ["deck", "document", "source", [...EXT.doc, "pdf"], "Presentation — slides from this"],
   ["handout", null, null, ["pptx"], "Word handout — every slide with its text and notes"],
+  ["video-slide", null, null, ["ecproj", "mp4", "m4v", "mov"], "PowerPoint — this video on a slide"],
   ["deck", "brief", "style", ["pptx", "potx"], "Presentation — a new deck on this design"],
   ["book", null, "manuscript", ["docx"], "Book — typeset it as a book"],
   ["doc", "brief", "style", ["docx", "odt", "rtf", "pdf"], "Document — write a new one in this style"],
@@ -1233,7 +1234,7 @@ const QUICK = [
       } },
   ] },
   // Videóprojekt: a (kézzel is szerkesztett) idővonal renderelése MP4-re — a szerver CPU-ja, kredit nélkül
-  { title: "Video", exts: ["ecproj"], uses: [], covers: [], items: [
+  { title: "Video", exts: ["ecproj"], uses: ["video-slide"], covers: ["video-slide"], items: [
     { label: "Render MP4", doing: "Rendering the video — about a minute for a minute of video…", hint: "Full quality, with sound",
       run: id => videoRender(id, false) },
     { label: "Quick draft", doing: "Rendering a quick draft…", hint: "Half size — to check the timing fast", run: id => videoRender(id, true) },
@@ -1286,7 +1287,7 @@ function wireQuick(f) {
   }
   row.addEventListener("click", e => {
     const b = e.target.closest("button"); if (!b || busy) return;
-    if (b.dataset.use != null) { const [kind, mode, slot] = uses[+b.dataset.use]; nav(makeLink(kind, mode, cur.file_id, slot)); return; }
+    if (b.dataset.use != null) { useIn(uses[+b.dataset.use]); return; }
     if (b.dataset.fill != null) return;
     const i = +b.dataset.q, it = g.items[i];
     if (!it.form) { close(); return run(it, null); }
@@ -2088,6 +2089,16 @@ function wireDownload(f, sibs) {
     if (b.dataset.self != null) saveUrl(cur.url, cur.label); else getAs(b.dataset.fmt);
   });
 }
+// „Use in…”: másik eszköz ablaka a fájllal — vagy közvetlen művelet (Word-kivonat, videó egy diára)
+async function useIn([kind, mode, slot]) {
+  const direct = { handout: ["/api/make/handout", "Making the handout…", r => `Handout ready — ${r.label}`],
+    "video-slide": ["/api/video/to-pptx", "Putting the video on a slide…", r => `On a slide — ${r.label}. It plays in PowerPoint and Keynote.`] }[kind];
+  if (!direct) return nav(makeLink(kind, mode, cur.file_id, slot));
+  toast(direct[1]);
+  try { const r = await api(direct[0], { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
+        toast(direct[2](r)); nav("/app/file/" + encodeURIComponent(r.file_id)); }
+  catch (err) { toast(err.message); }
+}
 // „More ▾”: a ritkább dolgok egy helyen — másik szerkesztő, átjárás más eszközbe, átalakítás, nyomtatás, törlés
 const ALT_EDIT = { vectorcraft: "Edit as a design — move text and pictures freely", photocraft: "Edit in the photo editor", pdfcraft: "Edit in the PDF editor" };
 function wireMore(f, altEds, openEditor) {
@@ -2110,17 +2121,7 @@ function wireMore(f, altEds, openEditor) {
     if (act === "edit") return openEditor(b.dataset.app);
     if (act === "print") return printFile(cur.file_id);
     if (act === "delete") return deleteWithUndo(cur);
-    if (act === "use") {
-      const [kind, mode, slot] = uses[+b.dataset.i];
-      if (kind === "handout") {
-        toast("Making the handout…");
-        try { const r = await api("/api/make/handout", { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
-              toast(`Handout ready — ${r.label}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
-        catch (err) { toast(err.message); }
-        return;
-      }
-      return nav(makeLink(kind, mode, cur.file_id, slot));
-    }
+    if (act === "use") return useIn(uses[+b.dataset.i]);
     if (act === "convert") {
       toast("Converting…");
       try { const r = await api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, target: b.dataset.fmt }) });
@@ -2146,12 +2147,13 @@ function deleteWithUndo(f) {
 }
 
 // „Kérj változtatást”: minden kérés új verzió; a lánc (eredeti → v2 → v3…) a fájlnézet alján
-const REVISABLE = ["jpg", "jpeg", "png", "webp", "psd", "tif", "tiff", "docx", "odt", "doc", "rtf", "md", "pptx", "pdf"];
+const REVISABLE = ["jpg", "jpeg", "png", "webp", "psd", "tif", "tiff", "docx", "odt", "doc", "rtf", "md", "pptx", "pdf", "ecproj", "mp4"];
 const ASK_EXAMPLES = [   // a változtatás-mező példája fájltípusonként (az első a tartalék)
   [["docx", "odt", "doc", "rtf", "md"], "“make the headings dark blue”, “on page 3 add a photo of the Colosseum”"],
   [["jpg", "jpeg", "png", "webp", "psd", "tif", "tiff"], "“remove the people in the background”, “warmer colours, crop to 4:5”"],
   [["pptx"], "“add a slide about costs after slide 4”, “make the background dark blue”"],
   [["pdf"], "“fix the spelling of the title”, “add a short summary at the start”"],
+  [["ecproj", "mp4"], "“a beach at sunset in scene 2”, “add a chart of the three rates after scene 3”, “make it 16:9”"],
 ];
 async function wireRevise(f) {
   if (!REVISABLE.includes(f.ext)) return;

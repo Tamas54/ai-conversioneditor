@@ -101,7 +101,7 @@ async def _render_thumb(src: Path, ext: str, dst: Path) -> None:
     elif ext == "pdf":
         await _run("pdftoppm", "-f", "1", "-l", "1", "-singlefile", "-scale-to", str(THUMB_W), "-png", str(src), str(raw.with_suffix("")))
     elif ext in ("pptx", "deckcraft"):
-        await crafts.run_cli(crafts.office_cli("deck"), "deckcraft-cli", "render", str(src), "--slide", "1", "--scale", "0.5", str(raw))
+        await crafts.run_cli(crafts.office_cli("deck"), "deckcraft-cli", "render", str(src), "--slide", "0", "--scale", "0.5", str(raw))   # 0-tól számol: az 1. dia
     elif ext in ("docx", "doc", "odt", "rtf", "md", "txt", "html", "htm"):
         await crafts.run_cli(wordcraft.cli_path(), "wordcraft-cli", "render", str(src), str(raw), "--page", "1", "--scale", "0.6")
     elif ext in ("psd", "psb", "pcraft", "exr"):

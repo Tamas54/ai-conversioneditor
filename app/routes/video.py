@@ -2,6 +2,8 @@
 
     POST /api/make/video           automata videó (cikk / URL / dokumentum / saját szöveg) → job; mode=new → üres projekt
     POST /api/video/render         egy videóprojekt (.ecproj) renderelése MP4-re → job
+    POST /api/video/edit           egy elkészült videó módosítása a forgatókönyvéből (changes) → job, új változat
+    POST /api/video/to-pptx        a videó egy diára (új pakli vagy egy meglévő új diája)
     GET  /api/video/assets         a projekt médiafájljai (név + letöltési link) — a böngészős szerkesztőnek (bridge)
     POST /api/video/asset          a böngészőben a projekthez adott médiafájl feltöltése (mentés után a bridge küldi)
 """
@@ -83,6 +85,42 @@ async def render_video(body: dict[str, Any]) -> dict[str, Any]:
         events.emit("tool_done", tool="render_video", params={"file_id": fid}, result={"file_id": res["file_id"]})
         return res
     return jobs.start("render", work)
+
+
+@router.post("/api/video/edit")
+async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: <.ecproj vagy a renderje>, changes: {...}, source?: str} → job (az új projekt + MP4)."""
+    from app import jobs
+    from app.tools import video
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    fid = body.get("file_id") or ""
+    try:
+        video.project_of(fid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    async def work(progress):
+        try:
+            res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress)
+        except Exception as e:
+            raise _fail(e)
+        events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})
+        return res
+    return jobs.start("video", work)
+
+
+@router.post("/api/video/to-pptx")
+async def video_to_pptx(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: videó vagy projekt, deck_file_id?, after_slide?, title?} → az új pptx."""
+    from app.tools import video
+    try:
+        res = await video.to_pptx(body.get("file_id") or "", body.get("deck_file_id"), body.get("after_slide"), body.get("title"))
+    except Exception as e:
+        raise _fail(e)
+    events.emit("tool_done", tool="video_to_pptx", params={"file_id": body.get("file_id")}, result={"file_id": res["file_id"]})
+    return res
 
 
 @router.get("/api/video/assets")

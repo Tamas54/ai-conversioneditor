@@ -21,6 +21,7 @@ Mérve 10-12 (16 mag): 8 s 1080×1920 render 16 s; a CLI a termék Docker-képé
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import math
@@ -127,7 +128,9 @@ def carry_assets(source_id: Optional[str], new_id: str) -> None:
     if not source_id:
         return
     meta = read_meta(source_id) or {}
-    extra = {k: meta[k] for k in ("assets", "video") if meta.get(k)}
+    extra = {k: meta[k] for k in ("assets", "video", "spec") if meta.get(k)}
+    if extra.get("spec"):
+        extra["hand_edited"] = True            # az ügynöki szerkesztés a forgatókönyvből épít újra — ezt jelezni kell
     if extra:
         write_meta(new_id, extra=extra)
 
@@ -877,15 +880,26 @@ async def _probe_duration(workdir: Path, name: str) -> Optional[float]:
         return None
 
 
-async def _materialize_images(specs: list[Any], fmt: str, workdir: Path) -> tuple[list[Optional[str]], list[str]]:
-    """Képleírások (file_id / {url} / {stock} / {generate}) → fájlnevek a munkamappában + forrásmegjelölések."""
+async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
+                              parent: Optional[str] = None) -> tuple[list[Optional[str]], list[str], list[Optional[str]]]:
+    """Képleírások (file_id / {url} / {stock} / {generate}, vagy {"asset": név} = a szülőprojekt meglévő képe, letöltés
+    nélkül) → fájlnevek a munkamappában + forrásmegjelölések (egyedi) + jelenetenkénti kredit."""
     from app.tools import images as imgs
     W, H = FORMATS[fmt]
     names: list[Optional[str]] = []
     credits: list[str] = []
+    per: list[Optional[str]] = []
+    parent_assets = assets_of(parent) if parent else {}
 
     async def one(i: int, spec: Any) -> tuple[Optional[str], Optional[str]]:
         if not spec:
+            return None, None
+        if isinstance(spec, dict) and spec.get("asset"):
+            fid = parent_assets.get(spec["asset"])
+            if fid:
+                name = f"picture-{i + 1:02d}{Path(spec['asset']).suffix or '.jpg'}"
+                shutil.copyfile(crafts.existing(fid), workdir / name)
+                return name, spec.get("credit")
             return None, None
         try:
             r = await imgs.resolve(spec, aspect=W / H, max_px=max(W, H))
@@ -903,9 +917,10 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path) -> tupl
     res = await asyncio.gather(*(guarded(i, s) for i, s in enumerate(specs)))
     for name, credit in res:
         names.append(name)
+        per.append(credit if name else None)
         if credit and credit not in credits:
             credits.append(credit)
-    return names, credits
+    return names, credits, per
 
 
 _PICK_N = 6
@@ -1096,13 +1111,34 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
         for i, chosen in (await _choose_stock(stock_jobs)).items():
             specs[i] = chosen
 
+    opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id")}
+    return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text,
+                           source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True))
+
+
+async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any], *, chart_notes: list[str],
+                    source_text: str, source_file_id: Optional[str], step: Callable[..., None], render: bool = True,
+                    parent: Optional[str] = None, label_stem: Optional[str] = None, operation: str = "video") -> dict[str, Any]:
+    """Forgatókönyv + képleírások → .ecproj (+ MP4). A make és az edit közös útja; parent = a szerkesztett projekt
+    (a képei és a hangja {"asset": név} hivatkozással, letöltés nélkül jönnek át)."""
+    fmt, total = opts["fmt"], opts.get("total")
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
-        names, credit_list = await _materialize_images(specs, fmt, work)
+        names, credit_list, per_credit = await _materialize_images(specs, fmt, work, parent)
         voice = music = None
         voice_s = None
+        parent_assets = assets_of(parent) if parent else {}
         for key, base in (("voice_file_id", "voice"), ("music_file_id", "music")):
-            fid = body.get(key)
+            fid = opts.get(key)
+            kept = opts.get(f"{base}_asset")          # szerkesztés: a szülőprojekt hangja marad
+            if not fid and kept and parent_assets.get(kept):
+                shutil.copyfile(crafts.existing(parent_assets[kept]), work / kept)
+                if base == "voice":
+                    voice = kept
+                else:
+                    music = kept
+                continue
             if fid:
                 p = crafts.existing(fid)
                 ext = p.suffix.lstrip(".").lower()
@@ -1119,10 +1155,10 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
         # a képernyőn rövid: név + licenc, linkek nélkül („Photo: X (Wikimedia Commons), CC BY 4.0 — https://…”)
         short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", c)).strip() for c in credit_list]
         on_screen = ("Pictures: " + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
-        kb = str(body.get("ken_burns") or "some").lower()
+        kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
         focus = {nm: await asyncio.to_thread(_focus, work / nm) for nm in names if nm} if kb != "off" else {}
-        D = compose(story, fmt=fmt, total=total, images=names, accent=body.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
+        D = compose(story, fmt=fmt, total=total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
                     voice=voice, voice_s=voice_s, music=music)
         # előre megrajzolt rétegek (képkockánként effekt helyett): sötét átmenet a cím/jelenet alá, elmosott zárókép
         W, H = FORMATS[fmt]
@@ -1139,20 +1175,29 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
         async with _render_gate():
             out = await _run("script", "build.jsx", "--save-as", "project.ecproj", cwd=work)
         log.info("videó felépítve: %s", out.strip().splitlines()[-2:] if out.strip() else "")
-        stem = _title_stem(story["title"])
+        stem = label_stem or _title_stem(story["title"])
         pid = new_file_id("ecproj")
         shutil.copyfile(work / "project.ecproj", output_path(pid))
         from app.routes.make import _new_group
         group = _new_group()
         info_meta = {"format": fmt, "duration": D["total"], "scenes": len(D["scenes"]), "title": story["title"]}
-        write_meta(pid, label=f"{stem}.ecproj", operation="video", source_file_id=body.get("source_file_id"),
-                   extra={"video": info_meta, "group": group, "credit": credits or None})
+        # a forgatókönyv a projekt mellett: ebből szerkeszt az ügynök (edit) — képek a projekt saját médiájára hivatkozva
+        def _src(sp: Any) -> Any:
+            sp = sp.get("src") if isinstance(sp, dict) and sp.get("asset") else sp
+            return sp if isinstance(sp, (str, dict)) else None
+        spec = {"story": story, "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
+                                              for nm, cr, sp in zip(names, per_credit, specs)],
+                "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
+                         "music_asset": music},
+                "source": (source_text or "")[:30000], "chart_notes": chart_notes}
+        write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
+                   extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
         for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra:
             add_asset(pid, name, work / name)
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": fmt,
                                   "duration": D["total"], "scenes": len(D["scenes"]), "captions": len(D["captions"]),
                                   "credits": credits or None, "story": story}
-        if body.get("render", True):
+        if render:
             step(4, 5, "rendering the video")
             vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
             result["check"] = vid.pop("check", None)          # a közös check-szerződés: a feladat (a videó) ellenőrzése
@@ -1166,6 +1211,8 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
         return result
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
 
 
 def _file_entry(fid: str) -> dict[str, Any]:
@@ -1239,16 +1286,31 @@ def info(file_id: str) -> dict[str, Any]:
     ext = p.suffix.lstrip(".").lower()
     meta = read_meta(file_id) or {}
     if ext != "ecproj":
-        return {"file_id": file_id, "kind": "movie" if ext in MOVIE_EXTS else ext, "size_kb": p.stat().st_size // 1024,
-                "made_from": meta.get("source_file_id")}
+        src = meta.get("source_file_id")
+        out = {"file_id": file_id, "kind": "movie" if ext in MOVIE_EXTS else ext, "size_kb": p.stat().st_size // 1024,
+               "made_from": src}
+        if src and str(src).lower().endswith(".ecproj"):
+            out["project"] = src
+            out["note"] = "To change this video, use video(action=\"edit\") with this file or its project; info on the project lists the scenes."
+        return out
     data = json.loads(p.read_text("utf-8"))
     footage = [Path(str((i.get("kind") or {}).get("path"))).name for i in (data.get("items") or {}).values()
                if (i.get("kind") or {}).get("type") == "Footage"]
     assets = assets_of(file_id)
     rid = meta.get("render_file_id")
+    spec = meta.get("spec") or {}
+    pics = spec.get("pictures") or []
+    scenes = [{"scene": i, "headline": sc.get("headline"), "caption": sc.get("caption"),
+               **({"chart": {"type": sc["chart"]["type"], "title": sc["chart"]["title"]}} if sc.get("chart") else {}),
+               **({"stat": sc["stat"]} if sc.get("stat") else {}),
+               "picture": ((pics[i] or {}).get("credit") or "yes") if i < len(pics) and pics[i] else None}
+              for i, sc in enumerate((spec.get("story") or {}).get("scenes") or [], 1)]
     return {"file_id": file_id, "comps": _comps(data), "footage": footage, "missing": [f for f in footage if f not in assets],
             "video": meta.get("video"), "last_render": _file_entry(rid) if rid and output_path(rid).exists() else None,
-            "credits": meta.get("credit")}
+            "credits": meta.get("credit"), "editable_by_description": bool(spec),
+            **({"title": spec["story"].get("title"), "scenes": scenes, "options": spec.get("opts")} if spec else {}),
+            **({"note": "It was also changed by hand in the editor; an edit rebuilds from the script and leaves those hand changes out."}
+               if meta.get("hand_edited") else {})}
 
 
 async def thumb(src: Path, raw: Path) -> None:
@@ -1271,3 +1333,278 @@ async def thumb(src: Path, raw: Path) -> None:
                    "--out", str(raw), cwd=work, timeout=120)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------- utólagos szerkesztés (az ügynök és az „Ask for a change”) ----------
+
+def project_of(file_id: str) -> str:
+    """A videó projektje: .ecproj maga, MP4/WebM/GIF esetén az, amiből renderelték."""
+    if file_id.lower().endswith(".ecproj"):
+        return file_id
+    src = (read_meta(file_id) or {}).get("source_file_id")
+    if src and str(src).lower().endswith(".ecproj"):
+        return src
+    raise ValueError("This video has no project behind it — make one with the video maker (video action=make).")
+
+
+def _img_spec(x: Any) -> Any:
+    """Kép a szerkesztéshez: file_id | {"file_id"} | {"url"} (pl. a kliens saját generált képe) | {"stock": szavak}
+    | None / "none" (kép nélkül)."""
+    if x in (None, "", "none", False):
+        return None
+    if isinstance(x, str):
+        return {"url": x} if x.startswith("http") else x
+    if isinstance(x, dict) and (x.get("file_id") or x.get("url") or x.get("stock")):
+        return x.get("file_id") or ({"url": x["url"], **({"credit": x["credit"]} if x.get("credit") else {})} if x.get("url")
+                                    else {"stock": _clean(x["stock"], 60)})
+    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}} or none — not {x!r}")
+
+
+def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    sc = dict(base or {"headline": "", "caption": "", "image_query": "", "stat": None, "chart": None})
+    if "headline" in ch:
+        sc["headline"] = _clean(ch["headline"], 60)
+    if "caption" in ch:
+        sc["caption"] = _clean(ch["caption"], 200)
+    if "stat" in ch:
+        st = ch["stat"]
+        sc["stat"] = {"value": _clean(st.get("value"), 10), "label": _clean(st.get("label"), 48)} if isinstance(st, dict) and st.get("value") else None
+        if sc["stat"]:
+            sc["chart"] = None
+    if "chart" in ch:
+        chart, note = _chart_from_plan(ch["chart"], source) if ch["chart"] else (None, None)
+        if note:
+            notes.append(note)
+        sc["chart"] = chart
+        if chart:
+            sc["stat"] = None
+    return sc
+
+
+async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
+               progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """Egy elkészült videó módosítása a forgatókönyvéből → ÚJ változat (projekt + MP4). changes:
+    {"scenes": [{"scene": n (1-től), "headline"?, "caption"?, "image"?, "stat"?, "chart"?, "remove"?}],
+     "add": [{"after": n (0 = az első elé), "headline", "caption"?, "image"? | "image_query"?, "stat"?, "chart"?}],
+     "title"?, "kicker"?, "title_image"?, "end_title"?, "end_subtitle"?,
+     "format"?, "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none", "voice_file_id"? | "none"}.
+    A grafikon számai a forrásból (vagy az extra_source-ból — pl. a kérés szövegéből) jöhetnek."""
+    step = progress or (lambda *a, **k: None)
+    pid = project_of(file_id)
+    meta = read_meta(pid) or {}
+    spec = meta.get("spec")
+    if not spec:
+        raise ValueError("This video wasn't made by the video maker, so it can't be changed by description — change it in "
+                         "the video editor (edit_url), or make a new one with video action=make.")
+    if not isinstance(changes, dict) or not changes:
+        raise ValueError("Say what should change (changes).")
+    story = copy.deepcopy(spec["story"])
+    pics = copy.deepcopy(spec.get("pictures") or [])
+    pics += [None] * (len(story["scenes"]) + 1 - len(pics))
+    opts = dict(spec.get("opts") or {})
+    source = (spec.get("source") or "") + "\n" + (extra_source or "")
+    notes: list[str] = []
+    keep = lambda pic: ({"asset": pic["asset"], "credit": pic.get("credit"), "src": pic.get("src")} if pic else None)
+
+    for key, lim in (("title", 70), ("kicker", 28)):
+        if key in changes:
+            story[key] = _clean(changes[key], lim)
+    end = dict(story.get("end") or {})
+    if "end_title" in changes:
+        end["title"] = _clean(changes["end_title"], 60)
+    if "end_subtitle" in changes:
+        end["subtitle"] = _clean(changes["end_subtitle"], 90)
+    story["end"] = end
+
+    entries = [{"scene": sc, "pic": keep(pics[i + 1]), "remove": False} for i, sc in enumerate(story["scenes"])]
+    title_pic = _img_spec(changes["title_image"]) if "title_image" in changes else keep(pics[0])
+    n0 = len(entries)
+    for ch in changes.get("scenes") or []:
+        try:
+            k = int(ch.get("scene")) - 1
+        except (TypeError, ValueError):
+            raise ValueError("scenes[].scene: the scene's number (1 = the first scene after the title card)")
+        if not 0 <= k < n0:
+            raise ValueError(f"There is no scene {k + 1} (the video has {n0}).")
+        e = entries[k]
+        if ch.get("remove"):
+            e["remove"] = True
+            continue
+        e["scene"] = _scene_from(ch, source, notes, e["scene"])
+        if "image" in ch:
+            e["pic"] = _img_spec(ch["image"])
+        elif ch.get("image_query"):
+            e["pic"] = {"stock": _clean(ch["image_query"], 60)}
+    adds: dict[int, list[dict[str, Any]]] = {}
+    for a in changes.get("add") or []:
+        after = max(0, min(n0, int(a.get("after", n0))))
+        sc = _scene_from(a, source, notes)
+        pic = _img_spec(a["image"]) if a.get("image") else {"stock": _clean(a.get("image_query") or sc["headline"] or story["title"], 60)}
+        adds.setdefault(after, []).append({"scene": sc, "pic": pic, "remove": False})
+    final = list(adds.get(0, []))
+    for i, e in enumerate(entries, 1):
+        if not e["remove"]:
+            final.append(e)
+        final += adds.get(i, [])
+    if not final:
+        raise ValueError("A video needs at least one scene.")
+
+    if "format" in changes:
+        opts["fmt"] = fmt_name(changes["format"])
+    if "duration" in changes:
+        d = changes["duration"]
+        opts["total"] = None if d in (None, "", "auto") else float(min(max(float(d), 10), 180))
+    for key in ("ken_burns", "accent"):
+        if key in changes:
+            opts[key] = changes[key]
+    for key, base in (("music_file_id", "music"), ("voice_file_id", "voice")):
+        if key in changes:
+            v = changes[key]
+            opts[f"{base}_asset"] = None
+            opts[key] = None if v in (None, "", "none") else v
+
+    story["scenes"] = [e["scene"] for e in final]
+    specs: list[Any] = [title_pic] + [e["pic"] for e in final]
+    reshape = opts["fmt"] != (spec.get("opts") or {}).get("fmt")
+    if reshape:          # más képarány: a képeket az eredeti forrásból újra (különben nagyítva, elmosódva)
+        specs = [(sp.get("src") or sp) if isinstance(sp, dict) and sp.get("asset") else sp for sp in specs]
+    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
+                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
+    if stock_jobs:
+        step(1, 5, "finding pictures")
+        for i, chosen in (await _choose_stock(stock_jobs)).items():
+            specs[i] = chosen
+    from app.storage.naming import result_stem
+    res = await _assemble(story, specs, opts, chart_notes=list(spec.get("chart_notes") or []) + notes, source_text=source,
+                          source_file_id=pid, step=step, parent=pid, label_stem=result_stem(pid, "edited"),
+                          operation="video edit")
+    res["notes"] = notes + (["Rebuilt from the video's script: changes made by hand in the video editor are not in this "
+                             "version (they stay in the previous one)."] if meta.get("hand_edited") else [])
+    return res
+
+
+_EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json object of changes — only what the request asks:
+{"summary": "what you changed, one short sentence in the request's language",
+ "scenes": [{"scene": n, "headline"?: str, "caption"?: str, "image"?: {"stock": "2–4 plain English words"} | "none",
+             "stat"?: {"value": str, "label": str} | null, "chart"?: <chart> | null, "remove"?: true}],
+ "add": [{"after": n, "headline": str, "caption": str, "image_query": "2–4 plain English words", "stat"?: ..., "chart"?: ...}],
+ "title"?: str, "end_title"?: str, "end_subtitle"?: str, "title_image"?: {"stock": "words"},
+ "format"?: "vertical|landscape|square", "duration"?: seconds, "ken_burns"?: "some|all|off", "accent"?: "#RRGGBB"}
+<chart> = {"type": "column|bar|line|donut|ring|icons|timeline|steps", "title": str, "unit": str, "total": number|null,
+           "items": [{"label": str, "value": number|null, "text": str}]}
+Scene numbers are the ones listed below (1 = the first scene after the title card). Numbers in charts and stats must
+come from the video's source or from the request itself — never invent them. Keep the language of the video.
+
+The video now:
+{video}
+
+Request: {request}"""
+
+
+def _describe(spec: dict[str, Any]) -> str:
+    st, o = spec["story"], spec.get("opts") or {}
+    pics = spec.get("pictures") or []
+    lines = [f"title: {st.get('title')} · format {o.get('fmt')} · {o.get('total') or 'auto'} s · Ken Burns {o.get('ken_burns')}"]
+    for i, sc in enumerate(st["scenes"], 1):
+        pic = pics[i] if i < len(pics) else None
+        what = f"chart {sc['chart']['type']} “{sc['chart']['title']}”" if sc.get("chart") else (f"stat {sc['stat']['value']}" if sc.get("stat") else "")
+        lines.append(f"{i}. {sc.get('headline')} — caption: {sc.get('caption')}" + (f" — {what}" if what else "")
+                     + (f" — picture: {(pic or {}).get('credit') or 'yes'}" if pic else " — no picture"))
+    lines.append(f"end: {(st.get('end') or {}).get('title')} / {(st.get('end') or {}).get('subtitle')}")
+    return "\n".join(lines)
+
+
+async def revise(file_id: str, request: str, progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """„Ask for a change" egy videóra: a kérésből változtatás-lista (DeepSeek, JSON) → edit."""
+    from app.llm.siliconflow import _call_model, _strip_json_fences
+    pid = project_of(file_id)
+    spec = (read_meta(pid) or {}).get("spec")
+    if not spec:
+        raise ValueError("This video wasn't made by the video maker — change it in the video editor instead.")
+    (progress or (lambda *a, **k: None))(0, 5, "planning the change")
+    prompt = _EDIT_PLAN.replace("{video}", _describe(spec)).replace("{request}", request)
+    plan_, last = None, None
+    for model in (settings.AGENT_MODEL, settings.AGENT_MODEL_FALLBACK):
+        try:
+            plan_ = json.loads(_strip_json_fences(await _call_model(model, [{"role": "user", "content": prompt}], thinking=False)))
+            break
+        except Exception as e:
+            last = e
+            log.warning("videó-szerkesztési terv %s modellel nem sikerült: %s", model, e)
+    if not isinstance(plan_, dict):
+        raise ValueError(f"Couldn't work out the change ({last}) — try saying it differently.")
+    summary = _clean((plan_ or {}).pop("summary", "") if isinstance(plan_, dict) else "", 200)
+    res = await edit(pid, plan_ if isinstance(plan_, dict) else {}, extra_source=request, progress=progress)
+    res["summary"] = summary or "Video changed."
+    return res
+
+
+# ---------- videó egy diára ----------
+
+async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide: Optional[int] = None,
+                  title: Optional[str] = None) -> dict[str, Any]:
+    """A videó egy diára: új egydiás pakli, vagy egy meglévő pakli új diája (after_slide után, alapból a végén).
+    A dián a videó maga (beágyazott MP4, az első kockája a borítóképe), a dia méretéhez igazítva."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+    from app.storage.naming import result_stem, root_name
+    from app.tools import previews
+    vid = file_id
+    if file_id.lower().endswith(".ecproj"):                 # projekt → a legutóbbi renderje (ha nincs, renderel)
+        rid = (read_meta(file_id) or {}).get("render_file_id")
+        if not rid or not output_path(rid).exists():
+            rid = (await render(file_id))["file_id"]
+        vid = rid
+    vpath = crafts.existing(vid)
+    if vpath.suffix.lower() not in (".mp4", ".m4v", ".mov"):
+        raise ValueError("Slides take an MP4 video (or a video project, which is rendered first).")
+    import cv2
+    cap = cv2.VideoCapture(str(vpath))
+    vw, vh = cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 16, cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 9
+    secs = (cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / (cap.get(cv2.CAP_PROP_FPS) or 30)
+    cap.release()
+    # borítókép: a címkártya, amikor a cím már teljesen látszik (~1,6 s) — fix arány átúszásra eshet
+    poster = temp_path(new_file_id("png"))
+    await asyncio.to_thread(previews._video_frame, vpath, min(0.5, 1.6 / secs) if secs > 0 else 0.1, poster)
+    if deck_file_id:
+        if not deck_file_id.lower().endswith(".pptx"):
+            raise ValueError("deck_file_id: a PowerPoint deck (.pptx)")
+        prs = Presentation(str(crafts.existing(deck_file_id)))
+    else:
+        prs = Presentation()
+        prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)          # 16:9
+    SW, SH = int(prs.slide_width), int(prs.slide_height)
+    layout = min(prs.slide_layouts, key=lambda lo: (len(lo.placeholders), "blank" not in lo.name.lower()))
+    slide = prs.slides.add_slide(layout)
+    for ph in list(slide.placeholders):                     # üres helyőrző ne maradjon a dián
+        ph._element.getparent().remove(ph._element)
+    top_room = 0
+    if title and title.strip():
+        top_room = int(SH * 0.16)
+        tb = slide.shapes.add_textbox(int(SW * 0.06), int(SH * 0.04), int(SW * 0.88), int(SH * 0.1))
+        tb.text_frame.text = title.strip()[:120]
+        tb.text_frame.paragraphs[0].runs[0].font.size = Pt(28)
+        tb.text_frame.paragraphs[0].runs[0].font.bold = True
+    pad = 0 if (not deck_file_id and not top_room and vw / vh >= SW / SH * 0.98) else int(min(SW, SH) * 0.04)
+    box_w, box_h = SW - 2 * pad, SH - top_room - 2 * pad
+    k = min(box_w / vw, box_h / vh)
+    w, h = int(vw * k), int(vh * k)
+    left, top = (SW - w) // 2, top_room + pad + (box_h - h) // 2
+    movie = slide.shapes.add_movie(str(vpath), left, top, w, h, poster_frame_image=str(poster), mime_type="video/mp4")
+    movie.name = "Video"
+    n = len(prs.slides)
+    pos = n - 1
+    if deck_file_id and after_slide is not None:            # a dia helye: after_slide után
+        pos = max(0, min(n - 1, int(after_slide)))
+        lst = prs.slides._sldIdLst
+        el = lst[-1]
+        lst.remove(el)
+        lst.insert(pos, el)
+    out = new_file_id("pptx")
+    await asyncio.to_thread(prs.save, str(output_path(out)))
+    poster.unlink(missing_ok=True)
+    label = (result_stem(deck_file_id, "with video") if deck_file_id else root_name(display_label(vid), "Video")) + ".pptx"
+    write_meta(out, source_file_id=deck_file_id or vid, operation="video on a slide", label=label)
+    return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid,
+            "note": "The video plays in PowerPoint and Keynote (it is embedded in the file); the browser's slide editor "
+                    "shows its first frame."}

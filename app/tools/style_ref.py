@@ -66,7 +66,7 @@ def _first_page_png(src: Path, dst: Path) -> list[str]:
                        capture_output=True, timeout=60, env={**__import__("os").environ, "WORDCRAFT_NO_PREFS": "1"})
     elif ext == ".pptx":
         from app.tools import crafts
-        subprocess.run([crafts.office_cli("deck") or "deckcraft-cli", "render", str(src), "--slide", "1", str(dst)],
+        subprocess.run([crafts.office_cli("deck") or "deckcraft-cli", "render", str(src), "--slide", "0", str(dst)],   # 0-tól számol: az 1. dia
                        check=True, capture_output=True, timeout=60)
     else:
         from PIL import Image

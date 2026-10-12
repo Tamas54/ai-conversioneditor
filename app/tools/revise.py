@@ -170,6 +170,13 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
         out_id = res["file_id"]
         summary = (f"New AI picture on {res['where'].split(' · ')[0].lower()}." if swap["ai"] else
                    f"New picture on {res['where'].split(' · ')[0].lower()} — pick another one or generate one below.")
+    elif ext in ("ecproj", "mp4", "m4v", "mov", "webm"):          # videó: a forgatókönyvből új változat (projekt + MP4)
+        from app.tools import video
+        vres = await video.revise(file_id, request)
+        out_id, summary = vres["file_id"], vres.get("summary") or "Video changed."
+        if vres.get("notes"):
+            summary += " " + " ".join(vres["notes"])
+        extra_files = [f["file_id"] for f in vres.get("files") or [] if f["file_id"] != out_id]
     elif ext in IMAGES:
         from app.tools import photo_edit
         res = await photo_edit.run([file_id], request, None, ["psd", "jpg"])

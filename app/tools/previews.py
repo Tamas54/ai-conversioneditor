@@ -146,7 +146,8 @@ async def render(src: Path, page: int = 1, width: int = DEFAULT_W) -> Path:
         elif ext == "pdf":
             await _pdftoppm(src, page, width, raw)
         elif ext in _DECK:
-            await crafts.run_cli(crafts.office_cli("deck"), "deckcraft-cli", "render", str(src), "--slide", str(page),
+            # a deckcraft-cli --slide 0-tól számol (10-12: az 1. oldal kérésére a 2. diát adta, egydiás paklinál hibát)
+            await crafts.run_cli(crafts.office_cli("deck"), "deckcraft-cli", "render", str(src), "--slide", str(page - 1),
                                  "--scale", f"{width / 960:.3f}", str(raw))
         elif ext in _WORD:
             await crafts.run_cli(wordcraft.cli_path(), "wordcraft-cli", "render", str(src), str(raw),

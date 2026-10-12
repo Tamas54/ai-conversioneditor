@@ -1407,6 +1407,10 @@ async def video(
     draft: bool = False,
     ken_burns: str = "some",
     data_file_id: Optional[str] = None,
+    changes: Optional[dict] = None,
+    deck_file_id: Optional[str] = None,
+    after_slide: Optional[int] = None,
+    title: Optional[str] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
 
@@ -1426,6 +1430,18 @@ async def video(
       Animated charts (bars grow, lines draw): made from comparable numbers in the source text (every value is checked
       against the text — a chart with an invented number is left out), or pass data_file_id (CSV/XLSX: a chart per
       column, values from the cells).
+    action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
+      changes = {"scenes": [{"scene": n (1 = first scene after the title card), "headline"?, "caption"?,
+      "image"? (file_id | URL — e.g. a picture you made with your own image tool | {"stock": "words"} | "none"),
+      "stat"? {value, label} | null, "chart"? (same shape as in the story: type column|bar|line|donut|ring|icons|
+      timeline|steps, title, unit, total, items[{label, value, text}]) | null, "remove"? true}],
+      "add": [{"after": n (0 = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?}],
+      "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
+      fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
+      "voice_file_id"? | "none"}. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
+      person's words there). video(action="info") shows the scenes; check and preview_url come with the result.
+    action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a
+      slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster).
     action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
       draft=true renders half size, fast.
     action="info": a project's compositions, length, media files and last render (file_id).
@@ -1445,8 +1461,15 @@ async def video(
     if act == "render":
         from app.routes.video import render_video
         return await render_video({"file_id": file_id or "", "draft": draft})
+    if act == "edit":
+        from app.routes.video import edit_video
+        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or ""})
+    if act in ("to_pptx", "pptx", "slide"):
+        from app.routes.video import video_to_pptx
+        return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
+                                    "title": title})
     if act != "make":
-        raise ValueError('action: "make" | "render" | "info" | "status"')
+        raise ValueError('action: "make" | "edit" | "to_pptx" | "render" | "info" | "status"')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
