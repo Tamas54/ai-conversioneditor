@@ -369,6 +369,7 @@ async def files(
     other_file_id: Optional[str] = None,
     scene: Optional[str] = None,
     at: Optional[float] = None,
+    frames: Optional[int] = None,
 ) -> dict:
     """The person's files, and empty new ones; see a file; compare two versions.
 
@@ -384,8 +385,8 @@ async def files(
       Give the person its edit_url — it opens the blank file in the matching editor.
       title names the file (and the deck's first slide).
     action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id (a video: scene =
-      "s3" | its number | "title" | "end" — that scene at its end, when the animation has played — or scene="all" for
-      every scene on one sheet, or at=seconds), so you can
+      "s3" | its number | "title" | "end" — that scene at its end, when the animation has played; + frames=6 for a
+      filmstrip of the scene's motion — or scene="all" for every scene on one sheet, or at=seconds), so you can
       check your own result (text overflow, a missing object, a wrong crop) before calling it done.
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
       changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
@@ -417,7 +418,7 @@ async def files(
             "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "made_from": f.get("source_label")} for f in page]}
     if action == "preview":
-        return await _preview_content(file_id, page or 1, scene, at)
+        return await _preview_content(file_id, page or 1, scene, at, frames)
     if action == "compare":
         from app.tools import compare as cmp
         if not file_id:
@@ -451,7 +452,8 @@ async def files(
     return res
 
 
-async def _preview_content(file_id: Optional[str], page: int, scene: Optional[str] = None, at: Optional[float] = None):
+async def _preview_content(file_id: Optional[str], page: int, scene: Optional[str] = None, at: Optional[float] = None,
+                           frames: Optional[int] = None):
     """files(action="preview"): a kép MAGA az eszköz-válaszban (a kliens-AI látja), mellette a szöveges adatok.
     Videónál jelenetenként is (scene: s3 | sorszám | title | end | all = kontaktlap) vagy időpontra (at)."""
     import asyncio
@@ -465,7 +467,11 @@ async def _preview_content(file_id: Optional[str], page: int, scene: Optional[st
     src = existing(file_id)
     if (scene is not None or at is not None) and src.suffix.lower().lstrip(".") in ("ecproj", "mp4", "mov", "m4v", "webm"):
         from app.tools import video as vid_mod
-        if str(scene or "").lower() == "all":
+        if frames and scene and str(scene).lower() not in ("all", "title", "end"):     # a jelenet mozgása: filmszalag
+            jpg, info = await asyncio.to_thread(vid_mod.filmstrip, file_id, scene, int(frames))
+            info = {"file_id": file_id, "name": display_label(file_id), **info,
+                    "note": "The scene from start to end — how the graphic moves, frame by frame."}
+        elif str(scene or "").lower() == "all":
             jpg, frames = await asyncio.to_thread(vid_mod.contact_sheet, file_id)
             info = {"file_id": file_id, "name": display_label(file_id), "scenes": frames,
                     "note": "Every scene at its end (animations done), with the title card and the end card."}
@@ -1438,6 +1444,8 @@ async def video(
     title_image: Optional[Any] = None,
     end_title: Optional[str] = None,
     end_subtitle: Optional[str] = None,
+    scene: Optional[str] = None,
+    brand: Optional[str] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
 
@@ -1475,12 +1483,16 @@ async def video(
     action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
       changes = {"scenes": [{"id": "s3" (stable — info lists the ids; or "scene": n, 1 = first after the title card), "headline"?, "caption"?,
       "image"? (file_id | URL — e.g. a picture you made with your own image tool | {"stock": "words"} | "none"),
-      "stat"? {value, label} | null, "chart"? (any graphic type above) | null, "duration"?, "remove"? true}],
+      "stat"? {value, label} | null, "chart"? (any graphic type above; WITHOUT "type" it is a fix of the scene's chart —
+      e.g. {"unit": "million"} or {"title": …} changes only that) | null, "duration"?, "remove"? true}],
       "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
       "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
       fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
       "voice_file_id"? | "none"}. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
       person's words there). video(action="info") shows the scenes; check and preview_url come with the result.
+    action="render" with scene="s3": just that scene as a short draft MP4 (a job, seconds) — check a change without
+      rendering the whole video. (Without scene: re-render the whole project, e.g. after hand edits.)
+    brand: the person's saved brand (name, "mine") colours the video; left out, their default brand is used; "none" = off.
     action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a
       slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster).
     action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
@@ -1501,6 +1513,14 @@ async def video(
         return vid.info(file_id)
     if act == "render":
         from app.routes.video import render_video
+        if scene:                                   # egyetlen jelenet gyors renderje (ellenőrzéshez, az egész nélkül)
+            from app import jobs as jobs_mod
+            from app.tools import video as vmod
+
+            async def work(progress):
+                progress(0, 1, "rendering the scene")
+                return await vmod.render_scene(file_id or "", scene, draft=True)
+            return jobs_mod.start("video", work)
         return await render_video({"file_id": file_id or "", "draft": draft})
     if act == "edit":
         from app.routes.video import edit_video
@@ -1515,7 +1535,7 @@ async def video(
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
             "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
-            "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker,
+            "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
             "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle}
     return await make_video(body)
 

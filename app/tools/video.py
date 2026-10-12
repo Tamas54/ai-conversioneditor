@@ -471,6 +471,35 @@ def _clean(s: Any, n: int, what: Optional[str] = None) -> str:
     return out
 
 
+# ábraszövegek, amelyek a dobozukba csak kisebb betűvel fértek be (a check megemlíti)
+_FIT: "contextvars.ContextVar[Optional[list[str]]]" = contextvars.ContextVar("video_fit", default=None)
+
+
+def _fit_size(st: str, size: float, box_w: float, box_h: float, name: str = "") -> int:
+    """Elfér-e a szöveg a dobozában (szótördeléssel, ~0,56 em átlagos betűszélesség, 1,22 sormagasság)? Ha nem,
+    kisebb betű — legfeljebb az eredeti 55%-áig; az illesztést feljegyzi."""
+    s0, size = int(size), float(size)
+    words = str(st or "").split() or [""]
+    while size > s0 * 0.55:
+        cw, lines, cur, wide = 0.56 * size, 1, 0.0, False
+        for w in words:
+            ww = len(w) * cw
+            wide = wide or ww > box_w
+            nxt = ww if cur == 0 else cur + cw + ww
+            if nxt > box_w and cur > 0:
+                lines, cur = lines + 1, ww
+            else:
+                cur = nxt
+        if not wide and lines * size * 1.22 <= box_h * 1.05:
+            break
+        size *= 0.93
+    out = int(round(size))
+    notes = _FIT.get()
+    if out < s0 and notes is not None:
+        notes.append(f"{name or 'text'} {s0}→{out} px")
+    return out
+
+
 def _with_ids(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Stabil jelenetazonosítók (s1, s2…): beszúrás/törlés után is ugyanarra a jelenetre mutatnak."""
     used = {str(sc.get("id")) for sc in scenes if sc.get("id")}
@@ -678,7 +707,8 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
     out: list[dict[str, Any]] = []
     rect = lambda name, size, pos, **o: out.append({"k": "rect", "name": name, "size": [round(size[0], 1), round(max(size[1], 2), 1)],
                                                      "pos": [round(pos[0], 1), round(pos[1], 1)], **o})
-    text = lambda name, st, size, box, pos, **o: out.append({"k": "text", "name": name, "str": st, "size": size,
+    text = lambda name, st, size, box, pos, **o: out.append({"k": "text", "name": name, "str": st,
+                                                             "size": _fit_size(st, size, box[0], box[1], name),
                                                              "box": [round(box[0], 1), round(box[1], 1)], "pos": [round(pos[0], 1), round(pos[1], 1)], **o})
     stagger, grow = min(0.18, 1.6 / max(n, 1)), 0.7
     if typ == "column":
@@ -1288,11 +1318,12 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
             raise ValueError(str(e).replace("Slides", "A video").replace("make slides from", "make a video from"))
         text, title_hint = src["text"], title_hint or src["title"]
         doc_pics = [p["file_id"] for p in src.get("pictures") or []]
-    trunc_tok = _TRUNC.set([])
+    trunc_tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
         return await _make_body(body, step, fmt, mode, text, title_hint, og_image, site, doc_pics)
     finally:
         _TRUNC.reset(trunc_tok)
+        _FIT.reset(fit_tok)
 
 
 async def _queries_for(scenes: list[dict[str, Any]]) -> list[str]:
@@ -1312,9 +1343,27 @@ async def _queries_for(scenes: list[dict[str, Any]]) -> list[str]:
     return [sc.get("headline") or "" for sc in scenes]
 
 
+async def _brand_accent(body: dict[str, Any]) -> Optional[str]:
+    """A videó akcentusszíne: a megadott, különben a felhasználó (alapértelmezett / megnevezett) arculatáé; brand="none" = ki."""
+    if body.get("accent"):
+        return body["accent"]
+    b = body.get("brand")
+    if str(b or "").strip().lower() in ("none", "off", "no"):
+        return None
+    try:
+        from app.brands import user as user_brands
+        kit = await user_brands.resolve(b)
+    except Exception as e:
+        log.info("videó-arculat: %s", e)
+        return None
+    cols = (kit or {}).get("colors") or {}
+    return cols.get("accent") or cols.get("primary")
+
+
 async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, mode: str, text: str, title_hint: str,
                      og_image: Optional[str], site: str, doc_pics: list[str]) -> dict[str, Any]:
     pictures = (body.get("pictures") or "stock").lower()
+    body = {**body, "accent": await _brand_accent(body)}
     pre_v: list[str] = []
     pre_f: list[str] = []
     if body.get("scenes"):                  # a kliens jelenetterve: nem tervezünk újra, pontosan ez lesz
@@ -1532,6 +1581,10 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 cov_v, cov_f, cov = _coverage(source_text, story, bool(opts.get("keep_wording")), scene_plan)
                 result["coverage"] = cov
                 chk["verified"] += cov_v
+                fitted = _FIT.get() or []
+                if fitted:
+                    chk["verified"].append(f"Fitted to their boxes: {len(fitted)} graphic text(s) set smaller, e.g. "
+                                           + "; ".join(fitted[:4]) + ".")
                 chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + cov_f + (
                     [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]])
                 if chk["findings"] and chk.get("status") == "ok":
@@ -1707,7 +1760,7 @@ def info(file_id: str) -> dict[str, Any]:
     scenes = [{"scene": i, "id": sc.get("id") or f"s{i}", **({"start": tl[sc["id"]]["start"], "end": tl[sc["id"]]["end"]}
                                                               if sc.get("id") in tl else {}),
                "headline": sc.get("headline"), "caption": sc.get("caption"),
-               **({"chart": {"type": sc["chart"]["type"], "title": sc["chart"]["title"]}} if sc.get("chart") else {}),
+               **({"chart": sc["chart"]} if sc.get("chart") else {}),
                **({"stat": sc["stat"]} if sc.get("stat") else {}),
                "picture": ((pics[i] or {}).get("credit") or "yes") if i < len(pics) and pics[i] else None}
               for i, sc in enumerate((spec.get("story") or {}).get("scenes") or [], 1)]
@@ -1790,7 +1843,10 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
         if sc["stat"]:
             sc["chart"] = None
     if "chart" in ch:
-        chart, note = _chart_from_plan(ch["chart"], source) if ch["chart"] else (None, None)
+        cc = ch["chart"]
+        if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
+            cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a mértékegység)
+        chart, note = _chart_from_plan(cc, source) if cc else (None, None)
         if note:
             notes.append(note)
         sc["chart"] = chart
@@ -1801,11 +1857,12 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
 
 async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
-    tok = _TRUNC.set([])
+    tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
         return await _edit(file_id, changes, extra_source=extra_source, progress=progress)
     finally:
         _TRUNC.reset(tok)
+        _FIT.reset(fit_tok)
 
 
 async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
@@ -2118,3 +2175,88 @@ def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str
     grid = np.vstack([np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)])
     ok, buf = cv2.imencode(".jpg", grid, [cv2.IMWRITE_JPEG_QUALITY, 82])
     return buf.tobytes(), info_
+
+
+def _scene_index(pid: str, scene: Any) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """Jelenet (id / sorszám) → (1-től számolt index, jelenet, idővonal-sor)."""
+    spec = (read_meta(pid) or {}).get("spec") or {}
+    scenes = _with_ids(copy.deepcopy((spec.get("story") or {}).get("scenes") or []))
+    tl = {x["id"]: x for x in spec.get("timeline") or [] if x.get("id")}
+    key = str(scene or "").strip()
+    k = int(key) if key.isdigit() else next((i + 1 for i, sc in enumerate(scenes) if sc["id"] == key), 0)
+    if not 1 <= k <= len(scenes):
+        raise ValueError(f"No scene {scene!r} — scenes: {', '.join(sc['id'] for sc in scenes)}")
+    sc = scenes[k - 1]
+    return k, sc, tl.get(sc["id"]) or {}
+
+
+def filmstrip(file_id: str, scene: Any, frames: int = 6, width: int = 1400) -> tuple[bytes, dict[str, Any]]:
+    """Egy jelenet mozgása egy képen: `frames` kocka a jelenet elejétől a végéig, időponttal feliratozva — így egy
+    külső AI is látja, hogyan nő az oszlop, rajzolódik a vonal, fordul a mutató (nem csak a végállapotot)."""
+    import cv2
+    import numpy as np
+    pid = project_of(file_id)
+    _, sc, row = _scene_index(pid, scene)
+    if not row:
+        raise ValueError("This video has no scene timeline (made before it was recorded) — use at=seconds instead.")
+    vid = (read_meta(pid) or {}).get("render_file_id") if file_id.lower().endswith(".ecproj") else file_id
+    if not vid or not output_path(vid).exists():
+        raise ValueError("This video project has no render yet — render it first (video action=render).")
+    frames = max(2, min(12, int(frames or 6)))
+    a, b = row["start"] + 0.55, row["end"] - 0.25           # az áttűnés (0,5 s) után: ne az előző jelenet látsszon
+    times = [a + (b - a) * i / (frames - 1) for i in range(frames)]
+    cap = cv2.VideoCapture(str(crafts.existing(vid)))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    cols = frames if frames <= 4 else math.ceil(frames / 2)
+    tw = width // cols
+    tiles = []
+    for t in times:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(t * fps))
+        ok, f = cap.read()
+        if not ok:
+            continue
+        f = cv2.resize(f, (tw, int(tw * f.shape[0] / f.shape[1])))
+        cv2.rectangle(f, (0, 0), (tw, 26), (0, 0, 0), -1)
+        cv2.putText(f, f"{sc['id']}  {t:.1f}s", (6, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        tiles.append(f)
+    cap.release()
+    if not tiles:
+        raise ValueError("No frame could be read from the video.")
+    while len(tiles) % cols:
+        tiles.append(np.zeros_like(tiles[0]))
+    grid = np.vstack([np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)])
+    ok, buf = cv2.imencode(".jpg", grid, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    return buf.tobytes(), {"scene": sc["id"], "start": row["start"], "end": row["end"], "frames_at": [round(t, 2) for t in times]}
+
+
+async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str, Any]:
+    """Csak egy jelenet renderelése (a saját kompozíciója) egy rövid MP4-be — ellenőrzéshez gyors, az egész videó
+    újrarenderelése nélkül. A klip rejtett munkafájl; a teljes videó a render / edit útján készül."""
+    pid = project_of(file_id)
+    k, sc, _ = _scene_index(pid, scene)
+    work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
+    try:
+        proj = stage(pid, work)
+        names = [c["name"] for c in _comps(json.loads(proj.read_text("utf-8")))]
+        comp = next((n for n in names if n.startswith(f"Scene {k} – ")), None)
+        if not comp:
+            raise ValueError(f"Scene {sc['id']} isn't a separate part of this project (was it rearranged by hand?).")
+        args = ["render", "--project", proj.name, "--comp", comp, "--out", "scene.mp4", "--format", "h264", "--json",
+                "--bitrate", "2500" if draft else "8000", "--audio", "auto"]
+        if draft:
+            args += ["--resolution", "half", "--quality", "draft"]
+        t0 = time.time()
+        async with _render_gate():
+            await _run(*args, cwd=work)
+        out = work / "scene.mp4"
+        if not out.exists():
+            raise RuntimeError("The scene render produced no file")
+        vid = new_file_id("mp4")
+        shutil.move(str(out), output_path(vid))
+        stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(display_label(pid)).stem)
+        write_meta(vid, label=f"{stem} – {sc['id']} clip.mp4", operation="video scene render", source_file_id=pid,
+                   extra={"ephemeral": True})
+        return {**_file_entry(vid), "scene": sc["id"], "headline": sc.get("headline"), "render_seconds": round(time.time() - t0, 1),
+                "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly."}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
