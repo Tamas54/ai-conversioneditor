@@ -79,14 +79,14 @@
     </div>
     <h2 class="try-title">Things to try</h2>
     <div class="try">
-      <button data-try="photo"><span>Photos</span>“Remove the blurry grass in front of the animal”</button>
-      <button data-try="photo"><span>Photos</span>“Put the Parliament behind it, crop to 4:5, headline at the top”</button>
-      <button data-try="photo"><span>Photos · restore</span>Photograph a whole album page — every old print is found, repaired and coloured</button>
-      <button data-try="scan"><span>Scan to text</span>Phone photos of an old book → Word, a new book PDF, a searchable PDF</button>
+      <button data-try="grass"><span>Photos</span>“Remove the blurry grass in front of the animal”</button>
+      <button data-try="backdrop"><span>Photos</span>“Put the Parliament behind it, crop to 4:5, headline at the top”</button>
+      <button data-try="restore"><span>Photos · restore</span>Photograph a whole album page — every old print is found, repaired and coloured</button>
+      <button data-try="oldbook"><span>Scan to text</span>Phone photos of an old book → Word, a new book PDF, a searchable PDF</button>
       <button data-try="book"><span>Book · then ask</span>“On page 22 add a photo of the Colosseum” · “indent every paragraph after the third”</button>
       <button data-try="deck"><span>Presentation</span>A brief → a designed deck; attach a pptx you like as the style example</button>
-      <button data-try="pdf"><span>PDF tools</span>Merge, black out names for good, number the pages, lock with a password</button>
-      <button data-try="scan"><span>Forms</span>Photo of a paper form → a fillable PDF; fill one, or a hundred from a spreadsheet</button>
+      <button data-try="redact"><span>PDF tools</span>Black out names for good — they're removed from the file, not just covered</button>
+      <button data-try="form"><span>Forms</span>Photo of a paper form → a fillable PDF; fill one, or a hundred from a spreadsheet</button>
     </div>
     <p class="muted small connect-note">Use it from your own AI too — Claude, ChatGPT, Cursor: <a href="/app/connect">Connect your AI</a>. Without an account you can try everything that doesn't use AI.</p>
   </section>
@@ -340,7 +340,10 @@ const views = {
     const nums = $(".ruler-nums"), w = $(".mat").clientWidth;   // vonalzó-számok 40 px-enként (1 = 1 cm)
     nums.innerHTML = Array.from({ length: Math.floor(w / 40) }, (_, i) => i && i % 2 === 0 ? `<span style="left:${i * 40}px">${i / 2}</span>` : "").join("");
     document.querySelectorAll("[data-make]").forEach(b => b.addEventListener("click", () => nav(makeLink(b.dataset.make))));
-    document.querySelectorAll("[data-try]").forEach(b => b.addEventListener("click", () => nav(makeLink(b.dataset.try))));
+    document.querySelectorAll("[data-try]").forEach(b => b.addEventListener("click", () => {   // a kártya előbeállítja az ablakot
+      const p = TRY[b.dataset.try]; if (!p) return;
+      pendingPreset = p; nav(makeLink(p.kind, p.mode));
+    }));
     await loadFiles(); renderFiles($("#recent"), files.slice(0, 10));
   },
   async files() {
@@ -486,6 +489,14 @@ views.make = async arg => {    // /app/make/<eszköz>[/<mód>][?src=<file_id>] �
     again: !!(history.state?.again || q.get("again")), draft: !!history.state?.draft });
 };
 const aboutPath = location.pathname.replace(/\/+$/, "");
+// a fül címe követi az appon belüli navigációt; a betöltött útvonalon a szerver (kereső-) címe marad
+const SERVER_TITLE = document.title, PRODUCT = $(".brand").textContent.trim(), SEO_PAGE = /^\/app\/(make\/|plans)/.test(aboutPath);
+function setTitle(t) {
+  document.title = SEO_PAGE && location.pathname.replace(/\/+$/, "") === aboutPath ? SERVER_TITLE
+    : t ? `${t} — ${PRODUCT}` : `${PRODUCT} — documents, slides, photos and PDFs, changed by asking`;
+}
+const VIEW_TITLES = { files: "Files", connect: "Connect your AI", plans: "Plans & pricing" };
+let baseTitle = "";            // az aktuális nézet címe (a készítő-fiók bezárásakor ez áll vissza)
 async function route() {
   appSteps++;
   const about = document.getElementById("tool-about");
@@ -493,11 +504,11 @@ async function route() {
   const rel = location.pathname.replace(/^\/app\/?/, "").replace(/\/+$/, "");   // statikus útvonal: /app/<nézet>/<…>
   const [name = "", ...rest] = rel.split("/");
   const arg = rest.join("/") + location.search;
-  if (name !== "make") { underMaker = here(); if ($("#drawer").open) $("#drawer").close(); }
+  if (name !== "make") { underMaker = here(); if ($("#drawer").open) $("#drawer").close(); baseTitle = VIEW_TITLES[name] || ""; setTitle(baseTitle); }
   if (!["file", "make"].includes(name)) lastPlace = here();
   document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
   document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
-  try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); }
+  try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); if (name === "file" && cur?.file_id && location.pathname.includes(cur.file_id)) { baseTitle = cur.label; setTitle(baseTitle); } }
   catch (e) { if (e.message !== "signed out") toast(e.message); }
 }
 // statikus linkek: History API; a belső <a href="/app…"> kattintás nem tölti újra az oldalt
@@ -580,20 +591,47 @@ const EXT = {
   slides: ["pptx", "potx", "ppt", "odp"], pdf: ["pdf"],
 };
 const extOf = n => (String(n).split(/[?#]/)[0].split(".").pop() || "").toLowerCase();
+// Saját ejtőzóna: a natív <input type=file> rejtve (a böngésző nyelvén írna, és nem tudna a „From your files”-ról);
+// a kiválasztott fájlok EGY helyen látszanak: bélyegkép + név + ✕ (saját fájl és most feltöltendő egyaránt).
+const ICON_UP = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>`;
+const extList = exts => [...new Set((exts || []).map(e => ({ jpeg: "jpg", tiff: "tif", htm: "html", potx: "pptx" }[e] || e)))];
 function fileSlot(name, { exts = null, multiple = false, label = "File", hint = "" } = {}) {
   return `<div class="slot" data-slot="${name}" data-exts="${exts ? exts.join(",") : ""}"${multiple ? " data-multiple" : ""}>
     ${label ? `<span class="slot-label">${label}</span>` : ""}
-    <div class="slot-row"><input type="file" name="${name}" accept="${exts ? exts.map(e => "." + e).join(",") : ""}"${multiple ? " multiple" : ""}>
+    <div class="slot-drop" role="button" tabindex="0"><input type="file" name="${name}" accept="${exts ? exts.map(e => "." + e).join(",") : ""}"${multiple ? " multiple" : ""} hidden tabindex="-1">
+      <span class="slot-drop-icon">${ICON_UP}</span><span class="slot-drop-text"></span>
       <button type="button" class="btn ghost slot-pick">From your files</button></div>
     <div class="slot-list" hidden></div><div class="slot-chips"></div>${hint}</div>`;
 }
 const slotEl = (form, name) => form.querySelector(`.slot[data-slot="${name}"]`);
 function slotPicked(form, name) { try { return JSON.parse(slotEl(form, name)?.dataset.ids || "[]"); } catch { return []; } }
+const localThumbs = new WeakMap();                  // File → objektum-URL: bélyegkép a még fel nem töltött képhez
+function drawSlot(s) {                              // a fájlhely egyetlen nézete: ejtőzóna-szöveg + a választott fájlok
+  let ids = []; try { ids = JSON.parse(s.dataset.ids || "[]"); } catch {}
+  const up = [...s.querySelector("input[type=file]").files], multi = s.hasAttribute("data-multiple"), any = ids.length + up.length > 0;
+  const kinds = extList(s.dataset.exts ? s.dataset.exts.split(",") : null);
+  s.querySelector(".slot-drop-text").innerHTML = (any ? `<b>${multi ? "Add more" : "Replace it"}</b> — drop here or <u>browse</u>`
+    : `<b>Drop ${multi ? "files" : "a file"} here</b> or <u>browse</u>`)
+    + (kinds.length ? `<em>${esc(kinds.slice(0, 6).map(e => e.toUpperCase()).join(" · "))}${kinds.length > 6 ? " …" : ""}</em>` : "");
+  s.querySelector(".slot-drop").setAttribute("aria-label", (any ? (multi ? "Add more files" : "Replace the file") : multi ? "Choose files" : "Choose a file") + " — or drop here");
+  const thumb = (src, ext) => `<span class="slot-thumb" data-ext="${esc(ext.slice(0, 4).toUpperCase())}">${src ? `<img src="${src}" alt="">` : ""}</span>`;
+  const chip = (th, label, attr) => `<span class="slot-chip">${th}<span class="slot-chip-name" title="${esc(label)}">${esc(label)}</span><button type="button" ${attr} aria-label="Remove ${esc(label)}">✕</button></span>`;
+  s.querySelector(".slot-chips").innerHTML =
+    ids.map(id => chip(thumb(`/api/thumb/${encodeURIComponent(id)}`, extOf(id)), files.find(x => x.file_id === id)?.label || id, `data-unpick="${esc(id)}"`)).join("")
+    + up.map((f, i) => {
+      let src = "";
+      if (/^image\/(png|jpe?g|webp|gif|bmp)$/.test(f.type)) { src = localThumbs.get(f); if (!src) { src = URL.createObjectURL(f); localThumbs.set(f, src); } }
+      return chip(thumb(src, extOf(f.name)), f.name, `data-unfile="${i}"`);
+    }).join("");
+  s.querySelectorAll(".slot-thumb img").forEach(img => img.addEventListener("error", () => img.remove(), { once: true }));   // nincs kép → a kiterjesztés látszik
+  s.classList.toggle("has", any);
+  s._kept = up;                                     // többes helyen a következő választás ehhez adódik
+}
 function setSlotPicked(form, name, ids) {
   const s = slotEl(form, name); if (!s) return;
   if (!s.hasAttribute("data-multiple")) { ids = ids.slice(-1); if (ids.length) s.querySelector("input[type=file]").value = ""; }
   s.dataset.ids = JSON.stringify(ids);
-  s.querySelector(".slot-chips").innerHTML = ids.map(id => `<span class="slot-chip">${esc(files.find(x => x.file_id === id)?.label || id)}<button type="button" data-unpick="${esc(id)}" aria-label="Remove">✕</button></span>`).join("");
+  drawSlot(s);
   if (ids.length) s.classList.remove("needs");
   s.dispatchEvent(new Event("slotchange", { bubbles: true }));
 }
@@ -606,7 +644,7 @@ function setSlotFiles(form, name, list) {          // File-objektumok átvitele 
   const s = slotEl(form, name), inp = s?.querySelector("input[type=file]"); if (!inp || !list?.length) return;
   pickerUpload(form, name);
   const dt = new DataTransfer(); (inp.multiple ? list : list.slice(0, 1)).forEach(f => dt.items.add(f));
-  inp.files = dt.files; s.classList.remove("needs"); s.dispatchEvent(new Event("slotchange", { bubbles: true }));
+  inp.files = dt.files; s.classList.remove("needs"); drawSlot(s); s.dispatchEvent(new Event("slotchange", { bubbles: true }));
 }
 function slotExt(form, name) {                      // az első kiválasztott fájl kiterjesztése
   const ids = slotPicked(form, name); if (ids.length) return extOf(ids[0]);
@@ -638,10 +676,32 @@ function presetSlot(form, name, ids) {
 }
 function wireSlots(form) {
   form.querySelectorAll(".slot").forEach(s => {
-    const name = s.dataset.slot, list = s.querySelector(".slot-list");
-    s.querySelector("input[type=file]").addEventListener("change", () => {
-      s.classList.remove("needs"); if (!s.hasAttribute("data-multiple")) setSlotPicked(form, name, []); else s.dispatchEvent(new Event("slotchange", { bubbles: true }));
+    const name = s.dataset.slot, list = s.querySelector(".slot-list"), inp = s.querySelector("input[type=file]"), drop = s.querySelector(".slot-drop");
+    const put = fl => {                              // többes helyen a meglévők mellé (név+méret+idő szerint egyszer), egyesnél csere
+      const dt = new DataTransfer(), seen = new Set();
+      for (const f of fl) { const k = `${f.name}|${f.size}|${f.lastModified}`; if (!seen.has(k)) { seen.add(k); dt.items.add(f); } }
+      inp.files = dt.files;
+    };
+    inp.addEventListener("change", e => {
+      const multi = s.hasAttribute("data-multiple");
+      if (e.isTrusted && multi && s._kept?.length) put([...s._kept, ...inp.files]);   // a böngésző választója cserélne → hozzáadás
+      s.classList.remove("needs");
+      if (!multi) setSlotPicked(form, name, []);
+      else { drawSlot(s); s.dispatchEvent(new Event("slotchange", { bubbles: true })); }
     });
+    drop.addEventListener("click", e => { if (!e.target.closest(".slot-pick")) inp.click(); });
+    drop.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target === drop) { e.preventDefault(); inp.click(); } });
+    for (const t of ["dragenter", "dragover"]) drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", e => { if (!drop.contains(e.relatedTarget)) drop.classList.remove("over"); });
+    drop.addEventListener("drop", e => {
+      e.preventDefault(); drop.classList.remove("over");
+      const exts = s.dataset.exts ? s.dataset.exts.split(",") : null, multi = s.hasAttribute("data-multiple");
+      const ok = [...(e.dataTransfer?.files || [])].filter(f => !exts || exts.includes(extOf(f.name)));
+      if (!ok.length) { $("#make-status").textContent = `That file doesn't fit here — use ${extList(exts).slice(0, 6).map(x => x.toUpperCase()).join(", ")}.`; return; }
+      put(multi ? [...(s._kept || []), ...ok] : ok.slice(0, 1));
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    drawSlot(s);
     s.querySelector(".slot-pick").addEventListener("click", async () => {
       if (!list.hidden) { list.hidden = true; return; }
       if (!files.length) await loadFiles().catch(() => {});
@@ -659,6 +719,8 @@ function wireSlots(form) {
     });
     s.querySelector(".slot-chips").addEventListener("click", e => {
       const b = e.target.closest("[data-unpick]"); if (b) setSlotPicked(form, name, slotPicked(form, name).filter(x => x !== b.dataset.unpick));
+      const u = e.target.closest("[data-unfile]");
+      if (u) { put([...inp.files].filter((f, i) => i !== +u.dataset.unfile)); drawSlot(s); s.dispatchEvent(new Event("slotchange", { bubbles: true })); }
     });
   });
 }
@@ -714,6 +776,32 @@ function applyCarry(kind, form) {
   if (c.files.length) setSlotFiles(form, slot, c.files);
 }
 
+// 4) „Things to try”: a kártya előbeállítja az ablakot (mód, mezők, pipák) → egy kattintás + a fájl = kész
+const TRY = {
+  grass: { kind: "photo", mode: "edit", set: { instruction: "Remove the blurry grass in front of the animal" }, note: "Add your photo — the instruction is filled in." },
+  backdrop: { kind: "photo", mode: "edit", set: { instruction: "Put the Parliament behind it, crop to 4:5, headline ‘Budapest’ at the top" }, note: "Add your photo — the instruction is filled in; change the headline to yours." },
+  restore: { kind: "photo", mode: "restore", set: { colorize: "on", split: "on" }, note: "Add a photo of an album page — every old print on it is found, repaired and coloured." },
+  oldbook: { kind: "scan", set: { out: ["docx", "pdf", "searchable_pdf"] }, note: "Add the page photos in order — you get Word, a new book PDF and a searchable PDF." },
+  book: { kind: "book", set: { layout: "book" }, note: "Add your manuscript. It opens in the Word editor — then ask below it, e.g. “On page 22 add a photo of the Colosseum”." },
+  deck: { kind: "deck", mode: "brief", focus: "brief", note: "Write a short brief, and add a pptx you like as the Style example below." },
+  redact: { kind: "pdf", set: { action: "redact" }, focus: "words", note: "Add your PDF and the names to black out — they're removed from the file for good." },
+  form: { kind: "scan", set: { out: ["fillable_pdf"] }, note: "Add a photo of the paper form — you get a fillable PDF. Fill one in, or a hundred from a spreadsheet." },
+};
+let pendingPreset = null;
+function applyPreset(kind, form) {
+  if (!pendingPreset || pendingPreset.kind !== kind) return;
+  const p = pendingPreset; pendingPreset = null;
+  for (const [name, v] of Object.entries(p.set || {})) {
+    const els = [...form.querySelectorAll(`[name="${CSS.escape(name)}"]`)]; if (!els.length) continue;
+    if (els[0].type === "checkbox") els.forEach(e => { e.checked = [].concat(v).includes(e.value); });
+    else if (els[0].type === "radio") { const r = els.find(e => e.value === v); if (r) r.checked = true; }
+    else els[0].value = v;
+    els.forEach(e => e.dispatchEvent(new Event("change", { bubbles: true })));
+  }
+  if (p.note) $("#make-status").textContent = p.note;
+  if (p.focus) setTimeout(() => form.querySelector(`[name="${p.focus}"]`)?.focus(), 50);
+}
+
 // stílusminta: „olyan legyen, mint ez” — egy saját dokumentum, valaki más pptx-e, egy PDF vagy kép
 const styleField = (what = "document") => `<div class="style-field">${what === "deck"
   ? fileSlot("style", { exts: ["pptx", "potx", "pdf", ...EXT.image], label: `Style example <span class="muted small">(optional) — a PowerPoint or template (.pptx, .potx) to build on: its layouts, backgrounds, logo and fonts are used. A PDF or picture gives just the colours and fonts.</span>` })
@@ -724,10 +812,25 @@ async function readStyle(form) {
   return id || null;
 }
 
+// PDF-munkák látható kártyákon: [érték, név, mit csinál, a gomb felirata]
+const PDF_JOBS = [
+  ["open", "Open in the editor", "Read, annotate, fill in, sign", "Open in editor"],
+  ["merge", "Merge", "Several PDFs into one", "Merge them"],
+  ["compress", "Make it smaller", "Compress the file", "Make it smaller"],
+  ["to_word", "To Word", "An editable .docx", "Convert to Word"],
+  ["page_numbers", "Page numbers", "At the bottom of every page", "Add page numbers"],
+  ["watermark", "Watermark", "e.g. DRAFT on every page", "Add the watermark"],
+  ["redact", "Black out", "Names and numbers, removed for good", "Black it out"],
+  ["protect", "Lock", "A password to open it", "Lock it"],
+  ["ocr", "Make searchable", "Scanned English text", "Make it searchable"],
+  ["compare", "Compare", "Two versions, changes marked", "Compare them"],
+  ["make_fillable", "Make fillable", "Lines and boxes become fields", "Make it fillable"],
+];
 // ---------- készítők ----------
 const MAKERS = {
   doc: {
-    cta: "Open", title: "Document", sub: "Write and edit like in Word. Anything you open here can also be changed by asking — “make the headings blue”, “add a table of contents”.",
+    cta: form => ({ template: "Start writing", brief: "Write it", open: "Open" })[form.querySelector("[name=dmode]:checked")?.value] || "Open",
+    title: "Document", sub: "Write and edit like in Word. Anything you open here can also be changed by asking — “make the headings blue”, “add a table of contents”.",
     fields: () => `<div class="seg" style="margin:0 0 16px"><label><input type="radio" name="dmode" value="template" checked><span>New</span></label>
       <label><input type="radio" name="dmode" value="brief"><span>From a brief</span></label>
       <label><input type="radio" name="dmode" value="open"><span>Open a file</span></label></div>
@@ -766,6 +869,7 @@ const MAKERS = {
     },
   },
   deck: {
+    cta: form => ({ blank: "Start the deck", brief: "Make the deck", document: "Make the deck", open: "Open" })[form.querySelector("[name=pmode]:checked")?.value] || "Make the deck",
     title: "Presentation", sub: "Build slides like in PowerPoint — start blank, from a brief, or from a document you already have.",
     fields: () => `<div class="seg" style="margin:0 0 16px"><label><input type="radio" name="pmode" value="blank"><span>New</span></label>
       <label><input type="radio" name="pmode" value="brief" checked><span>From a brief</span></label>
@@ -823,7 +927,7 @@ const MAKERS = {
     },
   },
   social: {
-    title: "New social post", sub: "Headline + picture → every size you tick. It opens in the design editor to fine-tune; the ready-to-post PNGs are in your files.",
+    cta: "Make the post", title: "Social post", sub: "Headline + picture → every size you tick. It opens in the design editor to fine-tune; the ready-to-post PNGs are in your files.",
     fields: () => `<label>Headline<input type="text" name="headline" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
@@ -846,7 +950,7 @@ const MAKERS = {
     },
   },
   book: {
-    cta: "Make the book", title: "New book", sub: "Upload your manuscript (.docx with Heading 1 chapters). It opens typeset in the Word editor so you can check every page before you publish — the PDF is made alongside.",
+    cta: form => form.querySelector("[name=layout]:checked")?.value === "booklet" ? "Make the booklet" : "Make the book", title: "Book", sub: "Upload your manuscript (.docx with Heading 1 chapters). It opens typeset in the Word editor so you can check every page before you publish — the PDF is made alongside.",
     fields: () => `${fileSlot("manuscript", { exts: ["docx"], label: "Manuscript (.docx)" })}
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="layout" value="book" checked><span>Book — check it in Word</span></label>
       <label><input type="radio" name="layout" value="booklet"><span>Designed booklet (PDF)</span></label></div>
@@ -866,7 +970,12 @@ const MAKERS = {
     },
   },
   photo: {
-    cta: "Go", title: "Photos", sub: "The result opens in the photo editor. Edits and restorations come as a layered Photoshop file (PSD) — nothing is lost, every step can be undone by hand; a JPG is in your files too.",
+    cta: form => {
+      const m = form.querySelector("[name=mode]:checked")?.value, a = form.querySelector("[name=action]:checked")?.value;
+      return m === "restore" ? "Restore" : m === "open" ? "Open in editor"
+        : m === "quick" ? ({ enhance: "Enhance", remove_background: "Remove the background", replace_background: "Swap the background" })[a] || "Fix it" : "Edit the photo";
+    },
+    title: "Photos", sub: "The result opens in the photo editor. Edits and restorations come as a layered Photoshop file (PSD) — nothing is lost, every step can be undone by hand; a JPG is in your files too.",
     fields: () => `${fileSlot("photos", { exts: EXT.image, multiple: true, label: "Photos" })}
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
       <label><input type="radio" name="mode" value="restore"><span>Restore old photos</span></label>
@@ -933,7 +1042,7 @@ const MAKERS = {
     },
   },
   print: {
-    title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your files.",
+    cta: "Make the design", title: "Print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your files.",
     fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
       <label>Title / name<input type="text" name="title" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
@@ -987,7 +1096,8 @@ const MAKERS = {
     },
   },
   convert: {
-    cta: "Convert", title: "Convert a file", sub: "Pick a file and the format you need — the result opens in the matching editor. The original stays as it was.",
+    cta: form => { const o = form.querySelector("[name=target]")?.selectedOptions[0]; return o?.value ? `Convert to ${o.textContent.replace(/\s*\(.*$/, "")}` : "Convert"; },
+    title: "Convert", sub: "Pick a file and the format you need — the result opens in the matching editor. The original stays as it was.",
     fields: () => `${fileSlot("file", { label: "File" })}
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
     wire(form) {
@@ -997,7 +1107,7 @@ const MAKERS = {
         if (!ext) { sel.innerHTML = `<option value="">Choose a file first</option>`; sel.disabled = true; return; }
         const { targets } = await api(`/api/convert/targets?ext=${encodeURIComponent(ext)}`);
         sel.innerHTML = targets.length ? targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("") : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
-        sel.disabled = !targets.length;
+        sel.disabled = !targets.length; sel.dispatchEvent(new Event("change", { bubbles: true }));   // a gomb felirata: „Convert to PDF”
       });
     },
     async submit(fd, form) {
@@ -1013,14 +1123,10 @@ const MAKERS = {
     },
   },
   pdf: {
-    cta: "Open in editor", title: "PDF tools", sub: "Open a PDF in the PDF editor, or pick a job — the result opens in the editor as a new file; the original stays as it was.",
-    fields: () => `<label>Job<select name="action">
-        <option value="open">Open in the PDF editor — read, annotate, fill in, sign</option>
-        <option value="merge">Merge PDFs into one</option><option value="compress">Make the file smaller</option>
-        <option value="to_word">Convert to Word (.docx)</option><option value="page_numbers">Add page numbers</option>
-        <option value="watermark">Add a watermark</option><option value="redact">Black out text for good</option>
-        <option value="ocr">Make a scan searchable (English)</option><option value="protect">Lock with a password</option>
-        <option value="compare">Compare two versions</option><option value="make_fillable">Make a printed form fillable</option></select></label>
+    cta: form => PDF_JOBS.find(j => j[0] === form.querySelector("[name=action]:checked")?.value)?.[3] || "Run",
+    title: "PDF tools", sub: "Open a PDF in the PDF editor, or pick a job — the result opens in the editor as a new file; the original stays as it was.",
+    fields: () => `<fieldset class="jobs-f"><legend>What should happen?</legend><div class="jobs" role="radiogroup">${PDF_JOBS.map(([v, t, d], i) =>
+        `<label><input type="radio" name="action" value="${v}"${i ? "" : " checked"}><span><b>${t}</b><small>${d}</small></span></label>`).join("")}</div></fieldset>
       ${fileSlot("pdfs", { exts: ["pdf"], label: "PDF" })}
       <div data-for="watermark" hidden><label>Watermark text<input type="text" name="wm" maxlength="40" placeholder="DRAFT"></label></div>
       <div data-for="page_numbers" hidden><label>Position<select name="pos"><option value="center">Bottom centre</option><option value="right">Bottom right</option><option value="left">Bottom left</option></select></label></div>
@@ -1031,13 +1137,13 @@ const MAKERS = {
       <div data-for="protect" hidden><label>Password to open it<input type="text" name="pw" minlength="4" autocomplete="off"></label></div>`,
     wire(form) {
       const sync = () => {
-        const a = form.querySelector("[name=action]").value, many = a === "merge" || a === "compare", s = slotEl(form, "pdfs");
+        const a = form.querySelector("[name=action]:checked").value, many = a === "merge" || a === "compare", s = slotEl(form, "pdfs");
         s.toggleAttribute("data-multiple", many); s.querySelector("input[type=file]").multiple = many;
         s.querySelector(".slot-label").textContent = a === "merge" ? "PDFs, in order (pick several)" : a === "compare" ? "Old version, then new version (pick both)" : "PDF";
+        drawSlot(s);
         form.querySelectorAll("[data-for]").forEach(d => d.hidden = d.dataset.for !== a);
-        form.querySelector("#make-go") && (form.querySelector("#make-go").textContent = a === "open" ? "Open in editor" : "Run");
       };
-      form.querySelector("[name=action]").addEventListener("change", sync); sync();
+      form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", sync)); sync();
     },
     async submit(fd, form) {
       const a = fd.get("action"), ids = await readSlot(form, "pdfs", "a PDF");
@@ -1160,13 +1266,17 @@ function editNative(list, n) {
 }
 function openMaker(kind, opts = {}) {
   const m = MAKERS[kind], form = $("#make-form");
-  if (account?.guest && AI_MAKERS.has(kind)) return accountCta(m.title);
+  if (account?.guest && AI_MAKERS.has(kind)) { pendingPreset = null; return accountCta(m.title); }
   form.innerHTML = `<nav class="tool-switch" aria-label="Tools">${Object.keys(SLUGS).map(k => {
       const name = esc(MAKERS[k].title.replace(/^New /, "").replace(/^./, c => c.toUpperCase()));
       return k === kind ? `<span aria-current="page">${name}</span>` : `<button type="button" data-switch="${k}">${name}</button>`; }).join("")}</nav>
     <h2 id="drawer-title">${m.title}</h2><p class="muted" style="margin:0 0 20px">${m.sub}</p>${m.fields()}
     <p class="status" id="make-status"></p>
-    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt"${m.altLoose ? " formnovalidate" : ""}>${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">${m.cta || "Make it"}</button></div>`;
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button>${m.alt ? `<button class="btn" id="make-alt" value="alt"${m.altLoose ? " formnovalidate" : ""}>${m.alt}</button>` : ""}<button class="btn primary" id="make-go" value="go">Make it</button></div>`;
+  setTitle(m.title);
+  // a fő gomb felirata a módhoz/munkához igazodik („Start writing”, „Merge them”, „Restore”…)
+  const label = () => { const go = form.querySelector("#make-go"); if (go && !go.disabled) go.textContent = typeof m.cta === "function" ? m.cta(form) : (m.cta || "Make it"); };
+  form.addEventListener("change", label);
   m.wire?.(form, opts);
   wireSlots(form);
   form.querySelector(".tool-switch").addEventListener("click", e => { const b = e.target.closest("[data-switch]"); if (b) switchTool(kind, b.dataset.switch, form); });
@@ -1190,7 +1300,9 @@ function openMaker(kind, opts = {}) {
   if (!back) {
     if (opts.source) { const tk = (opts.slot && (TAKES[kind] || []).find(([s]) => s === opts.slot)) || takesFor(kind, extOf(opts.source)); if (tk) presetSlot(form, tk[0], [opts.source]); }
     applyCarry(kind, form);
+    applyPreset(kind, form);
   }
+  label();
   form.onsubmit = async e => {
     if (!["go", "alt"].includes(e.submitter?.value)) return;
     e.preventDefault();
@@ -1248,7 +1360,7 @@ $("#make-form").addEventListener("invalid", e => {      // a böngésző buboré
 let keepMakeLink = false;   // sikeres készítés után a fiók linkje marad az előzményekben (a Vissza oda hoz)
 $("#drawer").addEventListener("close", () => {
   if (keepMakeLink) { keepMakeLink = false; return; }
-  if (here().startsWith("/app/make/")) history.replaceState(null, "", underMaker);
+  if (here().startsWith("/app/make/")) { history.replaceState(null, "", underMaker); setTitle(baseTitle); }
 });
 $("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
   if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();
