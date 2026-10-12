@@ -539,9 +539,30 @@ window.addEventListener("hashchange", () => {    // régi #-es link ugyanazon az
   if (location.hash.startsWith("#/")) { history.replaceState(null, "", "/app/" + location.hash.slice(2)); route(); }
 });
 let cur = null, editorDirty = false;   // a fájlnézet aktuális fájlja (szerkesztőben mentés után az új verzió)
+let saveWaiters = [], dirtyOverride = false;
+// ZSÁKUTCA NINCS: mentetlen kézi változás mellett a változtatás/gyors-munka előbb MAGA ment a szerkesztőben
+// (a bridge Ctrl+S-t küld), és a mentett változaton fut. Ha a mentés nem jön, a következő kattintás az utolsó
+// mentett változaton dolgozik. → true = mehet tovább
+async function saveEditorFirst(say) {
+  if (!editorDirty) return true;
+  const frame = $("#file-frame"), isEditor = /\/editor\/\w+\//.test(frame?.getAttribute("src") || "");
+  if (!isEditor || dirtyOverride) { editorDirty = false; dirtyOverride = false; return true; }
+  say("Saving your edits in the editor first…");
+  const ok = await new Promise(res => {
+    const t = setTimeout(() => { saveWaiters = saveWaiters.filter(w => w !== done); res(false); }, 20000);
+    const done = v => { clearTimeout(t); res(v); };
+    saveWaiters.push(done);
+    frame.contentWindow.postMessage({ target: "aice_bridge", cmd: "save" }, location.origin);
+  });
+  if (ok) return true;
+  dirtyOverride = true;
+  say("Couldn't save your edits automatically. Press it again to work on the last saved version — or save in the editor first (Ctrl+S).");
+  return false;
+}
 window.addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data || e.data.source !== "wordcraft") return;
-  if (e.data.type === "touched") editorDirty = true;
+  if (e.data.type === "touched") { editorDirty = true; dirtyOverride = false; }
+  if (e.data.type === "saved" || e.data.type === "save_failed") setTimeout(() => { const w = saveWaiters; saveWaiters = []; w.forEach(f => f(e.data.type === "saved")); });
   if (e.data.type === "saved") {
     toast(`Saved as ${e.data.label || e.data.name}`);
     editorDirty = false;
@@ -861,9 +882,10 @@ function wireQuick(f) {
   const lock = on => { busy = on; wrap.querySelectorAll("button").forEach(b => b.disabled = on); };
   async function run(it, fm) {
     if (busy) return;
-    if (editorDirty) { say("Save your edits in the editor first (File → Save) — then this works on the saved version."); return; }
     if (it.ai && account?.guest) return accountCta(it.label);     // vendég AI-n: fiók-ajánlat
-    lock(true); say(it.doing || "Working on it…");
+    lock(true);
+    if (!(await saveEditorFirst(say))) { lock(false); return; }
+    say(it.doing || "Working on it…");
     try {
       const r = await it.run(cur.file_id, fm, st);
       toast(r.msg || (r.label ? `Done — ${r.label}` : "Done — the new version is open"));
@@ -1452,10 +1474,11 @@ async function wireRevise(f) {
   form.onsubmit = async e => {
     e.preventDefault();
     const instruction = input.value.trim(); if (!instruction && !styleId) { input.focus(); return; }
-    if (editorDirty) { st.textContent = "Save your edits in the editor first (File → Save) — then the change builds on them."; return; }
     const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
     const go = $("#rev-go"); go.disabled = true; input.disabled = true;
     try {
+      if (!(await saveEditorFirst(m => st.textContent = m))) { go.disabled = false; input.disabled = false; return; }
+      st.textContent = "Working on it…";
       const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, instruction, style_file_id: styleId }) });
       const r = await pollJob(job, () => "Working on it…", st);
       toast(r.summary || "Done — new version");

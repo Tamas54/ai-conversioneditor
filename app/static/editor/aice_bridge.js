@@ -16,13 +16,14 @@
     console.log("[aice_bridge]", JSON.stringify(msg));
   };
 
-  let touched = false;
+  let touched = false, savingAt = 0;   // savingAt: mikor indult az utolsó mentés-letöltés
 
   if (save) {
     const origClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {
       if (!(this.download && this.href.startsWith("blob:"))) return origClick.call(this);
       const anchor = this, fname = this.download;
+      savingAt = Date.now();
       fetch(this.href)
         .then((r) => r.blob())
         .then((blob) => fetch(save + (save.includes("?") ? "&" : "?") + "name=" + encodeURIComponent(fname),
@@ -42,6 +43,25 @@
   };
   addEventListener("keydown", touch, true);
   addEventListener("pointerdown", touch, true);
+
+  // A szülő kérésére mentés (a „Kérj változtatást” előtt): a szerkesztő saját Ctrl+S-e — a mentés-letöltést
+  // a fenti anchor-elfogás küldi a szerverre, és „saved” üzenet jön vissza. (Szintetikus esemény: a touch nem jelzi.)
+  addEventListener("message", (e) => {
+    if (e.source !== parent || e.origin !== location.origin || e.data?.target !== "aice_bridge") return;
+    if (e.data.cmd !== "save") return;
+    const canvas = document.querySelector("canvas");
+    const press = (key, code, keyCode, ctrlKey) => {
+      for (const type of ["keydown", "keyup"])
+        (canvas || document).dispatchEvent(new KeyboardEvent(type, { key, code, keyCode, which: keyCode, ctrlKey,
+          bubbles: true, cancelable: true }));
+    };
+    canvas?.focus();
+    const asked = Date.now();
+    press("s", "KeyS", 83, true);
+    // A VectorCraft Ctrl+S-re „Save As” ablakot nyit (OK = Enter); máshol az Enter szöveget írna — csak ott
+    if (/\/editor\/vectorcraft\//.test(location.pathname))
+      setTimeout(() => { if (savingAt < asked) { canvas?.focus(); press("Enter", "Enter", 13, false); } }, 1500);
+  });
 
   if (src) {
     const open = async () => {
