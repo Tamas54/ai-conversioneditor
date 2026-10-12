@@ -1311,7 +1311,9 @@ const MAKERS = {
 };
 // ---------- fájlnézet: cím, testvérek, letöltés, „More” ----------
 // natív (csak nálunk nyíló) formátumok: a cím nem mutatja a technikai kiterjesztést, a Download a kész PNG/PDF-et adja
-const NATIVE = { vectorcraft: ["png", "pdf"], deckcraft: ["pptx", "pdf"], designcraft: ["pdf", "png"], pcraft: ["png", "jpg"] };
+const NATIVE = { vectorcraft: ["png", "pdf"], deckcraft: ["pptx", "pdf"], designcraft: ["pdf", "png"], pcraft: ["png", "jpg"],
+  psd: ["jpg", "png"], psb: ["jpg", "png"] };   // a rétegezett PSD-t a legtöbb képnézegető nem nyitja (10-12: KolourPaint) → a Download JPG-t ad
+const OPENS_ELSEWHERE = { psd: "Layers — opens in Photoshop, GIMP or Photopea", psb: "Layers — opens in Photoshop" };
 const FMT_NAMES = { png: "PNG", jpg: "JPG", jpeg: "JPG", pdf: "PDF", docx: "Word", pptx: "PowerPoint", xlsx: "Excel", vectorcraft: "Design",
   deckcraft: "Slides", designcraft: "Layout", pcraft: "Photo", psd: "PSD", svg: "SVG", txt: "Text", md: "Markdown" };
 const fmtName = ext => FMT_NAMES[ext] || ext.toUpperCase();
@@ -1365,15 +1367,16 @@ function wireDownload(f, sibs) {
     try { const r = await api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, target: fmt }) }); saveUrl(r.url, r.label); }
     catch (e) { toast(e.message); }
   };
-  const items = [...new Set([...(native || []), ...sameVar.map(x => x.ext)])].filter(x => x !== f.ext && !NATIVE[x]);
+  const items = [...new Set([...(native || []), ...sameVar.map(x => x.ext)])].filter(x => x !== f.ext && (!NATIVE[x] || OPENS_ELSEWHERE[x]));
   if (native) {
-    dl.textContent = `Download ${fmtName(native[0])}`; dl.title = `A finished ${fmtName(native[0])} — the .${f.ext} design file opens only here`;
+    dl.textContent = `Download ${fmtName(native[0])}`;
+    dl.title = OPENS_ELSEWHERE[f.ext] ? `A finished ${fmtName(native[0])} — the .${f.ext} file (layers) is in the ▾ menu` : `A finished ${fmtName(native[0])} — the .${f.ext} design file opens only here`;
     dl.addEventListener("click", e => { e.preventDefault(); getAs(native[0]); });
   }
   if (!items.length) return;
   more.hidden = false; dl.classList.add("has-more");
   menu.innerHTML = items.filter(x => !native || x !== native[0]).map(x => `<button type="button" role="menuitem" data-act data-fmt="${x}">${esc(fmtName(x))}</button>`).join("")
-    + (native ? `<button type="button" role="menuitem" data-act data-self>${esc(fmtName(f.ext))} file (.${f.ext})<small>Opens only here — to keep editing later</small></button>` : "");
+    + (native ? `<button type="button" role="menuitem" data-act data-self>${esc(fmtName(f.ext))} file (.${f.ext})<small>${esc(OPENS_ELSEWHERE[f.ext] || "Opens only here — to keep editing later")}</small></button>` : "");
   if (!native) menu.insertAdjacentHTML("afterbegin", `<button type="button" role="menuitem" data-act data-self>${esc(fmtName(f.ext))} — this file</button>`);
   wireMenu(more, menu);
   menu.addEventListener("click", e => {
