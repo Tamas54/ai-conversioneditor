@@ -218,10 +218,17 @@ def _image_side(slide, s, t, img, left: bool):
 def _full_image(slide, s, t, img):
     if img:
         _picture(slide, img.path, 0, 0, W_IN, H_IN)
-    _rect(slide, 0, H_IN - 1.9, W_IN, 1.9, "#000000", alpha=0.55)
-    if s.get("title"):
-        _text(slide, M_IN, H_IN - 1.75, W_IN - 2 * M_IN, 0.8, s["title"], size=30, font=t["font_heading"],
-              color="#FFFFFF", bold=True, anchor="bottom")
+    # A sötét sáv a cím sorainak számával nő (10-12: egy háromsoros idézet első sora kilógott a világos égre)
+    title = s.get("title") or ""
+    size = 30 if len(title) <= 130 else 24
+    cpl = max(20, int((W_IN - 2 * M_IN) * 72 / (size * 0.55)))          # becsült betű/sor (talpas betű, félkövér)
+    lines = max(1, -(-int(len(title) * 1.08) // cpl)) if title else 0   # +8%: a szótördelés vesztesége
+    line_h = size * 1.22 / 72
+    band = max(1.9, 0.95 + lines * line_h + 0.25)
+    _rect(slide, 0, H_IN - band, W_IN, band, "#000000", alpha=0.55)
+    if title:
+        _text(slide, M_IN, H_IN - 0.95 - lines * line_h - 0.1, W_IN - 2 * M_IN, lines * line_h + 0.1, title, size=size,
+              font=t["font_heading"], color="#FFFFFF", bold=True, anchor="bottom")
     if s.get("caption"):
         _text(slide, M_IN, H_IN - 0.9, W_IN - 2 * M_IN, 0.6, s["caption"], size=15, font=t["font_body"], color="#E5E5E5")
 
