@@ -110,6 +110,13 @@ body.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px
   repeating-conic-gradient(#ECEFEC 0 25%, #D5DAD5 0 50%) 0 0 / 10px 10px; }                /* átlátszóság */
 .o-poster { width: 92px; aspect-ratio: 1/1.414; transform: rotate(-1.5deg); background: var(--signal); color: #fff; padding: 10px;
   display: grid; align-content: end; font: 800 17px/.95 var(--f-display); letter-spacing: -.01em; }
+/* Infografika: kiemelt szám + oszlopok (a minden szám a cellákból jön) */
+.o-chart { width: 100px; aspect-ratio: 4/5; transform: rotate(2deg); padding: 11px 11px 10px; display: grid; grid-template-rows: auto 1fr; gap: 8px; }
+.o-chart b { font: 800 19px/1 var(--f-display); color: var(--ink); letter-spacing: -.02em; }
+.o-chart span { display: flex; align-items: flex-end; gap: 5px; border-bottom: 2px solid #C9CFC9; }
+.o-chart i { flex: 1; background: var(--mat); border-radius: 2px 2px 0 0; }
+.o-chart i:nth-child(1) { height: 38%; } .o-chart i:nth-child(2) { height: 55%; } .o-chart i:nth-child(3) { height: 47%; }
+.o-chart i:nth-child(4) { height: 88%; background: var(--signal); }
 
 /* PDF: oldal szamárfüllel, egy kitakart sorral (a PDF-eszközök jele) */
 .o-pdf { width: 94px; aspect-ratio: 1/1.32; transform: rotate(2.5deg); position: relative; padding: 16px 12px 0;

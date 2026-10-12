@@ -765,11 +765,12 @@ async def history(
 @linked
 async def design(
     template: str,
-    data: dict,
+    data: Optional[dict] = None,
     size: Optional[str] = None,
     theme: Optional[dict] = None,
     brand: Optional[str] = None,
     export: Optional[list[str]] = None,
+    rebuild_from: Optional[str] = None,
 ) -> dict:
     """
     Designed print/social pieces from templates (VectorCraft) → PDF + PNG
@@ -786,9 +787,38 @@ async def design(
       book          {file_id (manuscript .docx, Heading 1 chapters), title?, author?, cover_image?,
                      style_file_id?}  size A5|A4 → a WORD-typeset book (title page, book type) + its PDF;
                      the person checks it in the Word editor (edit_url) before publishing
+      infographic   {data_file_id (CSV/XLSX) | table_image (a photo of a table), title?, brief?, source?}
+                     size portrait (1080×1350) | landscape (1600×900) | both → 2–4 highlighted numbers, 1–2 charts and a
+                     short explanation; every number is computed from the cells (check.verified names the cells)
+      album         {photos [image, …], manuscript_file_id? (.docx with Heading 1 chapters | .md | .txt), title?,
+                     subtitle?, author?, captions? [one per photo], auto_captions? (AI writes them), cover? image}
+                     size A4 | A4-landscape | square | A5 → a photo album in the LAYOUT editor: facing pages, photos in
+                     their own proportions, captions, contents page, cover; + print PDF (3 mm bleed, crop marks)
+    rebuild_from = "<file_id>" (template ignored): a photo, screenshot or PDF of a poster / flyer / graphic → the SAME
+      design rebuilt as an EDITABLE one: every text a real text box, solid blocks as shapes, photos and logos as movable
+      pictures. data {page? (PDF), ai_clean? (AI also wipes the old text off the background, 1 credit), hint? (language)}.
+      Returns comparison_url (before / after side by side) — look at it.
+    Results carry check {status ok | needs_check | failed, findings, verified} — read it before you say it's done.
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"} | {"stock": "<words>"}
     theme {primary, accent, bg, text, muted} or brand=<name>. Titles shrink to fit.
     """
+    data = data or {}
+    if rebuild_from or template == "rebuild":
+        from app.tools import rebuild
+        return await rebuild.rebuild(rebuild_from or data.get("file_id"), page=int(data.get("page") or 1),
+                                     ai_clean=bool(data.get("ai_clean")), hint=data.get("hint"))
+    if template == "infographic":
+        from app.tools import infographic
+        return await infographic.make(data_file_id=data.get("data_file_id") or data.get("file_id"),
+                                      table_image_file_id=data.get("table_image"), title=data.get("title"),
+                                      brief=data.get("brief"), source=data.get("source"),
+                                      orientation=size or data.get("orientation") or "portrait", theme=theme, brand=brand)
+    if template == "album":
+        from app.tools import album
+        return await album.make(data.get("photos") or [], manuscript_file_id=data.get("manuscript_file_id"),
+                                title=data.get("title"), subtitle=data.get("subtitle"), author=data.get("author"), size=size,
+                                captions=data.get("captions"), auto_captions=bool(data.get("auto_captions")),
+                                cover=data.get("cover"), theme=theme, brand=brand)
     if template == "book":
         from app.routes.make import make_book
         cover = data.get("cover_image")

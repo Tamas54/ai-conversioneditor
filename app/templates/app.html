@@ -58,11 +58,13 @@
       <button class="tool" data-make="social"><span class="obj"><span class="paper o-post"><div></div><span></span></span></span>
         <span class="label">Social post</span><span class="hint">One design, every platform size at once</span></button>
       <button class="tool" data-make="print"><span class="obj"><span class="paper o-poster">Big<br>idea.</span></span>
-        <span class="label">Print design</span><span class="hint">Posters, flyers, report covers, certificates</span></button>
+        <span class="label">Print design</span><span class="hint">Posters, flyers, report covers, certificates — or rebuild one from a photo</span></button>
+      <button class="tool" data-make="infographic"><span class="obj"><span class="paper o-chart"><b>+86%</b><span><i></i><i></i><i></i><i></i></span></span></span>
+        <span class="label">Infographic <em class="ai-badge">AI</em></span><span class="hint">A spreadsheet in, the key numbers and charts out — every number checked</span></button>
       <button class="tool" data-make="photo"><span class="obj"><span class="paper o-photo"><div></div></span></span>
         <span class="label">Photos</span><span class="hint">Edit with words, restore old family photos, cut out</span></button>
       <button class="tool" data-make="book"><span class="obj"><span class="o-book paper"><i></i><i></i></span></span>
-        <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF</span></button>
+        <span class="label">Book</span><span class="hint">Your manuscript as a print-ready book PDF — or a photo album</span></button>
       <button class="tool" data-make="scan"><span class="obj"><span class="o-scan"><span class="paper"><i></i><i></i><i></i><i></i><i></i></span></span></span>
         <span class="label">Scan to text <em class="ai-badge">AI</em></span><span class="hint">Old books and photographed pages → Word, a new PDF, searchable PDF</span></button>
       <button class="tool" data-make="pdf"><span class="obj"><span class="paper o-pdf"><i></i><i></i><i class="x"></i><i></i><i></i><b>PDF</b></span></span>
@@ -87,6 +89,9 @@
       <button data-try="deck"><span>Presentation</span>A brief → a designed deck; attach a pptx you like as the style example</button>
       <button data-try="redact"><span>PDF tools</span>Black out names for good — they're removed from the file, not just covered</button>
       <button data-try="form"><span>Forms</span>Photo of a paper form → a fillable PDF; fill one, or a hundred from a spreadsheet</button>
+      <button data-try="rebuild"><span>Print design · rebuild</span>A photo of a poster → the same design, every word editable</button>
+      <button data-try="infographic"><span>Infographic</span>A spreadsheet → the key numbers and charts, each number traced to its cell</button>
+      <button data-try="album"><span>Book · photo album</span>Your photos and a few pages of text → a print-ready album with contents and captions</button>
     </div>
     <p class="muted small connect-note">Use it from your own AI too — Claude, ChatGPT, Cursor: <a href="/app/connect">Connect your AI</a>. Without an account you can try everything that doesn't use AI.</p>
   </section>
@@ -244,16 +249,16 @@ async function loadAccount() {
   document.body.classList.toggle("guest", !!account.guest);
 }
 const AI_NOTE = "This uses AI — create a free account to use it.";
-const AI_MAKERS = new Set(["scan"]);
-const SLUGS = { doc: "document", deck: "presentation", social: "social-post", print: "print-design", photo: "photos",
+const AI_MAKERS = new Set(["scan", "infographic"]);
+const SLUGS = { doc: "document", deck: "presentation", social: "social-post", print: "print-design", infographic: "infographic", photo: "photos",
   book: "book", scan: "scan-to-text", pdf: "pdf-tools", convert: "convert" };
 const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
   doc: ["dmode", { template: "new", brief: "from-brief", open: "open" }],
   deck: ["pmode", { blank: "new", brief: "from-brief", document: "from-document", open: "open" }],
   photo: ["mode", { new: "new", edit: "edit", restore: "restore", quick: "quick-fix", open: "open" }],
   social: ["start", { new: "new", design: "design" }],
-  print: ["start", { new: "new", template: "from-template" }],
-  book: ["start", { new: "new", manuscript: "from-manuscript" }],
+  print: ["start", { new: "new", template: "from-template", rebuild: "rebuild-from-picture" }],
+  book: ["start", { new: "new", manuscript: "from-manuscript", album: "photo-album" }],
   pdf: ["action", { new: "new", open: "open", merge: "merge", compress: "compress", to_word: "to-word", page_numbers: "page-numbers",
     watermark: "watermark", redact: "black-out", protect: "lock", ocr: "make-searchable", compare: "compare", make_fillable: "make-fillable" }],
 };
@@ -986,9 +991,10 @@ const TAKES = {
   doc: [["docfile", EXT.doc, "open"], ["style", ["docx", "odt", "rtf", "pdf", "pptx", ...EXT.image], null]],
   deck: [["source", [...EXT.doc, "pdf"], "document"], ["pfile", ["pptx", "ppt", "odp"], "open"], ["style", ["pptx", "potx", "pdf", ...EXT.image], null]],
   social: [["img-file", EXT.image, null]],
-  print: [["img-file", EXT.image, null]],
+  print: [["img-file", EXT.image, null], ["rebuild-file", [...EXT.image, "pdf"], "rebuild"]],
+  infographic: [["data", ["csv", "tsv", "xlsx", ...EXT.image], null]],
   photo: [["photos", EXT.image, null]],
-  book: [["manuscript", ["docx"], null], ["cover-file", EXT.image, null]],
+  book: [["manuscript", ["docx"], null], ["cover-file", EXT.image, null], ["album-photos", EXT.image, "album"], ["album-text", ["docx", "md", "txt"], "album"]],
   scan: [["pages", [...EXT.image, "pdf"], null]],
   pdf: [["pdfs", ["pdf"], null]],
   convert: [["file", null, null]],
@@ -1003,6 +1009,9 @@ const USES = [   // a fájlnézet „Use in…” menüje: [eszköz, mód, fájl
   ["photo", "restore", "photos", EXT.image, "Photos — restore & colourise"],
   ["social", null, "img-file", EXT.image, "Social post — with this picture"],
   ["print", null, "img-file", EXT.image, "Print design — with this picture"],
+  ["print", "rebuild", "rebuild-file", [...EXT.image, "pdf"], "Print design — rebuild it as an editable design"],
+  ["infographic", null, "data", ["csv", "tsv", "xlsx"], "Infographic — the key numbers and charts"],
+  ["book", "album", "album-photos", EXT.image, "Photo album — with this picture"],
   ["book", null, "cover-file", EXT.image, "Book — as the cover picture"],
   ["scan", null, "pages", [...EXT.image, "pdf"], "Scan to text — read the text"],
   ["pdf", null, "pdfs", ["pdf"], "PDF tools — merge, compress, black out…"],
@@ -1171,6 +1180,9 @@ const TRY = {
   deck: { kind: "deck", mode: "brief", focus: "brief", note: "Write a short brief, and add a pptx you like as the Style example below." },
   redact: { kind: "pdf", set: { action: "redact" }, focus: "words", note: "Add your PDF and the names to black out — they're removed from the file for good." },
   form: { kind: "scan", set: { out: ["fillable_pdf"] }, note: "Add a photo of the paper form — you get a fillable PDF. Fill one in, or a hundred from a spreadsheet." },
+  rebuild: { kind: "print", mode: "rebuild", note: "Add a photo, screenshot or PDF of a poster or flyer — it comes back as the same design, with every word editable." },
+  infographic: { kind: "infographic", note: "Add a spreadsheet (.csv or .xlsx) or a photo of a table — the key numbers are picked out and charted." },
+  album: { kind: "book", mode: "album", note: "Add your photos in order, and a few pages of text if you like — it's laid out as a print-ready album." },
 };
 let pendingPreset = null;
 function applyPreset(kind, form) {
@@ -1260,18 +1272,24 @@ function leaveNewOnFile(form, field, fallback) {
     if (f) { f.checked = true; f.dispatchEvent(new Event("change", { bubbles: true })); }
   });
 }
-// a mód nélküli készítők (Social, Print, Book) „New” módja: szegmens elöl, a megszokott mezők a másik módban
-function withNew(kind, m, other, otherLabel) {
+// a mód nélküli készítők (Social, Print, Book) „New” módja: szegmens elöl, a megszokott mezők a másik módban.
+// extra: további módok ugyanabban a szegmensben — {value, label, fields(), wire?(form), submit(fd, form), cta}
+// (Print: „Rebuild from a picture”, Book: „Photo album”)
+function withNew(kind, m, other, otherLabel, extra = []) {
+  const ex = v => extra.find(e => e.value === v);
   return { ...m,
-    cta: form => form.querySelector("[name=start]:checked")?.value === "new" ? BLANK[kind].cta : (typeof m.cta === "function" ? m.cta(form) : m.cta),
-    fields: () => `${seg("start", [["new", "New"], [other, otherLabel]], 1)}<div data-start="new" hidden>${blankFields(kind)}</div><div data-start="${other}">${m.fields()}</div>`,
+    cta: form => { const v = form.querySelector("[name=start]:checked")?.value;
+      return v === "new" ? BLANK[kind].cta : ex(v) ? ex(v).cta : (typeof m.cta === "function" ? m.cta(form) : m.cta); },
+    fields: () => `${seg("start", [["new", "New"], [other, otherLabel], ...extra.map(e => [e.value, e.label])], 1)}<div data-start="new" hidden>${blankFields(kind)}</div><div data-start="${other}">${m.fields()}</div>`
+      + extra.map(e => `<div data-start="${e.value}" hidden>${e.fields()}</div>`).join(""),
     wire(form, o) {
-      m.wire?.(form, o); wireBlank(form);
+      m.wire?.(form, o); wireBlank(form); extra.forEach(e => e.wire?.(form, o));
       const sync = () => { const v = form.querySelector("[name=start]:checked")?.value; form.querySelectorAll("[data-start]").forEach(d => d.hidden = d.dataset.start !== v); };
       form.querySelectorAll("[name=start]").forEach(r => r.addEventListener("change", sync)); sync();
       leaveNewOnFile(form, "start", other);
     },
-    async submit(fd, form, opts) { return fd.get("start") === "new" ? blankSubmit(kind, fd) : m.submit(fd, form, opts); },
+    async submit(fd, form, opts) { const v = fd.get("start");
+      return v === "new" ? blankSubmit(kind, fd) : ex(v) ? ex(v).submit(fd, form, opts) : m.submit(fd, form, opts); },
   };
 }
 const blankDocLink = `<p class="blank-alt"><a href="/app/make/document/new">Start a blank document instead <span aria-hidden="true">→</span></a></p>`;
@@ -1620,8 +1638,63 @@ const MAKERS = {
   },
 };
 MAKERS.social = withNew("social", MAKERS.social, "design", "Design it for me");
-MAKERS.print = withNew("print", MAKERS.print, "template", "From a template");
-MAKERS.book = withNew("book", MAKERS.book, "manuscript", "From a manuscript");
+// Infographic: táblázat (vagy táblázatfotó) → kiemelt számok + diagramok; minden szám a cellákból (a kód számol)
+MAKERS.infographic = {
+  cta: "Make the infographic", title: "Infographic",
+  sub: "A spreadsheet or a photo of a table in — the key numbers, charts and a short explanation out. Every number is calculated from your cells, never made up. It opens in the design editor; PNG and PDF are in your workspace too.",
+  fields: () => `${fileSlot("data", { exts: ["csv", "tsv", "xlsx", ...EXT.image], label: "Data — a spreadsheet (.csv, .xlsx) or a photo of a table" })}
+    <label>Title <span class="muted small">(optional — otherwise it states the main finding)</span><input type="text" name="title" maxlength="80"></label>
+    <label>What should it show? <span class="muted small">(optional)</span><textarea name="brief" placeholder="e.g. How visitor numbers recovered after 2020, for the town council"></textarea></label>
+    <label>Source <span class="muted small">(printed at the bottom)</span><input type="text" name="source" maxlength="140" placeholder="e.g. Statistics office, 2024"></label>
+    ${seg("orient", [["portrait", "Portrait"], ["landscape", "Landscape"], ["both", "Both"]])}${swatches()}`,
+  async submit(fd, form) {
+    if (account?.guest) throw needAccount();
+    const [id] = await readSlot(form, "data", "your data (.csv, .xlsx or a photo of a table)");
+    $("#make-status").textContent = "Reading the numbers and laying it out…";
+    const photo = EXT.image.includes(extOf(id));
+    const r = await api("/api/make/infographic", { method: "POST", body: JSON.stringify({ [photo ? "table_image_file_id" : "data_file_id"]: id,
+      title: fd.get("title"), brief: fd.get("brief"), source: fd.get("source"), orientation: fd.get("orient"), accent: fd.get("accent") }) });
+    const note = r.check?.status === "needs_check" && r.check.findings?.[0] ? ` Check: ${r.check.findings[0]}` : "";
+    return { ...editNative(r.files, r.files.length), msg: `Opening the design editor — ${r.highlights.length} numbers, each traced to its cell; PNG and PDF are in your workspace too.${note}` };
+  },
+};
+// Print → „Rebuild from a picture”: plakátfotó / képernyőkép / PDF → ugyanaz a dizájn, minden szöveg szerkeszthető
+const REBUILD_MODE = { value: "rebuild", label: "Rebuild from a picture", cta: "Rebuild it",
+  fields: () => `<p class="muted small" style="margin:-4px 0 12px">A photo, screenshot or PDF of a poster, flyer or social graphic comes back as the same design — every word a real text box, solid blocks as shapes, photos and logos as movable pictures. <em class="ai-badge">AI</em></p>
+    ${fileSlot("rebuild-file", { exts: [...EXT.image, "pdf"], label: "The design — a photo, screenshot or PDF of it" })}
+    <div class="checks"><label><input type="checkbox" name="ai_clean"> Also wipe the old text off the background with AI — for busy photo backgrounds (${account?.image_credit_cost ?? 1} credit)</label></div>`,
+  async submit(fd, form) {
+    if (account?.guest) throw needAccount();
+    const [id] = await readSlot(form, "rebuild-file", "a photo, screenshot or PDF of the design");
+    $("#make-status").textContent = "Reading the design and rebuilding it — about 15 seconds…";
+    const r = await api("/api/make/rebuild", { method: "POST", body: JSON.stringify({ file_id: id, ai_clean: !!fd.get("ai_clean") }) });
+    const note = r.check?.status === "needs_check" && r.check.findings?.[0] ? ` Check: ${r.check.findings[0]}` : "";
+    return { ...editNative(r.files, 1), msg: `Rebuilt — ${r.items.text} texts are editable; the PNG and PDF are in your workspace too.${note}` };
+  },
+};
+// Book → „Photo album”: fotók (+ kézirat) → oldalpárok a DesignCraftban, nyomdai PDF kifutóval
+const ALBUM_MODE = { value: "album", label: "Photo album", cta: "Make the album",
+  fields: () => `<p class="muted small" style="margin:-4px 0 12px">Your photos on facing pages in their own proportions — nothing cropped — with captions, a contents page and a cover. It opens in the layout editor; the print PDF has 3 mm bleed and crop marks.</p>
+    ${fileSlot("album-photos", { exts: EXT.image, multiple: true, label: "Photos, in order" })}
+    ${fileSlot("album-text", { exts: ["docx", "md", "txt"], label: "Text <span class=\"muted small\">(optional) — a .docx with Heading 1 chapters, .md or .txt</span>" })}
+    <label>Title<input type="text" name="atitle" maxlength="120"></label>
+    <label>Subtitle<input type="text" name="asubtitle" maxlength="160"></label>
+    <label>Author<input type="text" name="aauthor" maxlength="80"></label>
+    <label>Size<select name="asize"><option value="A4">A4 portrait</option><option value="A4-landscape">A4 landscape</option><option value="square">Square · 21×21 cm</option><option value="A5">A5</option></select></label>
+    <div class="checks"><label><input type="checkbox" name="acaptions"> Write captions for photos without one <em class="ai-badge">AI</em></label></div>`,
+  async submit(fd, form) {
+    if (fd.get("acaptions") && account?.guest) throw needAccount();
+    const photos = await readSlot(form, "album-photos", "your photos");
+    const [text = null] = await readSlot(form, "album-text");
+    $("#make-status").textContent = `Laying out ${photos.length} photo${photos.length > 1 ? "s" : ""}…`;
+    const r = await api("/api/make/album", { method: "POST", body: JSON.stringify({ photo_ids: photos, manuscript_file_id: text,
+      title: fd.get("atitle"), subtitle: fd.get("asubtitle"), author: fd.get("aauthor"), size: fd.get("asize"), auto_captions: !!fd.get("acaptions") }) });
+    const note = r.check?.status === "needs_check" && r.check.findings?.[0] ? ` Check: ${r.check.findings[0]}` : "";
+    return { file_id: r.file_id, n: r.files.length, edit: true, msg: `Your ${r.pages}-page album is open in the layout editor — the print PDF (bleed and crop marks) is in your workspace too.${note}` };
+  },
+};
+MAKERS.print = withNew("print", MAKERS.print, "template", "From a template", [REBUILD_MODE]);
+MAKERS.book = withNew("book", MAKERS.book, "manuscript", "From a manuscript", [ALBUM_MODE]);
 // ---------- fájlnézet: cím, testvérek, letöltés, „More” ----------
 // natív (csak nálunk nyíló) formátumok: a cím nem mutatja a technikai kiterjesztést, a Download a kész PNG/PDF-et adja
 const NATIVE = { vectorcraft: ["png", "pdf"], deckcraft: ["pptx", "pdf"], designcraft: ["pdf", "png"], pcraft: ["png", "jpg"],

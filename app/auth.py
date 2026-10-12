@@ -47,6 +47,7 @@ _GUEST_OK = (
     ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),
     ("POST", "/api/make/deck"), ("POST", "/api/make/handout"),          # deck: vendégnek csak az üres pakli (AI nélkül)
     ("POST", "/api/make/blank"),                                        # „New”: üres fájl, AI nélkül
+    ("POST", "/api/make/album"),                                        # fotóalbum: AI nélkül (az AI-képaláírás maga kér fiókot)
     ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),                # (eddig egy komment végére csúszva — vendég nem tudott törölni)
 )
 GUEST_MAX_UPLOAD_MB = 25
