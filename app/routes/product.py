@@ -1,6 +1,8 @@
 """A termék webes felülete: /app (kezdőképernyő, fájlok, AI-kapcsolat, fájlnézet — egy oldal, hash-útvonalak)."""
 from __future__ import annotations
 
+import functools
+import hashlib
 import html
 from pathlib import Path
 
@@ -11,6 +13,23 @@ from app.config import settings
 
 router = APIRouter()
 APP_HTML = Path(__file__).parent.parent / "templates" / "app.html"
+STATIC = Path(__file__).parent.parent / "static"
+
+
+def static_v(name: str) -> str:
+    """/static/<név>?v=<tartalom-hash> — a stíluslapnak nincs Cache-Control-ja, a böngésző heurisztikusan
+    a régit tartotta meg deploy után (új HTML + régi CSS = szétesett ejtőzóna, 10-12)."""
+    p = STATIC / name
+    try:
+        st = p.stat()
+    except OSError:
+        return f"/static/{name}"
+    return f"/static/{name}?v={_digest(str(p), st.st_mtime_ns, st.st_size)}"
+
+
+@functools.lru_cache(maxsize=16)
+def _digest(path: str, mtime_ns: int, size: int) -> str:
+    return hashlib.sha1(Path(path).read_bytes()).hexdigest()[:10]
 
 
 @router.get("/", include_in_schema=False)
@@ -37,7 +56,8 @@ async def app_page(rest: str = "") -> HTMLResponse:
             .replace("{{TITLE}}", e(meta["title"])).replace("{{DESCRIPTION}}", e(meta["desc"]))
             .replace("{{CANONICAL}}", e(meta["canonical"])).replace("{{SEO_HEAD}}", seo.head_html(meta))
             .replace("{{ABOUT}}", meta["about"])
-            .replace("{{PRODUCT}}", e(settings.PRODUCT_NAME)).replace("{{BASE}}", e(settings.PUBLIC_BASE_URL.rstrip("/"))))
+            .replace("{{PRODUCT}}", e(settings.PRODUCT_NAME)).replace("{{BASE}}", e(settings.PUBLIC_BASE_URL.rstrip("/")))
+            .replace('href="/static/product.css"', f'href="{static_v("product.css")}"'))
     return HTMLResponse(page, headers={"Cache-Control": "no-cache", **seo.robots_header(meta)})
 
 

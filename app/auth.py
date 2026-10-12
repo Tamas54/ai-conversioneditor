@@ -226,7 +226,8 @@ _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 
 def _page(title, action, fields, button, alt, nxt, error="") -> HTMLResponse:
     err = f'<p class="error">{html.escape(error)}</p>' if error else ""
-    return HTMLResponse(_PAGE.format(title=title, product=html.escape(settings.PRODUCT_NAME), action=action,
+    from app.routes.product import static_v
+    return HTMLResponse(_PAGE.replace('href="/static/product.css"', f'href="{static_v("product.css")}"').format(title=title, product=html.escape(settings.PRODUCT_NAME), action=action,
                                      fields=fields, button=button, alt=alt, next=html.escape(_safe_next(nxt)), error=err))
 
 
