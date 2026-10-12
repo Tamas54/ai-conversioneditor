@@ -156,6 +156,8 @@ function contentScene(sc, i) {
   var L = D.L;
   if (sc.chart) {        // mozgó grafikon: sötétített kép, fent a cím, alatta a grafikon
     shade(c, sc.dur, "even");
+    // + egyenletes sötét fátyol: zsúfolt képen (10-12: EEG-görbe az idővonal mögött) is olvasható maradjon az ábra
+    rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], 58);
     var cs = Math.round(Math.min(D.W, D.H) * 0.052);
     fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
       leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
