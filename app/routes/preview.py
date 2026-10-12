@@ -66,6 +66,17 @@ WORDCRAFT_PREVIEW_FORMATS = {"docx", "doc", "odt", "rtf"}
 # A böngésző nem rajzolja → PNG-re rajzoljuk: PhotoCraft (a rétegek összképe), VectorCraft (a dizájn, ahogy kinyomtatnák)
 PHOTOCRAFT_PREVIEW_FORMATS = {"psd", "psb", "tif", "tiff", "pcraft", "exr"}
 VECTORCRAFT_PREVIEW_FORMATS = {"vectorcraft", "ai", "eps"}
+VIDEO_PREVIEW_FORMATS = {"mp4", "webm", "mov", "m4v"}
+
+# Videó-előnézet: a böngésző lejátszója, illesztve (álló videó is egészben látszik)
+_VIDEO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name}</title><style>
+:root {{ --bg: #F1F2EE; color-scheme: light dark; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg: #202526; }} }}
+html, body {{ margin: 0; height: 100%; background: var(--bg); }}
+body {{ display: grid; place-items: center; overflow: hidden; }}
+video {{ display: block; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); background: #000; box-shadow: 0 6px 24px rgba(0,0,0,.18); }}
+</style></head><body><video src="{src}" poster="{poster}" controls playsinline preload="metadata" aria-label="{name}"></video></body></html>"""
 
 # Kép-előnézet a fájlnézetben: az EGÉSZ kép látszik (illesztve), kattintásra 100% ↔ illesztés; az átlátszó
 # rész (kivágott alak) sakktáblán. A nyers /preview/<id> marad a régi fogyasztóknak.
@@ -152,6 +163,22 @@ async def preview(file_id: str, request: Request, view: str = "", page: int = 0)
                            for i in range(1, n + 1))
             return HTMLResponse(_PAGES_PAGE.format(name=escape(_preview_filename(file_id, "pdf")), pages=imgs),
                                 headers={"Cache-Control": "no-cache"})
+
+    if ext in VIDEO_PREVIEW_FORMATS or ext == "ecproj":
+        # film: lejátszó (a /files/ link Range-kéréseket is kiszolgál); videóprojekt: a legutóbbi renderje, vagy egy kocka
+        from html import escape
+        from app.storage import public_url, read_meta
+        movie = file_id if ext != "ecproj" else (read_meta(file_id) or {}).get("render_file_id")
+        if movie and not (output_path(movie).exists() or input_path(movie).exists()):
+            movie = None
+        if not movie:     # még nem volt render: a címjelenet egy kockája
+            return HTMLResponse(_FIT_PAGE.format(name=escape(_preview_filename(file_id, "png")), src=f"/api/thumb/{file_id}"),
+                                headers={"Cache-Control": "no-cache"})
+        u = public_url(movie)
+        return HTMLResponse(_VIDEO_PAGE.format(name=escape(_preview_filename(movie, movie.rsplit(".", 1)[-1])),
+                                               src=escape(u[u.index("/files/"):] if "/files/" in u else u),
+                                               poster=f"/api/thumb/{file_id}"),
+                            headers={"Cache-Control": "no-cache"})
 
     if ext in PHOTOCRAFT_PREVIEW_FORMATS | VECTORCRAFT_PREVIEW_FORMATS:
         if view == "fit":

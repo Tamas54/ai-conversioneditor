@@ -1,22 +1,44 @@
-// aice_bridge.js — ragasztó a VÁLTOZATLAN Craft web-buildek (WordCraft, PhotoCraft, VectorCraft;
-// upstream release-ek) és a conversioneditor között. Az /editor/<app>/ index.html-be a szerver
-// szúrja be, a WASM elé. Mindhárom ugyanígy épül: <app>_canvas + <app>_loading, drop = megnyitás,
-// Mentés/Export = letöltés-anchor.
+// aice_bridge.js — ragasztó a VÁLTOZATLAN Craft web-buildek (WordCraft, PhotoCraft, VectorCraft, Deck/Pdf/Design/
+// GridCraft, EffectCraft, FilmCraft; upstream release-ek) és a conversioneditor között. Az /editor/<app>/
+// index.html-be a szerver szúrja be, a WASM elé. A trunk-os appok: <app>_canvas + <app>_loading, drop = megnyitás,
+// Mentés/Export = letöltés-anchor. Az EffectCraft és a FilmCraft nem trunk-os: a készenlétet a window.<app>Load.readyMs
+// jelzi; az EffectCraft saját JS-API-t ad (effectcraft.addFile / execute / files / readFile).
 //
 // URL-paraméterek: ?src=<letöltési URL>&name=<fájlnév>&save=<POST URL>
-//   src  — betöltéskor letölti a fájlt és „ráejti" a vászonra (a WordCraft drop-útja nyitja meg)
-//   save — a WordCraft minden letöltését (Mentés, Exportálás) elfogja, és POST-tal a szerverre
+//   src  — betöltéskor letölti a fájlt és megnyitja (drop, EffectCraftnál addFile — előtte a projekt médiafájljai)
+//   save — a szerkesztő minden letöltését (Mentés, Exportálás, Render) elfogja, és POST-tal a szerverre
 //          küldi; hiba esetén marad a sima böngészős letöltés
 // A szülő ablak (dashboard) postMessage-et kap: opened | open_failed | saved | save_failed | touched
 (() => {
   const q = new URLSearchParams(location.search);
   const src = q.get("src"), name = q.get("name") || "document.docx", save = q.get("save");
+  const app = (location.pathname.match(/\/editor\/([a-z]+)\//) || [])[1] || "";
+  const source = save ? new URLSearchParams(save.split("?")[1] || "").get("source") : null;
   const notify = (msg) => {
     if (parent !== window) parent.postMessage({ source: "wordcraft", ...msg }, location.origin);
     console.log("[aice_bridge]", JSON.stringify(msg));
   };
+  const MEDIA = /\.(png|jpe?g|webp|gif|tiff?|bmp|exr|psd|svg|mp4|mov|webm|m4v|mkv|mp3|wav|m4a|aac|ogg|oga|flac|aiff?|opus)$/i;
+  const known = new Set();      // a projekt ismert médiafájl-nevei (EffectCraft) — mentés után csak az újak mennek fel
 
   let touched = false, savingAt = 0;   // savingAt: mikor indult az utolsó mentés-letöltés
+
+  // EffectCraft: a böngészőben a projekthez adott képek/hangok/filmek a mentett projekt mellé a szerverre
+  const uploadNewMedia = async (projectId) => {
+    if (app !== "effectcraft" || !window.effectcraft || !projectId) return;
+    let list = [];
+    try { list = await effectcraft.files(); } catch { return; }
+    for (const f of list || []) {
+      const base = String(f.path || "").split("/").pop();
+      if (!base || known.has(base) || !MEDIA.test(base) || (f.size || 0) > 200 * 1024 * 1024) continue;
+      try {
+        const bytes = await effectcraft.readFile(f.path);
+        const r = await fetch(`/api/video/asset?project=${encodeURIComponent(projectId)}&name=${encodeURIComponent(base)}`,
+          { method: "POST", body: bytes, headers: { "Content-Type": "application/octet-stream" } });
+        if (r.ok) known.add(base);
+      } catch (e) { console.warn("[aice_bridge] media upload", base, e); }
+    }
+  };
 
   if (save) {
     const origClick = HTMLAnchorElement.prototype.click;
@@ -29,12 +51,15 @@
         .then((blob) => fetch(save + (save.includes("?") ? "&" : "?") + "name=" + encodeURIComponent(fname),
           { method: "POST", body: blob, headers: { "Content-Type": blob.type || "application/octet-stream" } }))
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
-        .then((j) => { touched = false; notify({ type: "saved", name: fname, ...j }); })
+        .then(async (j) => {
+          if (/\.ecproj$/i.test(fname)) await uploadNewMedia(j.file_id);
+          touched = false; notify({ type: "saved", name: fname, ...j });
+        })
         .catch((e) => { notify({ type: "save_failed", name: fname, error: String(e) }); origClick.call(anchor); });
     };
   }
 
-  // A dashboard ebből tudja, hogy elhagyás előtt rákérdezzen-e (a WordCraft saját
+  // A dashboard ebből tudja, hogy elhagyás előtt rákérdezzen-e (a szerkesztő saját
   // „módosítva" jelzője a WASM-ban van, kívülről nem olvasható). Sikeres mentés nullázza.
   const touch = (e) => {
     if (touched || !e.isTrusted) return;
@@ -49,6 +74,10 @@
   addEventListener("message", (e) => {
     if (e.source !== parent || e.origin !== location.origin || e.data?.target !== "aice_bridge") return;
     if (e.data.cmd !== "save") return;
+    if (app === "effectcraft" && window.effectcraft) {     // saját parancs: File ▸ Save (a böngészőben le is tölti)
+      effectcraft.execute("file.save", {}).catch((err) => notify({ type: "save_failed", name, error: String(err) }));
+      return;
+    }
     const canvas = document.querySelector("canvas");
     const press = (key, code, keyCode, ctrlKey) => {
       for (const type of ["keydown", "keyup"])
@@ -64,7 +93,7 @@
   });
 
   if (src) {
-    const open = async () => {
+    const drop = async () => {
       const r = await fetch(src);
       if (!r.ok) throw new Error("HTTP " + r.status);
       const blob = await r.blob();
@@ -75,10 +104,28 @@
         canvas.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
       notify({ type: "opened", name, bytes: blob.size });
     };
-    // Az app akkor kész, amikor a betöltő feliratot (#<app>_loading) eltávolította.
-    const wait = () => (document.querySelector('[id$="_loading"]')
-      ? setTimeout(wait, 100)
-      : open().catch((e) => notify({ type: "open_failed", name, error: String(e) })));
-    addEventListener("TrunkApplicationStarted", wait);
+    // EffectCraft: előbb a projekt médiafájljai (a projekt relatív névvel hivatkozik rájuk), aztán maga a projekt
+    const addFiles = async () => {
+      if (/\.ecproj$/i.test(name) && source) {
+        const a = await fetch(`/api/video/assets?file_id=${encodeURIComponent(source)}`).then((r) => (r.ok ? r.json() : { assets: [] }));
+        for (const x of a.assets || []) { await effectcraft.addFile(x.url, x.name); known.add(x.name); }
+      }
+      const r = await fetch(src);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const blob = await r.blob();
+      await effectcraft.addFile(new File([blob], name), name);
+      notify({ type: "opened", name, bytes: blob.size });
+    };
+    const fail = (e) => notify({ type: "open_failed", name, error: String(e) });
+    if (app === "effectcraft" || app === "filmcraft") {
+      const load = () => window[app + "Load"] || {};
+      const wait = () => (load().readyMs ? (app === "effectcraft" ? addFiles() : drop()).catch(fail)
+        : load().error || load().fatal ? fail(load().error || load().fatal) : setTimeout(wait, 150));
+      wait();
+    } else {
+      // Az app akkor kész, amikor a betöltő feliratot (#<app>_loading) eltávolította.
+      const wait = () => (document.querySelector('[id$="_loading"]') ? setTimeout(wait, 100) : drop().catch(fail));
+      addEventListener("TrunkApplicationStarted", wait);
+    }
   }
 })();

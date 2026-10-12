@@ -71,6 +71,12 @@ class Settings(BaseModel):
     PHOTOCRAFT_WEB_DIR: Path = Path(os.getenv("PHOTOCRAFT_WEB_DIR", "/opt/photocraft-web"))
     VECTORCRAFT_CLI: str = os.getenv("VECTORCRAFT_CLI", "/opt/vectorcraft/bin/vectorcraft-cli")
     VECTORCRAFT_WEB_DIR: Path = Path(os.getenv("VECTORCRAFT_WEB_DIR", "/opt/vectorcraft-web"))
+    # Videó (storytold, Apache-2.0): EffectCraft = After Effects-szerű (.ecproj, render MP4), FilmCraft = Premiere-szerű vágó
+    EFFECTCRAFT_CLI: str = os.getenv("EFFECTCRAFT_CLI", "/opt/effectcraft/bin/effectcraft-cli")
+    EFFECTCRAFT_WEB_DIR: Path = Path(os.getenv("EFFECTCRAFT_WEB_DIR", "/opt/effectcraft-web"))
+    FILMCRAFT_CLI: str = os.getenv("FILMCRAFT_CLI", "/opt/filmcraft/bin/filmcraft-cli")
+    FILMCRAFT_WEB_DIR: Path = Path(os.getenv("FILMCRAFT_WEB_DIR", "/opt/filmcraft-web"))
+    VIDEO_TIMEOUT_S: int = int(os.getenv("VIDEO_TIMEOUT_S", "1800"))      # egy 3 perces 4K render is beférjen
     # Háttéreltávolítás (rembg): ISNet — egy nehéz, ellenfényes fotón messze a legjobb (10-11 mérés).
     CUTOUT_MODEL_PATH: Path = Path(os.getenv("CUTOUT_MODEL_PATH", "/opt/models/isnet-general-use.onnx"))
     # alany (BiRefNet-lite, MIT): tisztább az ISNet-nél (nincs „köd” a háttérből, tömör ruha) — hiányában az ISNet fut

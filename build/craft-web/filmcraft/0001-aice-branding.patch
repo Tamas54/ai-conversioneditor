@@ -1,0 +1,124 @@
+AICE-javítás a storytold/filmcraft v0.6.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan:
+
+AICE-CHANGE: the header has no Discord button (the title gets the room); the Import screen has no Community links; the About dialog has no Discord/website/app page/GitHub/Report an issue links;
+AICE-CHANGE: the Help menu and the command search have no community or project links, and the web build opens no external links at all.
+
+Alkalmazás:  git -C <filmcraft> apply 0001-aice-branding.patch   (vagy: patch -d <filmcraft> -p1)
+
+--- filmcraft.orig/crates/ui-egui/src/links.rs
++++ filmcraft/crates/ui-egui/src/links.rs
+@@ -36,6 +36,10 @@
+ /// fails, it goes through `ctx.open_url`, which only does something on the web: the native egui
+ /// backend is built without its `links` feature, so there it would only log (#642).
+ pub fn open(app: &mut crate::FilmcraftApp, ctx: &egui::Context, url: &str) {
++    // AICE: the embedded web editor opens no community, project or documentation links.
++    if cfg!(target_arch = "wasm32") {
++        return;
++    }
+     if let Some(f) = app.hooks.open_url.as_mut() {
+         match f(url) {
+             Ok(()) => return,
+--- filmcraft.orig/crates/ui-egui/src/menus.rs
++++ filmcraft/crates/ui-egui/src/menus.rs
+@@ -672,7 +672,8 @@
+         });
+     }
+     for c in UI_COMMANDS.iter().chain(crate::panels::keyboard::COMMANDS) {
+-        if c.menu.is_empty() {
++        // AICE: the web build's Help menu has no community or project links.
++        if c.menu.is_empty() || (cfg!(target_arch = "wasm32") && crate::links::url_for(c.id).is_some()) {
+             continue;
+         }
+         out.push(MenuItem {
+@@ -780,8 +781,13 @@
+ /// rebound and resolved alongside engine commands (the `shortcuts.` commands).
+ pub fn external_commands() -> Vec<filmcraft_engine::shortcuts::CommandInfo> {
+     use filmcraft_engine::shortcuts::CommandInfo;
+-    let mut v: Vec<CommandInfo> =
+-        UI_COMMANDS.iter().chain(crate::panels::keyboard::COMMANDS).map(|c| CommandInfo::new(c.id, c.label, c.menu, c.shortcut)).collect();
++    // AICE: ... nor in its command search.
++    let mut v: Vec<CommandInfo> = UI_COMMANDS
++        .iter()
++        .chain(crate::panels::keyboard::COMMANDS)
++        .filter(|c| !(cfg!(target_arch = "wasm32") && crate::links::url_for(c.id).is_some()))
++        .map(|c| CommandInfo::new(c.id, c.label, c.menu, c.shortcut))
++        .collect();
+     for p in PanelKind::ALL {
+         v.push(CommandInfo::new(&panel_command_id(p), p.title(), &["Window"], p.window_shortcut()));
+     }
+--- filmcraft.orig/crates/ui-egui/src/header.rs
++++ filmcraft/crates/ui-egui/src/header.rs
+@@ -124,14 +124,19 @@
+         let g = p.layout_no_wrap(label.to_string(), Tokens::ui(12.0), Color32::WHITE);
+         let w = g.size().x + 34.0;
+         let r = Rect::from_min_size(pos2(wr.min.x - w - 14.0, rect.center().y - 12.0), vec2(w, 24.0));
+-        let resp = ui.interact(r, egui::Id::new("hdr-discord"), Sense::click()).on_hover_text(tl!("Join the ArtCraft Discord (discord.gg/artcraft)"));
+-        app.auto.add("header.discord", r, "Join the ArtCraft Discord");
+-        ui.painter().rect_filled(r, 12.0, if resp.hovered() { t.accent_hover } else { t.accent });
+-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)), Icon::Chat, Color32::WHITE);
+-        ui.painter().galley(pos2(r.min.x + 25.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
++        // AICE: no Discord button in the embedded web editor — the title gets its room.
++        let web = cfg!(target_arch = "wasm32");
++        let resp = (!web).then(|| {
++            let resp = ui.interact(r, egui::Id::new("hdr-discord"), Sense::click()).on_hover_text(tl!("Join the ArtCraft Discord (discord.gg/artcraft)"));
++            app.auto.add("header.discord", r, "Join the ArtCraft Discord");
++            ui.painter().rect_filled(r, 12.0, if resp.hovered() { t.accent_hover } else { t.accent });
++            icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)), Icon::Chat, Color32::WHITE);
++            ui.painter().galley(pos2(r.min.x + 25.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
++            resp
++        });
+         // Localized menus and user titles can be wider than English. Use the actual gap.
+         let left = left_end + 12.0;
+-        let right = r.min.x - 12.0;
++        let right = if web { wr.min.x - 12.0 } else { r.min.x - 12.0 };
+         if right > left + 40.0 {
+             let mut job = egui::text::LayoutJob::simple_singleline(title, Tokens::ui(14.0), t.tab_text_active);
+             job.wrap.max_width = right - left;
+@@ -146,7 +151,7 @@
+             );
+         }
+ 
+-        if resp.clicked() {
++        if resp.is_some_and(|r| r.clicked()) {
+             crate::links::open(app, ui.ctx(), crate::links::DISCORD);
+         }
+     }
+--- filmcraft.orig/crates/ui-egui/src/panels/import_mode.rs
++++ filmcraft/crates/ui-egui/src/panels/import_mode.rs
+@@ -43,6 +43,10 @@
+             app.ui.mode = crate::state::Mode::Edit;
+         }
+     }
++    // AICE: no community or project links in the embedded web editor.
++    if cfg!(target_arch = "wasm32") {
++        return;
++    }
+     // Community and project links.
+     let y = 90.0 + 150.0 + 36.0;
+     // ArtCraft wordmark (first-party trademark, docs/brand/), then the section title.
+--- filmcraft.orig/crates/ui-egui/src/panels/dialogs.rs
++++ filmcraft/crates/ui-egui/src/panels/dialogs.rs
+@@ -482,12 +482,15 @@
+             links::open(app, ui.ctx(), url);
+         }
+     };
+-    link(ui, "discord", Icon::Chat, tl!("Join the ArtCraft Discord"), links::DISCORD, true);
+-    ui.add_space(6.0);
+-    link(ui, "website", Icon::Globe, "getartcraft.com", links::WEBSITE, false);
+-    link(ui, "appPage", Icon::Globe, tl!("FilmCraft on getartcraft.com"), links::APP_PAGE, false);
+-    link(ui, "github", Icon::Code, tl!("Source code on GitHub"), links::GITHUB, false);
+-    link(ui, "reportIssue", Icon::Code, tl!("Report an issue"), links::ISSUES, false);
+-    ui.add_space(10.0);
++    // AICE: no community or project links in the embedded web editor's About dialog.
++    if !cfg!(target_arch = "wasm32") {
++        link(ui, "discord", Icon::Chat, tl!("Join the ArtCraft Discord"), links::DISCORD, true);
++        ui.add_space(6.0);
++        link(ui, "website", Icon::Globe, "getartcraft.com", links::WEBSITE, false);
++        link(ui, "appPage", Icon::Globe, tl!("FilmCraft on getartcraft.com"), links::APP_PAGE, false);
++        link(ui, "github", Icon::Code, tl!("Source code on GitHub"), links::GITHUB, false);
++        link(ui, "reportIssue", Icon::Code, tl!("Report an issue"), links::ISSUES, false);
++        ui.add_space(10.0);
++    }
+     ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Fonts: Inter, Noto Serif and JetBrains Mono (SIL OFL 1.1).")).small().color(t.text_dim));
+ }

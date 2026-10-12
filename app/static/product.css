@@ -108,6 +108,13 @@ body.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px
   radial-gradient(circle at 50% 40%, #C98B63 0 15%, transparent 15.5%),                    /* fej */
   radial-gradient(ellipse 34% 30% at 50% 100%, #2F5D7C 0 98%, transparent 100%),            /* váll */
   repeating-conic-gradient(#ECEFEC 0 25%, #D5DAD5 0 50%) 0 0 / 10px 10px; }                /* átlátszóság */
+/* videó: álló képernyő lejátszás-jellel, alul három klip az idővonalon */
+.o-video { width: 84px; aspect-ratio: 9/16; transform: rotate(2.5deg); position: relative; border-radius: 6px;
+  background: radial-gradient(circle at 30% 25%, #4F7F9F 0 22%, transparent 60%), linear-gradient(165deg, #2F5D7C, #12202A); }
+.o-video b { position: absolute; left: 50%; top: 40%; transform: translate(-35%, -50%); border-left: 19px solid #FCFCF9;
+  border-top: 12px solid transparent; border-bottom: 12px solid transparent; opacity: .95; }
+.o-video i { position: absolute; bottom: 11px; height: 6px; border-radius: 2px; left: 8px; width: 30px; background: var(--signal); }
+.o-video i + i { left: 41px; width: 17px; background: #F7B267; } .o-video i + i + i { left: 61px; width: 15px; background: #D6DCD7; }
 .o-poster { width: 92px; aspect-ratio: 1/1.414; transform: rotate(-1.5deg); background: var(--signal); color: #fff; padding: 10px;
   display: grid; align-content: end; font: 800 17px/.95 var(--f-display); letter-spacing: -.01em; }
 /* Infografika: kiemelt szám + oszlopok (a minden szám a cellákból jön) */

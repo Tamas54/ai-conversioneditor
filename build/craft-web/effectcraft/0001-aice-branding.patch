@@ -1,0 +1,125 @@
+AICE-javítás a storytold/effectcraft v0.8.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan:
+
+AICE-CHANGE: the header has no Discord, GitHub or getartcraft.com buttons; the start screen has no Community links or other-app tiles; the About dialog has no Discord/website/app page/GitHub links;
+AICE-CHANGE: the Help menu, the command search and the agent catalogue have no community or project links (Discord, website, app page, GitHub docs and issues, online tutorials, other apps).
+
+Alkalmazás:  git -C <effectcraft> apply 0001-aice-branding.patch   (vagy: patch -d <effectcraft> -p1)
+
+--- effectcraft.orig/crates/engine/src/menus.rs
++++ effectcraft/crates/engine/src/menus.rs
+@@ -391,7 +391,11 @@
+             *body = rest;
+             Some(keep)
+         };
+-        if let Some(false) = tagged("[mac] ", mac, &mut body).or_else(|| tagged("[!mac] ", !mac, &mut body)) {
++        // AICE: `[!web]` lines (community and project links) are left out of the web build's menus.
++        if let Some(false) = tagged("[mac] ", mac, &mut body)
++            .or_else(|| tagged("[!mac] ", !mac, &mut body))
++            .or_else(|| tagged("[!web] ", !cfg!(target_arch = "wasm32"), &mut body))
++        {
+             skip_below = Some(depth);
+             continue;
+         }
+@@ -1204,26 +1208,26 @@
+   VR Comp Editor | window.panel {"panel":"vrCompEditor"}
+   @dynamic:scriptPanels
+ Help
+-  EffectCraft Help... | help.docs {"page":"help"} | F1
+-  Scripting Help... | help.docs {"page":"scripting"}
+-  Expression Reference... | help.docs {"page":"expressions"}
+-  Effect Reference... | help.docs {"page":"effects"}
++  [!web] EffectCraft Help... | help.docs {"page":"help"} | F1
++  [!web] Scripting Help... | help.docs {"page":"scripting"}
++  [!web] Expression Reference... | help.docs {"page":"expressions"}
++  [!web] Effect Reference... | help.docs {"page":"effects"}
+   Animation Presets... | anim.browsePresets
+   Keyboard Shortcuts... | app.keyboardShortcuts
+   ---
+   In-App Tutorials... | help.inAppTutorials
+-  Online Tutorials... | help.onlineTutorials
++  [!web] Online Tutorials... | help.onlineTutorials
+   ---
+   System Compatibility Report... | help.systemReport
+   Enable Logging | help.enableLogging
+   Reveal Logging File | help.revealLogFile
+   ---
+-  Join the ArtCraft Discord... | help.discord
+-  Provide Feedback... | help.reportIssue
+-  ---
+-  ArtCraft Website | help.website
+-  EffectCraft Home Page | help.appPage
+-  EffectCraft on GitHub | help.github
++  [!web] Join the ArtCraft Discord... | help.discord
++  [!web] Provide Feedback... | help.reportIssue
++  [!web] ---
++  [!web] ArtCraft Website | help.website
++  [!web] EffectCraft Home Page | help.appPage
++  [!web] EffectCraft on GitHub | help.github
+   Open Demo Project | file.openDemoProject
+   [!mac] ---
+   [!mac] About EffectCraft... | app.about
+--- effectcraft.orig/crates/engine/src/commands/help.rs
++++ effectcraft/crates/engine/src/commands/help.rs
+@@ -29,6 +29,16 @@
+ }
+ 
+ pub fn specs() -> Vec<CommandSpec> {
++    let mut v = all_specs();
++    // AICE: the web build has no community or project links (Discord, getartcraft.com, GitHub docs and
++    // issues, other apps) — they are left out of the menus, the command search and the agent catalogue.
++    if cfg!(target_arch = "wasm32") {
++        v.retain(|c| matches!(c.id, "help.inAppTutorials"));
++    }
++    v
++}
++
++fn all_specs() -> Vec<CommandSpec> {
+     vec![
+         cmd!("help.docs", "EffectCraft Help...", [], Some("F1"), "{page?: help|scripting|expressions|effects|agents}", always, docs),
+         cmd!("help.discord", "Join the ArtCraft Discord...", ["Help"], None, "{}", always, |s, _| open(s, links::DISCORD.into())),
+--- effectcraft.orig/crates/ui-egui/src/header.rs
++++ effectcraft/crates/ui-egui/src/header.rs
+@@ -180,6 +180,8 @@
+ 
+     // Right side: community buttons, workspaces.
+     let mut rx = rect.max.x - 10.0;
++    // AICE: no community buttons (Discord, GitHub, getartcraft.com) in the embedded web editor.
++    if !cfg!(target_arch = "wasm32") {
+     // The pill fits its label (icon, gap, text) with even padding: it was a fixed 104 px with the
+     // text at its left, which left a wide gap on the right (#581).
+     let label = p.layout_no_wrap(tr("Discord").to_string(), Tokens::semibold(12.0), Color32::WHITE);
+@@ -204,6 +206,7 @@
+         app.auto.add(&format!("header.{}", &id[4..]), r, tip);
+         rx = r.min.x - 4.0;
+     }
++    }
+     // Appearance: Sync with System, Light, Dark (a monitor, sun or moon), one click to the next.
+     let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
+         "auto" => (Icon::Monitor, tr("Sync with System")),
+--- effectcraft.orig/crates/ui-egui/src/panels/home.rs
++++ effectcraft/crates/ui-egui/src/panels/home.rs
+@@ -270,6 +270,10 @@
+         }
+         y += 38.0;
+     }
++    // AICE: no community links or other-app tiles in the embedded web editor.
++    if cfg!(target_arch = "wasm32") {
++        return;
++    }
+     // Community links at the foot (below the pages when the window is short).
+     let links = [
+         (Icon::Chat, "Join the ArtCraft Discord", "help.discord"),
+--- effectcraft.orig/crates/ui-egui/src/panels/dialogs.rs
++++ effectcraft/crates/ui-egui/src/panels/dialogs.rs
+@@ -269,6 +269,10 @@
+     ui.add_space(12.0);
+     ui.label(tr("A clean-room, open-source compositor for motion graphics and visual effects: native on macOS, Windows and Linux, and in the browser. Part of the ArtCraft family of creative apps."));
+     ui.add_space(14.0);
++    // AICE: no community or project links in the embedded web editor's About dialog.
++    if cfg!(target_arch = "wasm32") {
++        return;
++    }
+     let links: [(Icon, &str, &str, &'static str); 4] = [
+         (Icon::Chat, "Join the ArtCraft Discord", effectcraft_engine::links::DISCORD, "help.discord"),
+         (Icon::Globe, "ArtCraft website", effectcraft_engine::links::WEBSITE, "help.website"),

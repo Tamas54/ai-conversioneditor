@@ -20,6 +20,13 @@ patchek fejléce (`AICE-CHANGE:` sorok) a csomag `NOTICE-AICE.txt`-jébe is beke
 | PdfCraft 0.6.0 | fülsor Discord-gombja; kezdőképernyő „Join the ArtCraft community” kártyája; About linkjei; Help-parancsok (menü + keresés): Discord, web page, GitHub, ArtCraft website, Check for updates | — |
 | DesignCraft 0.6.0 | címsor Discord-gombja; kezdőképernyő közösségi kártyája; About: Discord-gomb, linksor, „More ArtCraft apps”; Help menü és parancskeresés link-elemei | — (IDML-ben ritka a Calibri) |
 | GridCraft 0.5.0 | About: app page + Discord link | **Carlito** a webes buildbe (a webnek nincs rendszerfontja, eddig az egui alapfontjával rajzolta a Calibri-cellákat). A fájlokat a `fetch-fonts.sh` tölti le (ugyanazok és ugyanolyan SHA256-ellenőrzéssel, mint a WordCraftnál; bitre azonosak a szerver Docker-képének `fonts-crosextra-carlito` csomagjával) |
+| EffectCraft 0.8.0 (videó, 10-12) | fejléc Discord/GitHub/getartcraft-gombjai; kezdőképernyő Community-blokkja és „More ArtCraft apps”; About linkjei; Help menü (új `[!web]` menücímke), parancskeresés és ügynök-katalógus: Discord, website, app page, GitHub-doksik és -issue, online tutorials, testvérappok | — (az upstream web-build sem használ craft-fontsot) |
+| FilmCraft 0.6.0 (videó, 10-12) | fejléc Discord-gombja (a cím kapja a helyét); Import-képernyő Community-blokkja; About linkjei; Help menü és parancskeresés link-elemei; a webes build semmilyen külső linket nem nyit | — (`craft-fonts.ref`: az upstream web-job pinje) |
+
+Az EffectCraft és a FilmCraft nem trunk-os: a `build.sh` az upstream `packaging/web/package.sh`-t hívja, az
+`cargo xtask web`-bel épít — ehhez a **wasm-bindgen CLI 0.2.129** kell (a workflow telepíti; helyben:
+`cargo install wasm-bindgen-cli --version 0.2.129 --locked`). A patchek `cargo check --target wasm32-unknown-unknown`-nal
+ellenőrizve (10-12).
 
 Megmarad (szándékosan): az appok neve, az ArtCraft-jel, az About licenc/szerzői szövege és a
 közreműködők listája (attribúció). A webes appok nem küldenek telemetriát, csak a saját

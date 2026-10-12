@@ -49,6 +49,7 @@ _GUEST_OK = (
     ("POST", "/api/make/blank"),                                        # „New”: üres fájl, AI nélkül
     ("POST", "/api/make/album"),                                        # fotóalbum: AI nélkül (az AI-képaláírás maga kér fiókot)
     ("GET", "/api/design/columns"),                                     # tömeges személyre szabás: a táblázat oszlopai
+    ("GET", "/api/video/assets"), ("POST", "/api/video/asset"),         # a videószerkesztő médiafájljai (a projekt mellé)
     ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),                # (eddig egy komment végére csúszva — vendég nem tudott törölni)
 )
 GUEST_MAX_UPLOAD_MB = 25

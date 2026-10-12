@@ -25,9 +25,11 @@ _IMG = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"}
 _PHOTO = {"psd", "psb", "pcraft", "exr", "tga"}
 _WORD = {"docx", "doc", "odt", "rtf", "md", "txt", "html", "htm"}
 _DECK = {"pptx", "deckcraft"}
+_VIDEO = {"mp4", "mov", "webm", "m4v"}
+VIDEO_FRAMES = (0.15, 0.5, 0.85)            # videó-„oldalak”: három kocka az elejéről, a közepéről, a végéről
 # ami előnézhető (a többi — zip, json, mp3… — nem kap preview_url-t)
 PREVIEWABLE = _IMG | _PHOTO | _WORD | _DECK | {"pdf", "svg", "vectorcraft", "ai", "eps", "designcraft", "idml",
-                                              "xlsx", "xls", "ods", "csv", "tsv", "odp", "ppt"}
+                                              "xlsx", "xls", "ods", "csv", "tsv", "odp", "ppt"} | _VIDEO | {"ecproj"}
 _gate = asyncio.Semaphore(3)
 
 
@@ -113,6 +115,8 @@ async def page_count(src: Path) -> int:
     ext = src.suffix.lstrip(".").lower()
     if ext in _IMG | _PHOTO:
         return 1
+    if ext in _VIDEO or ext == "ecproj":
+        return len(VIDEO_FRAMES)
     if ext == "pptx":
         from pptx import Presentation
         return len(Presentation(str(src)).slides)
@@ -130,7 +134,12 @@ async def render(src: Path, page: int = 1, width: int = DEFAULT_W) -> Path:
         return dst
     raw = temp_path(f"pv-{src.stem}-{ext}-{page}-{width}.raw.png")
     async with _gate:
-        if ext in _IMG:
+        if ext == "ecproj":                      # a videóprojekt képe = az utolsó renderjének kockája
+            src = _project_render(src)
+            ext = src.suffix.lstrip(".").lower()
+        if ext in _VIDEO:
+            await asyncio.to_thread(_video_frame, src, VIDEO_FRAMES[min(page, len(VIDEO_FRAMES)) - 1], raw)
+        elif ext in _IMG:
             raw = src
         elif ext in _PHOTO:
             raw = await _photo_png(src)
@@ -150,6 +159,29 @@ async def render(src: Path, page: int = 1, width: int = DEFAULT_W) -> Path:
     if raw != src and raw.parent == dst.parent and raw.name.endswith(".raw.png"):
         raw.unlink(missing_ok=True)
     return dst
+
+
+def _project_render(src: Path) -> Path:
+    from app.storage import read_meta
+    from app.tools.crafts import existing
+    rid = (read_meta(src.name) or {}).get("render_file_id")
+    if not rid:
+        raise ValueError("This video project has no render yet — render it first (video action=render).")
+    return existing(rid)
+
+
+def _video_frame(src: Path, at: float, dst: Path) -> None:
+    import cv2
+    c = cv2.VideoCapture(str(src))
+    try:
+        n = c.get(cv2.CAP_PROP_FRAME_COUNT)
+        c.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(n * at) - 1))
+        ok, fr = c.read()
+    finally:
+        c.release()
+    if not ok or fr is None:
+        raise RuntimeError("No frame could be read from the video.")
+    cv2.imwrite(str(dst), fr)
 
 
 async def _pdftoppm(pdf: Path, page: int, width: int, raw: Path) -> None:

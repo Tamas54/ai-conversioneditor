@@ -6,6 +6,7 @@ EGY nyilvántartás (KINDS): eszköz → méretek, és EGY belépési pont (make
     photo   — üres PhotoCraft-vászon (PSD), fehér vagy átlátszó háttérrel
     book    — üres könyv Word-fájlként: könyvstílusok, tükörmargó, címoldal + „Chapter 1”
     pdf     — üres PDF (A4/Letter), egy oldal
+    video   — üres videóprojekt (.ecproj, EffectCraft): álló 9:16 / fekvő 16:9 / négyzetes, 30 s
 A dokumentumnak és a paklinak saját „New” módja van (/api/make/document, /api/make/deck mode=blank).
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ KINDS: dict[str, dict[str, Any]] = {
                                                    "1080x1350": (1080, 1350), "3000x2000": (3000, 2000)}},
     "book": {"label": "Untitled book", "sizes": {"A5": (148, 210), "A4": (210, 297), "6x9": (152.4, 228.6)}},   # mm
     "pdf": {"label": "Untitled PDF", "sizes": {"A4": (595.3, 841.9), "Letter": (612, 792)}},
+    "video": {"label": "Untitled video", "sizes": {"vertical": (1080, 1920), "landscape": (1920, 1080), "square": (1080, 1080)}},
 }
 MAX_PX = 12000
 
@@ -122,6 +124,9 @@ async def make(body: dict[str, Any]) -> dict[str, Any]:
     kind = body.get("kind") or ""
     if kind not in KINDS:
         raise ValueError(f"kind: {', '.join(KINDS)} (got {kind!r})")
+    if kind == "video":          # a videómotor saját üres projektje (méret = formátum; a hossz a szerkesztőben állítható)
+        from app.tools import video
+        return await video.blank(body.get("size") or body.get("format"), body.get("duration"))
     w, h = _size(kind, body.get("size"), body.get("orientation"), body.get("width"), body.get("height"))
     if kind in ("social", "print"):
         fid = await _vector(kind, w, h)

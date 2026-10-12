@@ -1,8 +1,10 @@
 """Kézi szerkesztők — a Craft-motorok WASM-buildje (változatlan upstream release-ek).
 
     /editor/{app}/            — az app index.html-je, beszúrt aice_bridge.js-sel
-                                (app: wordcraft | photocraft | vectorcraft | deckcraft | pdfcraft | designcraft | gridcraft)
-    /editor/{app}/{asset}     — wasm/js (előtömörített .gz, ha a kliens kéri)
+                                (app: wordcraft | photocraft | vectorcraft | deckcraft | pdfcraft | designcraft | gridcraft |
+                                 effectcraft | filmcraft)
+    /editor/{app}/{asset}     — wasm/js (előtömörített .gz, ha a kliens kéri); az EffectCraftnál almappa is
+                                (snippets/<crate>/js/host.js)
     POST /api/editor/save     — a szerkesztő Mentés/Exportálás bájtjai → új output file_id
 
 A dashboard iframe-ben nyitja: /editor/<app>/?src=<fájl-URL>&name=<fájlnév>&save=/api/editor/save?source=<file_id>
@@ -23,7 +25,7 @@ from app import events
 from app.config import settings
 from app.storage import input_path, output_path, public_url, save_bytes, write_meta
 from app.storage.files import new_file_id
-from app.tools import crafts
+from app.tools import crafts, video
 from app.tools.wordcraft import SAVE_FORMATS as WORD_SAVE
 
 router = APIRouter()
@@ -34,7 +36,7 @@ _ASSET_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MEDIA = {".wasm": "application/wasm", ".js": "text/javascript", ".html": "text/html"}
 _IMMUTABLE = "public, max-age=31536000, immutable"
 # Amit a szerkesztők menteni/exportálni tudnak (a mentés-végpont ezt engedi be).
-_SAVE_EXTS = WORD_SAVE | crafts.PHOTO_SAVE | crafts.VECTOR_SAVE | crafts.OFFICE_SAVE
+_SAVE_EXTS = WORD_SAVE | crafts.PHOTO_SAVE | crafts.VECTOR_SAVE | crafts.OFFICE_SAVE | video.VIDEO_SAVE
 # natív mentés → (motor, eredeti formátumok, amelyekre visszaalakítjuk)
 _OFFICE_ROUNDTRIP = {"deckcraft": ("deck", {"pptx"})}
 
@@ -45,6 +47,8 @@ def _web_dirs() -> dict[str, Path]:
         "photocraft": settings.PHOTOCRAFT_WEB_DIR,
         "vectorcraft": settings.VECTORCRAFT_WEB_DIR,
         **{spec["exe"]: crafts.office_web_dir(spec["exe"]) for spec in crafts.OFFICE.values()},
+        "effectcraft": settings.EFFECTCRAFT_WEB_DIR,
+        "filmcraft": settings.FILMCRAFT_WEB_DIR,
     }
 
 
@@ -66,7 +70,8 @@ def crafts_status() -> dict[str, Any]:
     from app.tools import cutout, wordcraft
     clis = {"wordcraft": wordcraft.available(), "photocraft": crafts.photo_cli() is not None,
             "vectorcraft": crafts.vector_cli() is not None,
-            **{spec["exe"]: crafts.office_cli(a) is not None for a, spec in crafts.OFFICE.items()}}
+            **{spec["exe"]: crafts.office_cli(a) is not None for a, spec in crafts.OFFICE.items()},
+            "effectcraft": video.effect_cli() is not None, "filmcraft": video.film_cli() is not None}
     st: dict[str, Any] = {app: {"cli": clis[app], "editor": (d / "index.html").is_file()}
                           for app, d in _web_dirs().items()}
     st["cutout"] = cutout.available()
@@ -97,11 +102,12 @@ async def editor_index(app: str) -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
-@router.get("/editor/{app}/{asset}", include_in_schema=False)
+@router.get("/editor/{app}/{asset:path}", include_in_schema=False)
 async def editor_asset(app: str, asset: str, request: Request):
     if asset == "aice_bridge.js":
         return FileResponse(BRIDGE_JS, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
-    if not _ASSET_RE.match(asset) or asset.endswith(".gz"):
+    parts = asset.split("/")      # almappa csak ártalmatlan szegmensekből (az EffectCraft host.js-e: snippets/<crate>/js/)
+    if len(parts) > 4 or not all(_ASSET_RE.match(x) and not x.startswith(".") for x in parts) or asset.endswith(".gz"):
         raise HTTPException(404)
     d = _web_dir(app)
     p = d / asset
@@ -109,7 +115,9 @@ async def editor_asset(app: str, asset: str, request: Request):
         raise HTTPException(404)
     suffix = p.suffix.lower()
     media = _MEDIA.get(suffix)
-    headers = {"Cache-Control": _IMMUTABLE if suffix in (".wasm", ".js") else "no-cache", "Vary": "Accept-Encoding"}
+    # az EffectCraft fájlnevei kiadásról kiadásra azonosak (nincs bennük hash) → újraellenőrzés, nem „immutable”
+    immutable = suffix in (".wasm", ".js") and app != "effectcraft"
+    headers = {"Cache-Control": _IMMUTABLE if immutable else "no-cache", "Vary": "Accept-Encoding"}
     gz = d / f"{asset}.gz"
     if gz.is_file() and "gzip" in request.headers.get("accept-encoding", ""):
         return FileResponse(gz, media_type=media, headers={**headers, "Content-Encoding": "gzip"})
@@ -188,6 +196,8 @@ async def editor_save(
             meta = read_meta(source) or {}
             return {"file_id": source, "url": public_url(source), "size_kb": src_path.stat().st_size // 1024,
                     "label": meta.get("label") or fname, "unchanged": True}
+    if ext == "ecproj":          # a videóprojekt ugyanazokat a médiafájlokat látja (a böngészőben hozzáadottakat a bridge küldi)
+        video.carry_assets(source, fid)
     stamp = datetime.utcnow().strftime("%H:%M")
     stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(fname).stem)
     if stem.lower() in _PLACEHOLDER_STEMS:      # „Untitled.docx” helyett a dokumentum saját címe (a Files-ban megkülönböztethető)

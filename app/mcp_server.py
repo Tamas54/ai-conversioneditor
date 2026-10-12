@@ -60,9 +60,10 @@ mcp = FastMCP(
         "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
         "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
         "a manuscript → a Word-typeset book (design template=book); posters/posts: design(template=\"auto\") → 3 options "
-        "to choose from → design(from_design=…, sizes=[…]) for every platform size. The person's earlier files: files(action=\"list\", "
+        "to choose from → design(from_design=…, sizes=[…]) for every platform size; an article, document or the person's "
+        "text → a short video with titles, pictures and captions on an editable timeline (video). The person's earlier files: files(action=\"list\", "
         "query=\"words from the name\") — search by name, don't page through everything. Start empty with "
-        "files(action=\"new\", kind=document|presentation|design|photo|book|pdf) and hand the person its edit_url. PICTURES: this server does NOT "
+        "files(action=\"new\", kind=document|presentation|design|photo|book|pdf|video) and hand the person its edit_url. PICTURES: this server does NOT "
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
         "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
         "generate_image(stock_search=…) to show the person candidates. "
@@ -82,7 +83,8 @@ mcp = FastMCP(
 
 
 _EDITABLE = {"docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pptx", "deckcraft", "pdf", "xlsx", "csv", "tsv",
-             "png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "svg", "vectorcraft", "ai", "eps", "designcraft", "idml"}
+             "png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "svg", "vectorcraft", "ai", "eps", "designcraft", "idml",
+             "ecproj", "fcproj", "mp4", "mov", "webm", "m4v"}
 
 
 def _exists(fid: str) -> bool:
@@ -319,6 +321,7 @@ _LIST_KINDS = {
     "slide": {"pptx", "ppt", "odp", "deckcraft"},
     "pdf": {"pdf"}, "spreadsheet": {"xlsx", "xls", "csv", "tsv", "ods"},
     "design": {"vectorcraft", "designcraft", "svg", "ai", "eps", "idml"},
+    "video": {"ecproj", "fcproj", "mp4", "mov", "webm", "m4v", "mkv"},
 }
 
 
@@ -370,11 +373,12 @@ async def files(
       edit_url}, plus total. To FIND a file ("the application form photo", "my contract"), pass query = words from
       its name — the person's own words first, names are often in their language (accents and _/- don't matter;
       best matches first). Narrow with kind = image |
-      document | presentation | pdf | spreadsheet | design, or ext (e.g. "pptx"). More: offset.
+      document | presentation | pdf | spreadsheet | design | video, or ext (e.g. "pptx"). More: offset.
     action="new": an EMPTY file, ready in the editor — kind = document | presentation | design (social post:
       size square|portrait|story|landscape) | print (size A4|A3|A5|Letter, orientation portrait|landscape) |
       photo (size 1920x1080|1080x1080|1080x1350|3000x2000, background white|transparent) | book (size A5|A4|6x9) |
-      pdf (size A4|Letter). Give the person its edit_url — it opens the blank file in the matching editor.
+      pdf (size A4|Letter) | video (size vertical|landscape|square — an empty timeline in the video editor).
+      Give the person its edit_url — it opens the blank file in the matching editor.
       title names the file (and the deck's first slide).
     action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id, so you can
       check your own result (text overflow, a missing object, a wrong crop) before calling it done.
@@ -428,7 +432,7 @@ async def files(
         res = await make_deck({"mode": "blank", "title": title or "Presentation title"})
     else:
         from app.tools import blank
-        k = {"design": "social", "social_post": "social", "poster": "print", "canvas": "photo"}.get(k, k)
+        k = {"design": "social", "social_post": "social", "poster": "print", "canvas": "photo", "movie": "video"}.get(k, k)
         res = await blank.make({"kind": k, "size": size, "orientation": orientation, "background": background})
     if title and isinstance(res, dict) and res.get("file_id"):
         # a megadott cím legyen a fájl neve („Untitled design" helyett) — ChatGPT-teszt 10-12
@@ -1375,6 +1379,72 @@ async def generate_image(
     if not prompt:
         raise ValueError("Give a prompt (or stock_search words for free stock candidates).")
     return await vision_ops.generate_image(prompt, model=model, size=size)
+
+
+# ============================================================
+# Video
+# ============================================================
+
+
+@mcp.tool()
+@linked
+async def video(
+    action: str = "make",
+    text: Optional[str] = None,
+    url: Optional[str] = None,
+    source_file_id: Optional[str] = None,
+    keep_wording: bool = False,
+    format: str = "vertical",
+    duration: Optional[float] = None,
+    images: Optional[list] = None,
+    pictures: str = "stock",
+    music_file_id: Optional[str] = None,
+    voice_file_id: Optional[str] = None,
+    accent: Optional[str] = None,
+    language: Optional[str] = None,
+    file_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+    draft: bool = False,
+) -> dict:
+    """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
+
+    action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
+      (text + keep_wording=true: their sentences become the captions) → title card, scenes with full-screen pictures
+      in gentle motion, headlines, timed captions, end card with picture credits → a video project (.ecproj) + the
+      MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
+      (result.project / result.video, each with edit_url) or "failed".
+      format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds
+      (default 60; with keep_wording and no duration the reading pace sets it). images: pictures in order —
+      file_ids or {"url": …}; this server doesn't make AI pictures for you, so make them with your own image tool
+      and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
+      music_file_id / voice_file_id: audio the person gave (upload it first). There is no text-to-speech here —
+      with a voice-over the video follows its length. accent: a hex colour for bars and numbers.
+    action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
+      draft=true renders half size, fast.
+    action="info": a project's compositions, length, media files and last render (file_id).
+    action="status": a make/render job (job_id).
+    """
+    from app import jobs
+    from app.tools import video as vid
+    act = (action or "make").lower()
+    if act in ("status", "job") or (act == "info" and job_id):
+        if not job_id:
+            raise ValueError("status needs job_id")
+        return await jobs.job_status(job_id)
+    if act == "info":
+        if not file_id:
+            raise ValueError("info needs file_id (a video project or movie)")
+        return vid.info(file_id)
+    if act == "render":
+        from app.routes.video import render_video
+        return await render_video({"file_id": file_id or "", "draft": draft})
+    if act != "make":
+        raise ValueError('action: "make" | "render" | "info" | "status"')
+    from app.routes.video import make_video
+    body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
+            "format": format, "duration": duration, "images": images or [], "pictures": pictures,
+            "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language}
+    return await make_video(body)
 
 
 # ============================================================

@@ -137,6 +137,40 @@ RUN set -eux; cd /tmp; \
     curl -fsSL -o /opt/models/birefnet-general-lite.onnx \
         https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx; \
     echo "${BIREFNET_SHA256}  /opt/models/birefnet-general-lite.onnx" | sha256sum -c -
+# Videó (storytold, Apache-2.0): EffectCraft (After Effects-szerű: .ecproj, MP4-render — az automata videó motorja)
+# + FilmCraft (Premiere-szerű vágó a kész filmekhez). A CLI a release linux tarjából, SHA256-tal.
+# ⚠ A web zip EGYELŐRE AZ UPSTREAM (Discord-gombos) build. A saját, link nélküli build (build/craft-web,
+#   workflow: craft-web, app=effectcraft|filmcraft, suffix=aice1) release-e után cserélendő a három ARG:
+#   *_WEB_TAG=<app>-web-<verzió>-aice1, *_WEB_URL=https://github.com/Tamas54/ai-conversioneditor/releases/download/
+#   <tag>/<tag>.zip, *_WEB_SHA256=<a release SHA256SUMS.txt-je>. (A zip belső mappája mindkét esetben a tag neve.)
+ARG EFFECTCRAFT_VERSION=0.8.0
+ARG EFFECTCRAFT_CLI_SHA256=725c88cf379122d70f941dd3edacb54479d63ff1e2a00fae318eaee02ad762c4
+ARG EFFECTCRAFT_WEB_TAG=effectcraft-web-0.8.0
+ARG EFFECTCRAFT_WEB_URL=https://github.com/storytold/effectcraft/releases/download/v0.8.0/effectcraft-web-0.8.0.zip
+ARG EFFECTCRAFT_WEB_SHA256=59426cdd519ea1480215a58158ec0b36a31e6a1163ddd8715f3869caf509069d
+ARG FILMCRAFT_VERSION=0.6.0
+ARG FILMCRAFT_CLI_SHA256=b3d706d599699ead76b46a29d5697287b9f75a0bc9eb40f7733db7657dae8204
+ARG FILMCRAFT_WEB_TAG=filmcraft-web-0.6.0
+ARG FILMCRAFT_WEB_URL=https://github.com/storytold/filmcraft/releases/download/v0.6.0/filmcraft-web-0.6.0.zip
+ARG FILMCRAFT_WEB_SHA256=9fd024d371075dc8bb0d868c0f162b60743d28db16d010e2f61b41927ea96629
+RUN set -eux; cd /tmp; \
+    for spec in "effectcraft ${EFFECTCRAFT_VERSION} ${EFFECTCRAFT_CLI_SHA256} ${EFFECTCRAFT_WEB_TAG} ${EFFECTCRAFT_WEB_URL} ${EFFECTCRAFT_WEB_SHA256}" \
+                "filmcraft ${FILMCRAFT_VERSION} ${FILMCRAFT_CLI_SHA256} ${FILMCRAFT_WEB_TAG} ${FILMCRAFT_WEB_URL} ${FILMCRAFT_WEB_SHA256}"; do \
+        set -- $spec; app=$1; ver=$2; tag=$4; \
+        curl -fsSL -o cli.tar.gz "https://github.com/storytold/${app}/releases/download/v${ver}/${app}-${ver}-linux-x86_64.tar.gz"; \
+        echo "$3  cli.tar.gz" | sha256sum -c -; \
+        mkdir -p /opt/${app}; \
+        tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} \
+            "${app}-${ver}-linux-x86_64/bin/${app}-cli" "${app}-${ver}-linux-x86_64/share/doc/${app}"; \
+        curl -fsSL -o web.zip "$5"; \
+        echo "$6  web.zip" | sha256sum -c -; \
+        unzip -q web.zip; mv "${tag}" /opt/${app}-web; \
+        gzip -9 -k /opt/${app}-web/*.wasm /opt/${app}-web/*.js; \
+        rm -f cli.tar.gz web.zip; \
+        /opt/${app}/bin/${app}-cli --version >/dev/null; \
+    done
+ENV EFFECTCRAFT_CLI=/opt/effectcraft/bin/effectcraft-cli EFFECTCRAFT_WEB_DIR=/opt/effectcraft-web \
+    FILMCRAFT_CLI=/opt/filmcraft/bin/filmcraft-cli FILMCRAFT_WEB_DIR=/opt/filmcraft-web
 ENV PHOTOCRAFT_CLI=/opt/photocraft/bin/photocraft-cli \
     PHOTOCRAFT_WEB_DIR=/opt/photocraft-web \
     VECTORCRAFT_CLI=/opt/vectorcraft/bin/vectorcraft-cli \

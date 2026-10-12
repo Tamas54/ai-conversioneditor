@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# A Craft-szerkesztők (PhotoCraft, VectorCraft, DeckCraft, PdfCraft, DesignCraft, GridCraft) webes
+# A Craft-szerkesztők (PhotoCraft, VectorCraft, DeckCraft, PdfCraft, DesignCraft, GridCraft, + a videó:
+# EffectCraft, FilmCraft) webes
 # (WASM) AICE-buildje: patch → (fontok) → az upstream packaging/web/package.sh → saját csomag.
 # Ugyanezt futtatja a .github/workflows/craft-web.yml is, így a helyi és a CI-build azonos.
 # (A WordCraft külön él: build/wordcraft-web/ — ugyanez a minta.)
@@ -16,6 +17,8 @@
 #                     (<app>/craft-fonts.ref); a PhotoCraft webes buildje nem használja
 #   <APP>_BUILD_SHA   a forrás commitja, ha a forrásfa nem git-checkout (pl. tag-archívum)
 # Kell: rustup + wasm32-unknown-unknown target, trunk, curl, zip, unzip, sha256sum, patch vagy git.
+# Az EffectCraft és a FilmCraft nem trunk-kal épül, hanem `cargo xtask web`-bel (az upstream package.sh hívja):
+# ehhez a wasm-bindgen CLI kell PONTOSAN a Cargo.lock-beli verzión (0.8.0 / 0.6.0: 0.2.129).
 set -euo pipefail
 
 [ $# -eq 4 ] || { echo "használat: $0 <app> <forrásfa> <csomagnév> <kimeneti-mappa>" >&2; exit 2; }
@@ -26,13 +29,15 @@ NAME=$3
 mkdir -p "$4"
 OUT=$(cd "$4" && pwd)
 case "$APP" in
-    photocraft | vectorcraft | deckcraft | pdfcraft | designcraft | gridcraft) ;;
+    photocraft | vectorcraft | deckcraft | pdfcraft | designcraft | gridcraft | effectcraft | filmcraft) ;;
     *) echo "hiba: ismeretlen app: $APP" >&2; exit 2 ;;
 esac
 UPPER=$(printf '%s' "$APP" | tr '[:lower:]' '[:upper:]')
 PATCH="$HERE/$APP/0001-aice-branding.patch"
 [ -f "$PATCH" ] || { echo "hiba: $PATCH hiányzik" >&2; exit 1; }
-[ -f "$SRC/apps/$APP-web/Trunk.toml" ] || { echo "hiba: $SRC nem $APP-forrásfa" >&2; exit 1; }
+# trunk-os app (Trunk.toml) vagy xtask-os (EffectCraft, FilmCraft: apps/<app>-web + packaging/web/package.sh)
+[ -f "$SRC/apps/$APP-web/Trunk.toml" ] || { [ -d "$SRC/apps/$APP-web" ] && [ -f "$SRC/packaging/web/package.sh" ]; } \
+    || { echo "hiba: $SRC nem $APP-forrásfa" >&2; exit 1; }
 
 # 1) Patch — ha már fent van (ismételt futás), nem rakjuk fel újra. Git-checkouton git apply,
 #    tag-archívumon patch(1); mindkettő ugyanazt a -p1-es egységes diffet olvassa.

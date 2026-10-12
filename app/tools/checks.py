@@ -496,6 +496,40 @@ async def generic(out: Path) -> dict[str, Any]:
     return make("needs_check", ["No automatic check for this kind of change. " + LOOK], v)
 
 
+def check_video(p: Path, want_s: Optional[float] = None, want_wh: Optional[tuple[int, int]] = None,
+                draft: bool = False) -> dict[str, Any]:
+    """Kész videó: dekódolható-e (5 mintakocka), a hossza és a mérete a kért-e, nem fekete-e."""
+    import cv2
+    c = cv2.VideoCapture(str(p))
+    try:
+        n, fps = c.get(cv2.CAP_PROP_FRAME_COUNT), c.get(cv2.CAP_PROP_FPS) or 0
+        w, h = int(c.get(cv2.CAP_PROP_FRAME_WIDTH)), int(c.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        good, dark = 0, 0
+        for f in (0.05, 0.25, 0.5, 0.75, 0.95):
+            c.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(n * f) - 1))
+            ok, fr = c.read()
+            if ok and fr is not None:
+                good += 1
+                dark += int(fr.mean() < 8)
+    finally:
+        c.release()
+    if not n or not fps or not good:
+        return make("failed", ["The video doesn't play: no frame could be decoded."], [])
+    dur = n / fps
+    findings, verified = [], [f"Plays: {good} of 5 sample frames decode; {dur:.1f} s at {fps:.0f} fps, {w}×{h}."]
+    if want_s and abs(dur - want_s) > max(1.0, 0.1 * want_s):
+        findings.append(f"It is {dur:.1f} s long — {want_s:.0f} s was asked for.")
+    elif want_s:
+        verified.append(f"Length as asked ({want_s:.0f} s).")
+    if want_wh and not draft and (w, h) != tuple(want_wh):
+        findings.append(f"It is {w}×{h} — {want_wh[0]}×{want_wh[1]} was expected.")
+    if good < 5:
+        findings.append(f"Only {good} of 5 sample frames decode.")
+    if dark >= 3:
+        findings.append(f"{dark} of 5 sample frames are black.")
+    return make("needs_check" if findings else "ok", findings, verified)
+
+
 # ---------- belépési pont ----------
 
 _NO_CHECK = {"files", "history", "extract", "ocr_image", "describe_image", "extract_table_from_image", "generate_image",

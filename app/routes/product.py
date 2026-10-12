@@ -108,6 +108,9 @@ async def _render_thumb(src: Path, ext: str, dst: Path) -> None:
         await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "convert", str(src), str(raw))
     elif ext in ("svg", "vectorcraft", "ai", "eps"):
         await crafts.run_cli(crafts.vector_cli(), "vectorcraft-cli", "run", "--in", str(src), "--export", str(raw), "--scale", "0.6")
+    elif ext == "ecproj" or ext in ("mp4", "mov", "webm", "m4v"):
+        from app.tools import video          # videó: projektnél a címjelenet egy kockája, filmnél az 1. másodperc
+        await video.thumb(src, raw)
     else:
         raise HTTPException(404, "no thumbnail for this type")
     if not raw.exists():

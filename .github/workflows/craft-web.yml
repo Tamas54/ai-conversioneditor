@@ -1,4 +1,4 @@
-# A Craft-szerkesztők (PhotoCraft, VectorCraft, DeckCraft, PdfCraft, DesignCraft, GridCraft) webes
+# A Craft-szerkesztők (PhotoCraft, VectorCraft, DeckCraft, PdfCraft, DesignCraft, GridCraft, EffectCraft, FilmCraft) webes
 # (WASM) AICE-buildje: storytold/<app> tag + a build/craft-web/<app> patch (közösségi/idegen linkek
 # nélkül; DeckCraft/GridCraft: Calibri/Cambria-kompatibilis fontok) → zip → GitHub release ebben a
 # repóban. Csak kézzel indul. Részletek: build/craft-web/README.md. (WordCraft: wordcraft-web.yml.)
@@ -11,7 +11,7 @@ on:
         description: "Craft-app"
         type: choice
         required: true
-        options: [photocraft, vectorcraft, deckcraft, pdfcraft, designcraft, gridcraft]
+        options: [photocraft, vectorcraft, deckcraft, pdfcraft, designcraft, gridcraft, effectcraft, filmcraft]
       version:
         description: "Upstream-verzió (a storytold/<app> v<verzió> tagje), pl. 0.7.0"
         type: string
@@ -36,6 +36,8 @@ env:
   RUST_TOOLCHAIN: "1.95.0"
   TRUNK_VERSION: "0.21.14"
   TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+  # EffectCraft / FilmCraft: `cargo xtask web` — a wasm-bindgen CLI a Cargo.lock-beli verzión (az upstream web-job is ez)
+  WASM_BINDGEN_VERSION: "0.2.129"
   APP: ${{ inputs.app }}
   VERSION: ${{ inputs.version }}
   TAG: ${{ inputs.app }}-web-${{ inputs.version }}-${{ inputs.suffix }}
@@ -98,6 +100,12 @@ jobs:
           echo "${TRUNK_SHA256}  $RUNNER_TEMP/trunk.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin" trunk
           trunk --version
+
+      - name: wasm-bindgen CLI ${{ env.WASM_BINDGEN_VERSION }} (EffectCraft, FilmCraft)
+        if: inputs.app == 'effectcraft' || inputs.app == 'filmcraft'
+        run: |
+          cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+          wasm-bindgen --version
 
       # Patch → (fontok) → az upstream packaging/web/package.sh → saját zip.
       - name: Patch + build + zip
