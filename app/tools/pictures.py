@@ -124,17 +124,27 @@ def _list_sync(file_id: str) -> list[dict[str, Any]]:
     m = _meta(file_id)
     if ext == "pptx" and m.get("deck_spec"):
         out = []
+        slides = m["deck_spec"].get("slides") or []
         for slot, i, j, ref in _deck_refs(m["deck_spec"]):
+            hint = (slides[i].get("title") if i < len(slides) and isinstance(slides[i], dict) else None) or m["deck_spec"].get("title")
             out.append({"slot": slot, "where": f"Slide {i + 1}" + (f" · picture {j + 1}" if j >= 0 else ""),
-                        "query": ref.get("query"), "prompt": ref.get("prompt"), "credit": ref.get("credit")})
+                        "query": ref.get("query"), "prompt": ref.get("prompt"), "credit": ref.get("credit"), "hint": hint})
         return out
     if ext == "pptx":
         from pptx import Presentation
-        pics = _pptx_pics(Presentation(str(src)))
+        prs = Presentation(str(src))
+        pics = _pptx_pics(prs)
         per = {}
         for _, i, _, _ in pics:
             per[i] = per.get(i, 0) + 1
-        return [{"slot": slot, "where": f"Slide {i + 1}" + (f" · picture {slot.split('.')[1]}" if per[i] > 1 else "")}
+        slides = list(prs.slides)
+        def title(i: int) -> str:     # a keresőmező előtöltése, ha nincs eltárolt keresőszó (különben üres rács = zsákutca)
+            try:
+                t = slides[i].shapes.title
+                return (t.text if t is not None else "").strip()[:80]
+            except Exception:
+                return ""
+        return [{"slot": slot, "where": f"Slide {i + 1}" + (f" · picture {slot.split('.')[1]}" if per[i] > 1 else ""), "hint": title(i)}
                 for slot, i, _, _ in pics]
     if ext == "docx":
         from docx import Document

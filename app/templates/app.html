@@ -691,7 +691,7 @@ async function pickPicture(fileId) {
   const cands = wireCandidates(q, $("#pick-grid"), $("#pick-info"), () => {});
   const fill = () => {                                   // a kép eredeti keresőszava / promptja (vagy a kérés) előtöltve
     const p = pictures.find(x => x.slot === slot), mine = pre && pre.slot === slot;
-    q.value = (mine && pre.query) || p.query || ""; prompt.value = (mine && pre.prompt) || p.prompt || p.query || "";
+    q.value = (mine && pre.query) || p.query || p.hint || ""; prompt.value = (mine && pre.prompt) || p.prompt || p.query || p.hint || "";
   };
   const src = () => form.querySelector("[name=psrc]:checked").value;
   const syncSrc = () => {
