@@ -28,7 +28,7 @@ log = logging.getLogger("aice.wordcraft")
 SAVE_FORMATS = {"docx", "pdf", "odt", "rtf", "html", "md", "tex", "txt", "json", "png"}
 OPEN_FORMATS = {"docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "html", "htm", "md", "tex", "txt", "json"}
 TEMPLATES = {"blank", "sample", "letter", "resume", "report"}
-READ_MODES = {"text", "info", "inspect", "commands", "review"}
+READ_MODES = {"text", "info", "inspect", "commands", "review", "comments", "changes"}
 
 Command = Union[str, dict[str, Any]]
 
@@ -180,6 +180,7 @@ async def read(
     query: Optional[str] = None,
     offset: int = 0,
     max_chars: int = DEFAULT_MAX_CHARS,
+    base_file_id: Optional[str] = None,
 ) -> dict[str, Any]:
     if mode not in READ_MODES:
         raise ValueError(f"read: {mode} (choose from {', '.join(sorted(READ_MODES))})")
@@ -194,6 +195,14 @@ async def read(
     if mode == "review":
         from app.tools import review
         return review.summary(file_id)
+    if mode == "comments":           # a bíráló nyitott megjegyzései munkalistaként (query="all": a lezártak is)
+        from app.tools import review_loop
+        return await asyncio.to_thread(review_loop.worklist, file_id, offset, max_chars, (query or "").lower() == "all")
+    if mode == "changes":            # mi változott a korábbi verzióhoz (base_file_id) képest
+        if not base_file_id:
+            raise ValueError("read=changes needs base_file_id: the earlier version (e.g. the one that was sent out)")
+        from app.tools import review_loop
+        return await asyncio.to_thread(review_loop.changes, file_id, base_file_id, offset, max_chars)
     out = await _cli(mode, str(_existing(file_id)))
     if mode == "text":
         chunk = out[offset:offset + max_chars]
