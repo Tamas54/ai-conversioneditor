@@ -1624,7 +1624,13 @@ const MAKERS = {
     },
   },
   video: {
-    cta: form => form.querySelector("[name=vmode]:checked")?.value === "new" ? BLANK.video.cta : "Make the video",
+    cta: form => {      // üres mezővel a gomb is megmondja, hova visz
+      const m = form.querySelector("[name=vmode]:checked")?.value;
+      if (m === "new") return BLANK.video.cta;
+      const t = (form.querySelector(m === "text" ? "[name=script]" : "[name=article]")?.value || "").trim();
+      const doc = m === "article" && form.querySelector("[data-slot=vsource] .slot-chips")?.children.length;
+      return t || doc ? "Make the video" : "Open an empty timeline";
+    },
     title: "Video", sub: "An article, a document or your own words as a short video — titles, pictures with gentle motion, timed captions. It opens on a timeline in the video editor (like After Effects) so you can change anything; the MP4 is in your workspace too.",
     fields: () => `${seg("vmode", [["new", "New"], ["article", "From an article"], ["text", "From my text"]], 1)}
       <div data-vmode="new" hidden>${blankFields("video")}</div>
@@ -1660,18 +1666,22 @@ const MAKERS = {
     async submit(fd, form) {
       const m = fd.get("vmode");
       if (m === "new") return blankSubmit("video", fd);
-      if (account?.guest) throw needAccount();
       const body = { mode: m, format: fd.get("vformat"), duration: +fd.get("vlen") || null, pictures: fd.get("vpicmode"), accent: fd.get("accent") };
-      let ex = false;
+      // üres mező (nincs cikk / szöveg / dokumentum) → nem a példát gyártjuk le: üres idővonal a választott
+      // formátumban és hosszban, a szerkesztőben (Kommandant 10-12: „ha üresen, egy szerkesztőbe kéne vinnie”)
+      const typed = m === "article" ? (fd.get("article") || "").trim() : (fd.get("script") || "").trim();
+      if (!typed && !(m === "article" && (await readSlot(form, "vsource")).length)) {
+        const r = await api("/api/make/blank", { method: "POST", body: JSON.stringify({ kind: "video", size: body.format, duration: body.duration || 30 }) });
+        return { ...r, edit: true, msg: "Nothing to make it from yet — an empty timeline is open in the video editor. Paste an article or your text to have the video made for you." };
+      }
+      if (account?.guest) throw needAccount();
       if (m === "article") {
-        const a = (fd.get("article") || "").trim();
         [body.source_file_id = null] = await readSlot(form, "vsource");
-        if (/^https?:\/\/\S+$/.test(a)) body.url = a; else body.text = a;
-        if (!a && !body.source_file_id) { body.text = example(form, "article"); ex = true; }
+        if (/^https?:\/\/\S+$/.test(typed)) body.url = typed; else if (typed) body.text = typed;
         if (!body.duration) body.duration = 30;
       } else {
-        body.text = (fd.get("script") || "").trim();
-        if (body.text.length < 20) { body.text = example(form, "script"); ex = true; }
+        body.text = typed;
+        if (body.text.length < 20) throw Object.assign(new Error("Write a little more — a sentence or two at least — or leave it empty for a blank timeline."), { field: "script" });
       }
       body.images = await readSlot(form, "vpics");
       if (body.pictures === "mine" && !body.images.length) throw Object.assign(new Error("Add your pictures — or choose Stock photos."), { slot: "vpics" });
@@ -1682,7 +1692,7 @@ const MAKERS = {
         "building the timeline": "Building the timeline…", "rendering the video": "Rendering the video — about a minute…" };
       const r = await pollJob(job, j => STAGES[j.stage] || "Working on it…");
       return { file_id: r.file_id, n: (r.files || []).length, edit: true,
-        msg: (ex ? "Made from the example — " : "") + `your ${Math.round(r.duration)}-second video is open on the timeline; the MP4 is in your workspace` };
+        msg: `Your ${Math.round(r.duration)}-second video is open on the timeline; the MP4 is in your workspace` };
     },
   },
   photo: {
@@ -2266,6 +2276,8 @@ function openMaker(kind, opts = {}) {
   // a fő gomb felirata a módhoz/munkához igazodik („Start writing”, „Merge them”, „Restore”…)
   const label = () => { const go = form.querySelector("#make-go"); if (go && !go.disabled) go.textContent = typeof m.cta === "function" ? m.cta(form) : (m.cta || "Make it"); };
   form.addEventListener("change", label);
+  form.addEventListener("input", label);         // gépelés közben is (pl. Video: üres mező → „Open an empty timeline”)
+  form.addEventListener("slotchange", label);    // fájl érkezett / kikerült
   m.wire?.(form, opts);
   wireSlots(form);
   form.querySelector(".tool-switch").addEventListener("click", e => { const b = e.target.closest("[data-switch]"); if (b) switchTool(kind, b.dataset.switch, form); });
