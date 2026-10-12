@@ -304,8 +304,10 @@ def _layout(W: int, H: int) -> dict[str, Any]:
     else:
         L.update(titleW=W * 0.84, titleX=W / 2, kickerTop=H * 0.53, barY=H * 0.58, titleTop=H * 0.60,
                  headW=W * 0.84, headX=W / 2, headBarY=H * 0.585, headTop=H * 0.60, capW=W * 0.84, capY=H * 0.885)
-    L.update(statY=H * 0.42, statLabelY=H * 0.53, endY=H * 0.42, endBarY=H * 0.52, endSubY=H * 0.585, creditY=H * 0.935,
-             capPad=round(m * 0.022))
+    L.update(statY=H * 0.42, endY=H * 0.42, endBarY=H * 0.52, endSubY=H * 0.585, creditY=H * 0.935, capPad=round(m * 0.022))
+    # a nagy szám alatti címke a szám MÉRETÉHEZ igazodik (az a rövidebb oldalból jön) — a magasság fix aránya (0,53 H)
+    # fekvő 16:9-ben a számba csúsztatta a címkét (10-12, gazdasági videó); állóban ez ~ugyanott marad
+    L["statLabelY"] = L["statY"] + L["statSize"] * 0.5 + L["statLabelSize"] * 1.2
     return L
 
 
@@ -491,6 +493,100 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path) -> tupl
     return names, credits
 
 
+_PICK_N = 6
+
+
+def _contact_sheet(thumbs: list[bytes]) -> str:
+    """A jelöltek bélyegképei számozott rácsban (3×2) — egy képen, egy látómodell-hívásnak."""
+    import base64
+    import io
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    cw, ch, cols = 360, 240, 3
+    rows = math.ceil(len(thumbs) / cols)
+    sheet = Image.new("RGB", (cols * cw, rows * ch), "white")
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+    except Exception:
+        font = ImageFont.load_default()
+    for k, data in enumerate(thumbs):
+        x, y = (k % cols) * cw, (k // cols) * ch
+        try:
+            im = ImageOps.fit(Image.open(io.BytesIO(data)).convert("RGB"), (cw - 6, ch - 6))
+            sheet.paste(im, (x + 3, y + 3))
+        except Exception:
+            pass
+        draw.rectangle([x + 3, y + 3, x + 50, y + 46], fill="black")
+        draw.text((x + 14, y + 6), str(k + 1), fill="white", font=font)
+    buf = io.BytesIO()
+    sheet.save(buf, "JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+async def _rank(query: str, headline: str, cands: list[dict[str, Any]]) -> list[int]:
+    """A látómodell sorrendje a jelöltekre (0-tól), a legjobban illő elöl; hiba esetén a kereső sorrendje.
+    Nem tartalmi szűrés (semmit nem dob ki): a kereső a FÁJLNÉVBEN keres, és absztrakt témánál mellé nyúl —
+    10-12, gazdasági videó: „oil barrels" → vasúti fordítókorong, „bond" → múzeumi kötvénypapír."""
+    from app.llm import vision as v
+    from app.tools import images as imgs
+    thumbs = await asyncio.gather(*(imgs._get(c["thumb_url"]) for c in cands), return_exceptions=True)
+    ok = [(i, t.content) for i, t in enumerate(thumbs) if not isinstance(t, Exception) and t.status_code == 200]
+    if len(ok) < 2:
+        return list(range(len(cands)))
+    prompt = (f'A scene of a short news video: "{headline}". Its full-screen background picture should show: "{query}". '
+              "Rank the numbered pictures by how well they fit: a clear, real photo of that subject first; old documents, "
+              "maps, diagrams, logos or unrelated places last. Return JSON only: {\"ranking\": [numbers, best first]}")
+    msgs = [{"role": "user", "content": [{"type": "text", "text": prompt},
+                                         {"type": "image_url", "image_url": {"url": _contact_sheet([b for _, b in ok])}}]}]
+    for model, tmo in ((settings.LLM_MODEL_VISION, 40), (settings.LLM_MODEL_VISION_FALLBACK, 60)):
+        try:
+            raw = await asyncio.wait_for(v._call(msgs, max_tokens=200, model=model), tmo)
+            m = re.search(r"\{.*\}", v._strip_json_fences(raw), re.S)
+            order = [ok[int(n) - 1][0] for n in (json.loads(m.group(0)).get("ranking") or []) if 1 <= int(n) <= len(ok)]
+            if order:
+                return list(dict.fromkeys(order + [i for i, _ in ok]))
+        except Exception as e:
+            log.info("képrangsor (%s, %s): %s", model, query, e)
+    return [i for i, _ in ok]
+
+
+async def _choose_stock(jobs: list[tuple[int, str, str]]) -> dict[int, dict[str, Any]]:
+    """Jelenetenként: stock-jelöltek → a látómodell rangsorolja → a legjobb, ami még nem szerepelt másik jelenetben.
+    jobs = [(spec-index, keresőszó, a jelenet címe)] → {spec-index: {"url", "credit"}}; ami nem sikerült, kimarad."""
+    from app.tools import images as imgs
+    sem = asyncio.Semaphore(4)
+
+    async def one(q: str, head: str) -> tuple[list[dict[str, Any]], list[int]]:
+        async with sem:
+            try:
+                # „gold bars and oil barrels": a Commons a fájlnévben keres, az összetett kifejezésre rossz jelölteket ad →
+                # a részek külön keresve, a jelöltek felváltva összefésülve (a látómodell választ közülük)
+                parts = [x.strip() for x in re.split(r"\s+(?:and|&|with)\s+|,", q) if len(x.strip()) > 2]
+                if len(parts) > 1:
+                    pools = await asyncio.gather(*(imgs.search(x, n=_PICK_N) for x in parts[:3]))
+                    seen, cands = set(), []
+                    for row in zip(*[pl + [None] * (_PICK_N - len(pl)) for pl in pools]):
+                        for c in row:
+                            if c and c["url"] not in seen:
+                                seen.add(c["url"]); cands.append(c)
+                    cands = cands[:_PICK_N]
+                else:
+                    cands = (await imgs.search(q, n=_PICK_N + 2))[:_PICK_N]
+                return cands, (await _rank(q, head, cands) if len(cands) > 1 else list(range(len(cands))))
+            except Exception as e:
+                log.info("képjelöltek (%s): %s", q, e)
+                return [], []
+    got = await asyncio.gather(*(one(q, h) for _, q, h in jobs))
+    out, used = {}, set()
+    for (i, _, _), (cands, order) in zip(jobs, got):
+        for k in order:
+            if cands[k]["url"] not in used:
+                used.add(cands[k]["url"])
+                out[i] = {"url": cands[k]["url"], "credit": cands[k]["credit"]}
+                break
+    return out
+
+
 def _title_stem(title: str) -> str:
     t = re.sub(r"[\\/:*?\"<>|\s]+", " ", title or "").strip(" .")
     return (t[:60].rsplit(" ", 1)[0] if len(t) > 60 else t) or "Video"
@@ -563,6 +659,13 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
             specs.append({"stock": q or story["title"]})
         else:
             specs.append(None)
+
+    # a stock-keresések jelöltjeiből a látómodell választ (és egy kép nem kerül két jelenetbe)
+    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
+                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
+    if stock_jobs:
+        for i, chosen in (await _choose_stock(stock_jobs)).items():
+            specs[i] = chosen
 
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
