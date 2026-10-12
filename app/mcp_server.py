@@ -669,11 +669,35 @@ async def wordcraft(
     query: Optional[str] = None,
     offset: int = 0,
     max_chars: int = 20000,
+    address: Optional[list] = None,
+    base_file_id: Optional[str] = None,
 ) -> dict:
     """
     Edit a document with the WordCraft Word engine: the same ~460 commands
     that drive Word's ribbon (styles, tables, track changes, comments, TOC,
     footnotes…), run headless. The result is a NEW file_id; the source stays.
+
+    REVIEW COMMENTS (someone commented a .docx in Word, e.g. a boss):
+    1. read="comments" → each open comment thread: id, author, comment,
+       anchor (the highlighted text), paragraph (number) + paragraph_text,
+       replies; plus the pending tracked_changes. query="all" adds resolved.
+    2. Agree the fixes with the person, then apply ALL in ONE call:
+       address=[{"comment": id,
+                 "replace": {"find": exact text from the anchor or its
+                             paragraph, "with": new text}  (or a list),
+                 OR "paragraph": the full new text of that paragraph,
+                 "reply": "Fixed: …" (optional), "resolve": false}],
+       author = the person's own name. Fixes become word-level tracked
+       changes under that name, the reply is threaded under the comment;
+       the reviewer's own tracked changes are left as they are. Result:
+       NEW file_id, results per comment (fixed | replied | resolved |
+       failed + why — retry failed ones on the NEW file_id), not_addressed
+       = open comments you skipped. Then give the person the edit_url (or
+       url to download) to send back.
+    3. Next round: read="changes", file_id = the version that came back,
+       base_file_id = the version that was sent → per paragraph before /
+       after / diff, tracked or untracked (edited with tracking off), new
+       comments and replies, resolved threads.
 
     commands: in order, each {"command": id, "params": {...}} or "id={json}".
       [{"command": "review.trackChanges", "params": {"value": true}},
@@ -698,15 +722,24 @@ async def wordcraft(
     read instead of editing: "text" | "info" | "inspect" (structure JSON,
     shows tracked-change runs) | "review" (compact list of tracked changes
     and comments: who changed what, in which sentence — read a human's
-    edits back cheaply) | "commands" (ids only; `query`, e.g. "table",
-    gives params). text/inspect/commands are paged: pass the returned
-    `next_offset` as `offset` (chars for text, blocks for inspect);
+    edits back cheaply) | "comments" | "changes" (above) | "commands" (ids
+    only; `query`, e.g. "table", gives params). text/inspect/comments/
+    changes/commands are paged: pass the returned `next_offset` as `offset`
+    (chars for text, blocks for inspect, items otherwise);
     `max_chars` caps one reply (default 20000).
     A human can continue by hand in the Word editor: give them the result's edit_url.
     """
     from app.tools import wordcraft as wc
     if read:
-        return await wc.read(read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
+        return await wc.read(read, file_id=file_id, query=query, offset=offset, max_chars=max_chars,
+                             base_file_id=base_file_id)
+    if address:
+        if not file_id:
+            raise ValueError("address needs file_id: the commented document")
+        if commands:
+            raise ValueError("Give address or commands, not both — run the commands in a second call on the new file_id")
+        from app.tools import review_loop
+        return await review_loop.address(file_id, address, author or await review_loop.default_author())
     return await wc.run(
         file_id=file_id, commands=commands, author=author,
         save_format=save_format, template=template,

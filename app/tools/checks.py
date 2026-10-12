@@ -561,7 +561,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
     own = normalize(res.get("check"))
     if own is not None:
         return own, None
-    if tool in _NO_CHECK:
+    if tool in _NO_CHECK or (tool == "wordcraft" and args.get("read")):    # olvasás: nincs új fájl, nincs mit ellenőrizni
         return None, None
     # háttérmunka: a kész eredményen (digitize / restore / photo_edit — a hívás job_id-val jön vissza)
     if res.get("status") in ("running", "failed", "cancelled") and "kind" in res:

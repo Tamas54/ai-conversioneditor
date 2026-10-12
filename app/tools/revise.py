@@ -4,6 +4,8 @@ lehet lépni); a verzió meta-adatában a kérés és az összefoglaló, így a 
 Fájltípus szerint:
   kép / PSD  → photo_edit (pontos lépések + AI-retus rétegként)                  „a vidra mögé tedd a Parlamentet”
   docx/odt   → doc_revise (DeepSeek terv + python-docx), ami nem fér bele → régi ügynök   „a 22. oldalra egy fotó”
+  docx nyitott megjegyzésekkel → review_loop: megjegyzésenként javítás követett változásként + válasz
+                                                                                  „address the comments”
   pptx       → saját paklinál a leírás (deck_spec) módosul és újraépül; idegennél → régi ügynök
   pdf        → ha Word-forrásból készült (könyv / digitalizálás): a forrást szerkeszti és újra PDF-et csinál;
                különben → régi ügynök
@@ -160,11 +162,16 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
         raise ValueError("Say what should change.")
     out_id, summary, extra_files = None, "", []
     swap = None
-    if ext in ("pptx", "docx") and not style_file_id:      # EGY kép cseréje: közvetlenül (nem ügynök), a választó nyílik
+    from app.tools import review_loop
+    comments_fix = ext == "docx" and not style_file_id and review_loop.wants_address(file_id, request)
+    if ext in ("pptx", "docx") and not style_file_id and not comments_fix:   # EGY kép cseréje: közvetlenül, a választó nyílik
         from app.tools import pictures
         swap = await pictures.detect_swap(file_id, request)
 
-    if swap:
+    if comments_fix:          # „address the comments”: javítás megjegyzésenként, követett változásként a felhasználó nevén
+        r = await review_loop.draft_and_address(file_id, request)
+        out_id, summary = r["file_id"], r["summary"]
+    elif swap:
         res = await pictures.replace(file_id, swap["slot"], {"ai": swap["prompt"]} if swap["ai"]
                                      else {"stock": swap["query"]})
         out_id = res["file_id"]
