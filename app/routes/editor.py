@@ -116,7 +116,8 @@ async def editor_asset(app: str, asset: str, request: Request):
     return FileResponse(p, media_type=media, headers=headers)
 
 
-_PLACEHOLDER_STEMS = {"untitled", "document", "letter", "report", "cv", "sample", "presentation", "your title here", "your headline here"}
+_PLACEHOLDER_STEMS = {"untitled", "document", "letter", "report", "cv", "sample", "presentation", "your title here", "your headline here",
+                      "untitled design", "untitled photo", "untitled book", "untitled pdf"}   # + a „New” fájlok (app/tools/blank.py)
 
 
 def _title_from(path: Path, ext: str) -> str:
@@ -124,7 +125,8 @@ def _title_from(path: Path, ext: str) -> str:
     try:
         if ext == "docx":
             from docx import Document
-            paras = [p for p in Document(str(path)).paragraphs if p.text.strip()]
+            from app.tools.blank import placeholder_title
+            paras = [p for p in Document(str(path)).paragraphs if p.text.strip() and not placeholder_title(p.text)]   # „Book title”, „Chapter 1” nem név
             head = next((p for p in paras if (p.style.name or "").lower().startswith(("title", "heading"))), paras[0] if paras else None)
             text = head.text if head else ""
         elif ext == "pptx":

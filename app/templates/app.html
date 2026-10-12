@@ -219,14 +219,19 @@ const SLUGS = { doc: "document", deck: "presentation", social: "social-post", pr
 const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
   doc: ["dmode", { template: "new", brief: "from-brief", open: "open" }],
   deck: ["pmode", { blank: "new", brief: "from-brief", document: "from-document", open: "open" }],
-  photo: ["mode", { edit: "edit", restore: "restore", quick: "quick-fix", open: "open" }],
+  photo: ["mode", { new: "new", edit: "edit", restore: "restore", quick: "quick-fix", open: "open" }],
+  social: ["start", { new: "new", design: "design" }],
+  print: ["start", { new: "new", template: "from-template" }],
+  book: ["start", { new: "new", manuscript: "from-manuscript" }],
+  pdf: ["action", { new: "new", open: "open", merge: "merge", compress: "compress", to_word: "to-word", page_numbers: "page-numbers",
+    watermark: "watermark", redact: "black-out", protect: "lock", ocr: "make-searchable", compare: "compare", make_fillable: "make-fillable" }],
 };
-const makeLink = (kind, mode, src, slot) => `/app/make/${SLUGS[kind]}` + (mode && MODES[kind] ? `/${MODES[kind][1][mode]}` : "")
+const makeLink = (kind, mode, src, slot) => `/app/make/${SLUGS[kind]}` + (mode && MODES[kind]?.[1][mode] ? `/${MODES[kind][1][mode]}` : "")
   + (src ? `?src=${encodeURIComponent(src)}` + (slot ? `&slot=${encodeURIComponent(slot)}` : "") : "");       // a Presentationnek van AI nélküli módja (New / Open a file)
-function accountCta(title) {
+function accountCta(title, alt = "") {     // alt: fiók nélküli következő lépés (pl. Scan → üres dokumentum)
   const form = $("#make-form");
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
-    <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>
+    <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>${alt}
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn primary" href="/signup?next=/app">Create free account</a></div>`;
   form.onsubmit = null; if (!$("#drawer").open) $("#drawer").showModal();
 }
@@ -1117,6 +1122,7 @@ async function readStyle(form) {
 
 // PDF-munkák látható kártyákon: [érték, név, mit csinál, a gomb felirata]
 const PDF_JOBS = [
+  ["new", "New", "A blank PDF — add text, pictures, fields", "Open a blank PDF"],
   ["open", "Open in the editor", "Read, annotate, fill in, sign", "Open in editor"],
   ["merge", "Merge", "Several PDFs into one", "Merge them"],
   ["compress", "Make it smaller", "Compress the file", "Make it smaller"],
@@ -1129,10 +1135,76 @@ const PDF_JOBS = [
   ["compare", "Compare", "Two versions, changes marked", "Compare them"],
   ["make_fillable", "Make fillable", "Lines and boxes become fields", "Make it fillable"],
 ];
+// „NEW” — teljesen üres kezdés, rögtön a LÁTHATÓ szerkesztőben (AI és fájl nélkül, vendégnek is).
+// EGY nyilvántartás (méretek, felirat, mi nyílik) + EGY végpont (/api/make/blank). A Document és a Presentation
+// saját „New” módja ugyanezt adja (üres Word / üres pakli); a Scan és a Convert helyett egy link visz a Document New-ra.
+const BLANK = {
+  social: { cta: "Open a blank design", what: "design", editor: "design editor",
+    sizes: [["square", "Square · 1080×1080"], ["portrait", "Portrait · 1080×1350"], ["story", "Story · 1080×1920"], ["landscape", "Landscape · 1200×630"]],
+    note: "An empty canvas in the design editor — add text, shapes and pictures yourself." },
+  print: { cta: "Open a blank page", what: "page", editor: "design editor", orientation: true,
+    sizes: [["A4", "A4 · 210×297 mm"], ["A3", "A3 · 297×420 mm"], ["A5", "A5 · 148×210 mm"], ["Letter", "US Letter · 8.5×11 in"]],
+    note: "An empty print-size page in the design editor." },
+  photo: { cta: "Open a blank canvas", what: "canvas", editor: "photo editor", background: true,
+    sizes: [["1920x1080", "1920×1080 · HD"], ["1080x1080", "1080×1080 · square post"], ["1080x1350", "1080×1350 · portrait post"], ["3000x2000", "3000×2000 · print"], ["custom", "Custom size…"]],
+    note: "An empty canvas in the photo editor — layers, brushes, text and placed pictures, like in Photoshop." },
+  book: { cta: "Open a blank book", what: "book", editor: "Word editor",
+    sizes: [["A5", "A5 · 148×210 mm"], ["A4", "A4 · 210×297 mm"], ["6x9", "6×9 in · US trade"]],
+    note: "A blank book in the Word editor: title page, Chapter 1, book typography and mirrored margins — every “Heading 1” starts a new chapter." },
+  pdf: { cta: "Open a blank PDF", what: "PDF", editor: "PDF editor", orientation: true,
+    sizes: [["A4", "A4"], ["Letter", "US Letter"]],
+    note: "One empty page in the PDF editor — add text, pictures and form fields." },
+};
+const seg = (name, opts, on = 0) => `<div class="seg" style="margin:0 0 16px">${opts.map(([v, t], i) =>
+  `<label><input type="radio" name="${name}" value="${v}"${i === on ? " checked" : ""}><span>${t}</span></label>`).join("")}</div>`;
+function blankFields(kind) {
+  const b = BLANK[kind], custom = b.sizes.some(([v]) => v === "custom");
+  return `<div class="blank-f"><label>Size<select name="bsize">${b.sizes.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join("")}</select></label>
+    ${custom ? `<div class="blank-custom" data-bcustom hidden><label>Width (px)<input type="number" name="bw" min="1" max="12000" value="1600"></label><label>Height (px)<input type="number" name="bh" min="1" max="12000" value="1200"></label></div>` : ""}
+    ${b.orientation ? seg("borient", [["portrait", "Portrait"], ["landscape", "Landscape"]]) : ""}
+    ${b.background ? seg("bbg", [["white", "White background"], ["transparent", "Transparent"]]) : ""}
+    <p class="muted small" style="margin:-4px 0 12px">${b.note}</p></div>`;
+}
+function wireBlank(form) {
+  const sel = form.querySelector("[name=bsize]"), box = form.querySelector("[data-bcustom]");
+  if (sel && box) sel.addEventListener("change", () => { box.hidden = sel.value !== "custom"; });
+}
+async function blankSubmit(kind, fd) {
+  const r = await api("/api/make/blank", { method: "POST", body: JSON.stringify({ kind, size: fd.get("bsize"), orientation: fd.get("borient"),
+    background: fd.get("bbg"), width: fd.get("bw"), height: fd.get("bh") }) });
+  return { ...r, edit: true, msg: `A blank ${BLANK[kind].what} is open in the ${BLANK[kind].editor}` };
+}
+// fájl érkezik (ráejtés, „From your files”, átvitel) egy „New” módban álló ablakba → a fájlos módra vált (nincs rejtett, elnyelt fájl)
+function leaveNewOnFile(form, field, fallback) {
+  form.addEventListener("slotchange", () => {
+    if (form.querySelector(`[name=${field}]:checked`)?.value !== "new") return;
+    const has = [...form.querySelectorAll(".slot")].some(s => slotPicked(form, s.dataset.slot).length || s.querySelector("input[type=file]").files.length);
+    const f = has && form.querySelector(`[name=${field}][value="${fallback}"]`);
+    if (f) { f.checked = true; f.dispatchEvent(new Event("change", { bubbles: true })); }
+  });
+}
+// a mód nélküli készítők (Social, Print, Book) „New” módja: szegmens elöl, a megszokott mezők a másik módban
+function withNew(kind, m, other, otherLabel) {
+  return { ...m,
+    cta: form => form.querySelector("[name=start]:checked")?.value === "new" ? BLANK[kind].cta : (typeof m.cta === "function" ? m.cta(form) : m.cta),
+    fields: () => `${seg("start", [["new", "New"], [other, otherLabel]], 1)}<div data-start="new" hidden>${blankFields(kind)}</div><div data-start="${other}">${m.fields()}</div>`,
+    wire(form, o) {
+      m.wire?.(form, o); wireBlank(form);
+      const sync = () => { const v = form.querySelector("[name=start]:checked")?.value; form.querySelectorAll("[data-start]").forEach(d => d.hidden = d.dataset.start !== v); };
+      form.querySelectorAll("[name=start]").forEach(r => r.addEventListener("change", sync)); sync();
+      leaveNewOnFile(form, "start", other);
+    },
+    async submit(fd, form, opts) { return fd.get("start") === "new" ? blankSubmit(kind, fd) : m.submit(fd, form, opts); },
+  };
+}
+const blankDocLink = `<p class="blank-alt"><a href="/app/make/document/new">Start a blank document instead <span aria-hidden="true">→</span></a></p>`;
+
 // ---------- készítők ----------
 const MAKERS = {
   doc: {
-    cta: form => ({ template: "Start writing", brief: "Write it", open: "Open" })[form.querySelector("[name=dmode]:checked")?.value] || "Open",
+    cta: form => { const m = form.querySelector("[name=dmode]:checked")?.value;
+      return m === "template" ? (form.querySelector("[name=template]")?.value === "blank" ? "Open a blank document" : "Start writing")
+        : ({ brief: "Write it", open: "Open" })[m] || "Open"; },
     title: "Document", sub: "Write and edit like in Word. Anything you open here can also be changed by asking — “make the headings blue”, “add a table of contents”.",
     fields: () => `<div class="seg" style="margin:0 0 16px"><label><input type="radio" name="dmode" value="template" checked><span>New</span></label>
       <label><input type="radio" name="dmode" value="brief"><span>From a brief</span></label>
@@ -1172,7 +1244,7 @@ const MAKERS = {
     },
   },
   deck: {
-    cta: form => ({ blank: "Start the deck", brief: "Make the deck", document: "Make the deck", open: "Open" })[form.querySelector("[name=pmode]:checked")?.value] || "Make the deck",
+    cta: form => ({ blank: "Open a blank deck", brief: "Make the deck", document: "Make the deck", open: "Open" })[form.querySelector("[name=pmode]:checked")?.value] || "Make the deck",
     title: "Presentation", sub: "Build slides like in PowerPoint — start blank, from a brief, or from a document you already have.",
     fields: () => `<div class="seg" style="margin:0 0 16px"><label><input type="radio" name="pmode" value="blank"><span>New</span></label>
       <label><input type="radio" name="pmode" value="brief" checked><span>From a brief</span></label>
@@ -1275,15 +1347,17 @@ const MAKERS = {
   photo: {
     cta: form => {
       const m = form.querySelector("[name=mode]:checked")?.value, a = form.querySelector("[name=action]:checked")?.value;
-      return m === "restore" ? "Restore" : m === "open" ? "Open in editor"
+      return m === "new" ? BLANK.photo.cta : m === "restore" ? "Restore" : m === "open" ? "Open in editor"
         : m === "quick" ? ({ enhance: "Enhance", remove_background: "Remove the background", replace_background: "Swap the background" })[a] || "Fix it" : "Edit the photo";
     },
     title: "Photos", sub: "The result opens in the photo editor. Edits and restorations come as a layered Photoshop file (PSD) — nothing is lost, every step can be undone by hand; a JPG is in your files too.",
-    fields: () => `${fileSlot("photos", { exts: EXT.image, multiple: true, label: "Photos" })}
-      <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
+    fields: () => `<div data-photo-files>${fileSlot("photos", { exts: EXT.image, multiple: true, label: "Photos" })}</div>
+      <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="new"><span>New</span></label>
+      <label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
       <label><input type="radio" name="mode" value="restore"><span>Restore old photos</span></label>
       <label><input type="radio" name="mode" value="quick"><span>Quick fix</span></label>
       <label><input type="radio" name="mode" value="open"><span>Open in editor</span></label></div>
+      <div data-mode="new" hidden>${blankFields("photo")}</div>
       <div data-mode="open" hidden><p class="muted small" style="margin:-4px 0 12px">Opens in the photo editor — layers, selections, adjustments, text, like in Photoshop.</p></div>
       <div data-mode="restore" hidden>
         <p class="muted small" style="margin:0 0 10px">Scratches, dust, stains, tears, fading and blur are repaired. Photograph a whole album page and every picture on it is found and straightened. The original stays as the bottom layer, so anything the AI got wrong can be brought back. <em class="ai-badge">AI</em> ${account?.image_credit_cost ?? 1} credit per photo, +${account?.image_credit_cost ?? 1} to colourise.</p>
@@ -1300,16 +1374,19 @@ const MAKERS = {
       <label><input type="radio" name="action" value="replace_background"><span>New background</span></label></div>
       <div id="pbg" hidden style="margin-top:10px">${imagePicker("bg", { allowNone: false, label: "New background" })}<label>Background blur (px)<input type="number" name="blur" min="0" max="40" value="12"></label></div></div>`,
     wire(form) {
-      wirePicker(form, "bg");
+      wirePicker(form, "bg"); wireBlank(form);
       const syncMode = () => { const m = form.querySelector("[name=mode]:checked").value;
-        form.querySelectorAll("[data-mode]").forEach(d => d.hidden = d.dataset.mode !== m); };
+        form.querySelectorAll("[data-mode]").forEach(d => d.hidden = d.dataset.mode !== m);
+        form.querySelector("[data-photo-files]").hidden = m === "new"; };
       form.querySelectorAll("[name=mode]").forEach(r => r.addEventListener("change", syncMode));
+      leaveNewOnFile(form, "mode", "edit");
       form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", () => form.querySelector("#pbg").hidden = form.querySelector("[name=action]:checked").value !== "replace_background"));
       form.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => {
         const ta = form.querySelector("[name=instruction]"); ta.value = (ta.value.trim() ? ta.value.trim().replace(/[.,]?$/, ", ") : "") + b.dataset.chip; ta.focus();
       }));
     },
     async submit(fd, form) {
+      if (fd.get("mode") === "new") return blankSubmit("photo", fd);
       let mode = fd.get("mode"), quickNote = "";
       const instr0 = mode === "edit" ? (fd.get("instruction") || "").trim() : "";
       if (mode === "edit" && !instr0) { mode = "quick"; fd.set("action", "enhance"); quickNote = "No instructions — gave it a quick enhance. "; }
@@ -1364,8 +1441,8 @@ const MAKERS = {
     },
   },
   scan: {
-    cta: "Read the pages", title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and open it as an editable document in the Word editor.",
-    fields: () => `${fileSlot("pages", { exts: [...EXT.image, "pdf"], multiple: true, label: "Pages, in order" })}
+    cta: "Read the pages", guestAlt: blankDocLink, title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and open it as an editable document in the Word editor.",
+    fields: () => `${blankDocLink}${fileSlot("pages", { exts: [...EXT.image, "pdf"], multiple: true, label: "Pages, in order" })}
       <p class="muted small" style="margin:-6px 0 14px">Phone photos are fine — flat, well lit, one page per photo. A scanned PDF works too. Up to ${account?.ocr_max_pages ?? 60} pages at a time.</p>
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">You get</legend>
       <div class="checks"><label><input type="checkbox" name="out" value="docx" checked> Word document (.docx)</label>
@@ -1401,7 +1478,7 @@ const MAKERS = {
   convert: {
     cta: form => { const o = form.querySelector("[name=target]")?.selectedOptions[0]; return o?.value ? `Convert to ${o.textContent.replace(/\s*\(.*$/, "")}` : "Convert"; },
     title: "Convert", sub: "Pick a file and the format you need — the result opens in the matching editor. The original stays as it was.",
-    fields: () => `${fileSlot("file", { label: "File" })}
+    fields: () => `${blankDocLink}${fileSlot("file", { label: "File" })}
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
     wire(form) {
       form.addEventListener("slotchange", async e => {
@@ -1429,8 +1506,9 @@ const MAKERS = {
     cta: form => PDF_JOBS.find(j => j[0] === form.querySelector("[name=action]:checked")?.value)?.[3] || "Run",
     title: "PDF tools", sub: "Open a PDF in the PDF editor, or pick a job — the result opens in the editor as a new file; the original stays as it was.",
     fields: () => `<fieldset class="jobs-f"><legend>What should happen?</legend><div class="jobs" role="radiogroup">${PDF_JOBS.map(([v, t, d], i) =>
-        `<label><input type="radio" name="action" value="${v}"${i ? "" : " checked"}><span><b>${t}</b><small>${d}</small></span></label>`).join("")}</div></fieldset>
+        `<label><input type="radio" name="action" value="${v}"${v === "open" ? " checked" : ""}><span><b>${t}</b><small>${d}</small></span></label>`).join("")}</div></fieldset>
       ${fileSlot("pdfs", { exts: ["pdf"], label: "PDF" })}
+      <div data-for="new" hidden>${blankFields("pdf")}</div>
       <div data-for="watermark" hidden><label>Watermark text<input type="text" name="wm" maxlength="40" placeholder="DRAFT"></label></div>
       <div data-for="page_numbers" hidden><label>Position<select name="pos"><option value="center">Bottom centre</option><option value="right">Bottom right</option><option value="left">Bottom left</option></select></label></div>
       <div data-for="redact" hidden><label>Words or phrases, one per line<textarea name="words" placeholder="Jane Doe&#10;Project Falcon"></textarea></label>
@@ -1443,12 +1521,14 @@ const MAKERS = {
         const a = form.querySelector("[name=action]:checked").value, many = a === "merge" || a === "compare", s = slotEl(form, "pdfs");
         s.toggleAttribute("data-multiple", many); s.querySelector("input[type=file]").multiple = many;
         s.querySelector(".slot-label").textContent = a === "merge" ? "PDFs, in order (pick several)" : a === "compare" ? "Old version, then new version (pick both)" : "PDF";
-        drawSlot(s);
+        drawSlot(s); s.hidden = a === "new";
         form.querySelectorAll("[data-for]").forEach(d => d.hidden = d.dataset.for !== a);
       };
       form.querySelectorAll("[name=action]").forEach(r => r.addEventListener("change", sync)); sync();
+      wireBlank(form); leaveNewOnFile(form, "action", "open");
     },
     async submit(fd, form) {
+      if (fd.get("action") === "new") return blankSubmit("pdf", fd);
       const a = fd.get("action"), ids = await readSlot(form, "pdfs", "a PDF");
       if (a === "open") return { file_id: ids[0], n: ids.length, edit: true, msg: "Opening the PDF editor…" };
       if ((a === "merge" || a === "compare") && ids.length < 2) {   // egy PDF-fel: a lista nyílik, a másodiknál magától folytatja
@@ -1461,6 +1541,9 @@ const MAKERS = {
     },
   },
 };
+MAKERS.social = withNew("social", MAKERS.social, "design", "Design it for me");
+MAKERS.print = withNew("print", MAKERS.print, "template", "From a template");
+MAKERS.book = withNew("book", MAKERS.book, "manuscript", "From a manuscript");
 // ---------- fájlnézet: cím, testvérek, letöltés, „More” ----------
 // natív (csak nálunk nyíló) formátumok: a cím nem mutatja a technikai kiterjesztést, a Download a kész PNG/PDF-et adja
 const NATIVE = { vectorcraft: ["png", "pdf"], deckcraft: ["pptx", "pdf"], designcraft: ["pdf", "png"], pcraft: ["png", "jpg"],
@@ -1715,7 +1798,7 @@ function editNative(list, n) {
 }
 function openMaker(kind, opts = {}) {
   const m = MAKERS[kind], form = $("#make-form");
-  if (account?.guest && AI_MAKERS.has(kind)) { pendingPreset = null; return accountCta(m.title); }
+  if (account?.guest && AI_MAKERS.has(kind)) { pendingPreset = null; return accountCta(m.title, m.guestAlt || ""); }
   form.innerHTML = `<nav class="tool-switch" aria-label="Tools">${Object.keys(SLUGS).map(k => {
       const name = esc(MAKERS[k].title.replace(/^New /, "").replace(/^./, c => c.toUpperCase()));
       return k === kind ? `<span aria-current="page">${name}</span>` : `<button type="button" data-switch="${k}">${name}</button>`; }).join("")}</nav>

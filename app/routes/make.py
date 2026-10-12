@@ -306,6 +306,21 @@ async def make_social(body: dict[str, Any]) -> dict[str, Any]:
     return {"posts": files}
 
 
+@router.post("/api/make/blank")
+async def make_blank(body: dict[str, Any]) -> dict[str, Any]:
+    """„New”: üres fájl a látható szerkesztőbe — {kind: social|print|photo|book|pdf, size, orientation?, background?,
+    width?, height?}. AI és feltöltés nélkül (vendégnek is)."""
+    from app.tools import blank
+    try:
+        out = await blank.make(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise _fail(e)
+    events.emit("tool_done", tool="make_blank", params={"kind": body.get("kind")}, result={"file_id": out["file_id"]})
+    return out
+
+
 @router.post("/api/make/design")
 async def make_design(body: dict[str, Any]) -> dict[str, Any]:
     from app.tools import design
