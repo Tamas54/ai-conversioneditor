@@ -1605,6 +1605,12 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     poster.unlink(missing_ok=True)
     label = (result_stem(deck_file_id, "with video") if deck_file_id else root_name(display_label(vid), "Video")) + ".pptx"
     write_meta(out, source_file_id=deck_file_id or vid, operation="video on a slide", label=label)
-    return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid,
+    # ellenőrzés (közös check-szerződés): a mentett fájlban tényleg ott a videó, a megadott dián
+    chk_prs = Presentation(str(output_path(out)))
+    media = [sh for sh in chk_prs.slides[pos].shapes if sh.shape_type == 16]       # MSO_SHAPE_TYPE.MEDIA
+    check = ({"status": "ok", "findings": [], "verified": [f"The MP4 ({secs:.0f} s) is embedded on slide {pos + 1} of {len(chk_prs.slides)}, "
+                                                          "with the title card as its poster."]}
+             if media else {"status": "failed", "findings": ["The video didn't end up on the slide."], "verified": []})
+    return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid, "check": check,
             "note": "The video plays in PowerPoint and Keynote (it is embedded in the file); the browser's slide editor "
                     "shows its first frame."}
