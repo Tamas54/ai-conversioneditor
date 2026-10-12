@@ -313,10 +313,11 @@ async def _ask(tb: Table, facts: list[Fact], brief: str, lang: str, numeric: lis
     return {}
 
 
-def _allowed_numbers(tb: Table, facts: list[Fact]) -> set[str]:
-    """A szövegben megengedett számok: a táblázat cellái/fejlécei és a kiírt tények (csak a számjegyek)."""
+def _allowed_numbers(tb: Table, facts: list[Fact], context: str = "") -> set[str]:
+    """A szövegben megengedett számok: a táblázat cellái/fejlécei, a kiírt tények, és amit a felhasználó maga adott
+    (brief, cím, forrás — pl. a „2026-10-12" dátum évszáma; 10-12: emiatt az alcímből csak „augusztus" maradt)."""
     toks: set[str] = set()
-    for s in [*tb.headers, *(c for r in tb.rows for c in r), *(f.display for f in facts)]:
+    for s in [*tb.headers, *(c for r in tb.rows for c in r), *(f.display for f in facts), context]:
         toks.update(re.findall(r"\d+", str(s)))
     return toks
 
@@ -331,10 +332,10 @@ def _scrub(text: str, allowed: set[str]) -> tuple[str, list[str]]:
 
 
 def plan(tb: Table, facts: list[Fact], numeric: list[Column], lab: Optional[int], answer: dict[str, Any],
-         lang: str) -> dict[str, Any]:
+         lang: str, context: str = "") -> dict[str, Any]:
     """A modell válasza → ellenőrzött terv (csak létező tények és oszlopok); hiányzó részre ésszerű alapérték."""
     by_id = {f.id: f for f in facts}
-    allowed = _allowed_numbers(tb, facts)
+    allowed = _allowed_numbers(tb, facts, context)
     findings: list[str] = []
     hl = []
     for h in answer.get("highlights") or []:
@@ -546,7 +547,7 @@ async def make(*, data_file_id: Optional[str] = None, table_image_file_id: Optio
     lang = _lang(tb, (brief or "") + " " + (title or ""))
     facts = facts_for(tb, numeric, lab, lang)
     answer = await _ask(tb, facts, (brief or "") + (f" Title: {title}" if title else ""), lang, numeric)
-    p = plan(tb, facts, numeric, lab, answer, lang)
+    p = plan(tb, facts, numeric, lab, answer, lang, " ".join(x for x in (brief, title, source) if x))
     if title and title.strip():
         p["title"] = title.strip()[:80]
     t = {**design._theme({}, theme, brand), "font_heading": F_HEAD, "font_body": F_BODY}
