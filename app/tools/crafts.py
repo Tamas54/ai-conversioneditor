@@ -12,8 +12,10 @@ file_id → útvonal a parancsparaméterekben, lapozás), a WordCraft is ezeket 
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -40,6 +42,14 @@ def cli_path(configured: str, name: str) -> Optional[str]:
     return shutil.which(name)
 
 
+class CliError(RuntimeError):
+    """A Craft-CLI hibája; `stdout`: amit a hiba előtt kiírt (a lefutott parancsok eredményei)."""
+
+    def __init__(self, msg: str, stdout: str = ""):
+        super().__init__(msg)
+        self.stdout = stdout
+
+
 async def run_cli(exe: Optional[str], name: str, *args: str) -> str:
     if exe is None:
         raise RuntimeError(f"{name} isn't installed on this server")
@@ -56,7 +66,7 @@ async def run_cli(exe: Optional[str], name: str, *args: str) -> str:
         raise RuntimeError(f"{name} {args[0]}: timed out after {settings.WORDCRAFT_TIMEOUT_S}s")
     if proc.returncode != 0:
         msg = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip()
-        raise RuntimeError(msg or f"{name} {args[0]}: exit code {proc.returncode}")
+        raise CliError(msg or f"{name} {args[0]}: exit code {proc.returncode}", out.decode("utf-8", "replace"))
     return out.decode("utf-8", "replace")
 
 
@@ -97,14 +107,58 @@ def page_items(items: list[Any], offset: int, max_chars: int) -> tuple[list[Any]
     return page, (i if i < len(items) else None)
 
 
-def _list_commands(raw: list[dict[str, Any]], query: Optional[str], offset: int, max_chars: int) -> dict[str, Any]:
+def _rank(item: dict[str, Any], term: str, key: str) -> Optional[int]:
+    """Kisebb = jobb: pontos azonosító 0, azonosító-eleje 1, azonosító-rész 2, címke/paraméter/leírás 3."""
+    cid = str(item.get(key) or "").lower()
+    if cid == term:
+        return 0
+    if cid.startswith(term):
+        return 1
+    if term in cid:
+        return 2
+    if term in json.dumps(item, ensure_ascii=False).lower():
+        return 3
+    return None
+
+
+def search_items(items: list[dict[str, Any]], query: str, key: str = "id") -> tuple[list[dict[str, Any]], list[str]]:
+    """query: egy vagy több kifejezés vesszővel/szóközzel („select.lasso, file.placeEmbedded") — mindegyikre a
+    legjobb találatok, a pontos azonosító elöl; ha semmi: hasonló azonosítók."""
+    from app.tools.run_report import similar_ids
+    terms = [t for t in re.split(r"[,\s]+", query.lower()) if t]
+    hits: dict[str, tuple[int, int, dict[str, Any]]] = {}
+    missed: list[str] = []
+    for ti, term in enumerate(terms):
+        found = False
+        for it in items:
+            r = _rank(it, term, key)
+            if r is not None:
+                found = True
+                k = str(it.get(key))
+                if k not in hits or (r, ti) < hits[k][:2]:
+                    hits[k] = (r, ti, it)
+        if not found:
+            missed.append(term)
+    ordered = [it for _, _, it in sorted(hits.values(), key=lambda h: (h[1], h[0]))]
+    near: list[str] = []
+    ids = [str(i.get(key)) for i in items]
+    for term in missed:                   # a nem talált kifejezésekre is javaslat (egy több-kifejezéses kérésben is)
+        near += [x for x in similar_ids(term, ids, 6) if x not in near]
+    return ordered, near
+
+
+def _list_commands(raw: list[dict[str, Any]], query: Optional[str], offset: int, max_chars: int, key: str = "id") -> dict[str, Any]:
     if not query:
-        return {"count": len(raw), "ids": [c["id"] for c in raw],
-                "hint": "pass query (e.g. 'text', 'crop') for params and labels"}
-    q = query.lower()
-    hits = [c for c in raw if q in json.dumps(c, ensure_ascii=False).lower()]
+        return {"count": len(raw), "ids": [c[key] for c in raw],
+                "hint": "pass query (one or more ids or words, e.g. 'select.lasso, text') for full params and labels"}
+    hits, near = search_items(raw, query, key)
     page, nxt = page_items(hits, max(0, offset), max(1_000, max_chars))
-    return {"count": len(hits), "commands": page, "offset": offset, "next_offset": nxt}
+    res: dict[str, Any] = {"count": len(hits), "commands": page, "offset": offset, "next_offset": nxt}
+    if near:
+        res["did_you_mean"] = near
+        res["not_found"] = [x for x in re.split(r"[,\s]+", query) if x and not any(
+            _rank(i, x.lower(), key) is not None for i in raw)]
+    return res
 
 
 def _new_output(fmt: str, source_file_id: Optional[str], op: str, stem: str) -> tuple[str, Path]:
@@ -171,14 +225,23 @@ async def photo_run(
         args += ["--out", str(out)]
         if quality:
             args += ["--quality", str(int(quality))]
-        log_lines = await run_cli(photo_cli(), "photocraft-cli", *args)
+        try:
+            log_lines = await run_cli(photo_cli(), "photocraft-cli", *args)
+        except CliError as e:
+            raise ValueError(await _explain(e, "photo", steps)) from None
+        before = await _photo_info(src) if src and src.suffix.lower() in (".psd", ".psb", ".pcraft") else None
     finally:
         for t in tmp:
             t.unlink(missing_ok=True)
-    stem = Path(display_label(file_id)).stem if file_id else "kep"
-    res = _finish(fid, file_id, "photocraft", stem)
+    what = ("background replaced" if background_file_id else "background removed" if remove_background
+            else "edited" if file_id else "")
+    res = _finish(fid, file_id, "photocraft", _stem(file_id, what, "image"))
     res.update({"commands_run": len(steps), "removed_background": remove_background,
-                "ms_elapsed": int((time.time() - t0) * 1000), "results": _json_lines(log_lines)[-10:]})
+                "ms_elapsed": int((time.time() - t0) * 1000),
+                "steps": run_report.steps(steps, run_report.engine_results(log_lines))})
+    after = await _photo_info(output_path(fid))
+    if after:
+        res["before_after"] = {"before": before, "after": after} if before else {"after": after}
     return res
 
 
@@ -224,12 +287,24 @@ async def vector_run(
         args += ["--export", str(out)]
     if scale:
         args += ["--scale", str(scale)]
-    log_lines = await run_cli(vector_cli(), "vectorcraft-cli", *args)
-    stem = Path(display_label(file_id)).stem if file_id else "design"
+    parsed = [split_command(c) for c in commands or []]
+    try:
+        log_lines = await run_cli(vector_cli(), "vectorcraft-cli", *args)
+    except CliError as e:
+        raise ValueError(await _explain(e, "vector", parsed)) from None
+    stem = _stem(file_id, "edited" if file_id else "", "design")
     files = [_finish(fid, file_id, "vectorcraft", stem) for fid in outs]
-    return {"files": files, "file_id": files[0]["file_id"], "commands_run": len(commands or []),
-            "ms_elapsed": int((time.time() - t0) * 1000),
-            "results": [r for r in _json_lines(log_lines) if r.get("step") == "cmd"][-10:]}
+    res = {"files": files, "file_id": files[0]["file_id"], "commands_run": len(commands or []),
+           "ms_elapsed": int((time.time() - t0) * 1000),
+           "steps": run_report.steps(parsed, run_report.engine_results(log_lines)),
+           "exports": [v.get("result") for v in run_report.json_stream(log_lines) if isinstance(v, dict) and v.get("step") == "export"]}
+    vf = next((output_path(f["file_id"]) for f in files if f["file_id"].endswith((".vectorcraft", ".pdf", ".svg"))), None)
+    if vf is not None:
+        try:
+            res["after"] = run_report.vector_summary(json.loads(await run_cli(vector_cli(), "vectorcraft-cli", "info", str(vf))))
+        except Exception:
+            pass
+    return res
 
 
 async def vector_read(mode: str, file_id: Optional[str] = None, query: Optional[str] = None,
@@ -310,12 +385,14 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
             raise ValueError("pdf needs a file_id")
         steps = [{"tool": c["tool"], "args": c.get("args") or {}} for c in commands or []
                  if isinstance(c, dict) and c.get("tool")]
-        await pdf_script([file_id], steps, out)
-        log_lines = ""
+        try:
+            log_lines = await pdf_script([file_id], steps, out)
+        except CliError as e:
+            raise ValueError(await _explain(e, "pdf", [(st["tool"], st["args"]) for st in steps], offset=1)) from None
     else:
         args = ["run"] + (["--in", str(src)] if src else [])
-        for c in commands or []:
-            cid, params = split_command(c)
+        parsed = [split_command(c) for c in commands or []]
+        for cid, params in parsed:
             args += ["--cmd", f"{cid}={json.dumps(params, ensure_ascii=False)}" if params else cid]
         if app == "sheet":
             args += ["--out", str(out), "--quiet"]
@@ -325,12 +402,26 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
             args += ["--cmd", f"file.save={json.dumps({'path': str(out)})}"]
         else:
             args += ["--export", str(out)]
-        log_lines = await run_cli(exe, name, *args)
+        try:
+            log_lines = await run_cli(exe, name, *args)
+        except CliError as e:
+            raise ValueError(await _explain(e, app, parsed)) from None
     if not out.exists():
         raise RuntimeError(f"{name}: no output was produced ({log_lines[-300:]})")
-    stem = Path(display_label(file_id)).stem if file_id else app
-    res = _finish(fid, file_id, app, stem)
+    res = _finish(fid, file_id, app, _stem(file_id, _office_what(app, commands), _OFFICE_NEW[app]))
     res.update({"steps_run": len(commands or []), "ms_elapsed": int((time.time() - t0) * 1000)})
+    try:
+        if app == "pdf":
+            res["steps"] = run_report.pdf_step_report(log_lines, steps)
+            if fmt == "pdf":
+                res["before_after"] = {"before": run_report.pdf_summary(src), "after": run_report.pdf_summary(out)}
+        else:
+            res["steps"] = run_report.steps(parsed, [])
+            if app == "deck" and fmt == "pptx":
+                ba = {"before": run_report.deck_summary(src)} if src and src.suffix.lower() == ".pptx" else {}
+                res["before_after"] = {**ba, "after": run_report.deck_summary(out)}
+    except Exception as e:  # a jelentés kényelmi — a kész fájlt nem buktatja
+        res["report_error"] = str(e)[:200]
     return res
 
 
@@ -364,19 +455,20 @@ async def office_read(app: str, mode: str, file_id: Optional[str] = None, query:
     if mode == "commands":
         if app == "pdf":
             raw = json.loads(await run_cli(exe, name, "tools"))
-            items = [{"tool": t["name"], "description": t.get("description", "")[:240],
-                      "params": list((t.get("input_schema") or {}).get("properties", {}))} for t in raw]
+            # teljes leírás és paraméter-séma (típus, enum, leírás) — a csonkolt lista miatt kellett eddig külön keresgélni
+            items = [{"tool": t["name"], "description": t.get("description", ""),
+                      "params": (t.get("input_schema") or {}).get("properties", {}),
+                      "required": (t.get("input_schema") or {}).get("required", []),
+                      "read_only": t.get("read_only")} for t in raw]
         elif app == "sheet":
             items = json.loads(await run_cli(exe, name, "commands", "--json"))
         else:
             items = json.loads(await run_cli(exe, name, "commands"))
         key = "tool" if app == "pdf" else "id"
-        if not query:
-            return {"count": len(items), "ids": [i.get(key) for i in items], "hint": "pass query for params and descriptions"}
-        q = query.lower()
-        hits = [i for i in items if q in json.dumps(i, ensure_ascii=False).lower()]
-        page, nxt = page_items(hits, max(0, offset), max(1_000, max_chars))
-        return {"count": len(hits), "items": page, "offset": offset, "next_offset": nxt}
+        res = _list_commands(items, query, offset, max_chars, key=key)
+        if "commands" in res:
+            res["items"] = res.pop("commands")
+        return res
     if not file_id:
         raise ValueError(f"read={mode} needs a file_id")
     path = str(existing(file_id))
@@ -396,3 +488,59 @@ async def office_read(app: str, mode: str, file_id: Optional[str] = None, query:
 
 async def office_convert(app: str, src: Path, dst: Path) -> None:
     await run_cli(office_cli(app), f"{OFFICE[app]['exe']}-cli", "convert", str(src), str(dst))
+
+
+# ---------- jelentés-segédek (A3 nevek, A4 részletek) ----------
+
+from app.tools import run_report  # noqa: E402
+
+_OFFICE_NEW = {"deck": "presentation", "pdf": "document", "layout": "layout", "sheet": "spreadsheet"}
+
+
+def _stem(source_file_id: Optional[str], what: str, fallback: str) -> str:
+    from app.storage.naming import result_stem
+    return result_stem(source_file_id, what, fallback)
+
+
+def _office_what(app: str, commands: Optional[list[Command]]) -> str:
+    tools = {str(c.get("tool") or c.get("command") or "") for c in commands or [] if isinstance(c, dict)}
+    if app == "pdf":
+        if any(t.startswith("redact") for t in tools):
+            return "redacted"
+        if "form_fill" in tools:
+            return "form filled"
+    return "edited"
+
+
+async def _photo_info(path: Path) -> Optional[dict[str, Any]]:
+    try:
+        return run_report.photo_summary(json.loads(await run_cli(photo_cli(), "photocraft-cli", "info", str(path), "--compact")))
+    except Exception:
+        return None
+
+
+_IDS_CACHE: dict[str, list[str]] = {}
+
+
+async def _known_ids(engine: str) -> list[str]:
+    """A motor parancsazonosítói (a hibaüzenet „hasonló parancsai"-hoz), folyamatonként egyszer lekérve."""
+    if engine not in _IDS_CACHE:
+        try:
+            if engine == "photo":
+                raw = json.loads(await run_cli(photo_cli(), "photocraft-cli", "commands", "--json"))
+            elif engine == "vector":
+                raw = json.loads(await run_cli(vector_cli(), "vectorcraft-cli", "commands"))
+            elif engine == "pdf":
+                raw = [{"id": t["name"]} for t in json.loads(await run_cli(office_cli("pdf"), "pdfcraft-cli", "tools"))]
+            elif engine == "sheet":
+                raw = json.loads(await run_cli(office_cli(engine), "gridcraft-cli", "commands", "--json"))
+            else:
+                raw = json.loads(await run_cli(office_cli(engine), f"{OFFICE[engine]['exe']}-cli", "commands"))
+            _IDS_CACHE[engine] = [str(c.get("id")) for c in raw if c.get("id")]
+        except Exception:
+            return []
+    return _IDS_CACHE[engine]
+
+
+async def _explain(e: CliError, engine: str, commands: list[tuple[str, Optional[dict[str, Any]]]], offset: int = 0) -> str:
+    return run_report.failure(engine, str(e), getattr(e, "stdout", ""), commands, await _known_ids(engine), offset=offset)

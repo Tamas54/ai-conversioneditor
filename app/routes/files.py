@@ -27,3 +27,30 @@ async def get_file(file_id: str, t: str = Query(..., description="signed token")
     # `page28.docx` instead of `f09de87…docx`. Falls back to file_id.
     download_name = display_label(file_id) or file_id
     return FileResponse(p, filename=download_name)
+
+
+@router.get("/files/{file_id}/preview.png")
+async def get_preview(file_id: str, t: str = Query(..., description="signed token"),
+                      u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)"),
+                      p: int = Query(1, ge=1, description="page or slide"),
+                      w: int = Query(1200, ge=200, le=2400, description="width in px")):
+    """Az MCP-eredmények `preview_url`-je: a fájl egy oldala/diája PNG-ként — ugyanaz az aláírt token, mint a letöltésé,
+    így egy külső AI is megnézheti, mi lett (nem csak a file_id-t látja)."""
+    from app.tools import previews
+    if not verify_file_token(file_id, t, uid=u):
+        raise HTTPException(403, "invalid or expired token")
+    tenancy.set_user(u)
+    src = output_path(file_id)
+    if not src.exists():
+        src = input_path(file_id)
+    if not src.exists():
+        raise HTTPException(404, "file not found")
+    if not previews.can_preview(file_id):
+        raise HTTPException(415, "no preview for this file type")
+    try:
+        png = await previews.render(src, p, w)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(422, f"could not render a preview: {str(e)[:200]}")
+    return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})

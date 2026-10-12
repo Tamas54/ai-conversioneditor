@@ -117,17 +117,56 @@ async def run(
 
     out_id = new_file_id(fmt)
     args += ["--save", str(output_path(out_id))]
-    await _cli(*args)
-    stem = Path(display_label(file_id)).stem if file_id else (template or "dokumentum")
+    from app.tools import run_report
+    parsed = [(a.partition("=")[0], _json_or_none(a.partition("=")[2])) for a in cmd_args]
+    try:
+        await _cli(*args)
+    except RuntimeError as e:
+        if "unknown command" in str(e) or "step" in str(e):
+            ids = [c["id"] for c in json.loads(await _cli("commands", "--json"))]
+            raise ValueError(run_report.failure("wordcraft", str(e), "", parsed, ids)) from None
+        raise
+    from app.storage.naming import result_stem
+    ids_used = " ".join(c for c, _ in parsed)
+    what = "reviewed" if ("review." in ids_used or "comment" in ids_used) else "edited" if file_id else ""
+    stem = result_stem(file_id, what, template or "document")
     write_meta(out_id, source_file_id=file_id, operation="wordcraft", label=f"{stem}.{fmt}")
-    return {
+    res = {
         "file_id": out_id,
         "url": public_url(out_id),
         "size_kb": output_path(out_id).stat().st_size // 1024,
         "commands_run": len(cmd_args),
+        "steps": run_report.steps(parsed, []),
         "author": author,
         "ms_elapsed": int((time.time() - t0) * 1000),
     }
+    if fmt == "docx":
+        try:
+            after = _doc_summary(output_path(out_id))
+            src = _existing(file_id) if file_id else None
+            before = _doc_summary(src) if src is not None and src.suffix.lower() == ".docx" else None
+            res["before_after"] = {"before": before, "after": after} if before else {"after": after}
+        except Exception:
+            pass
+    return res
+
+
+def _json_or_none(raw: str):
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return {"value": raw}
+
+
+def _doc_summary(path: Path) -> dict[str, Any]:
+    """Bekezdések, szavak, követett változások, megjegyzések — az előtte–utána jelentéshez."""
+    from docx import Document
+    from app.tools.checks import _docx_review_counts
+    d = Document(str(path))
+    words = sum(len(par.text.split()) for par in d.paragraphs)
+    changes, comments, authors = _docx_review_counts(path)
+    return {"paragraphs": len(d.paragraphs), "words": words, "tables": len(d.tables),
+            "tracked_changes": changes, "comments": comments, "authors": authors}
 
 
 # Egy MCP-válasz felső határa: egy 345 oldalas regény szövege 1 MB, az inspect-je 800 KB —
@@ -146,15 +185,10 @@ async def read(
         raise ValueError(f"read: {mode} (choose from {', '.join(sorted(READ_MODES))})")
     offset, max_chars = max(0, offset), max(1_000, max_chars)
     if mode == "commands":
-        cmds = json.loads(await _cli("commands", "--json"))
-        if not query:
-            # 460 parancs teljes leírással 81 KB; az azonosítók ~9 KB. Paraméterek: query-vel.
-            return {"count": len(cmds), "ids": [c["id"] for c in cmds],
-                    "hint": "pass query (e.g. 'table', 'comment') for params and labels"}
-        q = query.lower()
-        cmds = [c for c in cmds if q in json.dumps(c, ensure_ascii=False).lower()]
-        page, nxt = _page_items(cmds, offset, max_chars)
-        return {"count": len(cmds), "commands": page, "offset": offset, "next_offset": nxt}
+        # 460 parancs teljes leírással 81 KB; az azonosítók ~9 KB. Paraméterek: query-vel (több kifejezés is,
+        # a pontos azonosító elöl, hasonló azonosítók, ha nincs találat — közös a többi Craft-motorral).
+        from app.tools.crafts import _list_commands
+        return _list_commands(json.loads(await _cli("commands", "--json")), query, offset, max_chars)
     if not file_id:
         raise ValueError(f"read={mode} needs a file_id")
     if mode == "review":

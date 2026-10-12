@@ -64,7 +64,12 @@ mcp = FastMCP(
         "files(action=\"new\", kind=document|presentation|design|photo|book|pdf) and hand the person its edit_url. PICTURES: this server does NOT "
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
         "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
-        "generate_image(stock_search=…) to show the person candidates."
+        "generate_image(stock_search=…) to show the person candidates. "
+        "CHECK YOUR WORK: every file result has `preview_url` (a PNG of the page/slide that changed — open it, or "
+        "call files(action=\"preview\", file_id, page) to see it) and `check` = {status: ok | needs_check | failed, "
+        "findings, verified}. A file existing is not the task done: if status is needs_check, look at the preview; "
+        "if failed or a finding says something is missing, fix it before telling the person it's done. "
+        "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared."
     ),
     streamable_http_path="/",
     stateless_http=True,
@@ -79,8 +84,20 @@ _EDITABLE = {"docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "pptx", "d
              "png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "svg", "vectorcraft", "ai", "eps", "designcraft", "idml"}
 
 
-def _links(res):
-    """Minden fájl-eredmény mellé `edit_url`: az ember ezzel a fájlt rögtön a megfelelő szerkesztőben nyitja meg."""
+def _exists(fid: str) -> bool:
+    from app.tools.crafts import existing
+    try:
+        existing(fid)
+        return True
+    except (FileNotFoundError, ValueError):
+        return False
+
+
+def _links(res, pages: Optional[dict] = None):
+    """Minden fájl-eredmény mellé `edit_url` (a fájl rögtön a megfelelő szerkesztőben nyílik), `preview_url` (PNG,
+    amit egy külső AI megnézhet — `pages`: fájlonként melyik oldal/dia érdemes) és `name` (a beszédes fájlnév)."""
+    from app.storage import display_label
+    from app.tools import previews
     base = settings.PUBLIC_BASE_URL.rstrip("/")
 
     def walk(o, depth=0):
@@ -90,6 +107,10 @@ def _links(res):
             fid = o.get("file_id")
             if isinstance(fid, str) and "." in fid and fid.rsplit(".", 1)[1].lower() in _EDITABLE and "edit_url" not in o:
                 o["edit_url"] = f"{base}/app/file/{fid}/edit"
+            if isinstance(fid, str) and "preview_url" not in o and previews.can_preview(fid) and _exists(fid):
+                o["preview_url"] = previews.preview_url(fid, (pages or {}).get(fid, 1))
+                if "name" not in o and "label" not in o:
+                    o["name"] = display_label(fid)
             for v in list(o.values()):
                 walk(v, depth + 1)
         elif isinstance(o, list):
@@ -114,8 +135,9 @@ def linked(fn):
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
         t0 = time.monotonic()
         try:
-            res = _links(await fn(*a, **k))
-            log.info("mcp %s(%s) ok %.1fs", fn.__name__, _arg_brief(k), time.monotonic() - t0)
+            res = await _finalize(fn.__name__, k, await fn(*a, **k))
+            st = (res.get("check") or {}).get("status") if isinstance(res, dict) else None
+            log.info("mcp %s(%s) ok %.1fs%s", fn.__name__, _arg_brief(k), time.monotonic() - t0, f" check={st}" if st else "")
             return res
         except Exception as e:
             log.warning("mcp %s(%s) FAILED %.1fs: %s", fn.__name__, _arg_brief(k), time.monotonic() - t0, str(e)[:300])
@@ -123,6 +145,56 @@ def linked(fn):
         finally:
             tenancy.client_makes_images.reset(tok)
     return w
+
+
+# a közvetlen szerkesztők (edits.py) eredménye eddig címke nélkül maradt („3fa8c1e2.docx") — itt kap nevet
+_TOOL_WHAT = {"find_replace": "text replaced", "delete_section": "section removed", "insert_after": "text added",
+              "replace_heading": "heading renamed", "delete_pages": "pages removed", "merge": "merged",
+              "edit_with_instruction": "edited", "insert_image": "picture added", "convert": "converted",
+              "chart_redraw": "chart", "generate_chart_image": "chart"}
+
+
+def _file_dicts(res) -> list[dict]:
+    if not isinstance(res, dict):
+        return []
+    out = [res] if isinstance(res.get("file_id"), str) else []
+    out += [f for f in res.get("files") or [] if isinstance(f, dict) and isinstance(f.get("file_id"), str)]
+    return out
+
+
+def _name_unlabeled(tool: str, args: dict, res) -> None:
+    what = _TOOL_WHAT.get(tool)
+    if not what:
+        return
+    from app.storage import output_path, read_meta, write_meta
+    from app.storage.naming import result_stem
+    src = args.get("file_id") or next(iter(args.get("file_ids") or []), None)
+    for d in _file_dicts(res):
+        fid = d["file_id"]
+        meta = read_meta(fid) or {}
+        if meta.get("label") or meta.get("original_filename") or not output_path(fid).exists():
+            continue
+        label = f"{result_stem(src, what, 'file')}.{fid.rsplit('.', 1)[-1]}"
+        write_meta(fid, label=label, source_file_id=src if isinstance(src, str) else None, operation=tool)
+
+
+async def _finalize(tool: str, args: dict, res):
+    """Minden MCP-eredmény közös utófeldolgozása: név, ellenőrzés (check), linkek (szerkesztő, előnézet)."""
+    if not isinstance(res, dict):
+        return res                       # pl. CallToolResult (files preview képpel) — érintetlenül
+    try:
+        _name_unlabeled(tool, args, res)
+    except Exception as e:
+        log.info("elnevezés kimaradt (%s): %s", tool, e)
+    from app.tools import checks
+    check, page = await checks.run(tool, args, res)
+    pages = {}
+    if check is not None:
+        res["check"] = check
+        main = checks.main_file(res) or (checks.main_file(res["result"]) if isinstance(res.get("result"), dict) else None)
+        if main and page:
+            pages[main] = page
+    return _links(res, pages)
 
 
 def _arg_brief(k: dict) -> str:
@@ -287,8 +359,11 @@ async def files(
     orientation: Optional[str] = None,
     background: Optional[str] = None,
     title: Optional[str] = None,
+    file_id: Optional[str] = None,
+    page: Optional[int] = None,
+    other_file_id: Optional[str] = None,
 ) -> dict:
-    """The person's files, and empty new ones.
+    """The person's files, and empty new ones; see a file; compare two versions.
 
     action="list": their files (uploads and results, newest first) — {file_id, name, ext, size_kb, when, made_from,
       edit_url}, plus total. To FIND a file ("the application form photo", "my contract"), pass query = words from
@@ -299,6 +374,11 @@ async def files(
       size square|portrait|story|landscape) | print (size A4|A3|A5|Letter, orientation portrait|landscape) |
       photo (size 1920x1080|1080x1080|1080x1350|3000x2000, background white|transparent) | book (size A5|A4|6x9) |
       pdf (size A4|Letter). Give the person its edit_url — it opens the blank file in the matching editor.
+      title names the file (and the deck's first slide).
+    action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id, so you can
+      check your own result (text overflow, a missing object, a wrong crop) before calling it done.
+    action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
+      changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
     """
     if action in ("list", "find", "search"):
         import datetime
@@ -326,18 +406,61 @@ async def files(
             "file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
             "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "made_from": f.get("source_label")} for f in page]}
+    if action == "preview":
+        return await _preview_content(file_id, page or 1)
+    if action == "compare":
+        from app.tools import compare as cmp
+        if not file_id:
+            raise ValueError("compare needs file_id (and other_file_id, or it compares with the file it was made from)")
+        other = other_file_id or cmp.latest_source(file_id)
+        if not other:
+            raise ValueError("Give other_file_id — this file wasn't made from another one.")
+        return await cmp.compare(other, file_id) if not other_file_id else await cmp.compare(file_id, other_file_id)
     if action != "new":
-        raise ValueError('action: "list" or "new"')
+        raise ValueError('action: "list", "new", "preview" or "compare"')
     k = (kind or "").lower()
     if k in ("document", "doc", "word"):
         from app.routes.make import make_document
-        return await make_document({"mode": "template", "template": "blank"})
-    if k in ("presentation", "deck", "slides", "pptx"):
+        res = await make_document({"mode": "template", "template": "blank"})
+    elif k in ("presentation", "deck", "slides", "pptx"):
         from app.routes.make import make_deck
-        return await make_deck({"mode": "blank", "title": title or "Presentation title"})
-    from app.tools import blank
-    k = {"design": "social", "social_post": "social", "poster": "print", "canvas": "photo"}.get(k, k)
-    return await blank.make({"kind": k, "size": size, "orientation": orientation, "background": background})
+        res = await make_deck({"mode": "blank", "title": title or "Presentation title"})
+    else:
+        from app.tools import blank
+        k = {"design": "social", "social_post": "social", "poster": "print", "canvas": "photo"}.get(k, k)
+        res = await blank.make({"kind": k, "size": size, "orientation": orientation, "background": background})
+    if title and isinstance(res, dict) and res.get("file_id"):
+        # a megadott cím legyen a fájl neve („Untitled design" helyett) — ChatGPT-teszt 10-12
+        from app.storage import write_meta
+        from app.storage.naming import safe_title
+        t = safe_title(title)
+        if t:
+            label = f"{t}.{res['file_id'].rsplit('.', 1)[-1]}"
+            write_meta(res["file_id"], label=label)
+            res["label"] = res["name"] = label
+    return res
+
+
+async def _preview_content(file_id: Optional[str], page: int):
+    """files(action="preview"): a kép MAGA az eszköz-válaszban (a kliens-AI látja), mellette a szöveges adatok."""
+    import json
+    from mcp.types import CallToolResult, ImageContent, TextContent
+    from app.storage import display_label
+    from app.tools import previews
+    from app.tools.crafts import existing
+    if not file_id:
+        raise ValueError("preview needs file_id")
+    src = existing(file_id)
+    if not previews.can_preview(file_id):
+        raise ValueError(f"No preview for .{src.suffix.lstrip('.')} files.")
+    n = await previews.page_count(src)
+    page = max(1, min(int(page or 1), n or 1))
+    jpg = await previews.render_jpeg(src, page, 1000)
+    info = {"file_id": file_id, "name": display_label(file_id), "page": page, "pages": n,
+            "preview_url": previews.preview_url(file_id, page)}
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(info, ensure_ascii=False)),
+                                   ImageContent(type="image", data=base64.b64encode(jpg).decode(), mimeType="image/jpeg")],
+                          structuredContent=info)
 
 
 @mcp.tool()
