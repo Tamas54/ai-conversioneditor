@@ -1034,26 +1034,34 @@ def changes(file_id: str, base_file_id: str, offset: int = 0, max_chars: int = 2
             it["untracked"] = True
         items.append(it)
 
+    def added(jj: int) -> None:
+        if nt[jj].strip():
+            tr = fresh.get(jj + 1)
+            items.append({"paragraph": jj + 1, "added": cap(nt[jj]), **({"tracked": tr[:20]} if tr else {"untracked": True})})
+
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ot, nt, autojunk=False).get_opcodes():
         if tag == "equal":
             for k in range(i2 - i1):
                 if fresh.get(j1 + k + 1):
                     pair(i1 + k, j1 + k)
             continue
-        j = j1
+        j = j1                     # a cserélt blokkban a régi bekezdéshez a leghasonlóbb új tartozik (sorrendben)
         for i in range(i1, i2):
             best = max(range(j, j2), key=lambda jj: _similar(ot[i], nt[jj]), default=None)
             if best is not None and _similar(ot[i], nt[best]) >= 0.35:
                 for jj in range(j, best):
-                    if nt[jj].strip():
-                        items.append({"paragraph": jj + 1, "added": cap(nt[jj]), **({"tracked": fresh[jj + 1][:20]} if fresh.get(jj + 1) else {"untracked": True})})
+                    added(jj)
                 pair(i, best)
                 j = best + 1
             elif ot[i].strip():
-                items.append({"removed": cap(ot[i]), "was_paragraph": i + 1, "untracked": not gone.get(i + 1)})
+                it = {"removed": cap(ot[i]), "was_paragraph": i + 1}
+                if gone.get(i + 1):
+                    it["settled"] = gone[i + 1][:20]
+                if not _explained([(ot[i], "")], gone.get(i + 1, [])):
+                    it["untracked"] = True
+                items.append(it)
         for jj in range(j, j2):
-            if nt[jj].strip():
-                items.append({"paragraph": jj + 1, "added": cap(nt[jj]), **({"tracked": fresh[jj + 1][:20]} if fresh.get(jj + 1) else {"untracked": True})})
+            added(jj)
 
     nc, oc = _comments(new_pkg), _comments(old_pkg)
     ck = lambda c: (c["author"], c["text"])
