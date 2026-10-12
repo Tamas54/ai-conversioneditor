@@ -79,8 +79,11 @@ def find_prints(src: Path, workdir: Path) -> list[Path]:
 
 
 def trim_border(img):
-    """A régi papírkép fehér/világos szegélye nem a fotó része (a színező elszínezné) → levágjuk:
-    kívülről befelé, amíg a sor/oszlop egyenletesen világos (kis szórás, magas átlag)."""
+    """A régi papírkép fehér/világos szegélye nem a fotó része (a színező elszínezné, a Kontext keretnek nézné) → levágjuk:
+    kívülről befelé, amíg a sor/oszlop szegély-szerű (a pixelek ≥90%-a egy világos tónus körül).
+    10-12 (ChatGPT-teszt, albumoldal): a kiegyenesített kivágás legszélén 1-3 px sötét albumháttér marad (a talált
+    négyszög kicsit nagyobb a papírnál) — a régi „egész sor egyenletes” próba ezen elbukott, és a teljes keret bennmaradt.
+    Ezért: a szél sötét fringe-sorait átlépjük, és a sor arányát nézzük (a sarkokban lévő háttér, porszem nem számít)."""
     import cv2
     import numpy as np
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -88,12 +91,23 @@ def trim_border(img):
     ref = float(np.median(g))
 
     def plain(line) -> bool:
-        return line.std() < 14 and line.mean() > max(150, ref + 25)
-    t, b, l, r = 0, h, 0, w
-    while t < h * 0.15 and plain(g[t, l:r]): t += 1
-    while b > h * 0.85 and plain(g[b - 1, l:r]): b -= 1
-    while l < w * 0.15 and plain(g[t:b, l]): l += 1
-    while r > w * 0.85 and plain(g[t:b, r - 1]): r -= 1
+        m = float(np.median(line))
+        return m > max(150, ref + 25) and float((np.abs(line - m) < 18).mean()) > 0.9
+
+    def inward(line_at, n: int) -> int:
+        """Hány sort/oszlopot vágjunk le az egyik oldalról (0, ha nincs szegély)."""
+        fringe, i = max(3, round(n * 0.02)), 0
+        while i < fringe and not plain(line_at(i)):
+            i += 1
+        if i == fringe:
+            return 0
+        while i < n * 0.15 and plain(line_at(i)):
+            i += 1
+        return i
+    t = inward(lambda i: g[i, :], h)
+    b = h - inward(lambda i: g[h - 1 - i, :], h)
+    l = inward(lambda i: g[t:b, i], w)
+    r = w - inward(lambda i: g[t:b, w - 1 - i], w)
     pad = 3 if (t or l or (h - b) or (w - r)) else 0     # a szegély és a kép közti árnyékcsík se maradjon
     return img[min(h - 1, t + pad):max(t + 1, b - pad), min(w - 1, l + pad):max(l + 1, r - pad)]
 
