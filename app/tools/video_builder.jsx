@@ -119,10 +119,49 @@ function titleScene(sc) {
     leading: sc.size * 1.08, shadow: 24, name: "Title" }), 0.35, 0.7, D.H * 0.025);
   return c;
 }
+function grower(layer, el) {   // kinövés: a horgony a növekedés kezdő élén, a skála 0 → 100 (t0-tól dur alatt)
+  var w = el.size[0], h = el.size[1], T = tp(layer), S = T.property("ADBE Scale"), g = el.grow;
+  var A = { up: [0, h / 2], down: [0, -h / 2], right: [-w / 2, 0], left: [w / 2, 0], segment: [-w / 2, 0] }[g];
+  if (A) {
+    try { T.property("ADBE Anchor Point").setValue(A); } catch (e) {}
+    var P = el.pos;
+    if (g !== "segment") P = [el.pos[0] + A[0], el.pos[1] + A[1]];   // a horgonypont helye a kompozícióban
+    T.property("ADBE Position").setValue(P);
+    var z = g === "up" || g === "down" ? [100, 0] : [0, 100];
+    S.setValueAtTime(el.t0, z); S.setValueAtTime(el.t0 + el.dur, [100, 100]); ease(S);
+  } else if (g === "pop") {
+    S.setValueAtTime(el.t0, [0, 0]); S.setValueAtTime(el.t0 + el.dur, [100, 100]); ease(S);
+  } else if (el.t0 !== undefined) {
+    var o = T.property("ADBE Opacity"), full = el.opacity || 100;
+    o.setValueAtTime(el.t0, 0); o.setValueAtTime(el.t0 + el.dur, full);
+  }
+}
+function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria: minden oszlop / pont / felirat külön réteg
+  var F = { bold: D.font.bold, semibold: D.font.semibold, regular: D.font.regular };
+  for (var k = 0; k < ch.elements.length; k++) {
+    var el = ch.elements[k];
+    if (el.k === "rect") {
+      var r = rect(c, el.name, el.size, el.pos, el.color === "accent" ? D.accent : el.color, el.opacity, el.round);
+      if (el.rot) tp(r).property("ADBE Rotate Z").setValue(el.rot);
+      if (el.grow) grower(r, el);
+    } else {
+      fadeIn(textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
+        font: F[el.font] || D.font.semibold, color: el.color }), el.t0 || 0, 0.4, 0);
+    }
+  }
+}
 function contentScene(sc, i) {
   var c = app.project.items.addComp("Scene " + i + " – " + sc.headline.substring(0, 32), D.W, D.H, 1, sc.dur, D.fps);
   background(c, sc, sc.dur);
   var L = D.L;
+  if (sc.chart) {        // mozgó grafikon: sötétített kép, fent a cím, alatta a grafikon
+    shade(c, sc.dur, "even");
+    var cs = Math.round(Math.min(D.W, D.H) * 0.052);
+    fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
+      leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
+    chartLayers(c, sc.chart);
+    return c;
+  }
   if (sc.stat) {
     shade(c, sc.dur, "even");
     var ss = sc.stat.size || L.statSize;

@@ -228,7 +228,8 @@ async def fetch_article(url: str) -> dict[str, Any]:
 
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
-{"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null}],
+{"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
+  "chart": {"type": "column|bar|line", "title": str, "unit": str, "items": [{"label": str, "value": number}]} | null}],
  "end": {"title": str, "subtitle": str}}
 Rules:
 - exactly {n} scenes; write in the language of the source (unless told otherwise); no invented facts, names or numbers.
@@ -239,11 +240,83 @@ Rules:
 - image_query: 2–4 plain English words for a stock-photo search — concrete and visual ("wind turbines at sunset",
   "crowded city street"), never abstract.
 - stat only when the source gives a striking number (at most 2 scenes); value ≤ 8 characters ("72%", "3.4 bn"), label ≤ 40.
+- chart only when the source gives 3–8 comparable numbers of the SAME kind (inflation in three regions, sales per year):
+  copy every value EXACTLY from the source (a plain number, no unit); unit = "%" or a short unit ("$", "bn"), or "";
+  item labels ≤ 18 characters; line only for values over time, in time order; column for a few categories, bar for
+  long names or many items; at most 2 chart scenes; a scene has a stat OR a chart, never both; headline = what the
+  chart shows.
 - end.title ≤ 50 characters (the takeaway or a call to action); end.subtitle ≤ 80 (e.g. where to read more)."""
 
 _KEEP = """
 The user wrote this text as the video's SCRIPT: keep their wording for the captions (fix only typos), one scene per
 paragraph or idea, in their order; write the headlines and image queries yourself."""
+
+
+_NUM_IN_TEXT = re.compile(r"(?<![\d.,])-?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?(?![\d])|-?\d+(?:[.,]\d+)?")
+
+
+def _text_numbers(text: str) -> set[float]:
+    """A szöveg összes száma (1,8 · 1.8 · 4 194 · 41 670 · 3,35) — a grafikon minden értékének itt kell lennie."""
+    out = set()
+    for t in _NUM_IN_TEXT.findall(text or ""):
+        t = re.sub(r"[ \u00a0\u202f]", "", t)
+        for cand in (t.replace(",", "."), t.replace(",", "")):
+            try:
+                out.add(round(float(cand), 6))
+            except ValueError:
+                pass
+    return out
+
+
+def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """A modell javasolta grafikon → ellenőrzött grafikon (minden érték a forrásszövegben) | None + megjegyzés."""
+    if not isinstance(c, dict):
+        return None, None
+    nums = _text_numbers(source)
+    items, missing = [], []
+    for it in c.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        try:
+            v = float(str(it.get("value")).replace(",", ".").replace(" ", ""))
+        except ValueError:
+            continue
+        lab = _clean(it.get("label"), 22)
+        (items if round(v, 6) in nums else missing).append({"label": lab, "value": v})
+    title = _clean(c.get("title"), 60)
+    if missing or len(items) < 2:
+        return None, f"A suggested chart “{title}” was left out: not all its numbers are in the source."
+    typ = str(c.get("type") or "column").lower()
+    typ = typ if typ in ("column", "bar", "line") else "column"
+    if typ == "column" and (len(items) > 7 or max(len(i["label"]) for i in items) > 14):
+        typ = "bar"
+    unit = _clean(c.get("unit"), 6)
+    return ({"type": typ, "title": title, "unit": unit, "items": items[:12]},
+            f"Chart “{title}”: all {len(items)} values are in the source text.")
+
+
+def charts_from_table(file_id: str, limit: int = 2) -> list[dict[str, Any]]:
+    """Táblázatból (CSV/XLSX) grafikon-jelenetek: az értékek a cellákból (az infografika táblázat-kezelésével —
+    a „mutató × ország/év" tábla megfordítva), oszloponként egy grafikon."""
+    from app.tools import infographic as ig
+    tb = ig.load_table(crafts.existing(file_id))
+    if ig.indicator_table(tb):
+        tb = ig.transpose(tb)
+    cols = ig.numeric_columns(tb)
+    lab = ig.label_column(tb, cols)
+    cols = [c for c in cols if c.j != lab]          # az évszám-oszlop címke, nem adat (10-12: „Year” grafikon lett)
+    labels = tb.col(lab) if lab is not None else [str(i + 1) for i in range(len(tb.rows))]
+    timey = ig.time_like(labels)
+    out = []
+    for c in cols[:limit]:
+        items = [{"label": _clean(labels[i], 22), "value": v} for i, v in enumerate(c.values) if v is not None][:12]
+        if len(items) < 2:
+            continue
+        typ = "line" if timey and len(items) >= 3 else ("bar" if len(items) > 7 or max(len(x["label"]) for x in items) > 14 else "column")
+        unit = "%" if c.percent else ""
+        out.append({"type": typ, "title": _clean(re.sub(r"\s*\(%\)|\s*%", "", c.name), 60), "unit": unit, "items": items,
+                    "cells": f"{tb.refs[0][c.j]}:{tb.refs[-1][c.j]}"})
+    return out
 
 
 def _clean(s: Any, n: int) -> str:
@@ -379,6 +452,103 @@ def _rgb(hex_color: Optional[str]) -> list[float]:
     return [round(int(h[i:i + 2], 16) / 255, 4) for i in (0, 2, 4)]
 
 
+def _fmt_val(v: float, unit: str, lang: str) -> str:
+    """Értékcímke a forrás pontosságával (3,35 % marad 3,35 — az infografika fmt-je egy tizedesre kerekítene)."""
+    from app.tools.infographic import fmt
+    pct = unit == "%"
+    t = fmt(v, lang, percent=pct)
+    if round(v, 1) != round(v, 2):
+        num = f"{abs(v):,.2f}"
+        num = num.replace(",", " ").replace(".", ",") if lang == "hu" else num
+        t = ("-" if v < 0 else "") + num + ((" %" if lang == "hu" else "%") if pct else "")
+    if pct or not unit:
+        return t
+    return f"{unit}{t}" if unit in ("$", "€", "£", "¥") and lang == "en" else f"{t} {unit}"
+
+
+def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str) -> list[dict[str, Any]]:
+    """Egy mozgó grafikon rétegei (a builder csak lerakja): oszlop / sáv / vonal, értékcímkék, kategóriacímkék,
+    alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
+    m, vertical = min(W, H), H > W * 1.2
+    items = ch["items"]
+    n, vals = len(items), [float(i["value"]) for i in items]
+    unit, typ = ch.get("unit") or "", ch["type"]
+    x0, x1 = W * 0.09, W * 0.91
+    yT, yB = H * (0.2 if vertical else 0.22), H * (0.66 if vertical else 0.7)
+    vl, cl = round(m * 0.034), round(m * (0.031 if not vertical else 0.033))
+    soft = [0.86, 0.88, 0.92]
+    out: list[dict[str, Any]] = []
+    rect = lambda name, size, pos, **o: out.append({"k": "rect", "name": name, "size": [round(size[0], 1), round(max(size[1], 2), 1)],
+                                                     "pos": [round(pos[0], 1), round(pos[1], 1)], **o})
+    text = lambda name, st, size, box, pos, **o: out.append({"k": "text", "name": name, "str": st, "size": size,
+                                                             "box": [round(box[0], 1), round(box[1], 1)], "pos": [round(pos[0], 1), round(pos[1], 1)], **o})
+    stagger, grow = min(0.18, 1.6 / max(n, 1)), 0.7
+    if typ == "column":
+        vmin, vmax = min(0.0, *vals), max(0.0, *vals)
+        top = yT + vl * 1.8
+        bottom = yB - (vl * 1.8 if vmin < 0 else 0)
+        sc = (bottom - top) / ((vmax - vmin) or 1)
+        y0 = top + vmax * sc
+        slot = (x1 - x0) / n
+        bw = min(slot * 0.6, m * 0.17)
+        cat_y = yB + cl * 1.4
+        rect("Baseline", (x1 - x0, max(2, m * 0.003)), ((x0 + x1) / 2, y0), color=[1, 1, 1], opacity=45, t0=0.1, dur=0.4, grow="right")
+        for k, (it, v) in enumerate(zip(items, vals)):
+            cx, h, t0 = x0 + slot * (k + 0.5), abs(v) * sc, 0.35 + k * stagger
+            rect(f"Bar – {it['label']}", (bw, h), (cx, y0 - h / 2 if v >= 0 else y0 + h / 2), color="accent", opacity=100,
+                 round=min(bw * 0.08, 8), grow="up" if v >= 0 else "down", t0=t0, dur=grow)
+            text(f"Value – {it['label']}", _fmt_val(v, unit, lang), vl, (slot, vl * 1.4),
+                 (cx, (y0 - h - vl * 0.75) if v >= 0 else (y0 + h + vl * 0.95)), align="center", font="bold", t0=t0 + grow * 0.8)
+            text(f"Label – {it['label']}", it["label"], cl, (slot * 0.96, cl * 2.7), (cx, cat_y + cl * 0.6), align="center",
+                 font="semibold", color=soft, t0=0.2)
+    elif typ == "bar":
+        vmin, vmax = min(0.0, *vals), max(0.0, *vals)
+        lab_w = (x1 - x0) * (0.34 if not vertical else 0.36)
+        px0, px1 = x0 + lab_w + m * 0.02, x1 - vl * 4.2
+        sc = (px1 - px0) / ((vmax - vmin) or 1)
+        xz = px0 - vmin * sc
+        row = (yB - yT) / n
+        bh = min(row * 0.62, m * 0.075)
+        rect("Baseline", (max(2, m * 0.003), yB - yT), (xz, (yT + yB) / 2), color=[1, 1, 1], opacity=45, t0=0.1, dur=0.4, grow="down")
+        for k, (it, v) in enumerate(zip(items, vals)):
+            cy, w, t0 = yT + row * (k + 0.5), abs(v) * sc, 0.35 + k * stagger
+            rect(f"Bar – {it['label']}", (w, bh), (xz + w / 2 if v >= 0 else xz - w / 2, cy), color="accent", opacity=100,
+                 round=min(bh * 0.12, 8), grow="right" if v >= 0 else "left", t0=t0, dur=grow)
+            vx = xz + w + vl * 2.1 if v >= 0 else xz - w - vl * 2.1
+            text(f"Value – {it['label']}", _fmt_val(v, unit, lang), vl, (vl * 4, vl * 1.4), (vx, cy + vl * 0.1),
+                 align="center", font="bold", t0=t0 + grow * 0.8)
+            text(f"Label – {it['label']}", it["label"], cl, (lab_w, cl * 1.4), (x0 + lab_w / 2, cy + cl * 0.1), align="right",
+                 font="semibold", color=soft, t0=0.2)
+    else:   # line
+        lo, hi = min(vals), max(vals)
+        pad = (hi - lo) * 0.12 or abs(hi) * 0.1 or 1
+        lo, hi = lo - pad, hi + pad
+        top, bottom = yT + vl * 1.8, yB
+        xs = [x0 + (x1 - x0) * (0.06 + 0.88 * k / max(n - 1, 1)) for k in range(n)]
+        ys = [bottom - (v - lo) / (hi - lo) * (bottom - top) for v in vals]
+        rect("Baseline", (x1 - x0, max(2, m * 0.003)), ((x0 + x1) / 2, bottom), color=[1, 1, 1], opacity=45, t0=0.1, dur=0.4, grow="right")
+        seg = min(0.45, 2.4 / max(n - 1, 1))
+        th, d = max(4, m * 0.006), max(10, m * 0.016)
+        show = set(range(n)) if n <= 8 else {0, n - 1, vals.index(max(vals)), vals.index(min(vals))}
+        every = 1 if n <= 8 else math.ceil(n / 8)
+        for k in range(n):
+            t0 = 0.35 + k * seg
+            if k < n - 1:
+                dx, dy = xs[k + 1] - xs[k], ys[k + 1] - ys[k]
+                length = math.hypot(dx, dy)
+                out.append({"k": "rect", "name": f"Line {k + 1}", "size": [round(length, 1), round(th, 1)],
+                            "pos": [round(xs[k], 1), round(ys[k], 1)], "rot": round(math.degrees(math.atan2(dy, dx)), 2),
+                            "color": "accent", "opacity": 100, "grow": "segment", "t0": t0, "dur": seg})
+            rect(f"Point – {items[k]['label']}", (d, d), (xs[k], ys[k]), color="accent", opacity=100, round=d / 2, grow="pop", t0=t0, dur=0.25)
+            if k in show:
+                text(f"Value – {items[k]['label']}", _fmt_val(vals[k], unit, lang), vl, (vl * 5, vl * 1.4), (xs[k], ys[k] - vl * 1.0),
+                     align="center", font="bold", t0=t0 + 0.15)
+            if k % every == 0 or k == n - 1:
+                text(f"Label – {items[k]['label']}", items[k]["label"], cl, ((x1 - x0) / min(n, 8), cl * 2.7),
+                     (xs[k], bottom + cl * 2.0), align="center", font="semibold", color=soft, t0=0.2)
+    return out
+
+
 def _focus(path: Path) -> list[float]:
     """A kép „érdekes pontja" (0–1 koordináták) a Ken Burns-mozgás céljának: spectral residual szaliencia
     (Hou–Zhang; csak numpy + OpenCV-alap — az OpenCV 5-ből kikerült az arcfelismerő), enyhe középre húzással."""
@@ -449,6 +619,8 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     captions, t = [], Tt - X
     d_scenes = []
     motions = _motions(len(scenes), ken_burns)
+    from app.tools.infographic import _HU
+    lang = "hu" if _HU.search(" ".join([story.get("title") or ""] + [x.get("caption") or "" for x in scenes])) else "en"
     for i, (s, d) in enumerate(zip(scenes, durs)):
         cap = s.get("caption") or ""
         parts = _chunks(cap, max_chunk) if cap else []
@@ -463,7 +635,11 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         stat = s.get("stat") or None
         if stat:      # a nagy szám EGY sorban férjen el (10-12: „7,800 MW” két sorba tört és a címkére csúszott)
             stat = {**stat, "size": round(min(L["statSize"], W * 0.88 / (0.62 * max(len(stat["value"]), 1))))}
-        d_scenes.append({"headline": head, "stat": stat, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
+        chart = s.get("chart")
+        if chart:
+            stat = None
+            chart = {"title": chart.get("title") or head, "elements": chart_elements(chart, W, H, lang)}
+        d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
                          "motion": motions[i], "focus": (focus or {}).get(images[i + 1] if i + 1 < len(images) else "") or [0.5, 0.45],
                          "size": _size_for(head, m * (0.066 if fmt != "landscape" else 0.058), 34, m * 0.046)})
         t += d - X
@@ -678,8 +854,22 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
     story["scenes"] = [{"headline": _clean(s.get("headline"), 60), "caption": _clean(s.get("caption"), 200),
                         "image_query": _clean(s.get("image_query"), 60),
                         "stat": ({"value": _clean(s["stat"].get("value"), 10), "label": _clean(s["stat"].get("label"), 48)}
-                                 if isinstance(s.get("stat"), dict) and s["stat"].get("value") else None)}
+                                 if isinstance(s.get("stat"), dict) and s["stat"].get("value") else None),
+                        "chart": s.get("chart")}
                        for s in story.get("scenes") or [] if isinstance(s, dict)][:14]
+    chart_notes: list[str] = []
+    for sc in story["scenes"]:              # minden grafikon-érték a forrásban — különben kimarad (a modell nem talál ki számot)
+        sc["chart"], note = _chart_from_plan(sc.get("chart"), text)
+        if note:
+            chart_notes.append(note)
+        if sc["chart"]:
+            sc["stat"] = None
+    if body.get("data_file_id"):           # táblázatból: a cellák értékei, a 2. jelenettől beszúrva
+        for k, ch in enumerate(charts_from_table(body["data_file_id"])):
+            story["scenes"].insert(min(len(story["scenes"]), 1 + 2 * k),
+                                   {"headline": ch["title"], "caption": "", "image_query": story["scenes"][0]["image_query"],
+                                    "stat": None, "chart": ch})
+            chart_notes.append(f"Chart “{ch['title']}”: {len(ch['items'])} values from the table, cells {ch['cells']}.")
     if not story["scenes"]:
         raise ValueError("Couldn't plan any scenes from that text.")
     story["end"] = {"title": _clean((story.get("end") or {}).get("title"), 60), "subtitle": _clean((story.get("end") or {}).get("subtitle"), 90)}
@@ -770,6 +960,8 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
             step(4, 5, "rendering the video")
             vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
             result["check"] = vid.pop("check", None)          # a közös check-szerződés: a feladat (a videó) ellenőrzése
+            if result["check"] and chart_notes:
+                result["check"]["verified"] = result["check"].get("verified", []) + chart_notes
             result["video"] = vid
             result["files"] = [result["project"], vid]
         else:

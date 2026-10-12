@@ -1119,7 +1119,7 @@ const TAKES = {
   infographic: [["data", ["csv", "tsv", "xlsx", ...EXT.image], null]],
   photo: [["photos", EXT.image, null]],
   book: [["manuscript", ["docx"], null], ["cover-file", EXT.image, null], ["album-photos", EXT.image, "album"], ["album-text", ["docx", "md", "txt"], "album"]],
-  video: [["vsource", [...EXT.doc, "pdf"], "article"], ["vpics", EXT.image, null], ["vmusic", EXT.audio, null]],
+  video: [["vsource", [...EXT.doc, "pdf"], "article"], ["vpics", EXT.image, null], ["vdata", ["csv", "tsv", "xlsx", "xls"], null], ["vmusic", EXT.audio, null]],
   scan: [["pages", [...EXT.image, "pdf"], null]],
   pdf: [["pdfs", ["pdf"], null]],
   convert: [["file", null, null]],
@@ -1631,7 +1631,7 @@ const MAKERS = {
       const doc = m === "article" && form.querySelector("[data-slot=vsource] .slot-chips")?.children.length;
       return t || doc ? "Make the video" : "Open an empty timeline";
     },
-    title: "Video", sub: "An article, a document or your own words as a short video — titles, pictures with gentle motion, timed captions. It opens on a timeline in the video editor (like After Effects) so you can change anything; the MP4 is in your workspace too.",
+    title: "Video", sub: "An article, a document or your own words as a short video — titles, pictures in motion, animated charts, timed captions. It opens on a timeline in the video editor (like After Effects) so you can change anything; the MP4 is in your workspace too.",
     fields: () => `${seg("vmode", [["new", "New"], ["article", "From an article"], ["text", "From my text"]], 1)}
       <div data-vmode="new" hidden>${blankFields("video")}</div>
       <div data-vmode="article">
@@ -1649,6 +1649,7 @@ const MAKERS = {
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
           ${seg("vpicmode", [["stock", "Stock photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}</fieldset>
         ${fileSlot("vpics", { exts: EXT.image, multiple: true, label: "Your pictures (optional — used in order)" })}
+        ${fileSlot("vdata", { exts: ["csv", "tsv", "xlsx", "xls"], label: "Data for animated charts (optional — a spreadsheet)" })}
         ${fileSlot("vmusic", { exts: EXT.audio, label: "Music (optional)" })}
         ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — the video follows its length)" })}
         ${swatches()}</div>`,
@@ -1684,6 +1685,7 @@ const MAKERS = {
         if (body.text.length < 20) throw Object.assign(new Error("Write a little more — a sentence or two at least — or leave it empty for a blank timeline."), { field: "script" });
       }
       body.images = await readSlot(form, "vpics");
+      [body.data_file_id = null] = await readSlot(form, "vdata");
       if (body.pictures === "mine" && !body.images.length) throw Object.assign(new Error("Add your pictures — or choose Stock photos."), { slot: "vpics" });
       [body.music_file_id = null] = await readSlot(form, "vmusic");
       [body.voice_file_id = null] = await readSlot(form, "vvoice");
