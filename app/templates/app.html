@@ -417,7 +417,7 @@ const views = {
     cur = f;
     const sibs = f.group ? files.filter(x => x.group === f.group) : [];     // egy készítés testvérei (méretek × formátumok)
     const fmts = drawSibs(f, sibs, () => openApp);
-    setTitle(f, !fmts);
+    setFileName(f, !fmts);
     // EGY vissza-gomb: ha egy készítő-ablakból jött, oda visz kitöltve („← Back to Presentation”), különben egy lépés vissza
     const back = $("#btn-back"), close = $("#btn-close");
     back.href = close.href = lastPlace; close.title = "Close this file";
@@ -547,7 +547,7 @@ window.addEventListener("message", e => {
     editorDirty = false;
     if (cur && e.data.file_id && e.data.file_id !== cur.file_id) {   // innentől a mentett verzió az aktuális (letöltés, nyomtatás, változtatás)
       cur = { ...cur, file_id: e.data.file_id, label: e.data.label || cur.label, url: e.data.url || cur.url };
-      setTitle(cur); if (e.data.url) $("#btn-download").href = e.data.url;
+      setFileName(cur); setTitle(cur.label); if (e.data.url) $("#btn-download").href = e.data.url;
       const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
       history.replaceState(history.state, "", `/app/file/${encodeURIComponent(cur.file_id)}` + (app ? `/edit/${app}` : ""));
     }
@@ -1295,7 +1295,7 @@ const FMT_NAMES = { png: "PNG", jpg: "JPG", jpeg: "JPG", pdf: "PDF", docx: "Word
 const fmtName = ext => FMT_NAMES[ext] || ext.toUpperCase();
 const VARIANTS = { square: "Square", landscape: "Landscape", story: "Story" };
 function fileTitle(f) { const l = f.label || f.file_id; return l.toLowerCase().endsWith("." + f.ext) ? l.slice(0, -f.ext.length - 1) : l; }
-function setTitle(f, tag = true) {
+function setFileName(f, tag = true) {   // a fájlnézet fejléce (a fül címe: setTitle)
   $("#file-name").innerHTML = esc(fileTitle(f)) + (tag ? ` <span class="ext-tag">${esc(fmtName(f.ext))}</span>` : "");
   $("#file-name").title = f.label;
 }
