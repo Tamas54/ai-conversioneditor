@@ -167,8 +167,9 @@ def _new_output(fmt: str, source_file_id: Optional[str], op: str, stem: str) -> 
 
 
 def _finish(fid: str, source_file_id: Optional[str], op: str, stem: str) -> dict[str, Any]:
-    write_meta(fid, source_file_id=source_file_id, operation=op, label=f"{stem}.{fid.rsplit('.', 1)[1]}")
-    return {"file_id": fid, "url": public_url(fid), "size_kb": output_path(fid).stat().st_size // 1024}
+    name = f"{stem}.{fid.rsplit('.', 1)[1]}"
+    write_meta(fid, source_file_id=source_file_id, operation=op, label=name)
+    return {"file_id": fid, "name": name, "url": public_url(fid), "size_kb": output_path(fid).stat().st_size // 1024}
 
 
 # ---------- PhotoCraft ----------
