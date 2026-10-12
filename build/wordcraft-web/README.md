@@ -78,8 +78,7 @@ Ugyanazon WordCraft-verzió új patch-változata: `-aice2`, `-aice3` … (a rele
 és a benne lévő mappa neve).
 
 
-## GitHub Actions (még nem aktív)
-A workflow itt van: `github-workflow.yml`. A repóba csak `workflow` jogú tokennel tölthető fel
-(`gh auth refresh -h github.com -s workflow`), utána: `git mv build/wordcraft-web/github-workflow.yml
-.github/workflows/wordcraft-web.yml`. Addig a release kézzel készül: `build.sh` helyben, majd
-`gh release create <tag> <zip> SHA256SUMS.txt`.
+## GitHub Actions
+A workflow: `.github/workflows/wordcraft-web.yml` (10-12 óta a repóban; a gh-token `workflow` jogot kapott).
+Csak kézzel indul (`workflow_dispatch`): Actions → `wordcraft-web` → Run workflow, vagy
+`gh workflow run wordcraft-web -f tag=wordcraft-web-0.5.0-aice2 -f upstream_ref=v0.5.0`.
