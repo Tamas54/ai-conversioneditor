@@ -105,19 +105,46 @@
 </template>
 
 <template id="t-connect">
-  <section class="sheet" style="max-width:820px">
+  <section class="sheet connect" style="max-width:900px">
     <h2>Connect your AI</h2>
-    <p class="muted">Claude, ChatGPT and other MCP clients can make and edit files here with your account. Create a key, then paste the address into your client.</p>
-    <div class="card">
+    <p class="muted lede">Use Studio from ChatGPT, Claude, Cursor or VS Code: they make and change files in your account, and every result comes with a link that opens it here.</p>
+    <div class="card addr-card">
+      <span class="addr-label">Your connection address</span>
+      <div class="addr-row"><code class="keybox" id="mcp-addr"></code><button class="btn primary" id="mcp-copy" type="button">Copy</button></div>
+      <p class="muted small" style="margin:0">Paste it into your AI app. It asks you to sign in here once and press <b>Allow</b> — no keys to copy.</p>
+    </div>
+    <div class="clients">
+      <article class="client"><h3>ChatGPT</h3>
+        <ol><li>Settings → <b>Apps &amp; Connectors</b> → Advanced settings → turn on <b>Developer mode</b>.</li>
+          <li><b>Create</b> a connector, paste the address, leave authentication on <b>OAuth</b>.</li>
+          <li>Sign in here, press <b>Allow</b> — then pick it in a chat from the <b>+</b> menu.</li></ol></article>
+      <article class="client"><h3>Claude</h3>
+        <ol><li>Settings → <b>Connectors</b> → <b>Add custom connector</b>.</li>
+          <li>Paste the address → <b>Add</b> → <b>Connect</b>.</li>
+          <li>Sign in here and press <b>Allow</b>.</li></ol></article>
+      <article class="client"><h3>Cursor</h3>
+        <ol><li>Click the button — Cursor opens and adds it.</li><li>Sign in here and press <b>Allow</b>.</li></ol>
+        <a class="btn" id="add-cursor">Add to Cursor</a></article>
+      <article class="client"><h3>VS Code</h3>
+        <ol><li>Click the button — VS Code adds it to Copilot's tools.</li><li>Sign in here and press <b>Allow</b>.</li></ol>
+        <a class="btn" id="add-vscode">Add to VS Code</a></article>
+      <article class="client"><h3>Claude Code</h3>
+        <ol><li>Run this in your terminal, then <b>/mcp</b> → sign in.</li></ol>
+        <code class="keybox" id="cc-cmd"></code><button class="btn ghost" type="button" id="cc-copy">Copy</button></article>
+    </div>
+    <h3 class="sub">Connected apps and keys</h3>
+    <p class="muted small" id="keys-empty" style="margin:4px 0 0">Nothing connected yet.</p>
+    <ul class="keys" id="keys"></ul>
+    <details class="advanced"><summary>Advanced: use a key instead</summary>
+      <p class="muted small" style="margin:0 0 12px">For scripts and apps that can't sign in. The address then carries the key — keep it private.</p>
       <label>Key name<input type="text" id="key-name" placeholder="e.g. Claude on my laptop" maxlength="60"></label>
-      <button class="btn primary" id="key-create">Create key</button>
+      <button class="btn" id="key-create" type="button">Create key</button>
       <div id="key-new" hidden style="margin-top:16px">
         <p class="small"><strong>Copy it now</strong> — the key is shown only once.</p>
         <div class="keybox" id="key-url"></div>
         <p class="small muted" style="margin-top:10px">Claude Code: <span class="mono" id="key-cc"></span></p>
       </div>
-      <ul class="keys" id="keys"></ul>
-    </div>
+    </details>
     <h2 style="margin-top:32px">Credits</h2>
     <p class="muted" id="credit-text"></p>
   </section>
@@ -390,27 +417,43 @@ const views = {
   async connect() {
     mount("t-connect");
     await loadAccount();
+    const addr = location.origin + "/mcp", slug = (account.product || "studio").toLowerCase().replace(/\W+/g, "-");
+    $("#mcp-addr").textContent = addr;
+    $("#cc-cmd").textContent = `claude mcp add --transport http ${slug} ${addr}`;
+    // egykattintásos telepítők (a kliens maga végzi az OAuth-belépést)
+    $("#add-cursor").href = `cursor://anysphere.cursor-deeplink/mcp/install?name=${encodeURIComponent(slug)}&config=${encodeURIComponent(btoa(JSON.stringify({ url: addr })))}`;
+    $("#add-vscode").href = "vscode:mcp/install?" + encodeURIComponent(JSON.stringify({ name: slug, type: "http", url: addr }));
+    const copy = async (text, btn) => {
+      try { await navigator.clipboard.writeText(text); } catch { const r = document.createRange(); r.selectNodeContents(btn.previousElementSibling); getSelection().removeAllRanges(); getSelection().addRange(r); }
+      const t = btn.textContent; btn.textContent = "Copied ✓"; setTimeout(() => btn.textContent = t, 1600);
+    };
+    $("#mcp-copy").addEventListener("click", e => copy(addr, e.currentTarget));
+    $("#cc-copy").addEventListener("click", e => copy($("#cc-cmd").textContent, e.currentTarget));
     if (account.guest) {
-      $("#view").querySelector(".sheet").insertAdjacentHTML("afterbegin", `<div class="empty" style="margin-bottom:20px">Connecting your own AI (Claude, ChatGPT, Cursor…) needs an account — it gets a personal key. <a href="/signup?next=/app/connect">Create a free account</a></div>`);
+      $("#view").querySelector(".addr-card").insertAdjacentHTML("beforebegin", `<div class="empty" style="margin-bottom:16px">Connecting your own AI (ChatGPT, Claude, Cursor…) needs an account — your AI works in it. <a href="/signup?next=/app/connect">Create a free account</a></div>`);
+      $("#view").querySelectorAll(".keys, #keys-empty, details.advanced, h3.sub").forEach(el => el.hidden = true);
       return;
     }
     const keysEl = $("#keys");
-    const drawKeys = () => keysEl.innerHTML = account.keys.map(k => `<li><span><strong>${esc(k.name || "key")}</strong> <span class="mono muted">${esc(k.prefix)}…</span></span>
-      <button class="btn ghost" data-revoke="${k.id}">Revoke</button></li>`).join("");
+    const drawKeys = () => {
+      keysEl.innerHTML = (account.keys || []).map(k => `<li><span><strong>${esc(k.name || "key")}</strong> ${/\(connected\)$/.test(k.name || "") ? `<span class="muted small">signed in</span>` : `<span class="mono muted">${esc(k.prefix)}…</span>`}</span>
+        <button class="btn ghost" data-revoke="${k.id}">${/\(connected\)$/.test(k.name || "") ? "Disconnect" : "Revoke"}</button></li>`).join("");
+      $("#keys-empty").hidden = !!(account.keys || []).length;
+    };
     drawKeys();
     keysEl.addEventListener("click", async e => {
       const id = e.target.dataset.revoke; if (!id) return;
-      await api(`/api/account/keys/${id}`, { method: "DELETE" }); toast("Key revoked"); await loadAccount(); drawKeys();
+      await api(`/api/account/keys/${id}`, { method: "DELETE" }); toast("Disconnected"); await loadAccount(); drawKeys();
     });
     $("#key-create").addEventListener("click", async () => {
       const k = await api("/api/account/keys", { method: "POST", body: JSON.stringify({ name: $("#key-name").value }) });
       $("#key-new").hidden = false; $("#key-url").textContent = k.mcp_url;
-      $("#key-cc").textContent = `claude mcp add --transport http ${account.product.toLowerCase().replace(/\W+/g, "-")} "${k.mcp_url}"`;
+      $("#key-cc").textContent = `claude mcp add --transport http ${slug} "${k.mcp_url}"`;
       await loadAccount(); drawKeys();
     });
     $("#credit-text").textContent = account.credits === null
       ? "Admin account — no limits."
-      : `You have ${account.credits} credits. One AI-generated image costs ${account.image_credit_cost}. Stock photos and your own images are free.`;
+      : `You have ${account.credits} credits. Your AI's work runs on your plan — paid AI work (like restoring old photos) uses your credits.`;
   },
   async file(arg) {
     const [id, sub, wantApp] = arg.split("?")[0].split("/");

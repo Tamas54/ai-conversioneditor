@@ -91,6 +91,8 @@ app.middleware("http")(auth_middleware)
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.include_router(auth_router)
+from app.oauth import router as oauth_router  # noqa: E402
+app.include_router(oauth_router)
 app.include_router(health.router)
 app.include_router(upload.router)
 app.include_router(files.router)

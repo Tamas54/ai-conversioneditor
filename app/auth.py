@@ -33,7 +33,8 @@ router = APIRouter()
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook",
-                    "/robots.txt", "/llms.txt", "/sitemap.xml")
+                    "/robots.txt", "/llms.txt", "/sitemap.xml",
+                    "/.well-known/", "/oauth/")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
@@ -117,6 +118,9 @@ async def key_uid(request: Request) -> Optional[str]:
         return None
     if settings.MCP_AUTH_TOKEN and _same(key, settings.MCP_AUTH_TOKEN):
         return tenancy.ADMIN_ID
+    if key.startswith("at_"):                   # OAuth access token (ChatGPT, Claude… „Connect”) — app/oauth.py
+        from app import oauth
+        return await oauth.access_uid(key)
     if not key.startswith("sk_"):
         return None
     from app import db
@@ -152,7 +156,10 @@ async def auth_middleware(request: Request, call_next):
     uid = await key_uid(request)
     if path.startswith("/mcp") and uid is None:
         if settings.MCP_AUTH_TOKEN:
-            return JSONResponse({"error": "unauthorized: API key required (Bearer or ?key=)"}, status_code=401)
+            # A WWW-Authenticate-ből találja meg a kliens (ChatGPT, Claude) az OAuth-ot: belépés + „Allow”, kulcs nélkül
+            from app import oauth
+            return JSONResponse({"error": "unauthorized: sign in (OAuth) or send an API key (Bearer or ?key=)"},
+                                status_code=401, headers={"WWW-Authenticate": oauth.www_authenticate(bool(_given_key(request)))})
         uid = tenancy.ADMIN_ID  # helyi fejlesztés kulcs nélkül
     if uid is None:
         uid = session_uid(request.cookies.get(COOKIE))
@@ -240,7 +247,8 @@ _PW = '<label>Password<input type="password" name="password" autocomplete="{ac}"
 
 @router.get("/login", include_in_schema=False)
 async def login_page(next: str = "/app", error: str = "") -> HTMLResponse:
-    alt = ('No account yet? <a href="/signup">Create one</a> · ' if settings.SIGNUP_OPEN else "") + \
+    signup = "/signup" + (f"?next={quote(_safe_next(next), safe='')}" if _safe_next(next) != "/app" else "")   # pl. az OAuth-engedélyezés folytatódjon
+    alt = (f'No account yet? <a href="{html.escape(signup)}">Create one</a> · ' if settings.SIGNUP_OPEN else "") + \
           '<a href="/app">Look around without an account</a>'
     fields = _EMAIL.replace(" required", "") + _PW.format(ac="current-password", min=1)
     return _page("Sign in", "/login", fields, "Sign in", alt, next, error)
@@ -320,8 +328,8 @@ async def _adopt_guest(request: Request, uid: str) -> None:
 
 
 @router.get("/logout", include_in_schema=False)
-async def logout():
-    resp = RedirectResponse("/app", status_code=303)
+async def logout(next: str = "/app"):
+    resp = RedirectResponse(_safe_next(next), status_code=303)     # „Use another account” az engedélyező oldalról
     resp.delete_cookie(COOKIE)
     return resp
 
@@ -376,6 +384,8 @@ async def api_key_revoke(key_id: int) -> dict:
     if not await db.api_key_revoke(tenancy.current_user_id(), key_id):
         raise HTTPException(404, "no such key")
     _key_cache.clear()
+    from app import oauth
+    oauth.forget(key_id)              # a kapcsolódott AI (OAuth) is azonnal kiesik
     return {"revoked": key_id}
 
 

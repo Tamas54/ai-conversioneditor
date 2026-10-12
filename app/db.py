@@ -352,6 +352,13 @@ async def api_key_revoke(uid: str, key_id: int) -> bool:
     return bool(rows)
 
 
+async def api_key_active(key_id: int, uid: str) -> bool:
+    """OAuth-engedély (a kapcsolódott AI api_keys-sora): él-e még — a meglévő táblán, DDL nélkül (app/oauth.py)."""
+    rows = await _rows("""UPDATE api_keys SET last_used_at = now() WHERE id = %s AND user_id = %s AND revoked_at IS NULL
+                          RETURNING id""", (key_id, uid))
+    return bool(rows)
+
+
 async def api_key_user(key: str) -> Optional[str]:
     rows = await _rows("""UPDATE api_keys SET last_used_at = now() WHERE key_hash = %s AND revoked_at IS NULL
                           RETURNING user_id""", (_key_hash(key),))

@@ -41,8 +41,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 0; 
 
 /* ---------- belépés / regisztráció ---------- */
 body.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px;
-  background: var(--mat) repeating-linear-gradient(0deg, var(--mat-line) 0 1px, transparent 1px 32px),
-              repeating-linear-gradient(90deg, var(--mat-line) 0 1px, transparent 1px 32px); }
+  background: repeating-linear-gradient(0deg, var(--mat-line) 0 1px, transparent 1px 32px),
+              repeating-linear-gradient(90deg, var(--mat-line) 0 1px, transparent 1px 32px) var(--mat); }   /* a szín csak az utolsó rétegben lehet (különben az egész érvénytelen → fehér) */
 .auth-card { background: var(--paper); width: min(400px, 100%); padding: 32px; border-radius: var(--radius); box-shadow: var(--shadow); }
 .auth-card h1 { font: 700 26px/1.15 var(--f-display); margin: 18px 0 20px; }
 .brand { font: 800 20px/1 var(--f-display); text-decoration: none; letter-spacing: -.01em; }
@@ -477,3 +477,31 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
 .blank-alt { margin: -8px 0 18px; font-size: 14px; }
 .blank-alt a { color: inherit; font-weight: 600; text-decoration: underline; text-decoration-color: var(--signal); text-underline-offset: 3px; }
 .blank-alt a:hover { color: var(--signal); }
+
+/* ---------- OAuth-engedélyezés (ChatGPT, Claude „Connect”) ---------- */
+.auth-card.consent { width: min(460px, 100%); }
+.consent p { line-height: 1.55; }
+.consent-list { margin: 14px 0 18px; padding-left: 20px; display: grid; gap: 8px; color: var(--graphite); font-size: 14px; line-height: 1.5; }
+.consent-actions { display: flex; gap: 10px; justify-content: flex-end; margin: 22px 0 6px; }
+.consent-actions .btn { min-width: 110px; justify-content: center; }
+.consent-to { text-align: right; margin: 0; }
+
+/* ---------- Connect your AI: egy cím, kliensenként 2-3 lépés ---------- */
+.connect .lede { margin: -6px 0 20px; max-width: 640px; }
+.addr-card { display: grid; gap: 10px; }
+.addr-label { font: 600 13px var(--f-body); color: var(--graphite); }
+.addr-row { display: flex; gap: 10px; align-items: stretch; }
+.addr-row .keybox { flex: 1; font-size: 15px; display: flex; align-items: center; min-width: 0; }
+.addr-row .btn { flex: none; }
+.clients { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 18px 0 8px; }
+.client { border: 1px solid var(--rule); border-radius: var(--radius); padding: 18px; background: var(--card); display: grid; gap: 10px; align-content: start; }
+.client h3 { font: 700 17px/1.2 var(--f-display); margin: 0; display: flex; align-items: center; gap: 8px; }
+.client ol { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; line-height: 1.45; color: var(--graphite); }
+.client ol b { color: var(--ink); font-weight: 600; }
+.client .keybox { font-size: 12px; }
+.client .btn { justify-self: start; }
+.connect h3.sub { font: 700 17px/1.2 var(--f-display); margin: 28px 0 4px; }
+.connect details.advanced { margin-top: 22px; border-top: 1px solid var(--rule); padding-top: 14px; }
+.connect details.advanced summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--graphite); }
+.connect details.advanced[open] summary { margin-bottom: 14px; }
+@media (max-width: 560px) { .addr-row { flex-direction: column; } .addr-row .btn { justify-content: center; } .consent-actions .btn { flex: 1; } }
