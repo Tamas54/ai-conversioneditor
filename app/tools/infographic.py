@@ -168,6 +168,42 @@ def time_like(labels: list[str]) -> bool:
     return sum(1 for x in ls if pat.search(x) or x.rstrip(".").startswith(_MONTHS)) >= 0.8 * len(ls)
 
 
+_UNIT = re.compile(r"%|\(|\bper\b|/|\brate\b|ráta|kamat|infl|index|átlag|average|price|\bár\b|arány|ratio|yield|hozam", re.I)
+
+
+def indicator_table(tb: Table) -> bool:
+    """„Mutató × egység" tábla: minden sor MÁS mutató (mértékegységgel: „Infláció (%)", „Kamat (%)"), az oszlopok
+    országok/cégek — vagy az oszlopfejlécek évek. Ilyenkor oszloponként (egy ország „legmagasabb" értéke a
+    különböző mutatói közül) értelmetlen számolni, ezért megfordítjuk: a sor = egység, az oszlop = mutató.
+    (10-12, gazdasági szemle: „Legmagasabb magyar jegybanki kamat", „Amerikai kamat aránya 41%" — ráták összeadva.)"""
+    if len(tb.headers) < 3 or len(tb.rows) < 2:
+        return False
+    first = tb.col(0)
+    if sum(1 for c in first if num(c) is not None) > 0.3 * len(first):
+        return False                                   # az első oszlop maga is szám: nem címkeoszlop
+    rest = tb.headers[1:]
+    if time_like(rest):
+        return True                                    # évek az oszlopokban: idősor sorokban → fordítva
+    if time_like(first):
+        return False
+    return sum(1 for c in first if _UNIT.search(c)) >= max(2, 0.6 * len([c for c in first if c.strip()]))
+
+
+def transpose(tb: Table) -> Table:
+    """Sor ↔ oszlop; a cellahivatkozások az EREDETI cellákra mutatnak (a check ugyanazokat a cellákat nevezi meg)."""
+    headers = [tb.headers[0]] + [r[0] for r in tb.rows]
+    rows, refs = [], []
+    for j in range(1, len(tb.headers)):
+        rows.append([tb.headers[j]] + [r[j] if j < len(r) else "" for r in tb.rows])
+        refs.append([f"{_letter(j)}1"] + [rf[j] if j < len(rf) else "" for rf in tb.refs])
+    return Table(headers, rows, refs, tb.sheet, tb.name)
+
+
+def additive(c: "Column") -> bool:
+    """Összeadható-e (darab, összeg) — ráta, százalék, ár, index, átlag NEM: annak „részaránya az összesből" értelmetlen."""
+    return not c.percent and not _UNIT.search(c.name)
+
+
 # ---------- tények (a kód számol) ----------
 
 @dataclass
@@ -205,7 +241,7 @@ def facts_for(tb: Table, cols: list[Column], lab: Optional[int], lang: str) -> l
         rng = f"{refs[0]}:{refs[-1]}"
         F = lambda kind, text, v, cells, pct=c.percent, signed=False, **ex: out.append(
             Fact(f"{kind}:{c.j}", text, v, fmt(v, lang, pct, signed), cells, c.name, kind, ex))
-        if not c.percent and all(v >= 0 for _, v in pts):
+        if additive(c) and all(v >= 0 for _, v in pts):
             tot = sum(v for _, v in pts)
             F("total", f"total of {c.name} over all {len(pts)} rows", tot, f"sum of {rng}")
             if tot > 0 and not timey:
@@ -501,6 +537,8 @@ async def make(*, data_file_id: Optional[str] = None, table_image_file_id: Optio
         data_id = src_id
     tb = load_table(existing(data_id))
     tb.name = Path(display_label(data_id)).stem
+    if indicator_table(tb):
+        tb = transpose(tb)
     numeric = numeric_columns(tb)
     if not numeric:
         raise ValueError("No numbers found in the table — the infographic needs at least one column of numbers.")
