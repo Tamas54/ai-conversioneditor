@@ -108,6 +108,22 @@ app.include_router(seo.router)
 mount_mcp(app)
 
 
+class _McpNoSlashRedirect:
+    """/mcp → /mcp/ átirányítás NÉLKÜL (a 307-et nem minden MCP-kliens követi POST-tal; a ChatGPT-be
+    a „Connect your AI” oldal /mcp?key=… címe kerül). A legkülső réteg: a többi middleware már /mcp/-t lát."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/mcp":
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(_McpNoSlashRedirect)
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",

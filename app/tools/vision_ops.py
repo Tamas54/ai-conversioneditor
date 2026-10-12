@@ -92,8 +92,10 @@ async def generate_image(
     """Generate an image from a text prompt. Saves to outputs/ and returns
     image_file_id ready for insert_image / pptx insertion."""
     t0 = time.time()
-    # AI-kép kreditbe kerül (admin korlátlan); hiba esetén visszajár
     from app import db, tenancy
+    if tenancy.client_makes_images.get():          # MCP: a kliens a saját képeszközével generál (nem a mi FLUX-unk)
+        raise ValueError(tenancy.CLIENT_IMAGE_MSG)
+    # AI-kép kreditbe kerül (admin korlátlan); hiba esetén visszajár
     from app.config import settings
     uid = tenancy.current_user_id()
     charged = db.enabled() and uid != tenancy.ADMIN_ID and settings.IMAGE_CREDIT_COST > 0

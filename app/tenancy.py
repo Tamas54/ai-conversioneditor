@@ -18,6 +18,12 @@ from app.config import settings
 ADMIN_ID = "admin"
 _UID_RE = re.compile(r"^[a-z0-9]{6,40}$")
 _current: ContextVar[str] = ContextVar("aice_user", default=ADMIN_ID)
+# MCP-n a kliens (ChatGPT, Claude…) maga generál képet a SAJÁT képeszközével: a szerver FLUX-a ilyenkor nem fut,
+# a rendszer tokenjeit nem égetjük (Kommandant, 10-12). Az MCP-burkoló állítja be (app/mcp_server.py: linked).
+client_makes_images: ContextVar[bool] = ContextVar("aice_client_images", default=False)
+CLIENT_IMAGE_MSG = ("This server doesn't generate AI pictures for connected AIs. Make the picture with your own image "
+                    "tool, then pass its public URL (image_url, or {\"url\": …} in a spec) or upload it (upload_from_url / "
+                    "upload_file) and use the file_id. Free stock photos: {\"stock\": \"words\"} or generate_image(stock_search=…).")
 _ready: set[Path] = set()
 
 

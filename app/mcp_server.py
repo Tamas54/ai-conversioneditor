@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import logging
 from pathlib import Path
+from pydantic import BaseModel
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -58,7 +59,11 @@ mcp = FastMCP(
         "`edit_url`: give it to the person — it opens that file in the matching built-in editor (Word-like, "
         "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
         "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
-        "a manuscript → a Word-typeset book (design template=book)."
+        "a manuscript → a Word-typeset book (design template=book). Start empty with new_file (document, "
+        "presentation, design, photo, book, pdf) and hand the person its edit_url. PICTURES: this server does NOT "
+        "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
+        "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
+        "generate_image(stock_search=…) to show the person candidates."
     ),
     streamable_http_path="/",
     stateless_http=True,
@@ -99,43 +104,91 @@ def linked(fn):
 
     @functools.wraps(fn)
     async def w(*a, **k):
-        return _links(await fn(*a, **k))
+        from app import tenancy
+        tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
+        try:
+            return _links(await fn(*a, **k))
+        finally:
+            tenancy.client_makes_images.reset(tok)
     return w
 
 
 _CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
 
 
-@mcp.tool()
+def _sniff_ext(data: bytes) -> str:
+    """Kiterjesztés a tartalomból (PDF, képek, Office-zip), ha a névből nem derül ki."""
+    head = data[:8]
+    if head.startswith(b"%PDF"):
+        return "pdf"
+    if head.startswith(b"\x89PNG"):
+        return "png"
+    if head.startswith(b"\xff\xd8"):
+        return "jpg"
+    if head.startswith(b"8BPS"):
+        return "psd"
+    if head[:4] in (b"RIFF",) and data[8:12] == b"WEBP":
+        return "webp"
+    if head.startswith(b"PK"):
+        import io, zipfile
+        try:
+            names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        except Exception:
+            return "zip"
+        for pre, e in (("ppt/", "pptx"), ("word/", "docx"), ("xl/", "xlsx")):
+            if any(n.startswith(pre) for n in names):
+                return e
+        return "zip"
+    return "bin"
+
+
+class ChatFile(BaseModel):
+    """Egy a csetbe feltöltött fájl (ChatGPT Apps SDK „openai/fileParams”: {download_url, file_id})."""
+    download_url: str
+    file_id: Optional[str] = None
+    name: Optional[str] = None
+
+
+@mcp.tool(meta={"openai/fileParams": ["file"]})
 @linked
-async def upload_from_url(url: str, filename: Optional[str] = None) -> dict:
+async def upload_from_url(url: Optional[str] = None, filename: Optional[str] = None, file: Optional[ChatFile] = None) -> dict:
     """
-    Upload a file by fetching its public URL — the SERVER does the GET,
-    so you avoid the base64 round-trip entirely. Best when:
-      • you can put the file somewhere reachable (gist, S3, transfer.sh,
-        another Railway service, anywhere with HTTP/HTTPS)
-      • the file is already online (article PDF, github raw, etc.)
+    Bring a file in: a file the person attached to the chat (`file` — ChatGPT passes it automatically),
+    or any public URL (`url` — the SERVER does the GET, no base64 round-trip: a gist, S3, github raw,
+    an article PDF…). Then edit it with the other tools and give the person its edit_url.
 
     Args:
+      file: a chat attachment {download_url, file_id} (ChatGPT fills this in for attached files).
       url: full HTTP/HTTPS URL the server can GET.
-      filename: optional override for the human label. If omitted, taken
-                from the URL's last path segment.
+      filename: optional override for the human label (e.g. "Q3 deck.pptx"); default: from the file/URL.
 
-    Returns: same shape as upload_file: {file_id, url, size_kb, original_name}.
+    Returns: same shape as upload_file: {file_id, url, size_kb, original_name, edit_url}.
     """
     import httpx
+    if file is not None:
+        url = file.download_url
+        filename = filename or file.name
+    if not url:
+        raise ValueError("Give url, or attach the file in the chat (file).")
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
         r = await client.get(url)
         r.raise_for_status()
         data = r.content
     if not filename:
-        filename = url.rstrip("/").split("/")[-1].split("?")[0] or "downloaded.bin"
-    ext = Path(filename).suffix.lstrip(".") or "bin"
+        import re as _re
+        cd = r.headers.get("content-disposition", "")
+        m = _re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", cd, _re.I)
+        from urllib.parse import unquote
+        filename = unquote(m.group(1)) if m else (url.rstrip("/").split("/")[-1].split("?")[0] or "downloaded.bin")
+    ext = Path(filename).suffix.lstrip(".").lower()
+    if not ext or ext == "bin":            # név kiterjesztés nélkül (csetfájl-link): a tartalomból
+        ext = _sniff_ext(data)
+        filename = f"{filename.rsplit('.', 1)[0] if filename.endswith('.bin') else filename}.{ext}"
     fid = new_file_id(ext)
     await save_bytes(input_path(fid), data)
     write_meta(
         fid, original_filename=filename, label=filename,
-        operation="upload_from_url", extra={"source_url": url},
+        operation="upload_from_url", extra={"source_url": "chat attachment" if file is not None else url},   # az aláírt, ideiglenes link nem kell
     )
     return {
         "file_id": fid,
@@ -143,6 +196,60 @@ async def upload_from_url(url: str, filename: Optional[str] = None) -> dict:
         "size_kb": len(data) // 1024,
         "original_name": filename,
     }
+
+
+# A ChatGPT fájl-paramétere egyszerű objektum-sémát vár (Apps SDK „openai/fileParams”), nem anyOf/$ref-et.
+try:
+    _t = mcp._tool_manager.get_tool("upload_from_url")
+    _t.parameters["properties"]["file"] = {
+        "type": "object", "description": "A file the person attached to the chat (ChatGPT fills this in).",
+        "properties": {"download_url": {"type": "string"}, "file_id": {"type": "string"}, "name": {"type": "string"}},
+        "required": ["download_url"]}
+except Exception as _e:  # a séma-finomítás nem kötelező — az eszköz enélkül is működik
+    log.warning("upload_from_url séma nem finomítható: %s", _e)
+
+
+@mcp.tool()
+@linked
+async def files(
+    action: str = "list",
+    kind: Optional[str] = None,
+    ext: Optional[str] = None,
+    limit: int = 20,
+    size: Optional[str] = None,
+    orientation: Optional[str] = None,
+    background: Optional[str] = None,
+    title: Optional[str] = None,
+) -> dict:
+    """The person's files, and empty new ones.
+
+    action="list": their most recent files (uploads and results, newest first) — {file_id, name, ext, size_kb,
+      when, edit_url}. Filter with ext (e.g. "pptx"). Use it when the person says "my deck", "the file I uploaded".
+    action="new": an EMPTY file, ready in the editor — kind = document | presentation | design (social post:
+      size square|portrait|story|landscape) | print (size A4|A3|A5|Letter, orientation portrait|landscape) |
+      photo (size 1920x1080|1080x1080|1080x1350|3000x2000, background white|transparent) | book (size A5|A4|6x9) |
+      pdf (size A4|Letter). Give the person its edit_url — it opens the blank file in the matching editor.
+    """
+    if action == "list":
+        from app.routes.dashboard import api_files
+        d = await api_files()
+        items = sorted([*d.get("inputs", []), *d.get("outputs", [])], key=lambda f: f.get("mtime", 0), reverse=True)
+        if ext:
+            items = [f for f in items if f.get("ext") == ext.lower().lstrip(".")]
+        return {"files": [{"file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
+                           "when": f.get("mtime")} for f in items[:max(1, min(100, limit))]]}
+    if action != "new":
+        raise ValueError('action: "list" or "new"')
+    k = (kind or "").lower()
+    if k in ("document", "doc", "word"):
+        from app.routes.make import make_document
+        return await make_document({"mode": "template", "template": "blank"})
+    if k in ("presentation", "deck", "slides", "pptx"):
+        from app.routes.make import make_deck
+        return await make_deck({"mode": "blank", "title": title or "Presentation title"})
+    from app.tools import blank
+    k = {"design": "social", "social_post": "social", "poster": "print", "canvas": "photo"}.get(k, k)
+    return await blank.make({"kind": k, "size": size, "orientation": orientation, "background": background})
 
 
 @mcp.tool()
