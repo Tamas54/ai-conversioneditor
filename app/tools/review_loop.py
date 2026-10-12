@@ -1111,17 +1111,26 @@ Open comments (JSON; "anchor" is the highlighted text, "paragraph_text" the whol
 {errors}
 Reply with ONE JSON object:
 {{"items": [{{"comment": "<id>", "replace": {{"find": "<text copied EXACTLY from anchor or paragraph_text>", "with": "<new text>"}}, "reply": "<one short sentence: what you changed>"}}],
- "summary": "<one short sentence in the language of the instruction>"}}
+ "summary": "<one short sentence in the language of the instruction; no comment ids>"}}
 Rules: copy "find" character for character from the paragraph (keep it short but unique in that paragraph); write the
 new text in the language of the document; for a whole-paragraph rewrite use "paragraph": "<the full new paragraph>"
 instead of "replace". If a comment needs facts you do not have (e.g. "check the amount in the contract") or only asks a
-question, do NOT invent anything: leave out "replace" and reply briefly what the author must check. Replies go in the
-language of the comment. Never change text no comment asks about."""
+question, do NOT invent anything: leave out "replace" and reply briefly what the author must check. A reviewer's
+explicit suggestion ("I think it is X", "rather: Y") may be applied. The reply must say exactly what you did — never
+claim a change you did not make, nor deny one you made. Replies go in the language of the comment. Never change text
+no comment asks about."""
 
 
-def wants_address(request: str) -> bool:
-    """„Address the comments”, „javítsd a megjegyzéseket”… — de nem „adj hozzá egy megjegyzést” vagy „töröld őket”."""
-    return bool(_WANT.search(request or "")) and not _NOT.search(request or "")
+def wants_address(file_id: str, request: str) -> bool:
+    """„Address the comments”, „javítsd a megjegyzéseket”… egy olyan docx-en, amin van nyitott megjegyzés — de nem
+    „adj hozzá egy megjegyzést” vagy „töröld őket”."""
+    if not _WANT.search(request or "") or _NOT.search(request or ""):
+        return False
+    try:
+        cs = _comments(_load(file_id))
+    except Exception:
+        return False
+    return any(c["root"] == c["id"] and not c["done"] for c in cs.values())
 
 
 async def default_author() -> str:
@@ -1185,7 +1194,7 @@ async def draft_and_address(file_id: str, request: str, author: Optional[str] = 
     failed = [r for r in res["results"] if r["status"] == "failed"]
     summary = (plan.get("summary") or "").strip()
     summary = (summary + " " if summary else "") + \
-        f"{fixed} of {n} comments fixed as tracked changes by {author}, {replied} replied."
+        f"({fixed}/{n} comments fixed as tracked changes by {author}, {replied} replied.)"
     if failed:
         summary += f" Not done: {', '.join(r['comment'] for r in failed)}."
     res["summary"] = summary
