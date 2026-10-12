@@ -1,0 +1,115 @@
+AICE-javítás a storytold/pdfcraft v0.6.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan. A beágyazott szerkesztőben nincs közösségi/idegen link:
+
+AICE-CHANGE: the tab bar's Discord button is not shown;
+AICE-CHANGE: the Home screen's "Join the ArtCraft community" card and the About dialog's Discord/website/GitHub links are gone;
+AICE-CHANGE: the Help commands (menu and search) have no Discord, web page, GitHub, ArtCraft website and "Check for updates" items.
+
+Alkalmazás:  git -C <pdfcraft> apply 0001-aice-branding.patch   (vagy: patch -d <pdfcraft> -p1)
+
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' pdfcraft.orig/crates/engine/src/commands.rs pdfcraft/crates/engine/src/commands.rs
+--- pdfcraft.orig/crates/engine/src/commands.rs
++++ pdfcraft/crates/engine/src/commands.rs
+@@ -343,10 +343,17 @@
+     c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
++    // AICE: the embedded web editor lists no community links and no update check (it is updated
++    // with the site that hosts it).
++    #[cfg(not(target_arch = "wasm32"))]
+     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
++    #[cfg(not(target_arch = "wasm32"))]
+     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
++    #[cfg(not(target_arch = "wasm32"))]
+     c("help.github", "PdfCraft on GitHub", HELP, None, Nothing, "code-xml"),
++    #[cfg(not(target_arch = "wasm32"))]
+     c("help.website", "ArtCraft website", HELP, None, Nothing, "external-link"),
++    #[cfg(not(target_arch = "wasm32"))]
+     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
+     c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
+ ];
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' pdfcraft.orig/crates/ui-egui/src/chrome.rs pdfcraft/crates/ui-egui/src/chrome.rs
+--- pdfcraft.orig/crates/ui-egui/src/chrome.rs
++++ pdfcraft/crates/ui-egui/src/chrome.rs
+@@ -134,7 +134,10 @@
+                         app.dialog = Some(Dialog::Shortcuts);
+                     }
+                     // One click to the community, from anywhere in the app.
+-                    if widgets::ghost_button(ui, "messages-square", "Discord").on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
++                    // AICE: not in the embedded web editor.
++                    if !cfg!(target_arch = "wasm32")
++                        && widgets::ghost_button(ui, "messages-square", "Discord").on_hover_text(pdfcraft_engine::links::DISCORD).clicked()
++                    {
+                         app.execute("help.discord");
+                     }
+                 });
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' pdfcraft.orig/crates/ui-egui/src/dialogs.rs pdfcraft/crates/ui-egui/src/dialogs.rs
+--- pdfcraft.orig/crates/ui-egui/src/dialogs.rs
++++ pdfcraft/crates/ui-egui/src/dialogs.rs
+@@ -1120,9 +1120,12 @@
+                             ui.label(egui::RichText::new(tl!("Part of")).color(t.text_muted));
+                             widgets::artcraft_logo(ui, 16.0);
+                         });
+-                        ui.add_space(6.0);
+-                        if let Some(cmd) = widgets::community_links(ui) {
+-                            link_command = Some(cmd);
++                        // AICE: no community links (Discord, websites, GitHub) in the embedded web editor.
++                        if !cfg!(target_arch = "wasm32") {
++                            ui.add_space(6.0);
++                            if let Some(cmd) = widgets::community_links(ui) {
++                                link_command = Some(cmd);
++                            }
+                         }
+                     }
+                 }
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' pdfcraft.orig/crates/ui-egui/src/home.rs pdfcraft/crates/ui-egui/src/home.rs
+--- pdfcraft.orig/crates/ui-egui/src/home.rs
++++ pdfcraft/crates/ui-egui/src/home.rs
+@@ -20,26 +20,29 @@
+                     .font(theme::regular(14.0)),
+             );
+             ui.add_space(14.0);
+-            egui::Frame::NONE
+-                .fill(t.card)
+-                .stroke(Stroke::new(1.0, t.border))
+-                .corner_radius(CornerRadius::same(12))
+-                .inner_margin(egui::Margin::same(14))
+-                .show(ui, |ui| {
+-                    ui.set_width(ui.available_width());
+-                    ui.horizontal(|ui| {
+-                        widgets::artcraft_mark(ui, 28.0);
+-                        ui.vertical(|ui| {
+-                            ui.label(egui::RichText::new(tl!("Join the ArtCraft community")).font(theme::semibold(15.0)));
+-                            ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
++            // AICE: no community card (Discord, websites, GitHub) in the embedded web editor.
++            if !cfg!(target_arch = "wasm32") {
++                egui::Frame::NONE
++                    .fill(t.card)
++                    .stroke(Stroke::new(1.0, t.border))
++                    .corner_radius(CornerRadius::same(12))
++                    .inner_margin(egui::Margin::same(14))
++                    .show(ui, |ui| {
++                        ui.set_width(ui.available_width());
++                        ui.horizontal(|ui| {
++                            widgets::artcraft_mark(ui, 28.0);
++                            ui.vertical(|ui| {
++                                ui.label(egui::RichText::new(tl!("Join the ArtCraft community")).font(theme::semibold(15.0)));
++                                ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
++                            });
+                         });
++                        ui.add_space(8.0);
++                        if let Some(cmd) = widgets::community_links(ui) {
++                            app.execute(cmd);
++                        }
+                     });
+-                    ui.add_space(8.0);
+-                    if let Some(cmd) = widgets::community_links(ui) {
+-                        app.execute(cmd);
+-                    }
+-                });
+-            ui.add_space(22.0);
++                ui.add_space(22.0);
++            }
+ 
+             egui::Frame::NONE
+                 .fill(t.card)

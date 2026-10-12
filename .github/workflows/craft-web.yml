@@ -1,0 +1,137 @@
+# A Craft-szerkesztők (PhotoCraft, VectorCraft, DeckCraft, PdfCraft, DesignCraft, GridCraft) webes
+# (WASM) AICE-buildje: storytold/<app> tag + a build/craft-web/<app> patch (közösségi/idegen linkek
+# nélkül; DeckCraft/GridCraft: Calibri/Cambria-kompatibilis fontok) → zip → GitHub release ebben a
+# repóban. Csak kézzel indul. Részletek: build/craft-web/README.md. (WordCraft: wordcraft-web.yml.)
+name: craft-web
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Craft-app"
+        type: choice
+        required: true
+        options: [photocraft, vectorcraft, deckcraft, pdfcraft, designcraft, gridcraft]
+      version:
+        description: "Upstream-verzió (a storytold/<app> v<verzió> tagje), pl. 0.7.0"
+        type: string
+        required: true
+      suffix:
+        description: "AICE-változat (a release-tag vége): aice1, aice2…"
+        type: string
+        required: true
+        default: aice1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: craft-web-${{ inputs.app }}-${{ inputs.version }}-${{ inputs.suffix }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Pinelt eszközök (a helyi build is ezekkel készült; az upstream release-ek web-jobja is trunk 0.21.14).
+  RUST_TOOLCHAIN: "1.95.0"
+  TRUNK_VERSION: "0.21.14"
+  TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+  APP: ${{ inputs.app }}
+  VERSION: ${{ inputs.version }}
+  TAG: ${{ inputs.app }}-web-${{ inputs.version }}-${{ inputs.suffix }}
+
+jobs:
+  build:
+    name: Build + release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Bemenetek ellenőrzése
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^[a-z]+-web-[0-9]+\.[0-9]+\.[0-9]+-aice[0-9]+$'; then
+            echo "::error::A tag formája <app>-web-<x.y.z>-aiceN legyen, nem: $TAG"
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::A(z) $TAG release már létezik; a Dockerfile a SHA256-át pineli, ezért új változatot adj (pl. aice2)."
+            exit 1
+          fi
+
+      - name: Repó (patchek + scriptek)
+        uses: actions/checkout@v4
+        with:
+          path: aice
+
+      - name: craft-fonts pin (az upstream release-ben használt commit)
+        id: fonts
+        run: |
+          f="aice/build/craft-web/$APP/craft-fonts.ref"
+          echo "ref=$( [ -f "$f" ] && tr -d '[:space:]' <"$f" )" >>"$GITHUB_OUTPUT"
+
+      - name: storytold/${{ inputs.app }} @ v${{ inputs.version }}
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/${{ inputs.app }}
+          ref: v${{ inputs.version }}
+          path: src
+
+      - name: storytold/craft-fonts
+        if: steps.fonts.outputs.ref != ''
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ steps.fonts.outputs.ref }}
+          path: craft-fonts
+
+      - name: Rust ${{ env.RUST_TOOLCHAIN }} + wasm32 target
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+
+      - name: trunk ${{ env.TRUNK_VERSION }} (előre fordított, SHA256-tal)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${TRUNK_SHA256}  $RUNNER_TEMP/trunk.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin" trunk
+          trunk --version
+
+      # Patch → (fontok) → az upstream packaging/web/package.sh → saját zip.
+      - name: Patch + build + zip
+        run: |
+          if [ -n "${{ steps.fonts.outputs.ref }}" ]; then export CRAFT_FONTS_DIR="$GITHUB_WORKSPACE/craft-fonts"; fi
+          aice/build/craft-web/build.sh "$APP" src "$TAG" out
+
+      - name: SHA256
+        run: |
+          cat out/SHA256SUMS.txt
+          {
+            echo "### $TAG"
+            echo
+            echo "storytold/$APP \`v$VERSION\` ($(git -C src rev-parse --short=9 HEAD)) + \`build/craft-web/$APP/0001-aice-branding.patch\`"
+            echo
+            echo '```'
+            cat out/SHA256SUMS.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY" >out/release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TAG }}
+          path: |
+            out/${{ env.TAG }}.zip
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" "out/$TAG.zip" out/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file out/release-notes.md

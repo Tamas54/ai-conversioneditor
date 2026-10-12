@@ -1,0 +1,52 @@
+AICE-javítás a storytold/gridcraft v0.5.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan:
+
+AICE-CHANGE: the About dialog has no app-page and Discord links;
+AICE-CHANGE: the web build embeds Carlito (Regular, Bold, Italic, BoldItalic; OFL-1.1, OFL-carlito.txt), metric-compatible with Calibri, Excel's default — the cells no longer fall back to egui's built-in face.
+
+A Carlito-fájlokat a patch NEM tartalmazza: build előtt a build/craft-web/fetch-fonts.sh tölti le az
+assets/fonts/ alá, SHA256-ellenőrzéssel (ugyanazok, mint a WordCraftban és a szerver Docker-képében).
+
+Alkalmazás:  git -C <gridcraft> apply 0001-aice-branding.patch   (vagy: patch -d <gridcraft> -p1)
+
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' gridcraft.orig/crates/ui-egui/src/dialogs.rs gridcraft/crates/ui-egui/src/dialogs.rs
+--- gridcraft.orig/crates/ui-egui/src/dialogs.rs
++++ gridcraft/crates/ui-egui/src/dialogs.rs
+@@ -1044,8 +1044,11 @@
+             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+             ui.add_space(4.0);
+             ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");
+-            ui.hyperlink_to("getartcraft.com/apps/gridcraft", "https://getartcraft.com/apps/gridcraft");
+-            ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
++            // AICE: no community links (app page, Discord) in the embedded web editor.
++            if !cfg!(target_arch = "wasm32") {
++                ui.hyperlink_to("getartcraft.com/apps/gridcraft", "https://getartcraft.com/apps/gridcraft");
++                ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
++            }
+         }
+     }
+ }
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' gridcraft.orig/crates/ui-egui/src/theme.rs gridcraft/crates/ui-egui/src/theme.rs
+--- gridcraft.orig/crates/ui-egui/src/theme.rs
++++ gridcraft/crates/ui-egui/src/theme.rs
+@@ -179,8 +179,18 @@
+ }
+ 
+ #[cfg(target_arch = "wasm32")]
+-fn try_load(_paths: &[(&str, u32)]) -> Option<FontData> {
+-    None
++fn try_load(paths: &[(&str, u32)]) -> Option<FontData> {
++    // AICE: the web build has no system fonts. It embeds Carlito (metric-compatible with Calibri,
++    // Excel's default), so the cell roles that list it get real Calibri metrics instead of egui's
++    // default face. The files are fetched before the build into assets/fonts/ by the
++    // ai-conversioneditor build/craft-web/fetch-fonts.sh, SHA256-checked.
++    const CARLITO: &[(&str, &[u8])] = &[
++        ("/Carlito-Regular.ttf", include_bytes!("../../../assets/fonts/Carlito-Regular.ttf")),
++        ("/Carlito-Bold.ttf", include_bytes!("../../../assets/fonts/Carlito-Bold.ttf")),
++        ("/Carlito-Italic.ttf", include_bytes!("../../../assets/fonts/Carlito-Italic.ttf")),
++        ("/Carlito-BoldItalic.ttf", include_bytes!("../../../assets/fonts/Carlito-BoldItalic.ttf")),
++    ];
++    paths.iter().find_map(|(p, _)| CARLITO.iter().find(|(name, _)| p.ends_with(name)).map(|(_, bytes)| FontData::from_static(bytes)))
+ }
+ 
+ fn home_fonts(file: &str) -> String {

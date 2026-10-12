@@ -1,0 +1,90 @@
+AICE-javítás a storytold/deckcraft v0.5.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan:
+
+AICE-CHANGE: the About dialog and the start screen have no Discord/website/GitHub links, and the Record tab has no "Learn More" (app page) button;
+AICE-CHANGE: the web build embeds Carlito and Caladea (all styles, from the pinned craft-fonts), the metric-compatible stand-ins for Calibri and Cambria, so decks lay out in the browser as on the server.
+
+Alkalmazás:  git -C <deckcraft> apply 0001-aice-branding.patch   (vagy: patch -d <deckcraft> -p1)
+
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' deckcraft.orig/crates/fonts/build.rs deckcraft/crates/fonts/build.rs
+--- deckcraft.orig/crates/fonts/build.rs
++++ deckcraft/crates/fonts/build.rs
+@@ -57,7 +57,13 @@
+         if EXCLUDED_FAMILIES.contains(family) {
+             continue;
+         }
+-        if wasm && !matches!((*family, *style), ("BIZ UDPGothic", "Regular") | ("Inter", "Regular" | "Bold" | "Variable")) {
++        // AICE: the web build also embeds Carlito and Caladea (all four styles), the metric-compatible
++        // stand-ins for Calibri and Cambria (`fontdb::substitutes`), so PowerPoint decks lay out
++        // in the browser as they do on the server.
++        if wasm
++            && !matches!((*family, *style), ("BIZ UDPGothic", "Regular") | ("Inter", "Regular" | "Bold" | "Variable"))
++            && !matches!(*family, "Carlito" | "Caladea")
++        {
+             continue;
+         }
+         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' deckcraft.orig/crates/ui-egui/src/dialogs.rs deckcraft/crates/ui-egui/src/dialogs.rs
+--- deckcraft.orig/crates/ui-egui/src/dialogs.rs
++++ deckcraft/crates/ui-egui/src/dialogs.rs
+@@ -797,10 +797,13 @@
+         ui.label("Presentations and slide shows, rebuilt from scratch in pure Rust.");
+         ui.label("An open-source, clean-room project. Not affiliated with Microsoft.");
+         ui.add_space(6.0);
+-        ui.hyperlink_to("Join our community on Discord", deckcraft_engine::links::DISCORD);
+-        ui.hyperlink_to("getartcraft.com/apps/deckcraft", deckcraft_engine::links::APP_PAGE);
+-        ui.hyperlink_to("Source on GitHub", deckcraft_engine::links::GITHUB);
+-        ui.add_space(6.0);
++        // AICE: no community links (Discord, websites, GitHub) in the embedded web editor.
++        if !cfg!(target_arch = "wasm32") {
++            ui.hyperlink_to("Join our community on Discord", deckcraft_engine::links::DISCORD);
++            ui.hyperlink_to("getartcraft.com/apps/deckcraft", deckcraft_engine::links::APP_PAGE);
++            ui.hyperlink_to("Source on GitHub", deckcraft_engine::links::GITHUB);
++            ui.add_space(6.0);
++        }
+         ui.label(egui::RichText::new("MIT OR Apache-2.0 · © 2026 ArtCraft Team and the DeckCraft contributors").size(11.0).color(t.text_faint));
+     });
+ }
+@@ -906,11 +909,14 @@
+                 });
+             }
+         }
+-        ui.add_space(30.0);
+-        ui.horizontal(|ui| {
+-            ui.add_space(40.0);
+-            ui.hyperlink_to("Join the ArtCraft community on Discord", deckcraft_engine::links::DISCORD);
+-        });
++        // AICE: no community (Discord) link in the embedded web editor.
++        if !cfg!(target_arch = "wasm32") {
++            ui.add_space(30.0);
++            ui.horizontal(|ui| {
++                ui.add_space(40.0);
++                ui.hyperlink_to("Join the ArtCraft community on Discord", deckcraft_engine::links::DISCORD);
++            });
++        }
+     });
+ }
+ 
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' deckcraft.orig/crates/ui-egui/src/ribbon.rs deckcraft/crates/ui-egui/src/ribbon.rs
+--- deckcraft.orig/crates/ui-egui/src/ribbon.rs
++++ deckcraft/crates/ui-egui/src/ribbon.rs
+@@ -1755,11 +1755,14 @@
+             }
+         }
+     });
+-    group(ui, |ui| {
+-        if big_button(ui, Icon::Help, "Learn\nMore", true).clicked() {
+-            app.open_url(deckcraft_engine::links::APP_PAGE);
+-        }
+-    });
++    // AICE: "Learn More" opens the upstream app page — not in the embedded web editor.
++    if !cfg!(target_arch = "wasm32") {
++        group(ui, |ui| {
++            if big_button(ui, Icon::Help, "Learn\nMore", true).clicked() {
++                app.open_url(deckcraft_engine::links::APP_PAGE);
++            }
++        });
++    }
+ }
+ 
+ fn review(app: &mut SlideApp, ui: &mut Ui) {

@@ -1,0 +1,90 @@
+AICE-javítás a storytold/photocraft v0.7.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan. A beágyazott szerkesztőben nincs közösségi/idegen link:
+
+AICE-CHANGE: the title-bar Discord button is not shown;
+AICE-CHANGE: the Home screen and About dialog have no Discord button and website/GitHub/ArtCraft links;
+AICE-CHANGE: the Help menu has no Discord, website, GitHub and "Report an Issue" items.
+
+Alkalmazás:  git -C <photocraft> apply 0001-aice-branding.patch   (vagy: patch -d <photocraft> -p1)
+
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' photocraft.orig/crates/ui-egui/src/canvas.rs photocraft/crates/ui-egui/src/canvas.rs
+--- photocraft.orig/crates/ui-egui/src/canvas.rs
++++ photocraft/crates/ui-egui/src/canvas.rs
+@@ -2226,10 +2226,13 @@
+                 ui.add_space(22.0);
+                 home_recent(app, ui, &recent);
+             }
+-            ui.add_space(26.0);
+-            crate::links::discord_button(app, ui, 190.0);
+-            ui.add_space(10.0);
+-            crate::links::link_row(app, ui);
++            // AICE: no community links (Discord, websites, GitHub) in the embedded web editor.
++            if !cfg!(target_arch = "wasm32") {
++                ui.add_space(26.0);
++                crate::links::discord_button(app, ui, 190.0);
++                ui.add_space(10.0);
++                crate::links::link_row(app, ui);
++            }
+         });
+     });
+ }
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' photocraft.orig/crates/ui-egui/src/dialogs.rs photocraft/crates/ui-egui/src/dialogs.rs
+--- photocraft.orig/crates/ui-egui/src/dialogs.rs
++++ photocraft/crates/ui-egui/src/dialogs.rs
+@@ -372,11 +372,14 @@
+             ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+             ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
+             ui.add_space(12.0);
+-            ui.vertical_centered(|ui| {
+-                crate::links::discord_button(app, ui, 220.0);
+-                ui.add_space(8.0);
+-                crate::links::link_row(app, ui);
+-            });
++            // AICE: no community links (Discord, websites, GitHub) in the embedded web editor.
++            if !cfg!(target_arch = "wasm32") {
++                ui.vertical_centered(|ui| {
++                    crate::links::discord_button(app, ui, 220.0);
++                    ui.add_space(8.0);
++                    crate::links::link_row(app, ui);
++                });
++            }
+             ui.add_space(10.0);
+             ui.weak("egui · wgpu · photocraft-engine");
+         }
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' photocraft.orig/crates/ui-egui/src/menus.rs photocraft/crates/ui-egui/src/menus.rs
+--- photocraft.orig/crates/ui-egui/src/menus.rs
++++ photocraft/crates/ui-egui/src/menus.rs
+@@ -829,6 +829,10 @@
+     // 2) Our commands that Photoshop's tree doesn't list (or lists under another id).
+     let mut extra: Vec<MenuItem> = Vec::new();
+     for &(id, label, path, sc) in UI_COMMANDS {
++        // AICE: the embedded web editor's Help menu has no community links (Discord, websites, GitHub).
++        if cfg!(target_arch = "wasm32") && crate::links::url_for(id).is_some() {
++            continue;
++        }
+         extra.push(MenuItem {
+             id: id.into(),
+             label: label.into(),
+@@ -921,7 +925,8 @@
+         }
+     }
+     // Help: the link items, a separator, then System Info and About.
+-    if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about") {
++    // AICE: on the web the link items are gone, so no separator above System Info.
++    if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about").filter(|_| !cfg!(target_arch = "wasm32")) {
+         items.insert(
+             at,
+             MenuItem { id: "---".into(), label: "---".into(), path: vec!["Help".into()], shortcut: None, enabled: false, checked: None, color: None },
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' photocraft.orig/crates/ui-egui/src/panels.rs photocraft/crates/ui-egui/src/panels.rs
+--- photocraft.orig/crates/ui-egui/src/panels.rs
++++ photocraft/crates/ui-egui/src/panels.rs
+@@ -584,7 +584,8 @@
+                     }
+                     // The community Discord, one click away while the bar has room for it
+                     // (narrow windows drop it first; it is also Help › Discord).
+-                    if ui.available_width() >= DISCORD_ROOM {
++                    // AICE: the embedded web editor has no community (Discord) button.
++                    if !cfg!(target_arch = "wasm32") && ui.available_width() >= DISCORD_ROOM {
+                         let discord = egui::Button::image_and_text(
+                             icons::image("message-square", 14.0, t.text_dim),
+                             egui::RichText::new(tl!("Discord")).color(t.text_dim).size(12.0),

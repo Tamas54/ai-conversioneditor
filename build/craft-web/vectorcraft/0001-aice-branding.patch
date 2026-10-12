@@ -1,0 +1,96 @@
+AICE-javítás a storytold/vectorcraft v0.9.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan. A beágyazott szerkesztőben nincs közösségi/idegen link:
+
+AICE-CHANGE: the application bar's Discord button is not shown;
+AICE-CHANGE: the Home screen's Community section and the About dialog's Discord/website/GitHub links are gone;
+AICE-CHANGE: the Help (and application) menu has no Discord, website and GitHub items.
+
+Alkalmazás:  git -C <vectorcraft> apply 0001-aice-branding.patch   (vagy: patch -d <vectorcraft> -p1)
+
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' vectorcraft.orig/crates/ui-egui/src/canvas.rs vectorcraft/crates/ui-egui/src/canvas.rs
+--- vectorcraft.orig/crates/ui-egui/src/canvas.rs
++++ vectorcraft/crates/ui-egui/src/canvas.rs
+@@ -1870,10 +1870,13 @@
+             }
+         }
+     });
+-    ui.add_space(28.0);
+-    ui.label(egui::RichText::new(tl!("Community")).font(theme::semibold(14.0)).color(t.text));
+-    ui.add_space(10.0);
+-    crate::community::links(app, ui);
++    // AICE: no community section (Discord, websites, GitHub) in the embedded web editor.
++    if !cfg!(target_arch = "wasm32") {
++        ui.add_space(28.0);
++        ui.label(egui::RichText::new(tl!("Community")).font(theme::semibold(14.0)).color(t.text));
++        ui.add_space(10.0);
++        crate::community::links(app, ui);
++    }
+ }
+ 
+ /// The Home screen's Recent Files (#663): the first of File › Open Recent Files, each its name and
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' vectorcraft.orig/crates/ui-egui/src/chrome.rs vectorcraft/crates/ui-egui/src/chrome.rs
+--- vectorcraft.orig/crates/ui-egui/src/chrome.rs
++++ vectorcraft/crates/ui-egui/src/chrome.rs
+@@ -71,7 +71,10 @@
+             let icon = 28.0;
+             let search = room >= 64.0 + 8.0 + gap + icon;
+             let ws_w = ws_w.min(room - 8.0 - gap - if search { icon } else { 0.0 }).max(64.0);
+-            let discord = search && room >= ws_w + 8.0 + gap + icon + 10.0 + gap + crate::community::discord_width(ui, false);
++            // AICE: the embedded web editor has no community (Discord) button.
++            let discord = !cfg!(target_arch = "wasm32")
++                && search
++                && room >= ws_w + 8.0 + gap + icon + 10.0 + gap + crate::community::discord_width(ui, false);
+             let mut rui = ui.new_child(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)));
+             let ui = &mut rui;
+             // Workspace switcher: shows the current workspace, opens Window → Workspace.
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' vectorcraft.orig/crates/ui-egui/src/dialogs/about.rs vectorcraft/crates/ui-egui/src/dialogs/about.rs
+--- vectorcraft.orig/crates/ui-egui/src/dialogs/about.rs
++++ vectorcraft/crates/ui-egui/src/dialogs/about.rs
+@@ -59,8 +59,11 @@
+             ));
+         });
+     });
+-    ui.add_space(12.0);
+-    crate::community::links(app, ui);
++    // AICE: no community links (Discord, websites, GitHub) in the embedded web editor.
++    if !cfg!(target_arch = "wasm32") {
++        ui.add_space(12.0);
++        crate::community::links(app, ui);
++    }
+     ui.add_space(12.0);
+     ui.label(
+         egui::RichText::new(tl!(
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' vectorcraft.orig/crates/ui-egui/src/menus.rs vectorcraft/crates/ui-egui/src/menus.rs
+--- vectorcraft.orig/crates/ui-egui/src/menus.rs
++++ vectorcraft/crates/ui-egui/src/menus.rs
+@@ -1946,7 +1946,12 @@
+             // Quit from File, Language and Appearance synthesized). It stays first: `from_tree`
+             // gives the first menu the App role.
+             "VectorCraft",
+-            vec![c("About VectorCraft", "help.about"), c("Join Our Discord", "help.discord")],
++            vec![
++                c("About VectorCraft", "help.about"),
++                // AICE: no community links in the embedded web editor.
++                #[cfg(not(target_arch = "wasm32"))]
++                c("Join Our Discord", "help.discord"),
++            ],
+         ),
+         (
+             "File",
+@@ -2561,10 +2566,16 @@
+         (
+             "Help",
+             vec![
++                // AICE: no community links (Discord, websites, GitHub) in the embedded web editor.
++                #[cfg(not(target_arch = "wasm32"))]
+                 c("Join Our Discord", "help.discord"),
++                #[cfg(not(target_arch = "wasm32"))]
+                 c("ArtCraft Website", "help.website"),
++                #[cfg(not(target_arch = "wasm32"))]
+                 c("VectorCraft on getartcraft.com", "help.appPage"),
++                #[cfg(not(target_arch = "wasm32"))]
+                 c("VectorCraft on GitHub", "help.github"),
++                #[cfg(not(target_arch = "wasm32"))]
+                 Sep,
+                 c("Search Commands…", "help.commandPalette"),
+                 todos("VectorCraft Help…", "F1"),

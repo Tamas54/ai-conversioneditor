@@ -1,0 +1,191 @@
+AICE-javítás a storytold/designcraft v0.6.0 webes (WASM) buildjéhez — csak target_arch = "wasm32",
+a natív build változatlan. A beágyazott szerkesztőben nincs közösségi/idegen link:
+
+AICE-CHANGE: the title-bar Discord button is not shown;
+AICE-CHANGE: the start screen's community card and the About dialog's Discord button, website/GitHub/issue links and "More ArtCraft apps" row are gone;
+AICE-CHANGE: the Help menu and the command search have no Discord, website, GitHub, issue and app-page items.
+
+Alkalmazás:  git -C <designcraft> apply 0001-aice-branding.patch   (vagy: patch -d <designcraft> -p1)
+
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' designcraft.orig/crates/ui-egui/src/about.rs designcraft/crates/ui-egui/src/about.rs
+--- designcraft.orig/crates/ui-egui/src/about.rs
++++ designcraft/crates/ui-egui/src/about.rs
+@@ -163,56 +163,60 @@
+                     .size(12.0)
+                     .color(t.text_dim),
+             ));
+-            ui.add_space(16.0);
+-            if discord_button(ui, "Join the ArtCraft Discord", vec2(300.0, 40.0)) {
+-                open = Some("discord");
+-            }
+-            ui.add_space(4.0);
+-            ui.label(crate::rtl::widget(
+-                ui,
+-                egui::RichText::new(crate::i18n::tr(&app.ui.language, "discord.gg/artcraft — help, feedback and show-and-tell"))
+-                    .size(11.0)
+-                    .color(t.text_dim),
+-            ));
+-            ui.add_space(14.0);
+-            ui.horizontal(|ui| {
+-                // Centre the row of links.
+-                let w = 330.0;
+-                ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+-                for (text, key) in
+-                    [("DesignCraft page", "appPage"), ("GitHub", "github"), ("getartcraft.com", "website"), ("Report an issue", "issues")]
+-                {
+-                    if link(ui, text, links::get(key).unwrap_or_default(), t.accent) {
+-                        open = Some(key);
+-                    }
+-                    ui.add_space(6.0);
++            // AICE: no community links, Discord button or links to other apps in the embedded web editor.
++            if !cfg!(target_arch = "wasm32") {
++                ui.add_space(16.0);
++                if discord_button(ui, "Join the ArtCraft Discord", vec2(300.0, 40.0)) {
++                    open = Some("discord");
+                 }
+-            });
+-            ui.add_space(16.0);
+-            ui.separator();
+-            ui.add_space(6.0);
+-            ui.label(crate::rtl::widget(
+-                ui,
+-                egui::RichText::new(crate::i18n::tr(&app.ui.language, "More ArtCraft apps")).font(semibold(12.0)).color(t.text_strong),
+-            ));
+-            ui.add_space(4.0);
+-            ui.horizontal(|ui| {
+-                let pad = ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x;
+-                let w: f32 = SIBLINGS
+-                    .iter()
+-                    .map(|(_, n, _)| ui.painter().layout_no_wrap(n.to_string(), egui::FontId::proportional(12.0), Color32::WHITE).size().x + pad)
+-                    .sum::<f32>()
+-                    - ui.spacing().item_spacing.x;
+-                ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+-                for (slug, name, what) in SIBLINGS {
+-                    let url = format!("{}/apps/{slug}", links::WEBSITE);
+-                    let b =
+-                        ui.add(egui::Button::new(egui::RichText::new(*name).size(12.0)).corner_radius(10.0)).on_hover_text(format!("{what} — {url}"));
+-                    if b.clicked() {
+-                        app.ui.pending_urls.push(url);
++                ui.add_space(4.0);
++                ui.label(crate::rtl::widget(
++                    ui,
++                    egui::RichText::new(crate::i18n::tr(&app.ui.language, "discord.gg/artcraft — help, feedback and show-and-tell"))
++                        .size(11.0)
++                        .color(t.text_dim),
++                ));
++                ui.add_space(14.0);
++                ui.horizontal(|ui| {
++                    // Centre the row of links.
++                    let w = 330.0;
++                    ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
++                    for (text, key) in
++                        [("DesignCraft page", "appPage"), ("GitHub", "github"), ("getartcraft.com", "website"), ("Report an issue", "issues")]
++                    {
++                        if link(ui, text, links::get(key).unwrap_or_default(), t.accent) {
++                            open = Some(key);
++                        }
++                        ui.add_space(6.0);
+                     }
+-                }
+-            });
++                });
++                ui.add_space(16.0);
++                ui.separator();
++                ui.add_space(6.0);
++                ui.label(crate::rtl::widget(
++                    ui,
++                    egui::RichText::new(crate::i18n::tr(&app.ui.language, "More ArtCraft apps")).font(semibold(12.0)).color(t.text_strong),
++                ));
++                ui.add_space(4.0);
++                ui.horizontal(|ui| {
++                    let pad = ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x;
++                    let w: f32 = SIBLINGS
++                        .iter()
++                        .map(|(_, n, _)| ui.painter().layout_no_wrap(n.to_string(), egui::FontId::proportional(12.0), Color32::WHITE).size().x + pad)
++                        .sum::<f32>()
++                        - ui.spacing().item_spacing.x;
++                    ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
++                    for (slug, name, what) in SIBLINGS {
++                        let url = format!("{}/apps/{slug}", links::WEBSITE);
++                        let b = ui
++                            .add(egui::Button::new(egui::RichText::new(*name).size(12.0)).corner_radius(10.0))
++                            .on_hover_text(format!("{what} — {url}"));
++                        if b.clicked() {
++                            app.ui.pending_urls.push(url);
++                        }
++                    }
++                });
++            }
+             ui.add_space(12.0);
+             ui.label(crate::rtl::widget(
+                 ui,
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' designcraft.orig/crates/ui-egui/src/chrome.rs designcraft/crates/ui-egui/src/chrome.rs
+--- designcraft.orig/crates/ui-egui/src/chrome.rs
++++ designcraft/crates/ui-egui/src/chrome.rs
+@@ -125,7 +125,8 @@
+                         }
+                         ui.add_space(8.0);
+                         // Always one click away: the ArtCraft community Discord.
+-                        if crate::about::discord_button(ui, "Discord", vec2(78.0, 22.0)) {
++                        // AICE: not in the embedded web editor.
++                        if !cfg!(target_arch = "wasm32") && crate::about::discord_button(ui, "Discord", vec2(78.0, 22.0)) {
+                             let _ = app.run("help.discord", json!({}));
+                         }
+                         tools_start = ui.min_rect().min.x;
+@@ -685,8 +686,11 @@
+                 }
+             });
+             ui.add_space(20.0);
+-            community_card(app, ui);
+-            ui.add_space(24.0);
++            // AICE: no community card (Discord, websites, GitHub) in the embedded web editor.
++            if !cfg!(target_arch = "wasm32") {
++                community_card(app, ui);
++                ui.add_space(24.0);
++            }
+             ui.label(crate::rtl::widget(
+                 ui,
+                 egui::RichText::new(crate::i18n::tr(&app.ui.language, "Start a new document")).font(semibold(15.0)).color(t.text_strong),
+diff -ruN -x target -x dist -x '*.ttf' -x '*.orig' designcraft.orig/crates/ui-egui/src/menus.rs designcraft/crates/ui-egui/src/menus.rs
+--- designcraft.orig/crates/ui-egui/src/menus.rs
++++ designcraft/crates/ui-egui/src/menus.rs
+@@ -142,11 +142,18 @@
+         "{on?: bool, at?: [x, y] (points from the canvas's top-left)} — the Contextual Task Bar stays where it is (or at `at`) instead of following the selection; with neither, toggles",
+     ),
+     ("window.taskBarReset", "Reset Bar Position", None, "{} — the Contextual Task Bar follows the selection again, under it"),
++    // AICE: the embedded web editor lists no community links (menus, command search).
++    #[cfg(not(target_arch = "wasm32"))]
+     ("help.discord", "Join the ArtCraft Discord…", None, "{} — opens https://discord.gg/artcraft in the browser"),
++    #[cfg(not(target_arch = "wasm32"))]
+     ("help.appPage", "DesignCraft Website…", None, "{} — opens https://getartcraft.com/apps/designcraft"),
++    #[cfg(not(target_arch = "wasm32"))]
+     ("help.github", "DesignCraft on GitHub…", None, "{} — opens https://github.com/storytold/designcraft"),
++    #[cfg(not(target_arch = "wasm32"))]
+     ("help.issues", "Report an Issue…", None, "{} — opens the GitHub issue tracker"),
++    #[cfg(not(target_arch = "wasm32"))]
+     ("help.website", "ArtCraft Website…", None, "{} — opens https://getartcraft.com"),
++    #[cfg(not(target_arch = "wasm32"))]
+     ("help.app", "ArtCraft App Page…", None, "{app} — opens https://getartcraft.com/apps/{app} (e.g. photocraft)"),
+     (
+         "help.about",
+@@ -687,12 +694,20 @@
+     (
+         "Help",
+         &[
++            // AICE: no community links (Discord, websites, GitHub, issues) in the embedded web editor.
++            #[cfg(not(target_arch = "wasm32"))]
+             "ui:help.discord",
++            #[cfg(not(target_arch = "wasm32"))]
+             "-",
++            #[cfg(not(target_arch = "wasm32"))]
+             "ui:help.appPage",
++            #[cfg(not(target_arch = "wasm32"))]
+             "ui:help.github",
++            #[cfg(not(target_arch = "wasm32"))]
+             "ui:help.issues",
++            #[cfg(not(target_arch = "wasm32"))]
+             "ui:help.website",
++            #[cfg(not(target_arch = "wasm32"))]
+             "-",
+             "cmd:file.newSample",
+             "-",
