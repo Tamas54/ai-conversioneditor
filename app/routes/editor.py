@@ -9,6 +9,7 @@ A dashboard iframe-ben nyitja: /editor/<app>/?src=<fájl-URL>&name=<fájlnév>&s
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime
@@ -174,6 +175,17 @@ async def editor_save(
             fid = native.name
         else:
             native.unlink(missing_ok=True)
+    # Változatlan mentés (pl. a „Kérj változtatást” előtti automatikus mentés egy puszta kattintás után):
+    # NINCS új verzió — a forrás marad, a metájával (pakli-leírás, lánc) együtt. Kétes esetben új verzió lesz.
+    if source and ext in ("pptx", "docx") and source.rsplit(".", 1)[-1].lower() == ext:
+        from app.storage.metadata import read_meta
+        from app.tools.content_digest import same_content
+        src_path = output_path(source) if output_path(source).exists() else input_path(source)
+        if await asyncio.to_thread(same_content, src_path, output_path(fid)):
+            output_path(fid).unlink(missing_ok=True)
+            meta = read_meta(source) or {}
+            return {"file_id": source, "url": public_url(source), "size_kb": src_path.stat().st_size // 1024,
+                    "label": meta.get("label") or fname, "unchanged": True}
     stamp = datetime.utcnow().strftime("%H:%M")
     stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(fname).stem)
     if stem.lower() in _PLACEHOLDER_STEMS:      # „Untitled.docx” helyett a dokumentum saját címe (a Files-ban megkülönböztethető)

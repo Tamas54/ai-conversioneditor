@@ -1749,7 +1749,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "deck: [{command: 'file.new', params: {blank: true}}, {command: 'slide.new', params: {layout: "
                 "'titleAndContent', title, body: 'line\\nline'}}, {command: 'insert.picture', params: {file_id, "
                 "rect: [x,y,w,h]}}, {command: 'insert.chart', params: {type: 'column', categories, series: "
-                "[{name, values}]}}, then chart.options {title: null}]. save_format pdf/png exports.\n"
+                "[{name, values}]}}, then chart.options {title: null}]. save_format pdf/png exports. Pictures: "
+                "params.image = file_id | {stock: 'words, main noun last'} | {generate: 'prompt'} (costs a credit) | "
+                "{url} — never base64 (works for insert.picture).\n"
                 "sheet: range.setValues {range: 'A1', values: [[...]]} (strings starting with = are formulas), "
                 "cell.set {cell, input}, insert.chart {range, type}, data.sort.\n"
                 "pdf: commands are tool steps [{tool: 'page_add_text', args: {page: 1, text, at: [x, y]}}, "
@@ -3077,7 +3079,20 @@ async def _tool_office(state: AgentState, args: dict, pool) -> dict:
     fid = _target(state, args.get("file_id"), crafts.OFFICE[app_name]["open"])
     if args.get("read"):
         return await crafts.office_read(app_name, args["read"], file_id=fid, query=args.get("query"), max_chars=12000)
-    out = await crafts.office_run(app_name, file_id=fid, commands=args.get("commands"), save_format=args.get("save_format"))
+    # Kép a parancsban (picture.change, insert.picture…): az ügynök nem tud base64-et írni → „image” = file_id |
+    # {stock} | {generate} | {url} → helyi „path” (a CLI ezt is elfogadja). 10-12: a base64 találgatás elbukott.
+    from app.tools import images
+    cmds = []
+    for c in args.get("commands") or []:
+        p = (c or {}).get("params") if isinstance(c, dict) else None
+        if isinstance(p, dict) and p.get("image") and not p.get("path") and not p.get("data"):
+            spec = p["image"]
+            if isinstance(spec, dict) and spec.get("ai") and not spec.get("generate"):
+                spec = {**spec, "generate": spec["ai"]}
+            img = await images.resolve(spec)
+            c = {**c, "params": {k: v for k, v in p.items() if k != "image"} | {"path": str(img.path)}}
+        cmds.append(c)
+    out = await crafts.office_run(app_name, file_id=fid, commands=cmds, save_format=args.get("save_format"))
     if not _advance(state, [out["file_id"]]):
         out["image_file_id"] = out["file_id"]       # előnézet-kép: a munkadokumentum marad
     return out

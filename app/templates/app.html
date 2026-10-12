@@ -564,7 +564,7 @@ window.addEventListener("message", e => {
   if (e.data.type === "touched") { editorDirty = true; dirtyOverride = false; }
   if (e.data.type === "saved" || e.data.type === "save_failed") setTimeout(() => { const w = saveWaiters; saveWaiters = []; w.forEach(f => f(e.data.type === "saved")); });
   if (e.data.type === "saved") {
-    toast(`Saved as ${e.data.label || e.data.name}`);
+    toast(e.data.unchanged ? "No changes since the last version" : `Saved as ${e.data.label || e.data.name}`);   // változatlan: nincs új verzió
     editorDirty = false;
     if (cur && e.data.file_id && e.data.file_id !== cur.file_id) {   // innentől a mentett verzió az aktuális (letöltés, nyomtatás, változtatás)
       cur = { ...cur, file_id: e.data.file_id, label: e.data.label || cur.label, url: e.data.url || cur.url };
