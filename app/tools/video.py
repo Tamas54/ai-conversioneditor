@@ -854,6 +854,35 @@ def _gfx_color(v: Any, acc: list[float], default: Any = "accent") -> Any:
     return named.get(str(default), "accent")
 
 
+def _pin_sides(els: list[tuple[int, dict[str, Any]]], W: int, H: int, m: float, k: float) -> dict[int, str]:
+    """Tűfeliratok helye: jobbra | balra | fölötte | alatta — ahol a legkevésbé fed más feliratot, tűt, és kint sem lóg
+    (10-12: álló országtérképen a „Budapest” a „Debrecen” tűbe futott)."""
+    pins = [(i, e) for i, e in els if e.get("shape") == "pin" and e.get("text") and not e.get("_skip")]
+    taken = []                                         # (x0, y0, x1, y1): a tűk és a már lerakott feliratok
+    for _, e in pins:
+        r = e.get("r", 0.03) * m
+        x, y = e.get("x", 0.5) * W, e.get("y", 0.5) * H
+        taken.append((x - r, y - r, x + r, y + r))
+    def overlap(a: tuple, b: tuple) -> float:
+        return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    out: dict[int, str] = {}
+    for i, e in pins:
+        ts = e.get("size", 34) * k
+        w, h = min(W * 0.3, 0.56 * ts * len(e["text"]) + 4), ts * 1.25
+        r = e.get("r", 0.03) * m
+        x, y = e.get("x", 0.5) * W, e.get("y", 0.5) * H
+        own = (x - r, y - r, x + r, y + r)
+        cands = {"right": (x + r + 6, y - h / 2, x + r + 6 + w, y + h / 2), "left": (x - r - 6 - w, y - h / 2, x - r - 6, y + h / 2),
+                 "above": (x - w / 2, y - r - 8 - h, x + w / 2, y - r - 8), "below": (x - w / 2, y + r + 8, x + w / 2, y + r + 8 + h)}
+        def cost(bx: tuple) -> float:
+            out_ = max(0.0, -bx[0]) + max(0.0, bx[2] - W) + max(0.0, -bx[1]) + max(0.0, bx[3] - H)
+            return sum(overlap(bx, t) for t in taken if t != own) + out_ * h * 4
+        best = min(("right", "left", "above", "below"), key=lambda sd: (cost(cands[sd]), ("right", "left", "above", "below").index(sd)))
+        out[i] = best
+        taken.append(cands[best])
+    return out
+
+
 def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> list[dict[str, Any]]:
     """A „graphic” elemei builder-rétegekké: arányos koordináták → pixel; méretek 1080-as rövid oldalra értve."""
     m = min(W, H)
@@ -861,6 +890,7 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
     px = lambda q: [round(q[0] * W, 1), round(q[1] * H, 1)]
     out: list[dict[str, Any]] = []
     els = list(enumerate(ch.get("elements") or []))
+    sides = _pin_sides(els, W, H, m, k)
     for i, e in sorted(els, key=lambda ie: ie[1].get("shape") != "map"):     # a térkép legalul: ne takarja a tűket
         if e.get("_skip"):
             continue
@@ -885,9 +915,13 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
             out.append(el)
             if sh == "pin" and e.get("text"):
                 ts = round(e.get("size", 34) * k)
+                side = sides.get(i, "right")
+                px_, py_, r_ = e.get("x", 0.5) * W, e.get("y", 0.5) * H, size[0] / 2
+                cx_ = {"right": px_ + r_ + 6 + W * 0.15, "left": px_ - r_ - 6 - W * 0.15}.get(side, px_)
+                cy_ = {"above": py_ - r_ - 8 - ts * 0.6, "below": py_ + r_ + 8 + ts * 0.6}.get(side, py_)
                 out.append({"k": "text", "name": f"Pin label {i + 1}", "str": e["text"], "size": ts, "box": [round(W * 0.3, 1), round(ts * 2.8, 1)],
-                            "pos": [round(e.get("x", 0.5) * W + size[0] / 2 + W * 0.15 + 6, 1), round(e.get("y", 0.5) * H + ts * 0.65, 1)],
-                            "align": "left", "font": "semibold", "color": _gfx_color(e.get("color"), acc, "white"),
+                            "pos": [round(cx_, 1), round(cy_ + ts * 0.65, 1)],
+                            "align": {"right": "left", "left": "right"}.get(side, "center"), "font": "semibold", "color": _gfx_color(e.get("color"), acc, "white"),
                             "anim": "appear", "t0": round(t0 + 0.2, 3), "dur": 0.4})
         elif sh in ("line", "arrow", "path", "polygon"):
             pts = [e["from"], e["to"]] if sh in ("line", "arrow") else e["points"]
@@ -1829,8 +1863,12 @@ async def _place_on_maps(story: dict[str, Any], fmt: str) -> tuple[list[str], li
               [v for e in refs for v in (e["_ll"].get("points") or []) if v]
         m = maps[0]
         box = (W * (m.get("x", 0.5) - m.get("w", 1.0) / 2), H * (m.get("y", 0.5) - m.get("h", 1.0) / 2), W * m.get("w", 1.0), H * m.get("h", 1.0))
+        # a tűk és az útvonal a cím és a felirat közé (10-12: a vasútállomás a felirat alá csúszott); a jobb szélen
+        # álló tű felirata balra kerül (_graphic_elements)
+        sx0, sy0, sx1, sy1 = max(box[0], W * 0.07), max(box[1], H * 0.17), min(box[0] + box[2], W * 0.93), min(box[1] + box[3], H * 0.76)
+        fit = (sx0, sy0, sx1 - sx0, sy1 - sy0) if sx1 - sx0 > W * 0.2 and sy1 - sy0 > H * 0.2 else None
         try:
-            built = await geomod.build(m.get("map") or {}, pts, box, W, H)
+            built = await geomod.build(m.get("map") or {}, pts, box, W, H, fit=fit)
         except Exception as ex:
             problems.append(f"Scene {sid}: the map could not be made — {ex}.")
             for e in refs + maps:

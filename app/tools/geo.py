@@ -128,9 +128,9 @@ class Projection:
         x, y = self.px(lat, lon)
         return [round(x / self.W, 5), round(y / self.H, 5)]
 
-    def span(self) -> list[float]:
-        """A dobozban látszó terület [s, w, n, e]."""
-        bx, by, bw, bh = self.box
+    def span(self, box: Optional[tuple[float, float, float, float]] = None) -> list[float]:
+        """A dobozban (alapból a vetítés dobozában) látszó terület [s, w, n, e]."""
+        bx, by, bw, bh = box or self.box
         def inv(px: float, py: float) -> tuple[float, float]:
             x = self.cx + (px - bx - bw / 2) / self.k
             y = self.cy - (py - by - bh / 2) / self.k
@@ -456,7 +456,7 @@ _DARK = {"minor": [0.24, 0.27, 0.33], "major": [0.46, 0.5, 0.58], "water": [0.16
 
 
 async def build(spec: dict[str, Any], points: list[tuple[float, float]], box: tuple[float, float, float, float],
-                W: int, H: int) -> dict[str, Any]:
+                W: int, H: int, fit: Optional[tuple[float, float, float, float]] = None) -> dict[str, Any]:
     """spec: {"place"?, "bbox"? [s, w, n, e], "detail"?}; points: a jelenet többi földrajzi pontja (lat, lon) — a térkép
     ezeket is mutassa. → {"groups": [...], "proj": Projection, "credit", "mode", "place"}"""
     place = await geocode(spec["place"]) if spec.get("place") else None
@@ -473,8 +473,8 @@ async def build(spec: dict[str, Any], points: list[tuple[float, float]], box: tu
     pad = 0.12 if points else 0.04
     dla, dlo = max(bb[2] - bb[0], 0.004), max(bb[3] - bb[1], 0.006)
     bb = [bb[0] - dla * pad, bb[1] - dlo * pad, bb[2] + dla * pad, bb[3] + dlo * pad]
-    proj = Projection(bb, box, W, H)
-    view = proj.span()
+    proj = Projection(bb, fit or box, W, H)      # a hely és a tűk a fit-dobozba (cím és felirat közé) illeszkednek,
+    view = proj.span(box)                        # a térkép viszont a teljes dobozt kitölti
     extent = max(view[2] - view[0], (view[3] - view[1]) * math.cos(math.radians((view[0] + view[2]) / 2)))
     detail = spec.get("detail") if spec.get("detail") in ("streets", "outline") else (
         "outline" if extent > 1.6 or (place and place["rank"] <= 8) else "streets")
