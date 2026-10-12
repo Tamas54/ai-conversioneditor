@@ -882,7 +882,7 @@ async def make_document(body: dict[str, Any]) -> dict[str, Any]:
     from app.llm.siliconflow import _call_model
     try:
         md = ""
-        for model in (settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY):
+        for model in (settings.AGENT_MODEL, settings.AGENT_MODEL_FALLBACK):
             try:
                 md = await _call_model(model, [{"role": "system", "content": _DOC_SYSTEM},
                                                {"role": "user", "content": f"Write {kind}.\n\nBrief:\n{brief}"}], thinking=False,

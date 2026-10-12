@@ -1,5 +1,5 @@
 """
-SiliconFlow LLM client — Kimi K2.6 primary, DeepSeek V3.2 fallback.
+SiliconFlow LLM client (OpenAI-compatible chat completions) + the shared _call_model helper.
 
 Used by edit_with_instruction to compile natural-language edit instructions
 into structured edit-operation lists.
@@ -11,7 +11,7 @@ import logging
 import re
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.config import settings
 
@@ -78,7 +78,23 @@ def _strip_json_fences(s: str) -> str:
     return s.strip()
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
+class LLMServiceError(RuntimeError):
+    """A SiliconFlow HTTP-hibája felhasználónak mondható szöveggel; a státusz és a válasz eleje a naplóban."""
+
+    def __init__(self, status: int, model: str):
+        self.status = status
+        msg = ("the AI service is out of credit right now — try again later" if status == 402
+               else "the AI service is busy right now — try again in a minute" if status == 429 or status >= 500
+               else f"the AI service refused the request (HTTP {status})")
+        super().__init__(msg)
+
+
+def _retryable(e: BaseException) -> bool:
+    # 4xx (a 429 kivételével) újrapróbálva is ugyanaz — ne várakoztasson
+    return not (isinstance(e, LLMServiceError) and 400 <= e.status < 500 and e.status != 429)
+
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4), retry=retry_if_exception(_retryable), reraise=True)
 async def _call_model(model: str, messages: list[dict], thinking: bool = True, json_mode: bool = True) -> str:
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
@@ -100,7 +116,9 @@ async def _call_model(model: str, messages: list[dict], thinking: bool = True, j
                 **({} if thinking else {"enable_thinking": False}),
             },
         )
-        r.raise_for_status()
+        if r.status_code >= 400:   # a RetryError eddig elnyelte a státuszt — most a naplóban is látszik
+            log.warning("SiliconFlow %s → HTTP %s: %s", model, r.status_code, r.text[:300])
+            raise LLMServiceError(r.status_code, model)
         data = r.json()
         return data["choices"][0]["message"]["content"]
 
