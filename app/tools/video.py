@@ -21,6 +21,7 @@ Mérve 10-12 (16 mag): 8 s 1080×1920 render 16 s; a CLI a termék Docker-képé
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import json
 import logging
@@ -232,7 +233,8 @@ async def fetch_article(url: str) -> dict[str, Any]:
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
 {"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
-  "chart": {"type": "column|bar|line|donut|ring|icons|timeline|steps", "title": str, "unit": str, "total": number | null,
+  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote",
+            "title": str, "unit": str, "total": number | null, "min": number | null, "max": number | null,
             "items": [{"label": str, "value": number | null, "text": str}]} | null}],
  "end": {"title": str, "subtitle": str}}
 Rules:
@@ -252,9 +254,17 @@ Rules:
     ring — ONE percentage worth showing (unit "%", one item: label = what it is);
     icons — "x in N" or a percentage of people/things (one item: value = x; total = N, or unit "%" for x out of 100);
     timeline — 2–6 dated events in order (label = the date exactly as written in the source, text = what happened);
-    steps — 3–6 steps of a process or how-to in order (label = short step, text = one short line).
+    steps — 3–6 steps of a process or how-to in order (label = short step, text = one short line);
+    area — a value over time where the amount matters (filled under the line);
+    counter — ONE striking number that counts up (one item: label = what it is);
+    compare — 2–3 numbers of the same kind side by side (before/after, A vs B);
+    progress — 2–6 separate percentages that do NOT add up to a whole (e.g. "64% agree", "41% use daily");
+    gauge — ONE value on a scale (min/max given in the source, or 0–100%), e.g. a risk level or a score;
+    funnel — 3–6 shrinking stages of a process (applicants → interviewed → hired);
+    proscons — arguments for (label "+") and against (label "-"), each a short text; labels? = the two headings;
+    quote — ONE striking sentence quoted WORD FOR WORD from the source (text = the quote, label = who said it).
   Copy every number and date EXACTLY from the source (value = a plain number, no unit); unit = "%" or a short unit
-  ("$", "km", "bn") or ""; item labels ≤ 18 characters (ring/icons: ≤ 60); at most 3 chart scenes and never two of the
+  ("$", "km", "bn") or ""; item labels ≤ 18 characters (ring/icons: ≤ 60); at most 3 chart scenes (4 for 80 s or longer) and never two of the
   same type in a row; a scene has a stat OR a chart, never both; headline = what the graphic shows.
 - end.title ≤ 50 characters (the takeaway or a call to action); end.subtitle ≤ 80 (e.g. where to read more)."""
 
@@ -288,7 +298,8 @@ def _text_numbers(text: str) -> set[float]:
     return out
 
 
-_CHART_TYPES = ("column", "bar", "line", "donut", "ring", "icons", "timeline", "steps")
+_CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
+                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote")
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -300,16 +311,39 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
     typ = str(c.get("type") or "column").lower()
     if typ not in _CHART_TYPES:
         return None, None
-    title = _clean(c.get("title"), 60)
+    title = _clean(c.get("title"), 60, "Chart title")
     nums = _text_numbers(source)
     src = re.sub(r"\s+", " ", source or "").lower()
     bad = lambda t: [x for x in _text_numbers(t) if x not in nums]
     left_out = f"A suggested chart “{title}” was left out: not all its numbers are in the source."
     raw = [it for it in c.get("items") or [] if isinstance(it, dict)]
+    if typ == "quote":                 # idézet: CSAK szó szerint a forrásból (kitalált idézet nincs)
+        it = raw[0] if raw else {}
+        q = _clean(it.get("text") or it.get("label"), 220, "Quote")
+        norm = lambda x: re.sub(r"[^\w ]+", "", re.sub(r"\s+", " ", x or "")).lower().strip()
+        if not q or norm(q.rstrip("…")) not in norm(source):
+            return None, f"A suggested quote “{q[:60]}” was left out: it is not word for word in the source."
+        who = _clean(it.get("label") if it.get("text") else "", 40, "Quote author")
+        return {"type": typ, "title": title, "unit": "", "items": [{"text": q, "label": who}]}, \
+            f"Quote “{q[:50]}…”: word for word in the source."
+    if typ == "proscons":
+        items = []
+        for it in raw[:8]:
+            txt = _clean(it.get("text"), 70, "Point")
+            if bad(txt):
+                return None, left_out
+            side = "+" if str(it.get("label") or "").strip().lower() in ("+", "pro", "for", "mellette", "előny", "yes") else "-"
+            if txt:
+                items.append({"label": side, "text": txt})
+        if len(items) < 2:
+            return None, None
+        heads = [h for h in (c.get("labels") or []) if isinstance(h, str)][:2]
+        return ({"type": typ, "title": title, "unit": "", "items": items, **({"labels": [_clean(h, 18) for h in heads]} if heads else {})},
+                f"For/against “{title}”: {len(items)} points, no number that isn't in the source.")
     if typ in ("timeline", "steps"):
         items = []
         for it in raw[:6]:
-            lab, txt = _clean(it.get("label"), 26 if typ == "timeline" else 30), _clean(it.get("text"), 70)
+            lab, txt = _clean(it.get("label"), 26 if typ == "timeline" else 30, "Chart item"), _clean(it.get("text"), 70, "Chart text")
             if typ == "timeline" and re.sub(r"\s+", " ", lab).lower() not in src:
                 return None, f"A suggested timeline “{title}” was left out: the date “{lab}” is not in the source."
             if bad(txt) or (typ == "steps" and bad(lab)):
@@ -327,15 +361,31 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
             v = float(str(it.get("value")).replace(",", ".").replace(" ", ""))
         except ValueError:
             continue
-        (items if round(v, 6) in nums else missing).append({"label": _clean(it.get("label"), 22 if typ not in ("ring", "icons") else 60), "value": v})
-    unit = _clean(c.get("unit"), 14)   # „millió" is beférjen (10-12: „1,1 milli…”)
+        (items if round(v, 6) in nums else missing).append({"label": _clean(it.get("label"), 22 if typ not in ("ring", "icons") else 60, "Chart label"), "value": v})
+    unit = _clean(c.get("unit"), 14, "Chart unit")   # „millió" is beférjen (10-12: „1,1 milli…”)
     out: dict[str, Any] = {"type": typ, "title": title, "unit": unit}
-    if typ in ("ring", "icons"):
+    if typ in ("ring", "icons", "counter", "gauge"):
         if missing or not items:
             return None, left_out
         out["items"] = items[:1]
         if typ == "ring" and not (0 <= items[0]["value"] <= 100):
             return None, None
+        if typ == "counter":
+            return out, f"Counter “{title}”: the number is in the source text."
+        if typ == "gauge":            # a skála vége is a forrásból (a 0–100 % alapértelmezés kivétel)
+            for key in ("min", "max"):
+                if c.get(key) not in (None, ""):
+                    try:
+                        val = float(str(c[key]).replace(",", "."))
+                    except ValueError:
+                        return None, None
+                    if round(val, 6) not in nums and not (val in (0, 100) and (unit == "%" or key == "min")):
+                        return None, left_out
+                    out[key] = val
+            lo_, hi_ = out.get("min", 0), out.get("max", 100)
+            if not lo_ <= items[0]["value"] <= hi_:
+                return None, None
+            return out, f"Gauge “{title}”: the value (and its scale) are in the source text."
         if typ == "icons":
             tot = c.get("total")
             if tot not in (None, "", 0):
@@ -357,6 +407,14 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
         rest = f" “{items[-1]['label']}” is the rest of 100%."
     if missing or len(items) < 2:
         return None, left_out
+    if typ == "compare":
+        items = items[:3]
+    if typ == "progress" and not all(0 <= i["value"] <= 100 for i in items):
+        return None, None
+    if typ == "funnel" and len(items) < 3:
+        return None, None
+    if typ == "area" and len(items) < 3:
+        typ = out["type"] = "column"
     if typ == "donut":
         tot = sum(i["value"] for i in items)
         if any(i["value"] < 0 for i in items) or len(items) > 6:
@@ -398,9 +456,33 @@ def charts_from_table(file_id: str, limit: int = 2) -> list[dict[str, Any]]:
     return out
 
 
-def _clean(s: Any, n: int) -> str:
+# egy gyártás / szerkesztés alatt: mely szövegek rövidültek (a check jelzi — 10-12: „millió” → „milli…” észrevétlenül)
+_TRUNC: "contextvars.ContextVar[Optional[list[str]]]" = contextvars.ContextVar("video_trunc", default=None)
+
+
+def _clean(s: Any, n: int, what: Optional[str] = None) -> str:
     s = re.sub(r"\s+", " ", str(s or "")).strip()
-    return s if len(s) <= n else s[:n - 1].rsplit(" ", 1)[0].rstrip(",;:—-") + "…"
+    if len(s) <= n:
+        return s
+    out = s[:n - 1].rsplit(" ", 1)[0].rstrip(",;:—-") + "…"
+    notes = _TRUNC.get()
+    if what and notes is not None:
+        notes.append(f"{what} “{s[:70]}{'…' if len(s) > 70 else ''}” was shortened to “{out}” (limit {n} characters)")
+    return out
+
+
+def _with_ids(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stabil jelenetazonosítók (s1, s2…): beszúrás/törlés után is ugyanarra a jelenetre mutatnak."""
+    used = {str(sc.get("id")) for sc in scenes if sc.get("id")}
+    k = max([int(m.group(1)) for u in used if (m := re.fullmatch(r"s(\d+)", u))] or [0])
+    for sc in scenes:
+        if not sc.get("id") or str(sc["id"]) in ("title", "end"):
+            k += 1
+            while f"s{k}" in used:
+                k += 1
+            sc["id"] = f"s{k}"
+            used.add(sc["id"])
+    return scenes
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -529,6 +611,22 @@ def _rgb(hex_color: Optional[str]) -> list[float]:
     if not re.fullmatch(r"[0-9a-fA-F]{6}", h):
         h = DEFAULT_ACCENT.lstrip("#")
     return [round(int(h[i:i + 2], 16) / 255, 4) for i in (0, 2, 4)]
+
+
+def _decimals(v: float) -> int:
+    return 0 if float(v).is_integer() else 1 if round(v, 1) == round(v, 6) else 2
+
+
+def _fmt_fixed(x: float, dec: int, unit: str, lang: str) -> str:
+    """Számláló köztes értéke ugyanannyi tizedessel, mint a végső (ne ugráljon a szélessége)."""
+    num = f"{abs(x):,.{dec}f}"
+    num = num.replace(",", " ").replace(".", ",") if lang == "hu" else num
+    t = ("-" if x < 0 else "") + num
+    if unit == "%":
+        return t + (" %" if lang == "hu" else "%")
+    if not unit:
+        return t
+    return f"{unit}{t}" if unit in ("$", "€", "£", "¥") and lang == "en" else f"{t} {unit}"
 
 
 def _fmt_val(v: float, unit: str, lang: str) -> str:
@@ -718,7 +816,124 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
                 if it.get("text"):
                     text(f"Text {k + 1}", it["text"], round(m * 0.032), (tw, m * 0.1), (tx + tw / 2, py + m * 0.055), align="left",
                          font="regular", color=soft, t0=t0 + 0.3)
-    else:   # line
+    elif typ == "counter":            # felpörgő szám: 0 → érték, egymást váltó rétegekben, alatta a címke
+        v, dec = vals[0], _decimals(vals[0])
+        final = _fmt_val(v, unit, lang)
+        big = round(min(m * 0.21, W * 0.9 / (0.6 * max(len(final), 1))))
+        cy = (yT + yB) / 2 - m * 0.04
+        steps, T = 26, 1.7
+        for k in range(1, steps + 1):
+            x = v * (1 - (1 - k / steps) ** 3)
+            st = final if k == steps else _fmt_fixed(x, dec, unit, lang)
+            el = {"k": "text", "name": f"Counter {k}", "str": st, "size": big, "box": [round(W * 0.94, 1), round(big * 1.35, 1)],
+                  "pos": [round(W / 2, 1), round(cy, 1)], "align": "center", "font": "bold", "color": accent or _rgb(None),
+                  "t0": round(0.3 + T * (k - 1) / steps, 3), "cut": True}
+            if k < steps:
+                el["t1"] = round(0.3 + T * k / steps, 3)
+            out.append(el)
+        text("Counter label", items[0]["label"], round(m * 0.042), (W * 0.84, m * 0.12), (W / 2, cy + big * 0.85),
+             align="center", font="semibold", color=soft, t0=0.5)
+    elif typ == "compare":            # A vs B (vs C): nagy számok, alattuk arányos oszlopok
+        k_n = len(items)
+        xs = [W * x for x in ((0.3, 0.7) if k_n == 2 else (0.2, 0.5, 0.8))]
+        mx = max(max(vals), 1e-9)
+        bw = min(m * 0.17, W * 0.22)
+        big = round(min(m * 0.085, W * 0.3 / (0.6 * max(len(_fmt_val(v, unit, lang)) for v in vals))))
+        top = yT + m * 0.02 - big * 0.2            # a legmagasabb oszlop fölött a szám — ennyi a hely
+        rect("Baseline", (x1 - x0, max(2, m * 0.003)), ((x0 + x1) / 2, yB), color=[1, 1, 1], opacity=45, t0=0.1, dur=0.4, grow="right")
+        for k, (it, v, x) in enumerate(zip(items, vals, xs)):
+            h, t0 = max(2.0, max(v, 0) / mx * (yB - top - big * 1.4)), 0.35 + k * 0.35
+            hot = v == mx
+            rect(f"Bar – {it['label']}", (bw, h), (x, yB - h / 2), color="accent" if hot else [0.86, 0.88, 0.92],
+                 opacity=100 if hot else 70, round=min(bw * 0.06, 8), grow="up", t0=t0, dur=0.8)
+            text(f"Value – {it['label']}", _fmt_val(v, unit, lang), big, (W * 0.3, big * 1.3), (x, yB - h - big * 0.75),
+                 align="center", font="bold", color=(accent or _rgb(None)) if hot else None, t0=t0 + 0.6)
+            text(f"Label – {it['label']}", it["label"], round(m * 0.034), (W * 0.3, m * 0.1), (x, yB + m * 0.055),
+                 align="center", font="semibold", color=soft, t0=0.2)
+        if k_n == 2:
+            text("Versus", "vs", round(m * 0.05), (m * 0.2, m * 0.08), (W / 2, (top + yB) / 2), align="center", font="bold",
+                 color=soft, t0=0.3)
+    elif typ == "progress":           # egymástól független százalékok: sín + kitöltés
+        row = (yB - yT) / n
+        bh = min(row * 0.22, m * 0.032)
+        for k, (it, v) in enumerate(zip(items, vals)):
+            cy, t0 = yT + row * (k + 0.55), 0.35 + k * min(0.3, 1.5 / n)
+            text(f"Label – {it['label']}", it["label"], round(m * 0.036), ((x1 - x0) * 0.75, m * 0.06),
+                 (x0 + (x1 - x0) * 0.375, cy - bh - m * 0.028), align="left", font="semibold", t0=0.2)
+            text(f"Value – {it['label']}", _fmt_val(v, unit or "%", lang), round(m * 0.04), ((x1 - x0) * 0.25, m * 0.06),
+                 (x1 - (x1 - x0) * 0.125, cy - bh - m * 0.028), align="right", font="bold", color=accent or _rgb(None), t0=t0 + 0.5)
+            rect(f"Track – {it['label']}", (x1 - x0, bh), ((x0 + x1) / 2, cy), color=[1, 1, 1], opacity=16, round=bh / 2, t0=0.1, dur=0.3, grow="fade")
+            w = max(bh, (x1 - x0) * max(0.0, min(100.0, v)) / 100)
+            rect(f"Fill – {it['label']}", (w, bh), (x0 + w / 2, cy), color="accent", opacity=100, round=bh / 2, grow="right", t0=t0, dur=0.9)
+    elif typ == "gauge":              # mérőóra: félkör-skála, kitöltés és mutató a helyére fordul
+        lo_, hi_ = float(ch.get("min") or 0), float(ch.get("max") or ch.get("total") or 100)
+        frac = max(0.0, min(1.0, (vals[0] - lo_) / ((hi_ - lo_) or 1)))
+        r = min((x1 - x0) * 0.32, (yB - yT) * 0.78)
+        th = r * 0.16
+        cx, cy = W / 2, yB - m * 0.05
+        _arc(out, "Gauge track", cx, cy, r, th, -90, 90, [1, 1, 1], 0.1, 0.3, opacity=16)
+        _arc(out, "Gauge fill", cx, cy, r, th, -90, -90 + 180 * frac, "accent", 0.4, 1.3)
+        out.append({"k": "rect", "name": "Needle", "size": [round(r * 0.86, 1), round(max(4, th * 0.28), 1)], "pos": [round(cx, 1), round(cy, 1)],
+                    "rot0": -180, "rot": round(-180 + 180 * frac, 2), "color": [0.95, 0.95, 0.97], "opacity": 100,
+                    "round": round(th * 0.14, 1), "grow": "rotate", "t0": 0.4, "dur": 1.3})
+        rect("Hub", (th * 0.9, th * 0.9), (cx, cy), color=[0.95, 0.95, 0.97], opacity=100, round=th * 0.45, grow="pop", t0=0.3, dur=0.25)
+        big = round(m * 0.09)
+        text("Gauge value", _fmt_val(vals[0], unit, lang), big, (r * 2, big * 1.3), (cx, cy - r * 0.42), align="center", font="bold",
+             color=accent or _rgb(None), t0=1.2)
+        text("Gauge label", items[0]["label"], round(m * 0.036), (W * 0.8, m * 0.1), (cx, cy + m * 0.07), align="center",
+             font="semibold", color=soft, t0=1.4)
+        for nm, val, px in (("Gauge min", lo_, cx - r), ("Gauge max", hi_, cx + r)):
+            text(nm, _fmt_val(val, unit, lang), round(m * 0.03), (m * 0.25, m * 0.06), (px, cy + th * 0.9 + m * 0.02), align="center",
+                 font="regular", color=soft, t0=0.3)
+    elif typ == "funnel":             # tölcsér: szűkülő, középről nyíló sávok
+        row = (yB - yT) / n
+        mx = max(max(vals), 1e-9)
+        bh = row * 0.74
+        for k, (it, v) in enumerate(zip(items, vals)):
+            w, cy, t0 = max(bh, (x1 - x0) * 0.7 * max(v, 0) / mx), yT + row * (k + 0.5), 0.35 + k * 0.3
+            col = _palette(accent or _rgb(None))[0] if k == 0 else [round(c * (1 - 0.13 * k) + 0.05 * k, 4) for c in (accent or _rgb(None))]
+            rect(f"Stage – {it['label']}", (w, bh), (W / 2, cy), color=col, opacity=100, round=min(bh * 0.12, 10), grow="center", t0=t0, dur=0.7)
+            text(f"Label – {it['label']}", it["label"], round(min(m * 0.036, bh * 0.42)), (w * 0.92, bh * 0.9), (W / 2, cy + m * 0.004),
+                 align="center", font="bold", color=[0.06, 0.06, 0.08], t0=t0 + 0.45)
+            text(f"Value – {it['label']}", _fmt_val(v, unit, lang), round(m * 0.036), ((x1 - x0) * 0.14, bh), (W / 2 + w / 2 + (x1 - x0) * 0.08, cy),
+                 align="center", font="bold", color=accent or _rgb(None), t0=t0 + 0.55)
+    elif typ == "proscons":           # mellette / ellene: két oszlop (állóban egymás alatt), tételenként megjelenve
+        heads = ch.get("labels") or (["Mellette", "Ellene"] if lang == "hu" else ["For", "Against"])
+        pros = [it for it in items if str(it.get("label")).strip() in ("+", "pro", "for", "mellette", "előny")]
+        cons = [it for it in items if it not in pros]
+        cols_ = [(pros, "+", "accent", heads[0]), (cons, "–", [0.6, 0.62, 0.68], heads[1] if len(heads) > 1 else "")]
+        ts = 0.35
+        # közös sormagasság (a két fejléc egy vonalban); a szövegdoboz a tetejétől ír — a dobozt úgy tesszük le, hogy az
+        # első sor a jel közepére essen (10-12: a pontok szövege a jel fölé csúszott)
+        rows_ = max(len(pros), len(cons)) + 1
+        row = (yB - yT) / (rows_ * (2 if vertical else 1))
+        fs, hs = round(m * 0.034), round(m * 0.045)
+        line = lambda name, st, size, w, xl, yc, **o: text(name, st, size, (w, size * 2.8), (xl + w / 2, yc + size * 0.65), **o)
+        for ci, (lst, mark, col, head) in enumerate(cols_):
+            if vertical:
+                hx, hy, colw = x0 + m * 0.02, yT + ci * (yB - yT) / 2, x1 - x0
+            else:
+                hx, hy, colw = x0 + ci * (x1 - x0) / 2 + m * 0.02, yT, (x1 - x0) / 2 - m * 0.04
+            line(f"Heading {ci + 1}", head, hs, colw, hx, hy + row * 0.5, align="left", font="bold",
+                 color=(accent or _rgb(None)) if ci == 0 else soft, t0=0.2)
+            for k, it in enumerate(lst):
+                cy, d = hy + row * (k + 1.5), m * 0.045
+                rect(f"Mark {ci + 1}.{k + 1}", (d, d), (hx + d / 2, cy), color=col, opacity=100, round=d / 2, grow="pop", t0=ts, dur=0.25)
+                text(f"Mark sign {ci + 1}.{k + 1}", mark, round(d * 0.8), (d, d * 1.1), (hx + d / 2, cy + d * 0.08), align="center",
+                     font="bold", color=[0.06, 0.06, 0.08], t0=ts + 0.05)
+                line(f"Point {ci + 1}.{k + 1}", it.get("text") or "", fs, colw - d * 1.6, hx + d * 1.4, cy, align="left",
+                     font="semibold", t0=ts + 0.1)
+                ts += 0.4
+    elif typ == "quote":              # idézet: nagy idézőjel, a szöveg, alatta a szerző
+        q = items[0].get("text") or ""
+        size = round(m * (0.06 if len(q) < 90 else 0.05 if len(q) < 160 else 0.042))
+        text("Quote mark", "“", round(m * 0.24), (m * 0.3, m * 0.26), (W / 2, yT + m * 0.06), align="center", font="bold",
+             color=accent or _rgb(None), t0=0.2)
+        text("Quote", q, size, (W * 0.82, (yB - yT) * 0.7), (W / 2, (yT + yB) / 2 + m * 0.04), align="center", font="semibold", t0=0.5)
+        if items[0].get("label"):
+            text("Quote author", "— " + str(items[0]["label"]), round(m * 0.036), (W * 0.8, m * 0.08), (W / 2, yB + m * 0.03),
+                 align="center", font="regular", color=soft, t0=1.1)
+    else:   # line / area
         lo, hi = min(vals), max(vals)
         pad = (hi - lo) * 0.12 or abs(hi) * 0.1 or 1
         lo, hi = lo - pad, hi + pad
@@ -727,6 +942,16 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
         ys = [bottom - (v - lo) / (hi - lo) * (bottom - top) for v in vals]
         rect("Baseline", (x1 - x0, max(2, m * 0.003)), ((x0 + x1) / 2, bottom), color=[1, 1, 1], opacity=45, t0=0.1, dur=0.4, grow="right")
         seg = min(0.45, 2.4 / max(n - 1, 1))
+        if typ == "area":             # kitöltés a vonal alatt: keskeny, halvány oszlopok balról jobbra nőnek
+            K = 48
+            span = xs[-1] - xs[0]
+            for j in range(K):
+                xj = xs[0] + span * (j + 0.5) / K
+                kk = min(n - 2, int((xj - xs[0]) / (span / max(n - 1, 1))))
+                f_ = (xj - xs[kk]) / ((xs[kk + 1] - xs[kk]) or 1)
+                yj = ys[kk] + (ys[kk + 1] - ys[kk]) * f_
+                rect(f"Area {j + 1}", (span / K * 1.04, bottom - yj), (xj, (yj + bottom) / 2), color="accent", opacity=30, grow="up",
+                     t0=round(0.35 + (n - 1) * seg * j / K, 3), dur=0.35)
         th, d = max(4, m * 0.006), max(10, m * 0.016)
         show = set(range(n)) if n <= 8 else {0, n - 1, vals.index(max(vals)), vals.index(min(vals))}
         every = 1 if n <= 8 else math.ceil(n / 8)
@@ -803,14 +1028,21 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         total = max(8.0, voice_s + 1.0)
     Tt, Te = (2.6, 3.0) if (total or 60) < 22 else (3.6, 4.2)
     weights = [max(len(s.get("caption") or s.get("headline") or ""), 45) for s in scenes]
+    # a jelenetterv (scenes) adhat fix hosszt jelenetenként; a többi a maradékon osztozik a felirat hossza szerint
+    fixed = [float(s["duration"]) if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0 else None for s in scenes]
     if total is None:                        # saját szöveg, hossz nélkül: olvasási tempó (~14 karakter/s)
-        durs = [max(3.5, w / 14 + 1.0) for w in weights]
+        durs = [f or max(3.5, w / 14 + 1.0) for f, w in zip(fixed, weights)]
         total = Tt + sum(durs) + Te - X * (n + 1)
     else:
         room = max(total - Tt - Te + X * (n + 1), 3.0 * n)
-        durs = [max(3.0, room * w / sum(weights)) for w in weights]
-        k = room / sum(durs)
-        durs = [d * k for d in durs]
+        free = room - sum(f for f in fixed if f)
+        fw = sum(w for f, w in zip(fixed, weights) if not f) or 1
+        durs = [f or max(3.0, free * w / fw) for f, w in zip(fixed, weights)]
+        loose = [i for i, f in enumerate(fixed) if not f]
+        if loose:                            # a szabad jelenetek igazodnak, hogy a teljes hossz kijöjjön
+            k = max(0.2, (room - sum(f for f in fixed if f)) / max(sum(durs[i] for i in loose), 1e-6))
+            for i in loose:
+                durs[i] = max(3.0, durs[i] * k)
         total = Tt + sum(durs) + Te - X * (n + 1)
     total = round(total, 2)
     cpl = L["capW"] / (0.53 * L["capSize"])
@@ -852,7 +1084,13 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     L["endY"] = end_top + m * 0.22
     L["endBarY"] = end_top + end_lines * end_size * 1.1 + H * 0.03
     L["endSubY"] = L["endBarY"] + H * 0.035 + L["capSize"] * 1.7
+    tl, t0_ = [{"id": "title", "start": 0.0, "end": round(Tt, 2)}], Tt - X
+    for s_, d_ in zip(scenes, durs):
+        tl.append({"id": s_.get("id") or "", "start": round(t0_, 2), "end": round(t0_ + d_, 2)})
+        t0_ += d_ - X
+    tl.append({"id": "end", "start": round(t0_, 2), "end": round(total, 2)})
     D = {
+        "timeline": tl,
         "W": W, "H": H, "fps": FPS, "total": total, "xfade": X, "accent": _rgb(accent), "dark": [0.055, 0.06, 0.08],
         "font": FONT,
         "L": {**L, "titleH": m * 0.44, "headH": m * 0.36,
@@ -1050,6 +1288,37 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
             raise ValueError(str(e).replace("Slides", "A video").replace("make slides from", "make a video from"))
         text, title_hint = src["text"], title_hint or src["title"]
         doc_pics = [p["file_id"] for p in src.get("pictures") or []]
+    trunc_tok = _TRUNC.set([])
+    try:
+        return await _make_body(body, step, fmt, mode, text, title_hint, og_image, site, doc_pics)
+    finally:
+        _TRUNC.reset(trunc_tok)
+
+
+async def _queries_for(scenes: list[dict[str, Any]]) -> list[str]:
+    """Képkereső szavak (angolul, konkrétan) jelenetekhez, amelyekhez a kliens nem adott képet — a magyar cím a
+    képtárban mellényúl. Egy modellhívás; hiba esetén a cím."""
+    from app.llm.siliconflow import _call_model, _strip_json_fences
+    lines = "\n".join(f"{i + 1}. {sc.get('headline')} — {sc.get('caption')}" for i, sc in enumerate(scenes))
+    prompt = ("For each scene give a stock-photo search of 2–4 plain, concrete English words (\"wind turbines at sunset\"). "
+              f"Reply with json: {{\"queries\": [str, …]}} — exactly {len(scenes)} items, in order.\n{lines}")
+    for model in (settings.LLM_MODEL_PRIMARY, settings.LLM_MODEL_FALLBACK):
+        try:
+            q = json.loads(_strip_json_fences(await _call_model(model, [{"role": "user", "content": prompt}], thinking=False)))["queries"]
+            if isinstance(q, list) and len(q) == len(scenes):
+                return [_clean(x, 60) for x in q]
+        except Exception as e:
+            log.info("képkereső szavak (%s): %s", model, e)
+    return [sc.get("headline") or "" for sc in scenes]
+
+
+async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, mode: str, text: str, title_hint: str,
+                     og_image: Optional[str], site: str, doc_pics: list[str]) -> dict[str, Any]:
+    pictures = (body.get("pictures") or "stock").lower()
+    pre_v: list[str] = []
+    pre_f: list[str] = []
+    if body.get("scenes"):                  # a kliens jelenetterve: nem tervezünk újra, pontosan ez lesz
+        return await _make_from_scenes(body, step, fmt, text, title_hint, site, pictures)
     if len(text) < 20:
         raise ValueError("Give the video something to say — an article link, a document, or a few sentences of your own.")
     keep = mode == "text"
@@ -1063,21 +1332,11 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
 
     step(1, 5, "writing the script")
     story = await plan(text, n=n, keep_wording=keep, title_hint=title_hint, language=body.get("language"))
-    story["title"] = _clean(story.get("title") or title_hint or "Video", 70)
-    story["kicker"] = _clean(story.get("kicker") or site, 28)
-    story["scenes"] = [{"headline": _clean(s.get("headline"), 60), "caption": _clean(s.get("caption"), 200),
-                        "image_query": _clean(s.get("image_query"), 60),
-                        "stat": ({"value": _clean(s["stat"].get("value"), 10), "label": _clean(s["stat"].get("label"), 48)}
-                                 if isinstance(s.get("stat"), dict) and s["stat"].get("value") else None),
-                        "chart": s.get("chart")}
-                       for s in story.get("scenes") or [] if isinstance(s, dict)][:14]
+    story["title"] = _clean(story.get("title") or title_hint or "Video", 70, "Title")
+    story["kicker"] = _clean(story.get("kicker") or site, 28, "Kicker")
     chart_notes: list[str] = []
-    for sc in story["scenes"]:              # minden grafikon-érték a forrásban — különben kimarad (a modell nem talál ki számot)
-        sc["chart"], note = _chart_from_plan(sc.get("chart"), text)
-        if note:
-            chart_notes.append(note)
-        if sc["chart"]:
-            sc["stat"] = None
+    # minden jelenet egy úton: szöveghatárok, ábra a forrás számaival (különben kimarad — a modell nem talál ki számot)
+    story["scenes"] = _with_ids([_scene_from(s, text, chart_notes) for s in story.get("scenes") or [] if isinstance(s, dict)][:14])
     if body.get("data_file_id"):           # táblázatból: a cellák értékei, a 2. jelenettől beszúrva
         for k, ch in enumerate(charts_from_table(body["data_file_id"])):
             story["scenes"].insert(min(len(story["scenes"]), 1 + 2 * k),
@@ -1086,10 +1345,10 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
             chart_notes.append(f"Chart “{ch['title']}”: {len(ch['items'])} values from the table, cells {ch['cells']}.")
     if not story["scenes"]:
         raise ValueError("Couldn't plan any scenes from that text.")
-    story["end"] = {"title": _clean((story.get("end") or {}).get("title"), 60), "subtitle": _clean((story.get("end") or {}).get("subtitle"), 90)}
+    story["end"] = {"title": _clean((story.get("end") or {}).get("title"), 60, "End title"),
+                    "subtitle": _clean((story.get("end") or {}).get("subtitle"), 90, "End subtitle")}
 
     step(2, 5, "finding pictures")
-    pictures = (body.get("pictures") or "stock").lower()
     mine = [s for s in (body.get("images") or []) if s] + doc_pics
     specs: list[Any] = []
     for i in range(len(story["scenes"]) + 1):       # 0 = címkép, 1… = jelenetek
@@ -1107,6 +1366,16 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
         else:
             specs.append(None)
 
+    # a kliens képei hova kerültek (10-12, ChatGPT: „a képek sorrendje nem volt egyértelmű”)
+    if body.get("images") and pictures != "none":
+        places = ["title card"] + [f"scene {sc['id']}" for sc in story["scenes"]]
+        n_img = len([x for x in body.get("images") or [] if x])
+        pre_v.append("Your pictures: " + ", ".join(f"#{k + 1} → {places[k]}" for k in range(min(n_img, len(places))))
+                     + (" (then repeated)" if pictures == "mine" and n_img < len(places) else ""))
+        if n_img > len(places):
+            pre_f.append(f"Pictures #{len(places) + 1}–#{n_img} were not used: the video has {len(places)} places "
+                         "(title card + scenes). Use scenes=[…] with an image per scene, or fewer pictures.")
+
     # a stock-keresések jelöltjeiből a látómodell választ (és egy kép nem kerül két jelenetbe)
     stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
                   for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
@@ -1115,14 +1384,66 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
             specs[i] = chosen
 
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id")}
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": keep}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text,
-                           source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True))
+                           source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
+                           pre_verified=pre_v, pre_findings=pre_f)
+
+
+async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt: str, text: str, title_hint: str,
+                            site: str, pictures: str) -> dict[str, Any]:
+    """A kliens kész jelenetterve (scenes): szöveg, kép, ábra, hossz jelenetenként — pontosan ez készül el.
+    Az ábrák számai a forrásban (text), vagy ha az nincs, a jelenetek saját szövegében legyenek."""
+    raw = [s for s in body.get("scenes") or [] if isinstance(s, dict)][:20]
+    if not raw:
+        raise ValueError("scenes: a list of {headline, caption, image?, image_query?, stat?, chart?, duration?}")
+    source = text or "\n".join(f"{s.get('headline') or ''}. {s.get('caption') or ''}" for s in raw)
+    chart_notes: list[str] = []
+    scenes = _with_ids([_scene_from(s, source, chart_notes) for s in raw])
+    story = {"title": _clean(body.get("title") or title_hint or scenes[0].get("headline") or "Video", 70, "Title"),
+             "kicker": _clean(body.get("kicker") or site, 28, "Kicker"), "image_query": "", "scenes": scenes,
+             "end": {"title": _clean(body.get("end_title") or "", 60, "End title"),
+                     "subtitle": _clean(body.get("end_subtitle") or "", 90, "End subtitle")}}
+    pre_v = [f"Your scene plan: {len(scenes)} scenes ({', '.join(sc['id'] for sc in scenes)}), used as given."]
+    step(2, 5, "finding pictures")
+    specs: list[Any] = [None] * (len(scenes) + 1)
+    need = [k for k, s in enumerate(raw) if not s.get("image") and pictures != "none"]
+    if need and any(not scenes[k].get("image_query") for k in need):
+        qs = await _queries_for([scenes[k] for k in need])
+        for k, q in zip(need, qs):
+            scenes[k]["image_query"] = scenes[k].get("image_query") or q
+    for k, s in enumerate(raw):
+        if s.get("image") and pictures != "none":
+            specs[k + 1] = _img_spec(s["image"])
+        elif pictures not in ("none", "mine"):
+            specs[k + 1] = {"stock": scenes[k].get("image_query") or scenes[k]["headline"]}
+    if body.get("title_image") and pictures != "none":
+        specs[0] = _img_spec(body["title_image"])
+    elif pictures != "none":
+        specs[0] = specs[1] if specs[1] and not (isinstance(specs[1], dict) and specs[1].get("stock")) else \
+            {"stock": scenes[0].get("image_query") or story["title"]}
+    pre_v.append("Pictures: title card ← " + ("your title_image" if body.get("title_image") else "scene s1's picture" if specs[0] is specs[1] else "stock")
+                 + "; " + ", ".join(f"{sc['id']} ← {'yours' if raw[k].get('image') else 'stock' if specs[k + 1] else 'none'}"
+                                    for k, sc in enumerate(scenes)))
+    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else scenes[i - 1]["headline"])
+                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
+    if stock_jobs:
+        for i, chosen in (await _choose_stock(stock_jobs)).items():
+            specs[i] = chosen
+    dur = body.get("duration")
+    total = float(min(max(float(dur), 10), 180)) if dur else None
+    opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": False}
+    return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text or source,
+                           source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
+                           pre_verified=pre_v, pre_findings=[], scene_plan=True)
 
 
 async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any], *, chart_notes: list[str],
                     source_text: str, source_file_id: Optional[str], step: Callable[..., None], render: bool = True,
-                    parent: Optional[str] = None, label_stem: Optional[str] = None, operation: str = "video") -> dict[str, Any]:
+                    parent: Optional[str] = None, label_stem: Optional[str] = None, operation: str = "video",
+                    pre_verified: Optional[list[str]] = None, pre_findings: Optional[list[str]] = None,
+                    scene_plan: bool = False) -> dict[str, Any]:
     """Forgatókönyv + képleírások → .ecproj (+ MP4). A make és az edit közös útja; parent = a szerkesztett projekt
     (a képei és a hangja {"asset": név} hivatkozással, letöltés nélkül jönnek át)."""
     fmt, total = opts["fmt"], opts.get("total")
@@ -1191,8 +1512,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         spec = {"story": story, "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
                                               for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
-                         "music_asset": music},
-                "source": (source_text or "")[:30000], "chart_notes": chart_notes}
+                         "music_asset": music, "keep_wording": bool(opts.get("keep_wording"))},
+                "source": (source_text or "")[:30000], "chart_notes": chart_notes, "timeline": D.get("timeline")}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
                    extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
         for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra:
@@ -1204,6 +1525,17 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             step(4, 5, "rendering the video")
             vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
             result["check"] = vid.pop("check", None)          # a közös check-szerződés: a feladat (a videó) ellenőrzése
+            chk = result["check"]
+            if chk is not None:
+                chk["verified"] = list(pre_verified or []) + chk.get("verified", [])
+                trunc = _TRUNC.get() or []
+                cov_v, cov_f, cov = _coverage(source_text, story, bool(opts.get("keep_wording")), scene_plan)
+                result["coverage"] = cov
+                chk["verified"] += cov_v
+                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + cov_f + (
+                    [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]])
+                if chk["findings"] and chk.get("status") == "ok":
+                    chk["status"] = "needs_check"
             # technikailag jó, tartalmilag gyanús: kevés jelenet a hosszhoz (10-12: 60 s, 1 jelenet — a szöveg nagy része kimaradt).
             # Az ÁTLAG számít: egy 19 s-os idővonal három eseménnyel és három felirattal rendben van.
             ns = max(1, len(D["scenes"]))
@@ -1224,6 +1556,66 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         shutil.rmtree(work, ignore_errors=True)
 
 
+
+
+_STEM = lambda w: w[:5]
+
+
+def _words(t: str) -> list[str]:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (t or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return [w for w in re.findall(r"[a-z0-9]+", t) if len(w) >= 4]
+
+
+def _video_text(story: dict[str, Any]) -> str:
+    parts = [story.get("title") or "", (story.get("end") or {}).get("title") or "", (story.get("end") or {}).get("subtitle") or ""]
+    for sc in story.get("scenes") or []:
+        parts += [sc.get("headline") or "", sc.get("caption") or ""]
+        if sc.get("stat"):
+            parts += [sc["stat"].get("value") or "", sc["stat"].get("label") or ""]
+        ch = sc.get("chart") or {}
+        parts.append(ch.get("title") or "")
+        for it in ch.get("items") or []:
+            parts += [str(it.get("label") or ""), str(it.get("text") or ""), str(it.get("value") if it.get("value") is not None else "")]
+        if ch.get("total"):
+            parts.append(str(ch["total"]))
+    return " ".join(parts)
+
+
+def _coverage(source: str, story: dict[str, Any], keep: bool, scene_plan: bool) -> tuple[list[str], list[str], dict[str, Any]]:
+    """Tartalmi lefedettség (10-12, ChatGPT: „egy technikailag hibátlan, de tartalmilag hiányos videó is sikeres lett”):
+    a forrás mondatai és számai közül mi jelenik meg a videóban (felirat, cím, szám, ábra). Saját szövegnél (keep_wording)
+    minden mondatnak benne kell lennie; cikknél a nagy hiány (< 60%) „needs_check”, a kimaradtak listája mindig ott van."""
+    vt = _video_text(story)
+    vstems = {_STEM(w) for w in _words(vt)}
+    sents = [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n+", source or "") if len(_words(x)) >= 4]
+    missing = []
+    for snt in sents:
+        ws = {_STEM(w) for w in _words(snt)}
+        if ws and len(ws & vstems) / len(ws) < 0.4:
+            missing.append(snt)
+    src_nums = _text_numbers(source or "") - {float(i) for i in range(0, 4)}
+    vid_nums = _text_numbers(vt)
+    miss_nums = sorted(src_nums - vid_nums)
+    cov = {"sentences": {"total": len(sents), "covered": len(sents) - len(missing), "missing": missing[:12]},
+           "numbers": {"total": len(src_nums), "covered": len(src_nums) - len(miss_nums),
+                       "missing": [(int(x) if float(x).is_integer() else x) for x in miss_nums[:20]]}}
+    if scene_plan and not source:
+        return [], [], cov
+    verified = [f"Covers {cov['sentences']['covered']} of {len(sents)} sentences and {cov['numbers']['covered']} of "
+                f"{len(src_nums)} numbers of the source (coverage lists what is left out)."] if sents or src_nums else []
+    findings = []
+    s_ratio = (len(sents) - len(missing)) / len(sents) if sents else 1
+    n_ratio = cov["numbers"]["covered"] / len(src_nums) if src_nums else 1
+    if keep and missing:
+        findings.append(f"{len(missing)} of your sentences are not in the video, e.g. “{missing[0][:90]}”.")
+    elif s_ratio < 0.6 or n_ratio < 0.6:
+        findings.append(f"Much of the source is left out ({cov['sentences']['covered']}/{len(sents)} sentences, "
+                        f"{cov['numbers']['covered']}/{len(src_nums)} numbers), e.g. “{(missing or ['…'])[0][:90]}”"
+                        + (f"; numbers not shown: {', '.join(str(x) for x in cov['numbers']['missing'][:8])}" if miss_nums else "")
+                        + ". Add scenes with action=edit, or pass scenes=[…] yourself.")
+    return verified, findings, cov
 
 
 def _file_entry(fid: str) -> dict[str, Any]:
@@ -1311,7 +1703,10 @@ def info(file_id: str) -> dict[str, Any]:
     rid = meta.get("render_file_id")
     spec = meta.get("spec") or {}
     pics = spec.get("pictures") or []
-    scenes = [{"scene": i, "headline": sc.get("headline"), "caption": sc.get("caption"),
+    tl = {x["id"]: x for x in spec.get("timeline") or [] if x.get("id")}
+    scenes = [{"scene": i, "id": sc.get("id") or f"s{i}", **({"start": tl[sc["id"]]["start"], "end": tl[sc["id"]]["end"]}
+                                                              if sc.get("id") in tl else {}),
+               "headline": sc.get("headline"), "caption": sc.get("caption"),
                **({"chart": {"type": sc["chart"]["type"], "title": sc["chart"]["title"]}} if sc.get("chart") else {}),
                **({"stat": sc["stat"]} if sc.get("stat") else {}),
                "picture": ((pics[i] or {}).get("credit") or "yes") if i < len(pics) and pics[i] else None}
@@ -1372,14 +1767,26 @@ def _img_spec(x: Any) -> Any:
 
 
 def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Egy jelenet (a modell terve, a kliens jelenetterve vagy egy szerkesztés) tisztítva: szöveghatárok (a rövidülés
+    a check-be kerül), ábra a forrásszámokkal ellenőrizve, stabil id, opcionális fix hossz."""
     sc = dict(base or {"headline": "", "caption": "", "image_query": "", "stat": None, "chart": None})
+    if ch.get("id"):
+        sc["id"] = re.sub(r"[^\w-]", "", str(ch["id"]))[:20] or sc.get("id")
     if "headline" in ch:
-        sc["headline"] = _clean(ch["headline"], 60)
+        sc["headline"] = _clean(ch["headline"], 60, "Headline")
     if "caption" in ch:
-        sc["caption"] = _clean(ch["caption"], 200)
+        sc["caption"] = _clean(ch["caption"], 200, "Caption")
+    if ch.get("image_query"):
+        sc["image_query"] = _clean(ch["image_query"], 60)
+    if "duration" in ch:
+        try:
+            sc["duration"] = min(30.0, max(2.0, float(ch["duration"]))) if ch["duration"] not in (None, "", "auto") else None
+        except (TypeError, ValueError):
+            pass
     if "stat" in ch:
         st = ch["stat"]
-        sc["stat"] = {"value": _clean(st.get("value"), 10), "label": _clean(st.get("label"), 48)} if isinstance(st, dict) and st.get("value") else None
+        sc["stat"] = ({"value": _clean(st.get("value"), 10, "Stat value"), "label": _clean(st.get("label"), 48, "Stat label")}
+                      if isinstance(st, dict) and st.get("value") else None)
         if sc["stat"]:
             sc["chart"] = None
     if "chart" in ch:
@@ -1394,6 +1801,15 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
 
 async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    tok = _TRUNC.set([])
+    try:
+        return await _edit(file_id, changes, extra_source=extra_source, progress=progress)
+    finally:
+        _TRUNC.reset(tok)
+
+
+async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
+                progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
     """Egy elkészült videó módosítása a forgatókönyvéből → ÚJ változat (projekt + MP4). changes:
     {"scenes": [{"scene": n (1-től), "headline"?, "caption"?, "image"?, "stat"?, "chart"?, "remove"?}],
      "add": [{"after": n (0 = az első elé), "headline", "caption"?, "image"? | "image_query"?, "stat"?, "chart"?}],
@@ -1410,6 +1826,7 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
     if not isinstance(changes, dict) or not changes:
         raise ValueError("Say what should change (changes).")
     story = copy.deepcopy(spec["story"])
+    story["scenes"] = _with_ids(story["scenes"])          # régi projekt: s1, s2… a mostani sorrendben
     pics = copy.deepcopy(spec.get("pictures") or [])
     pics += [None] * (len(story["scenes"]) + 1 - len(pics))
     opts = dict(spec.get("opts") or {})
@@ -1419,24 +1836,30 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
 
     for key, lim in (("title", 70), ("kicker", 28)):
         if key in changes:
-            story[key] = _clean(changes[key], lim)
+            story[key] = _clean(changes[key], lim, key.capitalize())
     end = dict(story.get("end") or {})
     if "end_title" in changes:
-        end["title"] = _clean(changes["end_title"], 60)
+        end["title"] = _clean(changes["end_title"], 60, "End title")
     if "end_subtitle" in changes:
-        end["subtitle"] = _clean(changes["end_subtitle"], 90)
+        end["subtitle"] = _clean(changes["end_subtitle"], 90, "End subtitle")
     story["end"] = end
 
     entries = [{"scene": sc, "pic": keep(pics[i + 1]), "remove": False} for i, sc in enumerate(story["scenes"])]
     title_pic = _img_spec(changes["title_image"]) if "title_image" in changes else keep(pics[0])
     n0 = len(entries)
+    ids = [e["scene"].get("id") for e in entries]
     for ch in changes.get("scenes") or []:
-        try:
-            k = int(ch.get("scene")) - 1
-        except (TypeError, ValueError):
-            raise ValueError("scenes[].scene: the scene's number (1 = the first scene after the title card)")
-        if not 0 <= k < n0:
-            raise ValueError(f"There is no scene {k + 1} (the video has {n0}).")
+        if ch.get("id"):                        # stabil azonosító (s3) — beszúrás/törlés után is ugyanaz a jelenet
+            if ch["id"] not in ids:
+                raise ValueError(f"There is no scene {ch['id']} (scenes: {', '.join(ids)}).")
+            k = ids.index(ch["id"])
+        else:
+            try:
+                k = int(ch.get("scene")) - 1
+            except (TypeError, ValueError):
+                raise ValueError("scenes[]: give the scene's id (\"s3\") or number (1 = the first scene after the title card)")
+            if not 0 <= k < n0:
+                raise ValueError(f"There is no scene {k + 1} (the video has {n0}).")
         e = entries[k]
         if ch.get("remove"):
             e["remove"] = True
@@ -1448,7 +1871,8 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
             e["pic"] = {"stock": _clean(ch["image_query"], 60)}
     adds: dict[int, list[dict[str, Any]]] = {}
     for a in changes.get("add") or []:
-        after = max(0, min(n0, int(a.get("after", n0))))
+        aft = a.get("after", n0)
+        after = (ids.index(aft) + 1) if isinstance(aft, str) and aft in ids else 0 if aft == "title" else max(0, min(n0, int(aft)))
         sc = _scene_from(a, source, notes)
         # keresőszó híján a videó (angol) keresőszava — a magyar cím a képtárban mellényúl („Mit tehetsz a méhekért?”)
         near = next((e["scene"].get("image_query") for e in entries[max(0, after - 1):] if e["scene"].get("image_query")), "")
@@ -1477,7 +1901,7 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
             opts[f"{base}_asset"] = None
             opts[key] = None if v in (None, "", "none") else v
 
-    story["scenes"] = [e["scene"] for e in final]
+    story["scenes"] = _with_ids([e["scene"] for e in final])
     specs: list[Any] = [title_pic] + [e["pic"] for e in final]
     reshape = opts["fmt"] != (spec.get("opts") or {}).get("fmt")
     if reshape:          # más képarány: a képeket az eredeti forrásból újra (különben nagyítva, elmosódva)
@@ -1504,7 +1928,7 @@ _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json obj
  "add": [{"after": n, "headline": str, "caption": str, "image_query": "2–4 plain English words", "stat"?: ..., "chart"?: ...}],
  "title"?: str, "end_title"?: str, "end_subtitle"?: str, "title_image"?: {"stock": "words"},
  "format"?: "vertical|landscape|square", "duration"?: seconds, "ken_burns"?: "some|all|off", "accent"?: "#RRGGBB"}
-<chart> = {"type": "column|bar|line|donut|ring|icons|timeline|steps", "title": str, "unit": str, "total": number|null,
+<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
            "items": [{"label": str, "value": number|null, "text": str}]}
 Scene numbers are the ones listed below (1 = the first scene after the title card). Numbers in charts and stats must
 come from the video's source or from the request itself — never invent them. Keep the language of the video.
@@ -1628,3 +2052,69 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid, "check": check,
             "note": "The video plays in PowerPoint and Keynote (it is embedded in the file); the browser's slide editor "
                     "shows its first frame."}
+
+
+# ---------- előnézet jelenetenként ----------
+
+def frame_time(file_id: str, scene: Any = None, at: Optional[float] = None) -> tuple[str, float, str]:
+    """→ (a renderelt videó file_id-ja, az időpont másodpercben, címke). scene: id (s3), sorszám, "title", "end";
+    a jelenet VÉGE előtt 0,4 s-mal (az animációk már lefutottak); at: tetszőleges másodperc."""
+    if file_id.lower().endswith(".ecproj"):              # projekt → a legutóbbi renderje
+        pid, vid = file_id, (read_meta(file_id) or {}).get("render_file_id") or ""
+        if not vid or not output_path(vid).exists():
+            raise ValueError("This video project has no render yet — render it first (video action=render).")
+    else:                                                 # videó → a projektje (ha a videókészítő csinálta)
+        src = str((read_meta(file_id) or {}).get("source_file_id") or "")
+        pid, vid = (src if src.lower().endswith(".ecproj") else ""), file_id
+    spec = ((read_meta(pid) or {}).get("spec") or {}) if pid else {}
+    if at is not None:
+        return vid, max(0.0, float(at)), f"at {float(at):.1f} s"
+    tl = spec.get("timeline") or []
+    if not tl:
+        raise ValueError("This video has no scene timeline (made before it was recorded) — use at=seconds instead.")
+    key = str(scene).strip().lower() if scene is not None else "title"
+    if key.isdigit():
+        key = (tl[int(key)]["id"] if 0 < int(key) < len(tl) - 1 else "")
+    hit = next((x for x in tl if str(x.get("id")).lower() == key), None)
+    if not hit:
+        raise ValueError(f"No scene {scene!r} — scenes: {', '.join(str(x['id']) for x in tl)}")
+    t = hit["end"] - 0.4 if hit["id"] != "title" else min(hit["end"] - 0.4, 2.0)
+    return vid, max(0.0, t), f"{hit['id']} ({hit['start']:.1f}–{hit['end']:.1f} s)"
+
+
+def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str, Any]]]:
+    """Az összes jelenet egy képen (a címkártya, minden jelenet vége, a zárókép), feliratozva — egy pillantás az egészre."""
+    import cv2
+    import numpy as np
+    pid = project_of(file_id)
+    tl = ((read_meta(pid) or {}).get("spec") or {}).get("timeline") or []
+    if not tl:
+        raise ValueError("This video has no scene timeline (made before it was recorded) — use at=seconds instead.")
+    vid = (read_meta(pid) or {}).get("render_file_id") if file_id.lower().endswith(".ecproj") else file_id
+    if not vid or not output_path(vid).exists():
+        raise ValueError("This video project has no render yet — render it first (video action=render).")
+    cap = cv2.VideoCapture(str(crafts.existing(vid)))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    tiles, info_ = [], []
+    cols = 4 if len(tl) > 6 else 3
+    tw = width // cols
+    for x in tl:
+        t = x["end"] - 0.4 if x["id"] != "title" else min(x["end"] - 0.4, 2.0)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(0, t) * fps))
+        ok, f = cap.read()
+        if not ok:
+            continue
+        th = int(tw * f.shape[0] / f.shape[1])
+        f = cv2.resize(f, (tw, th))
+        cv2.rectangle(f, (0, 0), (tw, 30), (0, 0, 0), -1)
+        cv2.putText(f, f"{x['id']}  {x['start']:.1f}-{x['end']:.1f}s", (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        tiles.append(f)
+        info_.append({"id": x["id"], "start": x["start"], "end": x["end"], "frame_at": round(t, 2)})
+    cap.release()
+    if not tiles:
+        raise ValueError("No frame could be read from the video.")
+    while len(tiles) % cols:
+        tiles.append(np.zeros_like(tiles[0]))
+    grid = np.vstack([np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)])
+    ok, buf = cv2.imencode(".jpg", grid, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    return buf.tobytes(), info_

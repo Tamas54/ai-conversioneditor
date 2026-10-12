@@ -129,6 +129,15 @@ function grower(layer, el) {   // kinövés: a horgony a növekedés kezdő él�
     T.property("ADBE Position").setValue(P);
     var z = g === "up" || g === "down" ? [100, 0] : [0, 100];
     S.setValueAtTime(el.t0, z); S.setValueAtTime(el.t0 + el.dur, [100, 100]); ease(S);
+  } else if (g === "rotate") {      // mérőóra-mutató: a horgony a tövénél, elfordul rot0 → rot
+    try { T.property("ADBE Anchor Point").setValue([-w / 2, 0]); } catch (e) {}
+    T.property("ADBE Position").setValue(el.pos);
+    var R = T.property("ADBE Rotate Z");
+    R.setValueAtTime(el.t0, el.rot0); R.setValueAtTime(el.t0 + el.dur, el.rot); ease(R);
+    var Op = T.property("ADBE Opacity");          // beúszik (az áttűnés alatt ne álljon ott egyedül a skála előtt)
+    Op.setValueAtTime(Math.max(0, el.t0 - 0.3), 0); Op.setValueAtTime(el.t0, 100);
+  } else if (g === "center") {      // középről nyílik (tölcsér)
+    S.setValueAtTime(el.t0, [0, 100]); S.setValueAtTime(el.t0 + el.dur, [100, 100]); ease(S);
   } else if (g === "pop") {
     S.setValueAtTime(el.t0, [0, 0]); S.setValueAtTime(el.t0 + el.dur, [100, 100]); ease(S);
   } else if (el.t0 !== undefined) {
@@ -142,11 +151,15 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
     var el = ch.elements[k];
     if (el.k === "rect") {
       var r = rect(c, el.name, el.size, el.pos, el.color === "accent" ? D.accent : el.color, el.opacity, el.round);
-      if (el.rot) tp(r).property("ADBE Rotate Z").setValue(el.rot);
+      if (el.rot && el.grow !== "rotate") tp(r).property("ADBE Rotate Z").setValue(el.rot);
       if (el.grow) grower(r, el);
     } else {
-      fadeIn(textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
-        font: F[el.font] || D.font.semibold, color: el.color }), el.t0 || 0, 0.4, 0);
+      var tl = textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
+        font: F[el.font] || D.font.semibold, color: el.color });
+      if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
+        tl.inPoint = el.t0 || 0;
+        if (el.t1 !== undefined) tl.outPoint = el.t1;
+      } else fadeIn(tl, el.t0 || 0, 0.4, 0);
     }
   }
 }

@@ -13,7 +13,7 @@ import base64
 import logging
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from mcp.server.fastmcp import FastMCP
@@ -367,6 +367,8 @@ async def files(
     file_id: Optional[str] = None,
     page: Optional[int] = None,
     other_file_id: Optional[str] = None,
+    scene: Optional[str] = None,
+    at: Optional[float] = None,
 ) -> dict:
     """The person's files, and empty new ones; see a file; compare two versions.
 
@@ -381,7 +383,9 @@ async def files(
       pdf (size A4|Letter) | video (size vertical|landscape|square — an empty timeline in the video editor).
       Give the person its edit_url — it opens the blank file in the matching editor.
       title names the file (and the deck's first slide).
-    action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id, so you can
+    action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id (a video: scene =
+      "s3" | its number | "title" | "end" — that scene at its end, when the animation has played — or scene="all" for
+      every scene on one sheet, or at=seconds), so you can
       check your own result (text overflow, a missing object, a wrong crop) before calling it done.
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
       changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
@@ -413,7 +417,7 @@ async def files(
             "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "made_from": f.get("source_label")} for f in page]}
     if action == "preview":
-        return await _preview_content(file_id, page or 1)
+        return await _preview_content(file_id, page or 1, scene, at)
     if action == "compare":
         from app.tools import compare as cmp
         if not file_id:
@@ -447,8 +451,10 @@ async def files(
     return res
 
 
-async def _preview_content(file_id: Optional[str], page: int):
-    """files(action="preview"): a kép MAGA az eszköz-válaszban (a kliens-AI látja), mellette a szöveges adatok."""
+async def _preview_content(file_id: Optional[str], page: int, scene: Optional[str] = None, at: Optional[float] = None):
+    """files(action="preview"): a kép MAGA az eszköz-válaszban (a kliens-AI látja), mellette a szöveges adatok.
+    Videónál jelenetenként is (scene: s3 | sorszám | title | end | all = kontaktlap) vagy időpontra (at)."""
+    import asyncio
     import json
     from mcp.types import CallToolResult, ImageContent, TextContent
     from app.storage import display_label
@@ -457,6 +463,21 @@ async def _preview_content(file_id: Optional[str], page: int):
     if not file_id:
         raise ValueError("preview needs file_id")
     src = existing(file_id)
+    if (scene is not None or at is not None) and src.suffix.lower().lstrip(".") in ("ecproj", "mp4", "mov", "m4v", "webm"):
+        from app.tools import video as vid_mod
+        if str(scene or "").lower() == "all":
+            jpg, frames = await asyncio.to_thread(vid_mod.contact_sheet, file_id)
+            info = {"file_id": file_id, "name": display_label(file_id), "scenes": frames,
+                    "note": "Every scene at its end (animations done), with the title card and the end card."}
+        else:
+            vid, t, label = vid_mod.frame_time(file_id, scene, at)
+            out = previews.temp_path_for(vid, t)
+            await asyncio.to_thread(previews.video_frame_at, existing(vid), t, out)
+            jpg = await asyncio.to_thread(previews.to_jpeg, out, 1000)
+            info = {"file_id": file_id, "name": display_label(file_id), "frame": label, "at": round(t, 2)}
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(info, ensure_ascii=False)),
+                                       ImageContent(type="image", data=base64.b64encode(jpg).decode(), mimeType="image/jpeg")],
+                              structuredContent=info)
     if not previews.can_preview(file_id):
         raise ValueError(f"No preview for .{src.suffix.lstrip('.')} files.")
     n = await previews.page_count(src)
@@ -1412,8 +1433,19 @@ async def video(
     deck_file_id: Optional[str] = None,
     after_slide: Optional[int] = None,
     title: Optional[str] = None,
+    scenes: Optional[list] = None,
+    kicker: Optional[str] = None,
+    title_image: Optional[Any] = None,
+    end_title: Optional[str] = None,
+    end_subtitle: Optional[str] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
+
+    YOUR OWN SCENE PLAN (most reliable): action="make" with scenes=[{"headline", "caption", "image"? (file_id | URL
+      — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo), "stat"?
+      {value, label}, "chart"? (see below), "duration"? seconds, "id"? }] + title, kicker?, title_image?, end_title?,
+      end_subtitle?, format, duration (total; scenes without one share the rest). It is made exactly as given (no
+      re-planning). Put the source in text too: chart numbers are checked against it (without it, against your scenes).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
       (text + keep_wording=true ONLY when they want their own sentences word for word as the captions; for an
@@ -1423,21 +1455,28 @@ async def video(
       (result.project / result.video, each with edit_url) or "failed".
       format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds
       (default 60; with keep_wording and no duration the reading pace sets it). images: pictures in order —
-      file_ids or {"url": …}; this server doesn't make AI pictures for you, so make them with your own image tool
+      file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where
+      each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
       and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
       music_file_id / voice_file_id: audio the person gave (upload it first). There is no text-to-speech here —
       with a voice-over the video follows its length. accent: a hex colour for bars and numbers.
       ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
       | all | off (only a gentle drift).
-      Animated charts (bars grow, lines draw): made from comparable numbers in the source text (every value is checked
-      against the text — a chart with an invented number is left out), or pass data_file_id (CSV/XLSX: a chart per
-      column, values from the cells).
+      Animated graphics for any topic — chart = {"type", "title", "unit", "total"?, "min"?, "max"?, "items": [{"label",
+      "value"?, "text"?}]}: column | bar | line | area (values over time) | donut (parts of a whole) | ring (one %) |
+      icons ("1 in 4", x of 100) | counter (one number counting up) | compare (2–3 numbers side by side) | progress
+      (separate %s) | gauge (one value on a min–max scale) | funnel (shrinking stages) | timeline (dated events: label =
+      date) | steps (how-to) | proscons (label "+"/"-", text) | quote (text word for word from the source, label =
+      who). Every number, date and quote is checked against the source — one that isn't there drops the graphic.
+      Or pass data_file_id (CSV/XLSX: a chart per column, values from the cells).
+      The result's check also reports COVERAGE (which source sentences and numbers made it in — `coverage` lists the
+      missing ones), shortened texts, and where your pictures went. See it scene by scene: files(action="preview",
+      file_id, scene="all") or scene="s3".
     action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
-      changes = {"scenes": [{"scene": n (1 = first scene after the title card), "headline"?, "caption"?,
+      changes = {"scenes": [{"id": "s3" (stable — info lists the ids; or "scene": n, 1 = first after the title card), "headline"?, "caption"?,
       "image"? (file_id | URL — e.g. a picture you made with your own image tool | {"stock": "words"} | "none"),
-      "stat"? {value, label} | null, "chart"? (same shape as in the story: type column|bar|line|donut|ring|icons|
-      timeline|steps, title, unit, total, items[{label, value, text}]) | null, "remove"? true}],
-      "add": [{"after": n (0 = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?}],
+      "stat"? {value, label} | null, "chart"? (any graphic type above) | null, "duration"?, "remove"? true}],
+      "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
       "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
       fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
       "voice_file_id"? | "none"}. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
@@ -1476,7 +1515,8 @@ async def video(
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
             "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
-            "ken_burns": ken_burns, "data_file_id": data_file_id}
+            "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker,
+            "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle}
     return await make_video(body)
 
 

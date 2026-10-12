@@ -214,3 +214,35 @@ async def render_jpeg(src: Path, page: int = 1, width: int = 1000) -> bytes:
             im.convert("RGB").save(buf, "JPEG", quality=82, optimize=True)
             return buf.getvalue()
     return await asyncio.to_thread(enc)
+
+
+def temp_path_for(file_id: str, t: float) -> Path:
+    from app.storage import temp_path
+    return temp_path(f"pv-{Path(file_id).stem}-at{int(t * 100)}.png")
+
+
+def video_frame_at(src: Path, seconds: float, dst: Path) -> None:
+    """Egy videókocka adott másodpercnél (a jelenetenkénti előnézethez)."""
+    import cv2
+    c = cv2.VideoCapture(str(src))
+    try:
+        fps = c.get(cv2.CAP_PROP_FPS) or 30
+        n = c.get(cv2.CAP_PROP_FRAME_COUNT) or 1
+        c.set(cv2.CAP_PROP_POS_FRAMES, min(n - 1, max(0, int(seconds * fps))))
+        ok, fr = c.read()
+    finally:
+        c.release()
+    if not ok or fr is None:
+        raise RuntimeError("No frame could be read at that time.")
+    cv2.imwrite(str(dst), fr)
+
+
+def to_jpeg(src: Path, width: int = 1000) -> bytes:
+    import io
+    from PIL import Image
+    im = Image.open(src).convert("RGB")
+    if im.width > width:
+        im = im.resize((width, round(im.height * width / im.width)))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=82)
+    return buf.getvalue()
