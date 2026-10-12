@@ -100,6 +100,8 @@ ARG GRIDCRAFT_WEB_SHA256=7e73f8e8d39021fcb48a086c24c3b077c6a83dbf980275d5b5a4429
 ARG ISNET_SHA256=60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
 # emberszegmentálás a kivágáshoz: MINDEN ember maradjon, egészben (az ISNet csak a fő alanyt tartja — 10-12)
 ARG HUMANSEG_SHA256=01eb6a29a5c4d8edb30b56adad9bb3a2a0535338e480724a213e0acfd2d1c73c
+# az alany kivágása: BiRefNet-lite (MIT) — az ISNet a háttér világos tárgyait ködként a fej mellé tette (10-12)
+ARG BIREFNET_SHA256=5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333
 RUN set -eux; cd /tmp; \
     for spec in "photocraft ${PHOTOCRAFT_VERSION} ${PHOTOCRAFT_CLI_SHA256} ${PHOTOCRAFT_WEB_TAG} ${PHOTOCRAFT_WEB_SHA256}" \
                 "vectorcraft ${VECTORCRAFT_VERSION} ${VECTORCRAFT_CLI_SHA256} ${VECTORCRAFT_WEB_TAG} ${VECTORCRAFT_WEB_SHA256}" \
@@ -127,7 +129,10 @@ RUN set -eux; cd /tmp; \
     echo "${ISNET_SHA256}  /opt/models/isnet-general-use.onnx" | sha256sum -c -; \
     curl -fsSL -o /opt/models/u2net_human_seg.onnx \
         https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx; \
-    echo "${HUMANSEG_SHA256}  /opt/models/u2net_human_seg.onnx" | sha256sum -c -
+    echo "${HUMANSEG_SHA256}  /opt/models/u2net_human_seg.onnx" | sha256sum -c -; \
+    curl -fsSL -o /opt/models/birefnet-general-lite.onnx \
+        https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx; \
+    echo "${BIREFNET_SHA256}  /opt/models/birefnet-general-lite.onnx" | sha256sum -c -
 ENV PHOTOCRAFT_CLI=/opt/photocraft/bin/photocraft-cli \
     PHOTOCRAFT_WEB_DIR=/opt/photocraft-web \
     VECTORCRAFT_CLI=/opt/vectorcraft/bin/vectorcraft-cli \
@@ -137,7 +142,8 @@ ENV PHOTOCRAFT_CLI=/opt/photocraft/bin/photocraft-cli \
     DESIGNCRAFT_CLI=/opt/designcraft/bin/designcraft-cli DESIGNCRAFT_WEB_DIR=/opt/designcraft-web \
     GRIDCRAFT_CLI=/opt/gridcraft/bin/gridcraft-cli GRIDCRAFT_WEB_DIR=/opt/gridcraft-web \
     CUTOUT_MODEL_PATH=/opt/models/isnet-general-use.onnx \
-    HUMAN_SEG_MODEL_PATH=/opt/models/u2net_human_seg.onnx
+    HUMAN_SEG_MODEL_PATH=/opt/models/u2net_human_seg.onnx \
+    BIREFNET_MODEL_PATH=/opt/models/birefnet-general-lite.onnx
 
 WORKDIR /app
 
