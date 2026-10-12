@@ -256,13 +256,20 @@ def doc_pic_peek(v: Any, doc_pics: dict[str, str]) -> bool:
     return bool(re.search(r"DOCIMG#\d+", str(v or ""))) and any(t in str(v) for t in doc_pics)
 
 
-def _label_outputs(res: dict[str, Any], stem: str) -> None:
-    """A dizájn-kimenetek neve a címből (a motor belső „dizajn” neve helyett) — png, pdf, szerkeszthető .vectorcraft."""
+def _label_outputs(res: dict[str, Any], stem: str, group: Optional[str] = None, variant: Optional[str] = None) -> None:
+    """A dizájn-kimenetek neve a címből (a motor belső „dizajn” neve helyett) — png, pdf, szerkeszthető .vectorcraft.
+    group/variant: egy készítés testvér-fájljai (méretek × formátumok) — a felület ebből csoportosít és vált köztük."""
     from app.storage import write_meta
     for f in res.get("files") or []:
         ext = f["file_id"].rsplit(".", 1)[-1]
         f["label"] = f"{stem}.{ext}"
-        write_meta(f["file_id"], label=f["label"])
+        write_meta(f["file_id"], label=f["label"], extra={k: v for k, v in (("group", group), ("variant", variant)) if v})
+
+
+def _new_group() -> str:
+    """Egy készítés azonosítója (a testvér-fájlok közös metája)."""
+    import uuid
+    return uuid.uuid4().hex[:12]
 
 
 @router.post("/api/make/social")
@@ -272,7 +279,7 @@ async def make_social(body: dict[str, Any]) -> dict[str, Any]:
     if not headline:
         raise HTTPException(400, "Add a headline.")
     sizes = [s for s in body.get("sizes") or ["square"] if s in SOCIAL_SIZES] or ["square"]
-    files = []
+    files, group = [], _new_group()
     try:
         image = await _materialize(_image_spec(body.get("image")))
         if image and body.get("remove_background") and body.get("background"):
@@ -287,7 +294,7 @@ async def make_social(body: dict[str, Any]) -> dict[str, Any]:
                                                  "handle": body.get("handle"), "image": image},
                                       size=size, theme={"accent": body["accent"]} if body.get("accent") else None,
                                       export=["png", "pdf", *(["vectorcraft"] if body.get("editable") else [])])
-            _label_outputs(res, f"{headline[:60]} ({size})")
+            _label_outputs(res, f"{headline[:60]} ({size})", group=group, variant=size)
             files.append({"size": size, **res})
     except HTTPException:
         raise
@@ -310,7 +317,7 @@ async def make_design(body: dict[str, Any]) -> dict[str, Any]:
                                   export=["pdf", "png", *(["vectorcraft"] if body.get("editable") else [])])
     except Exception as e:
         raise _fail(e)
-    _label_outputs(out, (data.get("title") or data.get("recipient") or str(body.get("template") or "design"))[:60])
+    _label_outputs(out, (data.get("title") or data.get("recipient") or str(body.get("template") or "design"))[:60], group=_new_group())
     events.emit("tool_done", tool="make_design", result={"file_id": out["file_id"]})
     return out
 
@@ -339,8 +346,16 @@ async def make_photo(body: dict[str, Any]) -> dict[str, Any]:
         raise
     except Exception as e:
         raise _fail(e)
+    # a név mondja meg, melyik a javított változat („urge (enhanced).jpg”), és a verziólánc is erre épül
+    from app.storage import display_label, write_meta
+    label = f"{Path(display_label(fid)).stem} ({PHOTO_LABELS[action]}).{out['file_id'].rsplit('.', 1)[1]}"
+    write_meta(out["file_id"], source_file_id=fid, operation=f"photo {action}", label=label)
+    out["label"] = label
     events.emit("tool_done", tool="make_photo", result={"file_id": out["file_id"]})
     return out
+
+
+PHOTO_LABELS = {"enhance": "enhanced", "remove_background": "cut out", "replace_background": "new background"}
 
 
 def _book_front(path: Path, title: str, author: Optional[str], cover: Optional[Path], size: str, ink: bool = True) -> None:
@@ -420,8 +435,9 @@ async def make_book(body: dict[str, Any]) -> dict[str, Any]:
             raise
         except Exception as e:
             raise _fail(e)
-        write_meta(styled, source_file_id=fid, operation="book", label=f"{title} (book).docx")
-        write_meta(pdf, source_file_id=styled, operation="book", label=f"{title}.pdf")
+        group = {"group": _new_group()}             # a Word-könyv és a PDF-je testvérek: a nézetben egymásra váltanak
+        write_meta(styled, source_file_id=fid, operation="book", label=f"{title} (book).docx", extra=group)
+        write_meta(pdf, source_file_id=styled, operation="book", label=f"{title}.pdf", extra=group)
         events.emit("tool_done", tool="make_book", result={"file_id": styled})
         return {"file_id": styled, "url": public_url(styled), "pdf": pdf, "pdf_url": public_url(pdf),
                 "size_kb": output_path(styled).stat().st_size // 1024}
@@ -561,8 +577,9 @@ async def make_pdf(body: dict[str, Any]) -> dict[str, Any]:
         raise _fail(e)
     stem = Path(display_label(ids[-1] if action == "compare" else ids[0])).stem
     tag = PDF_LABELS.get(action, action)
-    write_meta(fid, source_file_id=ids[0], operation=f"pdf {action}", label=f"{stem}{' (' + tag + ')' if tag else ''}.{fmt}")
-    res = {"file_id": fid, "url": public_url(fid), "size_kb": out.stat().st_size // 1024}
+    label = f"{stem}{' (' + tag + ')' if tag else ''}.{fmt}"
+    write_meta(fid, source_file_id=ids[0], operation=f"pdf {action}", label=label)
+    res = {"file_id": fid, "url": public_url(fid), "size_kb": out.stat().st_size // 1024, "label": label}
     events.emit("tool_done", tool="make_pdf", params={"action": action}, result=res)
     return res
 

@@ -144,20 +144,24 @@
     <div class="work-bar">
       <a class="btn ghost" id="btn-back" href="/app/files" title="One step back">← Back</a>
       <h2 id="file-name"></h2>
-      <a class="btn ghost" id="made-back" hidden></a>
-      <span id="edit-btns"></span>
-      <select class="use-in" id="use-in" aria-label="Use this file in another tool" hidden></select>
-      <span class="convert-to" id="convert-to" hidden><select id="convert-fmt" aria-label="Convert to"></select><button class="btn ghost" id="btn-convert">Convert</button></span>
-      <a class="btn" id="btn-download" download>Download</a>
-      <button class="btn" id="btn-print">Print</button>
-      <button class="btn ghost" id="btn-delete">Delete</button>
+      <span class="sibs" id="sibs" hidden></span>
+      <span class="view-seg" id="edit-btns" role="group" aria-label="View or edit"></span>
+      <span class="menu-wrap dl-split"><a class="btn" id="btn-download" download>Download</a><button type="button" class="btn dl-more" id="dl-more" aria-haspopup="menu" aria-expanded="false" aria-label="Other formats" hidden>▾</button>
+        <div class="menu" id="dl-menu" role="menu" hidden></div></span>
+      <span class="menu-wrap"><button type="button" class="btn ghost" id="btn-more" aria-haspopup="menu" aria-expanded="false">More ▾</button>
+        <div class="menu menu-right" id="more-menu" role="menu" hidden></div></span>
       <a class="btn ghost x-close" id="btn-close" href="/app/files" aria-label="Close" title="Close">✕</a>
+    </div>
+    <div class="quick" id="quick" hidden>
+      <div class="quick-row" role="toolbar" id="quick-row"></div>
+      <form class="quick-panel" id="quick-panel" hidden novalidate></form>
+      <p class="quick-status" id="quick-status" role="status" aria-live="polite" hidden></p>
     </div>
     <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
     <form class="revise" id="revise" hidden>
       <ol class="versions" id="versions" aria-label="Versions"></ol>
       <div class="rev-row">
-        <input id="rev-input" autocomplete="off" placeholder="Ask for a change — e.g. “on page 22 add a photo of the Colosseum”, “remove the grass in front of the animal”">
+        <input id="rev-input" autocomplete="off" placeholder="Ask for a change">
         <label class="btn ghost rev-style" title="Attach a style example: a Word file, pptx/template, PDF or picture whose look you want"><span id="rev-style-name">Style example</span><input type="file" id="rev-style" hidden accept=".pptx,.potx,.pdf,.docx,.odt,.rtf,image/*"></label>
         <button class="btn primary" id="rev-go">Apply <em class="ai-badge">AI</em></button>
       </div>
@@ -185,7 +189,12 @@ const EDITOR_NAMES = { wordcraft: "Word editor", deckcraft: "slide editor", pdfc
   photocraft: "photo editor", designcraft: "layout editor", vectorcraft: "design editor" };
 let account = null, files = [];
 
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3800); }
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("act"); t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3800); }
+function toastAction(msg, label, fn, ms = 8000) {      // üzenet + egy gomb (pl. „Undo”), amíg látszik
+  const t = $("#toast"); t.innerHTML = `<span>${esc(msg)}</span><button type="button">${esc(label)}</button>`; t.classList.add("show", "act");
+  t.querySelector("button").addEventListener("click", () => { clearTimeout(t._h); t.classList.remove("show", "act"); fn(); }, { once: true });
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show", "act"), ms);
+}
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}, ...opts });
   const data = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
@@ -235,7 +244,7 @@ async function pollJob(job, label, st = $("#make-status")) {
 // ---------- fájlok ----------
 async function loadFiles() {
   const d = await api("/api/files");
-  files = [...(d.inputs || []), ...(d.outputs || [])].sort((a, b) => b.mtime - a.mtime);
+  files = [...(d.inputs || []), ...(d.outputs || [])].filter(f => !pendingDel.has(f.file_id)).sort((a, b) => b.mtime - a.mtime);   // a visszavonható törlés alatt állók nem látszanak
 }
 const IMG = ["png","jpg","jpeg","webp","gif","bmp"];
 const REL = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" });
@@ -251,7 +260,7 @@ const ICON_DL = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" str
 const ICON_PRINT = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/></svg>`;
 function fileCard(f) {
   return `<div class="file-card"><button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
-    <span class="name" title="${esc(f.label)}">${esc(f.label)}</span><span class="meta">${size(f.size_kb)} · ${ago(f.mtime)}</span></button>
+    <span class="name" title="${esc(f.label)}">${esc(cardName(f))}</span><span class="meta">${f._n > 1 ? `${f._n} files · ` : `${size(f.size_kb)} · `}${ago(f.mtime)}</span></button>
     <span class="file-acts"><a class="fa" href="${esc(f.url)}" download title="Download" aria-label="Download ${esc(f.label)}">${ICON_DL}</a><button class="fa" data-print="${esc(f.file_id)}" title="Print" aria-label="Print ${esc(f.label)}">${ICON_PRINT}</button></span></div>`;
 }
 // nyomtatás: a szerver PDF-et ad (Word, pptx, táblázat, kép, PSD… → PDF), a böngésző azt nyomtatja
@@ -276,7 +285,25 @@ function glyph(ext) {
   const wide = ["pptx", "ppt", "key"].includes(ext);
   return `<span class="glyph${wide ? " wide" : ""}" style="--band:${BANDS[ext] || "#5C6870"}"><i></i><i></i><i></i>${wide ? "" : "<i></i><i></i>"}<b>${esc(ext.toUpperCase())}</b></span>`;
 }
+// egy készítés testvér-fájljai (méretek × formátumok) EGY kártyán: a szerkeszthető változat nyílik, a kártya mondja, hány fájl
+const GROUP_PICK = ["vectorcraft", "docx", "png", "pdf"];
+const cardName = f => {   // natív formátum: kiterjesztés nélkül; több méret egy kártyán: a méret-jelölő nélkül
+  const t = NATIVE[f.ext] || f._n > 1 ? fileTitle(f) : f.label;
+  return f._n > 1 && f.variant ? t.replace(new RegExp(`\\s*\\(${f.variant}\\)$`, "i"), "") : t;
+};
+const pickRank = f => { const i = GROUP_PICK.indexOf(f.ext); return (i < 0 ? 9 : i) + (f.variant && f.variant !== "square" ? 0.5 : 0); };
+function groupFiles(list) {
+  const seen = new Map(), out = [];
+  for (const f of list) {
+    if (!f.group) { out.push(f); continue; }
+    const g = seen.get(f.group);
+    if (!g) { const c = { ...f, _n: f._n || 1 }; seen.set(f.group, c); out.push(c); }
+    else { g._n += f._n || 1; if (pickRank(f) < pickRank(g)) Object.assign(g, f, { _n: g._n }); }
+  }
+  return out;
+}
 function renderFiles(el, list) {
+  list = groupFiles(list);
   el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — make something above, or upload a file.</div>`;
   el.querySelectorAll(".file").forEach(b => b.addEventListener("click", () => nav("/app/file/" + encodeURIComponent(b.dataset.id))));
   el.querySelectorAll("[data-print]").forEach(b => b.addEventListener("click", () => printFile(b.dataset.print)));
@@ -344,7 +371,7 @@ const views = {
       const p = TRY[b.dataset.try]; if (!p) return;
       pendingPreset = p; nav(makeLink(p.kind, p.mode));
     }));
-    await loadFiles(); renderFiles($("#recent"), files.slice(0, 10));
+    await loadFiles(); renderFiles($("#recent"), groupFiles(files).slice(0, 10));
   },
   async files() {
     mount("t-files");
@@ -381,94 +408,74 @@ const views = {
       : `You have ${account.credits} credits. One AI-generated image costs ${account.image_credit_cost}. Stock photos and your own images are free.`;
   },
   async file(arg) {
-    const [id, sub, wantApp] = arg.split("/");
+    const [id, sub, wantApp] = arg.split("?")[0].split("/");
     mount("t-file");
     editorDirty = false;
     await loadFiles();
     const f = files.find(x => x.file_id === id);
-    if (!f) { $("#file-name").textContent = "This file is gone"; return; }
+    if (!f) { $("#file-name").textContent = "This file is gone"; $("#btn-more").hidden = true; $("#btn-download").hidden = true; return; }
     cur = f;
-    $("#file-name").textContent = f.label; $("#btn-download").href = f.url;
+    const sibs = f.group ? files.filter(x => x.group === f.group) : [];     // egy készítés testvérei (méretek × formátumok)
+    const fmts = drawSibs(f, sibs, () => openApp);
+    setTitle(f, !fmts);
+    // EGY vissza-gomb: ha egy készítő-ablakból jött, oda visz kitöltve („← Back to Presentation”), különben egy lépés vissza
+    const back = $("#btn-back"), close = $("#btn-close");
+    back.href = close.href = lastPlace; close.title = "Close this file";
     try {
       const made = JSON.parse(sessionStorage.getItem("aice-made:" + f.file_id) || "null");
       if (made && MAKERS[made.kind]) {
-        const a = $("#made-back"), title = MAKERS[made.kind].title.replace(/^New /, "");
-        a.hidden = false; a.textContent = `‹ Back to ${title[0].toUpperCase() + title.slice(1)}`;
-        a.title = "Back to the window you made this in — your settings are kept";
-        a.href = made.link + (made.link.includes("?") ? "&" : "?") + "again=1";
+        const title = MAKERS[made.kind].title.replace(/^New /, "");
+        back.textContent = `← Back to ${title[0].toUpperCase() + title.slice(1)}`;
+        back.title = "Back to the window you made this in — your settings are kept";
+        back.href = made.link + (made.link.includes("?") ? "&" : "?") + "again=1"; back.dataset.made = "1";
       }
     } catch {}
-    $("#btn-print").addEventListener("click", () => printFile(cur.file_id));
-    $("#btn-close").title = "Close this file";
-    for (const id of ["#btn-back", "#btn-close"]) {      // ✕ (és ha nincs előzmény, a Back is): oda, ahonnan jött — címlap vagy Files
-      const a = $(id); a.href = lastPlace;
-      a.addEventListener("click", e => {
-        if (editorDirty && !confirm("Close the editor? Changes you haven't saved will be lost.")) e.preventDefault();
-      });
-    }
-    $("#btn-back").addEventListener("click", e => {      // „← Back” = egy lépés vissza (mint a böngésző), ha az appon belül van hova; a mentetlen-változás kérdés UTÁN
-      if (appSteps > 1 && !e.defaultPrevented) { e.preventDefault(); history.back(); }
+    for (const a of [back, close]) a.addEventListener("click", e => {
+      if (editorDirty && !confirm("Close the editor? Changes you haven't saved will be lost.")) e.preventDefault();
     });
-    $("#file-frame").src = `/preview/${encodeURIComponent(f.file_id)}`;
-    const box = $("#edit-btns");
-    editorsFor(f.ext).forEach(([app, label], i) => {
-      const b = document.createElement("button");
-      b.className = i ? "btn ghost" : "btn"; b.textContent = label;
-      b.dataset.app = app;
-      b.addEventListener("click", () => {
-        const link = `/app/file/${encodeURIComponent(f.file_id)}/edit/${app}`;   // saját link; a Vissza az előnézetre lép
-        if (here() !== link) history[b.dataset.auto ? "replaceState" : "pushState"](null, "", link);   // auto-nyitásnál ne legyen Vissza-csapda
-        const src = f.url.slice(f.url.indexOf("/files/"));
-        const name = f.label.toLowerCase().endsWith("." + f.ext) ? f.label : `${f.label}.${f.ext}`;
-        const save = `/api/editor/save?source=${encodeURIComponent(f.file_id)}`;
-        $("#file-frame").src = `/editor/${app}/?src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}`;
-        box.replaceChildren();
-      });
-      box.append(b);
+    back.addEventListener("click", e => {      // egy lépés vissza (mint a böngésző), ha az appon belül van hova; a mentetlen-változás kérdés UTÁN
+      if (!e.defaultPrevented && !back.dataset.made && appSteps > 1) { e.preventDefault(); history.back(); }
     });
-    const uses = USES.filter(([, , , exts]) => exts.includes(f.ext));     // átjárás: ez a fájl melyik eszközben használható
-    if (uses.length) {
-      const sel = $("#use-in");
-      sel.innerHTML = `<option value="" disabled selected>Use in…</option>` + uses.map((u, i) => `<option value="${i}">${esc(u[4])}</option>`).join("");
-      sel.hidden = false;
-      sel.addEventListener("change", async () => {
-        const [kind, mode, slot] = uses[+sel.value]; sel.selectedIndex = 0;
-        if (kind === "handout") {
-          toast("Making the handout…");
-          try { const r = await api("/api/make/handout", { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
-                toast(`Handout ready — ${r.label}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
-          catch (e) { toast(e.message); }
-          return;
-        }
-        nav(makeLink(kind, mode, cur.file_id, slot));
-      });
-    }
-    if (sub === "edit") {
-      const b = box.querySelector(`button[data-app="${wantApp}"]`) || box.querySelector("button[data-app]");
-      if (b) { b.dataset.auto = "1"; b.click(); }
-    }
-    if (f.ext === "pdf") api(`/api/forms/fields?file_id=${encodeURIComponent(f.file_id)}`).then(({ fields }) => {
-      if (!fields.length) return;
-      const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Fill in";
-      b.addEventListener("click", () => openFill(f, fields));
-      $("#edit-btns").prepend(b);
-    }).catch(() => {});
-    api(`/api/convert/targets?ext=${encodeURIComponent(f.ext)}`).then(({ targets }) => {
-      if (!targets.length) return;
-      $("#convert-fmt").innerHTML = `<option value="" disabled selected>Convert to…</option>` + targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("");
-      $("#convert-to").hidden = false;
-      $("#btn-convert").addEventListener("click", async () => {
-        const fmt = $("#convert-fmt").value; if (!fmt) { $("#convert-fmt").focus(); return; }
-        const b = $("#btn-convert"); b.disabled = true; b.textContent = "Converting…";
-        try { const r = await api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: f.file_id, target: fmt }) });
-              toast(`Converted — ${r.label}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
-        catch (e) { toast(e.message); b.disabled = false; b.textContent = "Convert"; }
-      });
-    }).catch(() => {});
+    // Nézet: Preview | Edit. Kép (PSD/TIFF is) illesztve látszik, kattintásra 100%. A szerkesztő mindig az AKTUÁLIS
+    // fájlt (cur) nyitja — szerkesztőbeli mentés után az a mentett változat. A második szerkesztő (pl. PDF → dizájn) a More alatt.
+    const previewSrc = x => `/preview/${encodeURIComponent(x.file_id)}` + (FIT_PREVIEW.includes(x.ext) ? "?view=fit"   // telefonon a PDF oldalképekként
+      : x.ext === "pdf" && !matchMedia("(min-width: 900px)").matches ? "?view=pages" : "");
+    const eds = editorsFor(f.ext), seg = $("#edit-btns");
+    let openApp = null;
+    const drawSeg = () => {
+      seg.hidden = !eds.length; if (!eds.length) return;
+      const [app, label] = eds.find(([a]) => a === openApp) || eds[0];
+      seg.innerHTML = `<button type="button" data-view="preview" aria-pressed="${!openApp}">Preview</button>`
+        + `<button type="button" data-view="${app}" aria-pressed="${!!openApp}" title="${esc(label)} in the built-in editor">${openApp && openApp !== eds[0][0] ? esc(label) : "Edit"}</button>`;
+    };
+    const openEditor = (app, auto = false) => {
+      const link = `/app/file/${encodeURIComponent(cur.file_id)}/edit/${app}`;   // saját link; a Vissza az előnézetre lép
+      if (here() !== link) history[auto ? "replaceState" : "pushState"](null, "", link);   // auto-nyitásnál ne legyen Vissza-csapda
+      const src = cur.url.slice(cur.url.indexOf("/files/"));
+      const name = cur.label.toLowerCase().endsWith("." + f.ext) ? cur.label : `${cur.label}.${f.ext}`;
+      const save = `/api/editor/save?source=${encodeURIComponent(cur.file_id)}`;
+      $("#file-frame").src = `/editor/${app}/?src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}`;
+      openApp = app; drawSeg();
+    };
+    const showPreview = () => {
+      if (editorDirty && !confirm("Close the editor? Changes you haven't saved will be lost.")) return;
+      editorDirty = false;
+      history.replaceState(null, "", `/app/file/${encodeURIComponent(cur.file_id)}/preview`);   // saját link: újratöltéskor is előnézet
+      $("#file-frame").src = previewSrc(cur); openApp = null; drawSeg();
+    };
+    seg.addEventListener("click", e => {
+      const b = e.target.closest("[data-view]"); if (!b || b.getAttribute("aria-pressed") === "true") return;
+      b.dataset.view === "preview" ? showPreview() : openEditor(b.dataset.view);
+    });
+    $("#file-frame").src = previewSrc(f); drawSeg();
+    wireDownload(f, sibs);
+    wireMore(f, eds.slice(1), openEditor);
+    // PDF-nél, képnél és saját dizájnnál a szerkesztő a központ: széles képernyőn rögtön abban nyílik (Preview = sima nézet);
+    // telefonon az előnézet marad (a szerkesztők asztali felületek), a gyors-eszközsáv ott is működik
+    const quick = wireQuick(f);
+    if (eds.length && (sub === "edit" || ((quick || NATIVE[f.ext]) && !sub && matchMedia("(min-width: 900px)").matches)))
+      openEditor((eds.find(([a]) => a === wantApp) || eds[0])[0], true);
     wireRevise(f);
-    $("#btn-delete").addEventListener("click", async () => {
-      await api(`/api/files/${encodeURIComponent(f.file_id)}`, { method: "DELETE" }); toast("Deleted"); nav("/app/files");
-    });
   },
 };
 let mounted = "";
@@ -540,7 +547,7 @@ window.addEventListener("message", e => {
     editorDirty = false;
     if (cur && e.data.file_id && e.data.file_id !== cur.file_id) {   // innentől a mentett verzió az aktuális (letöltés, nyomtatás, változtatás)
       cur = { ...cur, file_id: e.data.file_id, label: e.data.label || cur.label, url: e.data.url || cur.url };
-      $("#file-name").textContent = cur.label; if (e.data.url) $("#btn-download").href = e.data.url;
+      setTitle(cur); if (e.data.url) $("#btn-download").href = e.data.url;
       const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
       history.replaceState(history.state, "", `/app/file/${encodeURIComponent(cur.file_id)}` + (app ? `/edit/${app}` : ""));
     }
@@ -653,7 +660,8 @@ function slotExt(form, name) {                      // az első kiválasztott f�
 async function readSlot(form, name, need = "") {    // → file_id-k: a kiválasztott saját fájlok + a most feltöltöttek
   const s = slotEl(form, name); if (!s) return [];
   const ids = slotPicked(form, name), up = [...s.querySelector("input[type=file]").files];
-  for (const [i, f] of up.entries()) { $("#make-status").textContent = up.length > 1 ? `Uploading ${i + 1} of ${up.length}…` : "Uploading…"; ids.push((await uploadFile(f)).file_id); }
+  const st = form.closest(".quick")?.querySelector(".quick-status") || $("#make-status");   // fiók vagy fájlnézet-sáv
+  for (const [i, f] of up.entries()) { if (st) { st.hidden = false; st.textContent = up.length > 1 ? `Uploading ${i + 1} of ${up.length}…` : "Uploading…"; } ids.push((await uploadFile(f)).file_id); }
   if (!ids.length && need) {   // nincs fájl: a választó nyílik (saját fájlok listája, ha van illő; különben a gép fájlválasztója)
     s.classList.add("needs"); s.scrollIntoView({ block: "center", behavior: "smooth" });
     const exts = s.dataset.exts ? s.dataset.exts.split(",") : null, have = files.some(f => !exts || exts.includes(f.ext));
@@ -697,7 +705,11 @@ function wireSlots(form) {
       e.preventDefault(); drop.classList.remove("over");
       const exts = s.dataset.exts ? s.dataset.exts.split(",") : null, multi = s.hasAttribute("data-multiple");
       const ok = [...(e.dataTransfer?.files || [])].filter(f => !exts || exts.includes(extOf(f.name)));
-      if (!ok.length) { $("#make-status").textContent = `That file doesn't fit here — use ${extList(exts).slice(0, 6).map(x => x.toUpperCase()).join(", ")}.`; return; }
+      if (!ok.length) {
+        const st = form.closest(".quick")?.querySelector(".quick-status") || $("#make-status");   // fiók vagy fájlnézet-sáv
+        if (st) { st.hidden = false; st.textContent = `That file doesn't fit here — use ${extList(exts).slice(0, 6).map(x => x.toUpperCase()).join(", ")}.`; }
+        return;
+      }
       put(multi ? [...(s._kept || []), ...ok] : ok.slice(0, 1));
       inp.dispatchEvent(new Event("change", { bubbles: true }));
     });
@@ -774,6 +786,123 @@ function applyCarry(kind, form) {
   if (mode && field) { const r = form.querySelector(`[name=${field}][value=${mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } }
   if (c.ids.length) presetSlot(form, slot, c.ids);
   if (c.files.length) setSlotFiles(form, slot, c.files);
+}
+// 4) Gyors-eszközsáv a fájlnézetben (PDF, kép): a NYITOTT fájlon dolgozik, az eredmény új változat (a lánc alul:
+//    Original → v2 …), és rögtön a szerkesztőben nyílik. Csoport = {cím, kiterjesztések, sorok, átjárás = USES-fajták};
+//    covers = a USES-fajták, amelyeket a sáv már lefed (a „More” nem ismétli). Új művelet = új sor. Sor: {label, doing, run(file_id, panel, status) → {file_id}, form?() = a panel mezői, wire?, ai?, hint?}.
+const field = (fm, name) => fm.querySelector(`[name="${name}"]`);
+const pdfJob = (action, file_ids, extra = {}) => api("/api/make/pdf", { method: "POST", body: JSON.stringify({ action, file_ids, ...extra }) });
+const photoJob = (file_id, action, extra = {}) => api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id, action, ...extra }) });
+const QUICK = [
+  { title: "PDF tools", exts: EXT.pdf, uses: ["deck", "scan"], covers: ["pdf"], items: [
+    { label: "Merge with…", doing: "Merging…", form: () => fileSlot("more", { exts: ["pdf"], multiple: true, label: "PDFs to add after this one, in order" }),
+      run: async (id, fm) => pdfJob("merge", [id, ...await readSlot(fm, "more", "the PDFs to add")]) },
+    { label: "Make smaller", doing: "Making it smaller…", run: id => pdfJob("compress", [id]) },
+    { label: "Page numbers", doing: "Numbering the pages…",
+      form: () => `<label>Position<select name="pos"><option value="center">Bottom centre</option><option value="right">Bottom right</option><option value="left">Bottom left</option></select></label>`,
+      run: (id, fm) => pdfJob("page_numbers", [id], { position: field(fm, "pos").value }) },
+    { label: "Watermark", doing: "Adding the watermark…", form: () => `<label>Watermark text<input type="text" name="wm" maxlength="40" placeholder="DRAFT"></label>`,
+      run: (id, fm) => pdfJob("watermark", [id], { text: field(fm, "wm").value.trim() || "DRAFT" }) },
+    { label: "Black out", doing: "Blacking out…",
+      form: () => `<label>Words or phrases, one per line<textarea name="words" placeholder="Jane Doe&#10;Project Falcon"></textarea></label>
+        <div class="checks"><label><input type="checkbox" name="pat" value="email"> Email addresses</label><label><input type="checkbox" name="pat" value="phone"> Phone numbers</label>
+        <label><input type="checkbox" name="pat" value="credit-card"> Card numbers</label></div>
+        <p class="muted small">The text is removed from the file, not just covered.</p>`,
+      run: (id, fm) => {
+        const words = field(fm, "words").value.split("\n").map(w => w.trim()).filter(Boolean), patterns = [...fm.querySelectorAll("[name=pat]:checked")].map(x => x.value);
+        if (!words.length && !patterns.length) { field(fm, "words").focus(); throw new Error("Type the words to black out, or tick emails, phone numbers or card numbers."); }
+        return pdfJob("redact", [id], { words, patterns });
+      } },
+    { label: "Make searchable", doing: "Reading the text…", hint: "Adds a text layer to a scanned PDF (English). For other languages use Scan to text.", run: id => pdfJob("ocr", [id]) },
+    { label: "Password", doing: "Locking it…", form: () => `<label>Password to open it<input type="text" name="pw" autocomplete="off" placeholder="At least 4 characters"></label>`,
+      run: (id, fm) => {
+        const pw = field(fm, "pw").value;
+        if (pw.length < 4) { field(fm, "pw").focus(); throw new Error("Choose a password of at least 4 characters."); }
+        return pdfJob("protect", [id], { password: pw });
+      } },
+    { label: "To Word", doing: "Converting to Word…", hint: "An editable Word document — opens in the Word editor", run: id => pdfJob("to_word", [id]) },
+    { label: "Make fillable", doing: "Finding the fields…", hint: "The lines and boxes of a printed form become real fields", run: id => pdfJob("make_fillable", [id]) },
+  ] },
+  { title: "Photo tools", exts: EXT.image, uses: ["social", "print"], covers: ["photo"], items: [
+    { label: "Enhance", doing: "Enhancing…", hint: "Auto tone and colour", run: id => photoJob(id, "enhance") },
+    { label: "Remove background", doing: "Cutting it out…", hint: "The subject on a transparent background (PNG)", run: id => photoJob(id, "remove_background") },
+    { label: "New background…", doing: "Putting it on the new background…",
+      form: () => imagePicker("qbg", { allowNone: false, label: "New background" }) + `<label>Background blur (px)<input type="number" name="qblur" min="0" max="40" value="12"></label>`,
+      wire: fm => wirePicker(fm, "qbg"),
+      run: async (id, fm) => {
+        const background = await readPicker(fm, "qbg");
+        if (!background) { field(fm, "qbg-q")?.focus(); throw new Error("Pick the new background — search words, an AI prompt or one of your images."); }
+        return photoJob(id, "replace_background", { background, blur: +field(fm, "qblur").value });
+      } },
+    { label: "Restore & colourise", ai: true, doing: "Restoring…",
+      form: () => `<p class="muted small" style="margin:0 0 10px">Scratches, dust, stains, tears, fading and blur are repaired. The original stays as the bottom layer, so anything the AI got wrong can be brought back. <em class="ai-badge">AI</em> 2 credits, +1 to colourise.</p>
+        <div class="checks"><label><input type="checkbox" name="colorize" checked> Colourise if it's black-and-white</label><label><input type="checkbox" name="split"> Several pictures on this photo — find each one</label></div>`,
+      run: async (id, fm, st) => {
+        const job = await api("/api/make/restore", { method: "POST", body: JSON.stringify({ file_ids: [id], colorize: field(fm, "colorize").checked ? null : false, split_prints: field(fm, "split").checked }) });
+        const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the picture…", st);
+        await loadAccount();
+        const psd = r.files.find(x => x.file_id.endsWith(".psd")) || r.files[0];
+        return { file_id: psd.file_id, msg: "Restored — the original, the repair and the colour are separate layers" };
+      } },
+  ] },
+];
+const FIT_PREVIEW = [...IMG, "psd", "psb", "tif", "tiff", "vectorcraft", "ai", "eps"];
+function wireQuick(f) {
+  const g = QUICK.find(q => q.exts.includes(f.ext)); if (!g) return null;
+  const wrap = $("#quick"), row = $("#quick-row"), panel = $("#quick-panel"), st = $("#quick-status");
+  const uses = USES.filter(([kind, , , exts]) => g.uses.includes(kind) && exts.includes(f.ext));
+  const ai = '<em class="ai-badge">AI</em>';
+  row.innerHTML = `<span class="quick-h">${esc(g.title)}</span>` + g.items.map((it, i) => `<button type="button" class="qb" data-q="${i}"${it.hint ? ` title="${esc(it.hint)}"` : ""}${it.form ? ' aria-expanded="false"' : ""}>${esc(it.label)}${it.ai ? " " + ai : ""}</button>`).join("")
+    + (uses.length ? `<span class="quick-sep" aria-hidden="true"></span>` + uses.map((u, i) => `<button type="button" class="qb qb-go" data-use="${i}" title="${esc(u[4])}">${esc(u[4].split(" — ")[0])} <span aria-hidden="true">→</span></button>`).join("") : "");
+  wrap.hidden = false;
+  const say = msg => { st.textContent = msg || ""; st.hidden = !msg; };
+  let open = -1, busy = false;
+  const close = () => { open = -1; panel.hidden = true; panel.innerHTML = ""; row.querySelectorAll("[aria-expanded]").forEach(b => b.setAttribute("aria-expanded", "false")); };
+  const lock = on => { busy = on; wrap.querySelectorAll("button").forEach(b => b.disabled = on); };
+  async function run(it, fm) {
+    if (busy) return;
+    if (editorDirty) { say("Save your edits in the editor first (File → Save) — then this works on the saved version."); return; }
+    if (it.ai && account?.guest) return accountCta(it.label);     // vendég AI-n: fiók-ajánlat
+    lock(true); say(it.doing || "Working on it…");
+    try {
+      const r = await it.run(cur.file_id, fm, st);
+      toast(r.msg || (r.label ? `Done — ${r.label}` : "Done — the new version is open"));
+      nav(`/app/file/${encodeURIComponent(r.file_id)}/edit`);      // az eredmény a szerkesztőben (Word-be alakítás: a Word-szerkesztőben)
+    } catch (e) {
+      lock(false);
+      if (e.cta) { say(""); return accountCta(it.label); }
+      say(e.message);
+      if (e.slot && fm) {                                          // hiányzó fájl: a választó nyitva — kiválasztás után magától folytatja
+        const s = slotEl(fm, e.slot);
+        const resume = () => { if (!slotPicked(fm, e.slot).length && !s.querySelector("input[type=file]")?.files?.length) return;
+          s.removeEventListener("slotchange", resume); run(it, fm); };
+        s.addEventListener("slotchange", resume);
+      }
+    }
+  }
+  row.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b || busy) return;
+    if (b.dataset.use != null) { const [kind, mode, slot] = uses[+b.dataset.use]; nav(makeLink(kind, mode, cur.file_id, slot)); return; }
+    if (b.dataset.fill != null) return;
+    const i = +b.dataset.q, it = g.items[i];
+    if (!it.form) { close(); return run(it, null); }
+    if (open === i) { close(); say(""); return; }
+    close(); say(""); open = i; b.setAttribute("aria-expanded", "true");
+    panel.innerHTML = `<div class="qp-body">${it.form()}</div><div class="qp-actions"><button type="button" class="btn ghost" data-close>Cancel</button>`
+      + `<button class="btn primary">${esc(it.label.replace(/…$/, ""))}${it.ai ? " " + ai : ""}</button></div>`;
+    panel.hidden = false; it.wire?.(panel); wireSlots(panel);
+    panel.querySelector(".slot-pick") ? panel.querySelector(".slot-pick").click() : panel.querySelector("input:not([type=radio]):not([type=checkbox]), textarea, select")?.focus();
+  });
+  panel.addEventListener("click", e => { if (e.target.closest("[data-close]")) { close(); say(""); } });
+  panel.onsubmit = e => { e.preventDefault(); if (open >= 0) run(g.items[open], panel); };
+  if (f.ext === "pdf") api(`/api/forms/fields?file_id=${encodeURIComponent(f.file_id)}`).then(({ fields }) => {   // kitölthető PDF: „Fill in” elöl
+    if (!fields.length) return;
+    const b = document.createElement("button"); b.type = "button"; b.className = "qb qb-primary"; b.dataset.fill = ""; b.textContent = "Fill in";
+    b.title = `${fields.length} fields — you get a filled copy; this one stays blank`;
+    b.addEventListener("click", () => { if (!busy) openFill(cur, fields); });
+    row.querySelector(".quick-h").after(b);
+  }).catch(() => {});
+  return g;
 }
 
 // 4) „Things to try”: a kártya előbeállítja az ablakot (mód, mezők, pipák) → egy kattintás + a fájl = kész
@@ -1158,12 +1287,148 @@ const MAKERS = {
     },
   },
 };
+// ---------- fájlnézet: cím, testvérek, letöltés, „More” ----------
+// natív (csak nálunk nyíló) formátumok: a cím nem mutatja a technikai kiterjesztést, a Download a kész PNG/PDF-et adja
+const NATIVE = { vectorcraft: ["png", "pdf"], deckcraft: ["pptx", "pdf"], designcraft: ["pdf", "png"], pcraft: ["png", "jpg"] };
+const FMT_NAMES = { png: "PNG", jpg: "JPG", jpeg: "JPG", pdf: "PDF", docx: "Word", pptx: "PowerPoint", xlsx: "Excel", vectorcraft: "Design",
+  deckcraft: "Slides", designcraft: "Layout", pcraft: "Photo", psd: "PSD", svg: "SVG", txt: "Text", md: "Markdown" };
+const fmtName = ext => FMT_NAMES[ext] || ext.toUpperCase();
+const VARIANTS = { square: "Square", landscape: "Landscape", story: "Story" };
+function fileTitle(f) { const l = f.label || f.file_id; return l.toLowerCase().endsWith("." + f.ext) ? l.slice(0, -f.ext.length - 1) : l; }
+function setTitle(f, tag = true) {
+  $("#file-name").innerHTML = esc(fileTitle(f)) + (tag ? ` <span class="ext-tag">${esc(fmtName(f.ext))}</span>` : "");
+  $("#file-name").title = f.label;
+}
+// testvér-váltó: méretek (Square · Landscape · Story) és formátumok (Word · PDF, PNG · PDF · Design); → van-e formátum-váltó
+function drawSibs(f, sibs, editing) {
+  const box = $("#sibs"); if (sibs.length < 2) return false;
+  const go = x => nav(`/app/file/${encodeURIComponent(x.file_id)}` + (editing() && editorsFor(x.ext).length ? "/edit" : ""));
+  const vars = Object.keys(VARIANTS).filter(v => sibs.some(x => x.variant === v));
+  const mine = sibs.filter(x => (x.variant || null) === (f.variant || null));
+  const order = ["png", "jpg", "docx", "pptx", "pdf", "vectorcraft"], at = e => (order.indexOf(e) + 1) || 99;
+  const exts = [...new Set(mine.map(x => x.ext))].sort((a, b) => at(a) - at(b));
+  const seg = (items, label) => `<span class="seg-mini" role="group" aria-label="${label}">${items.join("")}</span>`;
+  box.innerHTML = (vars.length > 1 ? seg(vars.map(v => `<button type="button" data-var="${v}" aria-pressed="${v === f.variant}">${VARIANTS[v]}</button>`), "Size") : "")
+    + (exts.length > 1 ? seg(exts.map(e => `<button type="button" data-ext="${e}" aria-pressed="${e === f.ext}" title="${esc(fmtName(e))} file">${esc(fmtName(e))}</button>`), "Format") : "");
+  box.hidden = !box.innerHTML;
+  box.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b || b.getAttribute("aria-pressed") === "true") return;
+    if (b.dataset.var) {    // másik méret: ugyanaz a formátum, ha van; különben a szerkeszthető, aztán a kép
+      const same = sibs.filter(x => x.variant === b.dataset.var);
+      go(same.find(x => x.ext === f.ext) || same.find(x => x.ext === "vectorcraft") || same.find(x => x.ext === "png") || same[0]);
+    } else go(mine.find(x => x.ext === b.dataset.ext));
+  });
+  return exts.length > 1;
+}
+function wireMenu(btn, menu) {
+  const close = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.addEventListener("click", e => { e.stopPropagation(); const open = menu.hidden; document.querySelectorAll(".menu").forEach(m => m.hidden = true); menu.hidden = !open; btn.setAttribute("aria-expanded", String(open)); });
+  document.addEventListener("click", e => { if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !menu.hidden) { close(); btn.focus(); } });
+  menu.addEventListener("click", e => { if (e.target.closest("[data-act]")) close(); });
+  return close;
+}
+function saveUrl(url, name) { const a = document.createElement("a"); a.href = url; a.download = name || ""; document.body.append(a); a.click(); a.remove(); }
+// Download: a fájl maga; natív formátumnál a kész PNG/PDF (a testvér, ha még az eredetit nézzük; különben átalakítva).
+// ▾ = a többi formátum (testvérek, átalakítás), a natív fájl a végén „csak itt nyílik” megjegyzéssel.
+function wireDownload(f, sibs) {
+  const dl = $("#btn-download"), more = $("#dl-more"), menu = $("#dl-menu"), native = NATIVE[f.ext];
+  dl.href = f.url;
+  const sameVar = sibs.filter(x => x.file_id !== f.file_id && (x.variant || null) === (f.variant || null));
+  const fresh = () => cur.file_id === f.file_id;            // szerkesztőbeli mentés után a testvérek már a régi változatot mutatják
+  const getAs = async fmt => {
+    const s = fresh() && sameVar.find(x => x.ext === fmt);
+    if (s) return saveUrl(s.url, s.label);
+    toast(`Making the ${fmtName(fmt)}…`);
+    try { const r = await api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, target: fmt }) }); saveUrl(r.url, r.label); }
+    catch (e) { toast(e.message); }
+  };
+  const items = [...new Set([...(native || []), ...sameVar.map(x => x.ext)])].filter(x => x !== f.ext && !NATIVE[x]);
+  if (native) {
+    dl.textContent = `Download ${fmtName(native[0])}`; dl.title = `A finished ${fmtName(native[0])} — the .${f.ext} design file opens only here`;
+    dl.addEventListener("click", e => { e.preventDefault(); getAs(native[0]); });
+  }
+  if (!items.length) return;
+  more.hidden = false; dl.classList.add("has-more");
+  menu.innerHTML = items.filter(x => !native || x !== native[0]).map(x => `<button type="button" role="menuitem" data-act data-fmt="${x}">${esc(fmtName(x))}</button>`).join("")
+    + (native ? `<button type="button" role="menuitem" data-act data-self>${esc(fmtName(f.ext))} file (.${f.ext})<small>Opens only here — to keep editing later</small></button>` : "");
+  if (!native) menu.insertAdjacentHTML("afterbegin", `<button type="button" role="menuitem" data-act data-self>${esc(fmtName(f.ext))} — this file</button>`);
+  wireMenu(more, menu);
+  menu.addEventListener("click", e => {
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    if (b.dataset.self != null) saveUrl(cur.url, cur.label); else getAs(b.dataset.fmt);
+  });
+}
+// „More ▾”: a ritkább dolgok egy helyen — másik szerkesztő, átjárás más eszközbe, átalakítás, nyomtatás, törlés
+const ALT_EDIT = { vectorcraft: "Edit as a design — move text and pictures freely", photocraft: "Edit in the photo editor", pdfcraft: "Edit in the PDF editor" };
+function wireMore(f, altEds, openEditor) {
+  const btn = $("#btn-more"), menu = $("#more-menu");
+  const covered = QUICK.find(q => q.exts.includes(f.ext))?.covers || [];   // amit a gyors-sáv már tud, azt nem ismétli
+  const uses = USES.filter(([kind, , , exts]) => exts.includes(f.ext) && !covered.includes(kind));     // átjárás: ez a fájl melyik eszközben használható
+  const sec = (h, body) => body ? `<div class="menu-sec"><span class="menu-h">${h}</span>${body}</div>` : "";
+  const draw = (targets = []) => {
+    menu.innerHTML = sec("Edit", altEds.map(([app, label]) => `<button type="button" role="menuitem" data-act="edit" data-app="${app}">${esc(ALT_EDIT[app] || label)}</button>`).join(""))
+      + sec("Use in", uses.map((u, i) => `<button type="button" role="menuitem" data-act="use" data-i="${i}">${esc(u[4])}</button>`).join(""))
+      + sec("Convert to", targets.length ? `<div class="menu-chips">${targets.map(x => `<button type="button" role="menuitem" data-act="convert" data-fmt="${x.fmt}">${esc(x.label)}</button>`).join("")}</div>` : "")
+      + `<div class="menu-sec"><button type="button" role="menuitem" data-act="print">Print</button><button type="button" role="menuitem" data-act="delete" class="danger">Delete</button></div>`;
+  };
+  draw();
+  api(`/api/convert/targets?ext=${encodeURIComponent(f.ext)}`).then(({ targets }) => draw(targets)).catch(() => {});
+  wireMenu(btn, menu);
+  menu.addEventListener("click", async e => {
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    const act = b.dataset.act;
+    if (act === "edit") return openEditor(b.dataset.app);
+    if (act === "print") return printFile(cur.file_id);
+    if (act === "delete") return deleteWithUndo(cur);
+    if (act === "use") {
+      const [kind, mode, slot] = uses[+b.dataset.i];
+      if (kind === "handout") {
+        toast("Making the handout…");
+        try { const r = await api("/api/make/handout", { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
+              toast(`Handout ready — ${r.label}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
+        catch (err) { toast(err.message); }
+        return;
+      }
+      return nav(makeLink(kind, mode, cur.file_id, slot));
+    }
+    if (act === "convert") {
+      toast("Converting…");
+      try { const r = await api("/api/make/convert", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, target: b.dataset.fmt }) });
+            toast(`Converted — ${r.label}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
+      catch (err) { toast(err.message); }
+    }
+  });
+}
+// Törlés: azonnal eltűnik, de 8 másodpercig visszavonható („Undo”); a tényleges törlés utána (vagy az oldal elhagyásakor)
+const pendingDel = new Map();   // file_id → időzítő
+function commitDelete(id) {
+  clearTimeout(pendingDel.get(id)); pendingDel.delete(id);
+  return fetch(`/api/files/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => {});
+}
+addEventListener("pagehide", () => { for (const id of [...pendingDel.keys()]) commitDelete(id); });
+function deleteWithUndo(f) {
+  if (editorDirty && !confirm("Delete it? Changes you haven't saved in the editor will be lost too.")) return;
+  editorDirty = false;
+  const id = f.file_id;
+  pendingDel.set(id, setTimeout(() => commitDelete(id), 8000));
+  nav(lastPlace.startsWith("/app/file/") ? "/app/files" : lastPlace);
+  toastAction(`Deleted “${fileTitle(f)}”`, "Undo", () => { clearTimeout(pendingDel.get(id)); pendingDel.delete(id); toast("Restored"); route(); }, 8000);
+}
+
 // „Kérj változtatást”: minden kérés új verzió; a lánc (eredeti → v2 → v3…) a fájlnézet alján
 const REVISABLE = ["jpg", "jpeg", "png", "webp", "psd", "tif", "tiff", "docx", "odt", "doc", "rtf", "md", "pptx", "pdf"];
+const ASK_EXAMPLES = [   // a változtatás-mező példája fájltípusonként (az első a tartalék)
+  [["docx", "odt", "doc", "rtf", "md"], "“make the headings dark blue”, “on page 3 add a photo of the Colosseum”"],
+  [["jpg", "jpeg", "png", "webp", "psd", "tif", "tiff"], "“remove the people in the background”, “warmer colours, crop to 4:5”"],
+  [["pptx"], "“add a slide about costs after slide 4”, “make the background dark blue”"],
+  [["pdf"], "“fix the spelling of the title”, “add a short summary at the start”"],
+];
 async function wireRevise(f) {
   if (!REVISABLE.includes(f.ext)) return;
   const form = $("#revise"), input = $("#rev-input"), st = $("#rev-status");
   form.hidden = false;
+  input.placeholder = `Ask for a change — e.g. ${(ASK_EXAMPLES.find(([exts]) => exts.includes(f.ext)) || ASK_EXAMPLES[0])[1]}`;
   if (account?.guest) {
     input.disabled = true; $("#rev-go").disabled = true;
     input.placeholder = "Asking for changes uses AI — create a free account to try it";
@@ -1171,8 +1436,10 @@ async function wireRevise(f) {
   const { history } = await api(`/api/revisions?file_id=${encodeURIComponent(f.file_id)}`).catch(() => ({ history: [] }));
   $("#versions").innerHTML = history.length > 1 ? history.map((h, i) => {
     const cur = h.file_id === f.file_id;
-    const tip = h.instruction ? `${h.instruction}${h.summary ? " — " + h.summary : ""}` : "The original";
-    return `<li><a href="/app/file/${encodeURIComponent(h.file_id)}" title="${esc(tip)}" ${cur ? 'aria-current="true"' : ""}>${i ? "v" + (i + 1) : "Original"}</a>${cur && h.instruction ? `<span class="muted">“${esc(h.instruction.slice(0, 90))}”</span>` : ""}</li>`;
+    const step = i && h.step ? h.step[0].toUpperCase() + h.step.slice(1) : "";        // nem kérésből lett változat: a lépés neve
+    const tip = h.instruction ? `${h.instruction}${h.summary ? " — " + h.summary : ""}` : i ? step || "A new version" : "The original";
+    const note = h.instruction ? `“${esc(h.instruction.slice(0, 90))}”` : esc(step);
+    return `<li><a href="/app/file/${encodeURIComponent(h.file_id)}" title="${esc(tip)}" ${cur ? 'aria-current="true"' : ""}>${i ? "v" + (i + 1) : "Original"}</a>${cur && note ? `<span class="muted">${note}</span>` : ""}</li>`;
   }).join("") : "";
   let styleId = null;
   $("#rev-style").addEventListener("change", async e => {
@@ -1365,6 +1632,9 @@ $("#drawer").addEventListener("close", () => {
 $("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
   if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();
 });
+// a munkaterület magassága a fejléc valódi magasságából (telefonon két sor) — különben az alsó sáv kilóg
+const setTop = () => document.documentElement.style.setProperty("--top", $(".topbar").offsetHeight + "px");
+addEventListener("resize", setTop); setTop();
 loadAccount().catch(() => {}); route();
 </script>
 </body>

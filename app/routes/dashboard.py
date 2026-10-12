@@ -108,6 +108,8 @@ def _list_dir(d: Path, kind: str, include_ephemeral: bool = False) -> list[dict[
                              if meta.get("source_file_id") else None),
             "operation": meta.get("operation"),
             "original_filename": meta.get("original_filename"),
+            "group": meta.get("group"),          # egy készítés testvér-fájljai (méretek × formátumok)
+            "variant": meta.get("variant"),
         })
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items

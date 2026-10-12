@@ -63,13 +63,114 @@ def _preview_filename(file_id: str, ext: str) -> str:
 
 
 WORDCRAFT_PREVIEW_FORMATS = {"docx", "doc", "odt", "rtf"}
+# A böngésző nem rajzolja → PNG-re rajzoljuk: PhotoCraft (a rétegek összképe), VectorCraft (a dizájn, ahogy kinyomtatnák)
+PHOTOCRAFT_PREVIEW_FORMATS = {"psd", "psb", "tif", "tiff", "pcraft", "exr"}
+VECTORCRAFT_PREVIEW_FORMATS = {"vectorcraft", "ai", "eps"}
+
+# Kép-előnézet a fájlnézetben: az EGÉSZ kép látszik (illesztve), kattintásra 100% ↔ illesztés; az átlátszó
+# rész (kivágott alak) sakktáblán. A nyers /preview/<id> marad a régi fogyasztóknak.
+_FIT_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name}</title><style>
+:root {{ --bg: #F1F2EE; --a: #FFFFFF; --b: #E4E6E1; --ink: #5C6870; color-scheme: light dark; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg: #202526; --a: #2A3032; --b: #22282A; --ink: #9AA6AC; }} }}
+html, body {{ margin: 0; height: 100%; background: var(--bg); }}
+body {{ display: grid; place-items: center; overflow: hidden; }}
+body.full {{ display: block; overflow: auto; }}
+img {{ display: block; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); object-fit: contain; cursor: zoom-in;
+  background: repeating-conic-gradient(var(--a) 0 25%, var(--b) 0 50%) 0 0 / 20px 20px; box-shadow: 0 6px 24px rgba(0,0,0,.18); }}
+body.full img {{ max-width: none; max-height: none; margin: 16px; cursor: zoom-out; }}
+.hint {{ position: fixed; right: 10px; bottom: 8px; font: 500 11px/1 ui-monospace, monospace; color: var(--ink); opacity: .8; pointer-events: none; }}
+</style></head><body><img src="{src}" alt="{name}"><span class="hint" id="h"></span>
+<script>
+const img = document.querySelector("img"), h = document.getElementById("h");
+const show = () => {{ if (!img.naturalWidth) return; const z = img.clientWidth / img.naturalWidth;
+  h.textContent = img.naturalWidth + " × " + img.naturalHeight + " px · " + (document.body.classList.contains("full") ? 100 : Math.round(Math.min(1, z) * 100)) + "%"; }};
+img.addEventListener("load", show); addEventListener("resize", show);
+img.addEventListener("click", () => {{ document.body.classList.toggle("full"); show(); }});
+</script></body></html>"""
+
+
+async def _render_png(src: Path, file_id: str, mtime: int, ext: str) -> Path:
+    """PSD/TIFF… (PhotoCraft) vagy dizájn (VectorCraft) → PNG (cache: mtime szerint)."""
+    from app.tools import crafts
+    cache = PREVIEW_DIR / f"{file_id}_{mtime}.png"
+    if not cache.exists():
+        tmp = cache.with_suffix(".tmp.png")
+        if ext in VECTORCRAFT_PREVIEW_FORMATS:
+            await crafts.run_cli(crafts.vector_cli(), "vectorcraft-cli", "run", "--in", str(src), "--export", str(tmp), "--scale", "1")
+        else:
+            await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "convert", str(src), str(tmp))
+        if not tmp.exists():
+            raise HTTPException(404, "could not render a preview")
+        tmp.replace(cache)
+    return cache
+
+
+_PAGES_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name}</title><style>
+:root {{ --bg: #F1F2EE; color-scheme: light dark; }} @media (prefers-color-scheme: dark) {{ :root {{ --bg: #202526; }} }}
+html, body {{ margin: 0; background: var(--bg); }}
+main {{ display: grid; gap: 12px; padding: 12px; justify-items: center; }}
+img {{ display: block; width: 100%; max-width: 900px; height: auto; background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.16); }}
+</style></head><body><main>{pages}</main></body></html>"""
+
+
+def _pdf_page_png(src: Path, file_id: str, mtime: int, page: int) -> Path:
+    """Egy PDF-oldal PNG-ként (telefonon a böngésző nem rajzol PDF-et iframe-ben) — cache: mtime szerint."""
+    import fitz
+    cache = PREVIEW_DIR / f"{file_id}_{mtime}_p{page}.png"
+    if not cache.exists():
+        with fitz.open(src) as doc:
+            if not 1 <= page <= doc.page_count:
+                raise HTTPException(404, "no such page")
+            doc[page - 1].get_pixmap(dpi=110).save(cache)
+    return cache
 
 
 @router.get("/preview/{file_id}")
-async def preview(file_id: str, request: Request):
+async def preview(file_id: str, request: Request, view: str = "", page: int = 0):
     src = _resolve(file_id)
     fmt = detect_from_path(src)
+    ext = src.suffix.lstrip(".").lower()
     mtime = int(src.stat().st_mtime)
+
+    if fmt == "pdf" and page:
+        import asyncio
+        png = await asyncio.to_thread(_pdf_page_png, src, file_id, mtime, page)
+        return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+    if fmt == "pdf" and view == "pages":
+        import fitz
+        from html import escape
+        try:
+            with fitz.open(src) as doc:
+                n = 0 if doc.needs_pass else doc.page_count
+                w, h = (doc[0].rect.width, doc[0].rect.height) if n else (595, 842)
+        except Exception:
+            n, w, h = 0, 595, 842
+        if n:           # jelszavas / sérült PDF: marad a sima PDF-válasz lent
+            imgs = "".join(f'<img src="/preview/{file_id}?page={i}" alt="Page {i}" loading="lazy" width="{int(w)}" height="{int(h)}">'
+                           for i in range(1, n + 1))
+            return HTMLResponse(_PAGES_PAGE.format(name=escape(_preview_filename(file_id, "pdf")), pages=imgs),
+                                headers={"Cache-Control": "no-cache"})
+
+    if ext in PHOTOCRAFT_PREVIEW_FORMATS | VECTORCRAFT_PREVIEW_FORMATS:
+        if view == "fit":
+            from html import escape
+            return HTMLResponse(_FIT_PAGE.format(name=escape(_preview_filename(file_id, ext)), src=f"/preview/{file_id}?view=png"),
+                                headers={"Cache-Control": "no-cache"})
+        try:
+            png = await _render_png(src, file_id, mtime, ext)
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.warning("PNG-előnézet nem sikerült (%s): %s", file_id, e)
+            raise HTTPException(404, "could not render a preview")
+        return FileResponse(png, media_type="image/png", headers={"Content-Disposition": _inline_disposition(file_id, "png")})
+
+    if view == "fit" and fmt in IMAGE_FORMATS:
+        from html import escape
+        return HTMLResponse(_FIT_PAGE.format(name=escape(_preview_filename(file_id, fmt)), src=f"/preview/{file_id}"),
+                            headers={"Cache-Control": "no-cache"})
 
     # Direct serve formats
     if fmt == "pdf":

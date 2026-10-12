@@ -30,8 +30,26 @@ def _meta(fid: str) -> dict[str, Any]:
     return read_meta(fid) or {}
 
 
+def _version_step(op: str) -> Optional[str]:
+    """Ugyanannak a fájlnak egy újabb változata-e (→ rövid angol lépésnév a láncban), vagy már más fájl (None).
+    Kérés, kézi szerkesztés, PDF-munka (oldalszám, kitakarás…), gyors fotójavítás, helyreállítás = változat;
+    formátumváltás (Word-be, konvertálás) és összehasonlító jelentés = új fájl, ott a lánc megáll."""
+    if op == "revise":
+        return "change"
+    if op == "manual edit":
+        return "edited by hand"
+    if op.startswith("pdf ") and op not in ("pdf to_word", "pdf compare"):
+        return {"merge": "merged", "compress": "made smaller", "page_numbers": "page numbers", "make_fillable": "made fillable",
+                "ocr": "made searchable", "redact": "blacked out", "protect": "password"}.get(op[4:], op[4:].replace("_", " "))
+    if op.startswith("photo ") or op == "restore (layers)":
+        return {"photo enhance": "enhanced", "photo remove_background": "background removed",
+                "photo replace_background": "new background", "restore (layers)": "restored"}.get(op, "photo edit")
+    return None
+
+
 def history(file_id: str, limit: int = 40) -> list[dict[str, Any]]:
-    """A verzió-lánc a legrégebbitől: [{file_id, label, instruction?, summary?}] — a forrásig visszafelé."""
+    """A verzió-lánc a legrégebbitől: [{file_id, label, instruction?, summary?, step?}] — a forrásig visszafelé.
+    A lánc a változatokon megy vissza (ld. _version_step), az első nem-változatnál (feltöltés, készítés) megáll."""
     from app.storage import display_label
     from app.tools.crafts import existing
     chain, fid = [], file_id
@@ -41,9 +59,10 @@ def history(file_id: str, limit: int = 40) -> list[dict[str, Any]]:
         except FileNotFoundError:
             break
         m = _meta(fid)
+        step = _version_step(m.get("operation") or "")
         chain.append({"file_id": fid, "label": display_label(fid, m), "instruction": m.get("instruction"),
-                      "summary": m.get("summary"), "operation": m.get("operation")})
-        if m.get("operation") != "revise":
+                      "summary": m.get("summary"), "operation": m.get("operation"), "step": step})
+        if not step:
             break
         fid = m.get("source_file_id")
     return list(reversed(chain))
