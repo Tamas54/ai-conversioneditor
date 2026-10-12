@@ -55,13 +55,13 @@ ARG WORDCRAFT_WEB_SHA256=181c06e415e292b56e07e1ecdd241f31bfac979e56c1eabe7ff6c67
 RUN set -eux; \
     base="https://github.com/storytold/wordcraft/releases/download/v${WORDCRAFT_VERSION}"; \
     cd /tmp; \
-    curl -fsSL -o wc.tar.gz "$base/wordcraft-${WORDCRAFT_VERSION}-linux-x86_64.tar.gz"; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o wc.tar.gz "$base/wordcraft-${WORDCRAFT_VERSION}-linux-x86_64.tar.gz"; \
     echo "${WORDCRAFT_CLI_SHA256}  wc.tar.gz" | sha256sum -c -; \
     mkdir -p /opt/wordcraft; \
     tar xzf wc.tar.gz --strip-components=1 -C /opt/wordcraft \
         "wordcraft-${WORDCRAFT_VERSION}-linux-x86_64/bin/wordcraft-cli" \
         "wordcraft-${WORDCRAFT_VERSION}-linux-x86_64/share/doc/wordcraft"; \
-    curl -fsSL -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${WORDCRAFT_WEB_TAG}/${WORDCRAFT_WEB_TAG}.zip"; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${WORDCRAFT_WEB_TAG}/${WORDCRAFT_WEB_TAG}.zip"; \
     echo "${WORDCRAFT_WEB_SHA256}  web.zip" | sha256sum -c -; \
     unzip -q web.zip; \
     mv "${WORDCRAFT_WEB_TAG}" /opt/wordcraft-web; \
@@ -115,12 +115,12 @@ RUN set -eux; cd /tmp; \
                 "gridcraft ${GRIDCRAFT_VERSION} ${GRIDCRAFT_CLI_SHA256} ${GRIDCRAFT_WEB_TAG} ${GRIDCRAFT_WEB_SHA256}"; do \
         set -- $spec; app=$1; ver=$2; tag=$4; \
         base="https://github.com/storytold/${app}/releases/download/v${ver}"; \
-        curl -fsSL -o cli.tar.gz "$base/${app}-${ver}-linux-x86_64.tar.gz"; \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o cli.tar.gz "$base/${app}-${ver}-linux-x86_64.tar.gz"; \
         echo "$3  cli.tar.gz" | sha256sum -c -; \
         mkdir -p /opt/${app}; \
         tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} \
             "${app}-${ver}-linux-x86_64/bin/${app}-cli" "${app}-${ver}-linux-x86_64/share/doc/${app}"; \
-        curl -fsSL -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${tag}/${tag}.zip"; \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${tag}/${tag}.zip"; \
         echo "$5  web.zip" | sha256sum -c -; \
         unzip -q web.zip; mv "${tag}" /opt/${app}-web; \
         gzip -9 -k /opt/${app}-web/*.wasm /opt/${app}-web/*.js; \
@@ -128,41 +128,39 @@ RUN set -eux; cd /tmp; \
         /opt/${app}/bin/${app}-cli --version >/dev/null; \
     done; \
     mkdir -p /opt/models; \
-    curl -fsSL -o /opt/models/isnet-general-use.onnx \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/isnet-general-use.onnx \
         https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx; \
     echo "${ISNET_SHA256}  /opt/models/isnet-general-use.onnx" | sha256sum -c -; \
-    curl -fsSL -o /opt/models/u2net_human_seg.onnx \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/u2net_human_seg.onnx \
         https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx; \
     echo "${HUMANSEG_SHA256}  /opt/models/u2net_human_seg.onnx" | sha256sum -c -; \
-    curl -fsSL -o /opt/models/birefnet-general-lite.onnx \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/birefnet-general-lite.onnx \
         https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx; \
     echo "${BIREFNET_SHA256}  /opt/models/birefnet-general-lite.onnx" | sha256sum -c -
 # Videó (storytold, Apache-2.0): EffectCraft (After Effects-szerű: .ecproj, MP4-render — az automata videó motorja)
 # + FilmCraft (Premiere-szerű vágó a kész filmekhez). A CLI a release linux tarjából, SHA256-tal.
-# ⚠ A web zip EGYELŐRE AZ UPSTREAM (Discord-gombos) build. A saját, link nélküli build (build/craft-web,
-#   workflow: craft-web, app=effectcraft|filmcraft, suffix=aice1) release-e után cserélendő a három ARG:
-#   *_WEB_TAG=<app>-web-<verzió>-aice1, *_WEB_URL=https://github.com/Tamas54/ai-conversioneditor/releases/download/
-#   <tag>/<tag>.zip, *_WEB_SHA256=<a release SHA256SUMS.txt-je>. (A zip belső mappája mindkét esetben a tag neve.)
+# A web zip a SAJÁT, közösségi linkek nélküli build (build/craft-web, workflow: craft-web, app=effectcraft|filmcraft,
+#   suffix=aice1 — 10-12 kiadva). Verzióváltás: új tag (-aice2), és a három ARG: *_WEB_TAG, *_WEB_URL, *_WEB_SHA256.
 ARG EFFECTCRAFT_VERSION=0.8.0
 ARG EFFECTCRAFT_CLI_SHA256=725c88cf379122d70f941dd3edacb54479d63ff1e2a00fae318eaee02ad762c4
-ARG EFFECTCRAFT_WEB_TAG=effectcraft-web-0.8.0
-ARG EFFECTCRAFT_WEB_URL=https://github.com/storytold/effectcraft/releases/download/v0.8.0/effectcraft-web-0.8.0.zip
-ARG EFFECTCRAFT_WEB_SHA256=59426cdd519ea1480215a58158ec0b36a31e6a1163ddd8715f3869caf509069d
+ARG EFFECTCRAFT_WEB_TAG=effectcraft-web-0.8.0-aice1
+ARG EFFECTCRAFT_WEB_URL=https://github.com/Tamas54/ai-conversioneditor/releases/download/effectcraft-web-0.8.0-aice1/effectcraft-web-0.8.0-aice1.zip
+ARG EFFECTCRAFT_WEB_SHA256=ad3ef721eb8c8b6f33302806369436b688e326dcc2f575372e897c0d31a3ca85
 ARG FILMCRAFT_VERSION=0.6.0
 ARG FILMCRAFT_CLI_SHA256=b3d706d599699ead76b46a29d5697287b9f75a0bc9eb40f7733db7657dae8204
-ARG FILMCRAFT_WEB_TAG=filmcraft-web-0.6.0
-ARG FILMCRAFT_WEB_URL=https://github.com/storytold/filmcraft/releases/download/v0.6.0/filmcraft-web-0.6.0.zip
-ARG FILMCRAFT_WEB_SHA256=9fd024d371075dc8bb0d868c0f162b60743d28db16d010e2f61b41927ea96629
+ARG FILMCRAFT_WEB_TAG=filmcraft-web-0.6.0-aice1
+ARG FILMCRAFT_WEB_URL=https://github.com/Tamas54/ai-conversioneditor/releases/download/filmcraft-web-0.6.0-aice1/filmcraft-web-0.6.0-aice1.zip
+ARG FILMCRAFT_WEB_SHA256=621c8d7da0d8c2c7050228540d97469aa8a01dc4fb1bb03675df86c5a3c658ac
 RUN set -eux; cd /tmp; \
     for spec in "effectcraft ${EFFECTCRAFT_VERSION} ${EFFECTCRAFT_CLI_SHA256} ${EFFECTCRAFT_WEB_TAG} ${EFFECTCRAFT_WEB_URL} ${EFFECTCRAFT_WEB_SHA256}" \
                 "filmcraft ${FILMCRAFT_VERSION} ${FILMCRAFT_CLI_SHA256} ${FILMCRAFT_WEB_TAG} ${FILMCRAFT_WEB_URL} ${FILMCRAFT_WEB_SHA256}"; do \
         set -- $spec; app=$1; ver=$2; tag=$4; \
-        curl -fsSL -o cli.tar.gz "https://github.com/storytold/${app}/releases/download/v${ver}/${app}-${ver}-linux-x86_64.tar.gz"; \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o cli.tar.gz "https://github.com/storytold/${app}/releases/download/v${ver}/${app}-${ver}-linux-x86_64.tar.gz"; \
         echo "$3  cli.tar.gz" | sha256sum -c -; \
         mkdir -p /opt/${app}; \
         tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} \
             "${app}-${ver}-linux-x86_64/bin/${app}-cli" "${app}-${ver}-linux-x86_64/share/doc/${app}"; \
-        curl -fsSL -o web.zip "$5"; \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o web.zip "$5"; \
         echo "$6  web.zip" | sha256sum -c -; \
         unzip -q web.zip; mv "${tag}" /opt/${app}-web; \
         gzip -9 -k /opt/${app}-web/*.wasm /opt/${app}-web/*.js; \
