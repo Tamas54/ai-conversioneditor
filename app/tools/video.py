@@ -229,7 +229,8 @@ async def fetch_article(url: str) -> dict[str, Any]:
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
 {"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
-  "chart": {"type": "column|bar|line", "title": str, "unit": str, "items": [{"label": str, "value": number}]} | null}],
+  "chart": {"type": "column|bar|line|donut|ring|icons|timeline|steps", "title": str, "unit": str, "total": number | null,
+            "items": [{"label": str, "value": number | null, "text": str}]} | null}],
  "end": {"title": str, "subtitle": str}}
 Rules:
 - exactly {n} scenes; write in the language of the source (unless told otherwise); no invented facts, names or numbers.
@@ -240,11 +241,18 @@ Rules:
 - image_query: 2–4 plain English words for a stock-photo search — concrete and visual ("wind turbines at sunset",
   "crowded city street"), never abstract.
 - stat only when the source gives a striking number (at most 2 scenes); value ≤ 8 characters ("72%", "3.4 bn"), label ≤ 40.
-- chart only when the source gives 3–8 comparable numbers of the SAME kind (inflation in three regions, sales per year):
-  copy every value EXACTLY from the source (a plain number, no unit); unit = "%" or a short unit ("$", "bn"), or "";
-  item labels ≤ 18 characters; line only for values over time, in time order; column for a few categories, bar for
-  long names or many items; at most 2 chart scenes; a scene has a stat OR a chart, never both; headline = what the
-  chart shows.
+- chart: an animated graphic for ANY topic (science, health, history, sport, culture, business, how-to…), only when
+  the source supports it — pick the type that fits:
+    column / bar — 2–8 comparable numbers of the SAME kind (bar for long names or many items);
+    line — a value over time, in time order;
+    donut — parts of one whole (shares adding up to about 100%, 2–6 items);
+    ring — ONE percentage worth showing (unit "%", one item: label = what it is);
+    icons — "x in N" or a percentage of people/things (one item: value = x; total = N, or unit "%" for x out of 100);
+    timeline — 2–6 dated events in order (label = the date exactly as written in the source, text = what happened);
+    steps — 3–6 steps of a process or how-to in order (label = short step, text = one short line).
+  Copy every number and date EXACTLY from the source (value = a plain number, no unit); unit = "%" or a short unit
+  ("$", "km", "bn") or ""; item labels ≤ 18 characters (ring/icons: ≤ 60); at most 3 chart scenes and never two of the
+  same type in a row; a scene has a stat OR a chart, never both; headline = what the graphic shows.
 - end.title ≤ 50 characters (the takeaway or a call to action); end.subtitle ≤ 80 (e.g. where to read more)."""
 
 _KEEP = """
@@ -255,9 +263,18 @@ paragraph or idea, in their order; write the headlines and image queries yoursel
 _NUM_IN_TEXT = re.compile(r"(?<![\d.,])-?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?(?![\d])|-?\d+(?:[.,]\d+)?")
 
 
+_NUM_WORDS = {w: i for i, ws in enumerate((
+    (), ("one", "egy"), ("two", "kettő", "két"), ("three", "három"), ("four", "négy"), ("five", "öt"), ("six",), ("seven",),
+    ("eight", "nyolc"), ("nine", "kilenc"), ("ten", "tíz"), ("eleven", "tizenegy"), ("twelve", "tizenkettő"),
+    ("thirteen",), ("fourteen",), ("fifteen",), ("sixteen",), ("seventeen",), ("eighteen",), ("nineteen",),
+    ("twenty", "húsz"))) for w in ws}
+_NUM_WORD_RE = re.compile(r"\b(" + "|".join(sorted(_NUM_WORDS, key=len, reverse=True)) + r")\b", re.I)
+
+
 def _text_numbers(text: str) -> set[float]:
-    """A szöveg összes száma (1,8 · 1.8 · 4 194 · 41 670 · 3,35) — a grafikon minden értékének itt kell lennie."""
-    out = set()
+    """A szöveg összes száma (1,8 · 1.8 · 4 194 · 41 670 · 3,35, és a kis számnevek: „one in four", „négyből egy")
+    — a grafikon minden értékének itt kell lennie."""
+    out = {float(_NUM_WORDS[w.lower()]) for w in _NUM_WORD_RE.findall(text or "")}
     for t in _NUM_IN_TEXT.findall(text or ""):
         t = re.sub(r"[ \u00a0\u202f]", "", t)
         for cand in (t.replace(",", "."), t.replace(",", "")):
@@ -268,31 +285,82 @@ def _text_numbers(text: str) -> set[float]:
     return out
 
 
+_CHART_TYPES = ("column", "bar", "line", "donut", "ring", "icons", "timeline", "steps")
+
+
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
-    """A modell javasolta grafikon → ellenőrzött grafikon (minden érték a forrásszövegben) | None + megjegyzés."""
+    """A modell javasolta ábra → ellenőrzött ábra | None + megjegyzés. Szabály minden típusra: szám és dátum CSAK a
+    forrásból (számos ábra: minden érték; ikonrács: az „N-ből" is; idővonal: a dátum szó szerint; lépések: a szövegük
+    számai) — különben az ábra kimarad. A modell nem talál ki számot."""
     if not isinstance(c, dict):
         return None, None
+    typ = str(c.get("type") or "column").lower()
+    if typ not in _CHART_TYPES:
+        return None, None
+    title = _clean(c.get("title"), 60)
     nums = _text_numbers(source)
+    src = re.sub(r"\s+", " ", source or "").lower()
+    bad = lambda t: [x for x in _text_numbers(t) if x not in nums]
+    left_out = f"A suggested chart “{title}” was left out: not all its numbers are in the source."
+    raw = [it for it in c.get("items") or [] if isinstance(it, dict)]
+    if typ in ("timeline", "steps"):
+        items = []
+        for it in raw[:6]:
+            lab, txt = _clean(it.get("label"), 26 if typ == "timeline" else 30), _clean(it.get("text"), 70)
+            if typ == "timeline" and re.sub(r"\s+", " ", lab).lower() not in src:
+                return None, f"A suggested timeline “{title}” was left out: the date “{lab}” is not in the source."
+            if bad(txt) or (typ == "steps" and bad(lab)):
+                return None, left_out
+            if lab:
+                items.append({"label": lab, "text": txt})
+        if len(items) < (2 if typ == "timeline" else 3):
+            return None, None
+        return ({"type": typ, "title": title, "unit": "", "items": items},
+                f"{'Timeline' if typ == 'timeline' else 'Steps'} “{title}”: {len(items)} items"
+                + (", every date is in the source text." if typ == "timeline" else ", no number that isn't in the source."))
     items, missing = [], []
-    for it in c.get("items") or []:
-        if not isinstance(it, dict):
-            continue
+    for it in raw:
         try:
             v = float(str(it.get("value")).replace(",", ".").replace(" ", ""))
         except ValueError:
             continue
-        lab = _clean(it.get("label"), 22)
-        (items if round(v, 6) in nums else missing).append({"label": lab, "value": v})
-    title = _clean(c.get("title"), 60)
-    if missing or len(items) < 2:
-        return None, f"A suggested chart “{title}” was left out: not all its numbers are in the source."
-    typ = str(c.get("type") or "column").lower()
-    typ = typ if typ in ("column", "bar", "line") else "column"
-    if typ == "column" and (len(items) > 7 or max(len(i["label"]) for i in items) > 14):
-        typ = "bar"
+        (items if round(v, 6) in nums else missing).append({"label": _clean(it.get("label"), 22 if typ not in ("ring", "icons") else 60), "value": v})
     unit = _clean(c.get("unit"), 6)
-    return ({"type": typ, "title": title, "unit": unit, "items": items[:12]},
-            f"Chart “{title}”: all {len(items)} values are in the source text.")
+    out: dict[str, Any] = {"type": typ, "title": title, "unit": unit}
+    if typ in ("ring", "icons"):
+        if missing or not items:
+            return None, left_out
+        out["items"] = items[:1]
+        if typ == "ring" and not (0 <= items[0]["value"] <= 100):
+            return None, None
+        if typ == "icons":
+            tot = c.get("total")
+            if tot not in (None, "", 0):
+                try:
+                    tot = float(str(tot).replace(",", "."))
+                except ValueError:
+                    return None, None
+                if round(tot, 6) not in nums and not (unit == "%" and tot == 100):
+                    return None, left_out
+                out["total"] = tot
+            elif unit != "%":
+                return None, None
+        return out, f"{'Ring' if typ == 'ring' else 'Icons'} “{title}”: the number is in the source text."
+    if missing or len(items) < 2:
+        return None, left_out
+    checked, rest = len(items), ""
+    if typ == "donut":
+        tot = sum(i["value"] for i in items)
+        if any(i["value"] < 0 for i in items) or len(items) > 6:
+            return None, None
+        if unit == "%" and 60 <= tot < 99.5:          # a hiányzó rész „Egyéb" — kiszámolt, nem kitalált
+            from app.tools.infographic import _HU
+            items.append({"label": "Egyéb" if _HU.search(source or "") else "Other", "value": round(100 - tot, 6)})
+            rest = f" “{items[-1]['label']}” is the rest of 100%."
+    if typ == "column" and (len(items) > 7 or max(len(i["label"]) for i in items) > 14):
+        typ = out["type"] = "bar"
+    out["items"] = items[:12]
+    return out, f"Chart “{title}”: all {checked} values are in the source text.{rest}"
 
 
 def charts_from_table(file_id: str, limit: int = 2) -> list[dict[str, Any]]:
@@ -312,7 +380,10 @@ def charts_from_table(file_id: str, limit: int = 2) -> list[dict[str, Any]]:
         items = [{"label": _clean(labels[i], 22), "value": v} for i, v in enumerate(c.values) if v is not None][:12]
         if len(items) < 2:
             continue
-        typ = "line" if timey and len(items) >= 3 else ("bar" if len(items) > 7 or max(len(x["label"]) for x in items) > 14 else "column")
+        tot = sum(x["value"] for x in items)
+        share = c.percent and 95 <= tot <= 105 and 2 <= len(items) <= 6 and all(x["value"] >= 0 for x in items)
+        typ = "donut" if share and not timey else "line" if timey and len(items) >= 3 else (
+            "bar" if len(items) > 7 or max(len(x["label"]) for x in items) > 14 else "column")
         unit = "%" if c.percent else ""
         out.append({"type": typ, "title": _clean(re.sub(r"\s*\(%\)|\s*%", "", c.name), 60), "unit": unit, "items": items,
                     "cells": f"{tb.refs[0][c.j]}:{tb.refs[-1][c.j]}"})
@@ -466,12 +537,33 @@ def _fmt_val(v: float, unit: str, lang: str) -> str:
     return f"{unit}{t}" if unit in ("$", "€", "£", "¥") and lang == "en" else f"{t} {unit}"
 
 
-def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str) -> list[dict[str, Any]]:
+def _palette(acc: list[float]) -> list[list[float]]:
+    """Szeletszínek az akcentusból: akcentus, világos, sötétebb akcentus, szürke, halvány akcentus, középszürke."""
+    mix = lambda a, b, t: [round(a[i] * (1 - t) + b[i] * t, 4) for i in range(3)]
+    return [acc, [0.93, 0.94, 0.96], mix(acc, [0, 0, 0], 0.45), [0.55, 0.58, 0.64], mix(acc, [1, 1, 1], 0.5), [0.35, 0.37, 0.42]]
+
+
+def _arc(out: list, name: str, cx: float, cy: float, r: float, th: float, a0: float, a1: float, color: Any,
+         t0: float, dur: float, opacity: int = 100) -> None:
+    """Körív apró, elforgatott, lekerekített szakaszokból, amelyek egymás után tűnnek fel (rajzolás-hatás).
+    Szögek fokban, 0 = fent, az óramutató járásával."""
+    span = a1 - a0
+    k = max(3, math.ceil(abs(span) / 5))
+    for i in range(k):
+        a = math.radians(a0 + span * (i + 0.5) / k - 90)
+        chord = 2 * r * math.sin(math.radians(abs(span) / k) / 2)
+        out.append({"k": "rect", "name": f"{name} {i + 1}", "size": [round(chord * 1.18 + th * 0.2, 1), round(th, 1)],
+                    "pos": [round(cx + r * math.cos(a), 1), round(cy + r * math.sin(a), 1)], "rot": round(math.degrees(a) + 90, 2),
+                    "color": color, "opacity": opacity, "round": round(th * 0.25, 1), "grow": "fade",
+                    "t0": round(t0 + dur * i / k, 3), "dur": 0.08})
+
+
+def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Optional[list[float]] = None) -> list[dict[str, Any]]:
     """Egy mozgó grafikon rétegei (a builder csak lerakja): oszlop / sáv / vonal, értékcímkék, kategóriacímkék,
     alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
     m, vertical = min(W, H), H > W * 1.2
     items = ch["items"]
-    n, vals = len(items), [float(i["value"]) for i in items]
+    n, vals = len(items), [float(i["value"]) if i.get("value") is not None else 0.0 for i in items]
     unit, typ = ch.get("unit") or "", ch["type"]
     x0, x1 = W * 0.09, W * 0.91
     yT, yB = H * (0.2 if vertical else 0.22), H * (0.66 if vertical else 0.7)
@@ -519,6 +611,105 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str) -> list[dict[s
                  align="center", font="bold", t0=t0 + grow * 0.8)
             text(f"Label – {it['label']}", it["label"], cl, (lab_w, cl * 1.4), (x0 + lab_w / 2, cy + cl * 0.1), align="right",
                  font="semibold", color=soft, t0=0.2)
+    elif typ in ("donut", "ring"):
+        pal = _palette(accent or _rgb(None))
+        r = m * (0.2 if not vertical else 0.24)
+        th = r * (0.32 if typ == "donut" else 0.22)
+        cx = W * (0.32 if not vertical and typ == "donut" else 0.5)
+        cy = (yT + yB) / 2 if not vertical or typ == "ring" else yT + r + th
+        _arc(out, "Track", cx, cy, r, th, 0, 360, [1, 1, 1], 0.1, 0.3, opacity=14)
+        if typ == "ring":
+            v = max(0.0, min(100.0, vals[0]))
+            _arc(out, "Ring", cx, cy, r, th, 0, 360 * v / 100, "accent", 0.4, 1.6)
+            big = round(r * 0.62)
+            text("Ring value", _fmt_val(vals[0], unit or "%", lang), big, (r * 1.9, big * 1.3), (cx, cy + big * 0.05),
+                 align="center", font="bold", t0=0.5)
+            text("Ring label", items[0]["label"], round(m * 0.036), (W * 0.8, m * 0.12), (cx, cy + r + th + m * 0.07),
+                 align="center", font="semibold", color=soft, t0=0.9)
+        else:
+            tot = sum(max(v, 0) for v in vals) or 1
+            a, leg_x = 0.0, W * 0.58
+            leg_y0 = cy - (n - 1) * m * 0.045
+            for k, (it, v) in enumerate(zip(items, vals)):
+                sweep = 360 * max(v, 0) / tot
+                col = pal[k % len(pal)]
+                _arc(out, f"Slice {k + 1} – {it['label']}", cx, cy, r, th, a, a + sweep, col, 0.35 + 1.4 * a / 360, 1.4 * sweep / 360)
+                a += sweep
+                ly = (leg_y0 + k * m * 0.09) if not vertical else (cy + r + th + m * (0.06 + 0.075 * k))
+                lx = leg_x if not vertical else W * 0.16
+                t1 = 0.35 + 1.4 * (a - sweep / 2) / 360
+                rect(f"Key {k + 1}", (m * 0.03, m * 0.03), (lx, ly), color=col, opacity=100, round=m * 0.006, grow="pop", t0=t1, dur=0.25)
+                text(f"Key label {k + 1}", f"{it['label']}  ·  {_fmt_val(v, unit, lang)}", round(m * 0.034),
+                     (W * (0.36 if not vertical else 0.72), m * 0.06), (lx + m * 0.03 + W * (0.18 if not vertical else 0.36), ly + m * 0.004),
+                     align="left", font="semibold", t0=t1)
+    elif typ == "icons":
+        part, total = vals[0], float(ch.get("total") or (100 if unit == "%" else 0))
+        if total <= 0 or part < 0 or part > total:
+            return out
+        cells = int(total) if total <= 20 and float(total).is_integer() else 100
+        on = round(part / total * cells)
+        cols = 10 if cells == 100 else (cells if cells <= 10 else math.ceil(cells / 2))
+        rows = math.ceil(cells / cols)
+        area_w = (x1 - x0) * (0.62 if not vertical else 0.9)
+        cell = min(area_w / cols, (yB - yT - m * 0.16) / rows)
+        dot = cell * 0.72
+        gx0 = W / 2 - cell * cols / 2 + cell / 2
+        gy0 = yT + m * 0.02 + cell / 2
+        for k in range(cells):
+            gx, gy = gx0 + (k % cols) * cell, gy0 + (k // cols) * cell
+            hot = k < on
+            rect(f"Dot {k + 1}", (dot, dot), (gx, gy), color="accent" if hot else [1, 1, 1], opacity=100 if hot else 22,
+                 round=dot / 2, grow="pop", t0=round(0.3 + (1.6 * k / cells if hot else 0.05 * (k % cols)), 3), dur=0.22)
+        say = (f"{_fmt_val(part, '', lang)} / {_fmt_val(total, '', lang)}" if cells != 100 or unit != "%" else _fmt_val(part, "%", lang))
+        ty = gy0 + rows * cell + m * 0.03
+        text("Icons value", say, round(m * 0.07), (W * 0.8, m * 0.1), (W / 2, ty + m * 0.03), align="center", font="bold",
+             color=accent or _rgb(None), t0=1.6)
+        text("Icons label", items[0]["label"], round(m * 0.034), (W * 0.84, m * 0.11), (W / 2, ty + m * 0.12), align="center",
+             font="semibold", color=soft, t0=1.9)
+    elif typ in ("timeline", "steps"):
+        k_n = len(items)
+        hor = not vertical and k_n <= 6
+        th = max(4, m * 0.006)
+        d = m * (0.03 if typ == "timeline" else 0.07)
+        if hor:
+            ly, xa, xb = (yT + yB) / 2 - m * 0.03, x0 + m * 0.03, x1 - m * 0.03
+            if typ == "timeline":
+                out.append({"k": "rect", "name": "Timeline", "size": [round(xb - xa, 1), round(th, 1)], "pos": [round(xa, 1), round(ly, 1)],
+                            "rot": 0, "color": [1, 1, 1], "opacity": 55, "grow": "segment", "t0": 0.2, "dur": 0.9})
+            slot = (xb - xa) / k_n
+            for k, it in enumerate(items):
+                px, t0 = xa + slot * (k + 0.5), 0.5 + k * min(0.55, 2.6 / k_n)
+                rect(f"Point {k + 1}", (d, d), (px, ly), color="accent", opacity=100, round=d / 2, grow="pop", t0=t0, dur=0.3)
+                if typ == "steps":
+                    text(f"Step number {k + 1}", str(k + 1), round(d * 0.55), (d, d * 0.8), (px, ly + d * 0.04), align="center",
+                         font="bold", t0=t0 + 0.1)
+                up = typ == "timeline" and k % 2 == 1
+                head_y = ly - m * 0.09 if up else ly + d / 2 + m * 0.05
+                text(f"Label {k + 1}", it["label"], round(m * 0.042), (slot * 0.94, m * 0.06), (px, head_y), align="center",
+                     font="bold", color=(accent or _rgb(None)) if typ == "timeline" else None, t0=t0 + 0.15)
+                if it.get("text"):
+                    body_y = head_y - m * 0.07 if up else head_y + m * 0.075
+                    text(f"Text {k + 1}", it["text"], round(m * 0.03), (slot * 0.94, m * 0.11), (px, body_y + (0 if up else m * 0.02)),
+                         align="center", font="regular", color=soft, t0=t0 + 0.3)
+        else:
+            lx, ya, yb = x0 + m * 0.06, yT + m * 0.02, yB + m * 0.02
+            if typ == "timeline":
+                out.append({"k": "rect", "name": "Timeline", "size": [round(yb - ya, 1), round(th, 1)], "pos": [round(lx, 1), round(ya, 1)],
+                            "rot": 90, "color": [1, 1, 1], "opacity": 55, "grow": "segment", "t0": 0.2, "dur": 0.9})
+            row = (yb - ya) / k_n
+            for k, it in enumerate(items):
+                py, t0 = ya + row * (k + 0.5), 0.5 + k * min(0.55, 2.6 / k_n)
+                rect(f"Point {k + 1}", (d, d), (lx, py), color="accent", opacity=100, round=d / 2, grow="pop", t0=t0, dur=0.3)
+                if typ == "steps":
+                    text(f"Step number {k + 1}", str(k + 1), round(d * 0.55), (d, d * 0.8), (lx, py + d * 0.04), align="center",
+                         font="bold", t0=t0 + 0.1)
+                tx = lx + d / 2 + m * 0.04
+                tw = x1 - tx
+                text(f"Label {k + 1}", it["label"], round(m * 0.044), (tw, m * 0.065), (tx + tw / 2, py - (m * 0.02 if it.get("text") else 0)),
+                     align="left", font="bold", color=(accent or _rgb(None)) if typ == "timeline" else None, t0=t0 + 0.15)
+                if it.get("text"):
+                    text(f"Text {k + 1}", it["text"], round(m * 0.032), (tw, m * 0.1), (tx + tw / 2, py + m * 0.055), align="left",
+                         font="regular", color=soft, t0=t0 + 0.3)
     else:   # line
         lo, hi = min(vals), max(vals)
         pad = (hi - lo) * 0.12 or abs(hi) * 0.1 or 1
@@ -638,7 +829,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         chart = s.get("chart")
         if chart:
             stat = None
-            chart = {"title": chart.get("title") or head, "elements": chart_elements(chart, W, H, lang)}
+            chart = {"title": chart.get("title") or head, "elements": chart_elements(chart, W, H, lang, _rgb(accent))}
         d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
                          "motion": motions[i], "focus": (focus or {}).get(images[i + 1] if i + 1 < len(images) else "") or [0.5, 0.45],
                          "size": _size_for(head, m * (0.066 if fmt != "landscape" else 0.058), 34, m * 0.046)})
