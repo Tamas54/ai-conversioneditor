@@ -115,6 +115,30 @@ async def editor_asset(app: str, asset: str, request: Request):
     return FileResponse(p, media_type=media, headers=headers)
 
 
+_PLACEHOLDER_STEMS = {"untitled", "document", "letter", "report", "cv", "sample", "presentation", "your title here", "your headline here"}
+
+
+def _title_from(path: Path, ext: str) -> str:
+    """Az első címsor / az első nem üres sor (docx), ill. az első dia címe (pptx) — fájlnévnek."""
+    try:
+        if ext == "docx":
+            from docx import Document
+            paras = [p for p in Document(str(path)).paragraphs if p.text.strip()]
+            head = next((p for p in paras if (p.style.name or "").lower().startswith(("title", "heading"))), paras[0] if paras else None)
+            text = head.text if head else ""
+        elif ext == "pptx":
+            from pptx import Presentation
+            slides = list(Presentation(str(path)).slides)
+            text = slides[0].shapes.title.text if slides and slides[0].shapes.title is not None else ""
+        else:
+            return ""
+    except Exception as e:
+        log.debug("cím kiolvasása (%s): %s", path.name, e)
+        return ""
+    text = re.sub(r"[\\/:*?\"<>|\s]+", " ", text).strip(" .")
+    return text[:60].rsplit(" ", 1)[0] if len(text) > 60 else text
+
+
 @router.post("/api/editor/save")
 async def editor_save(
     request: Request,
@@ -151,7 +175,10 @@ async def editor_save(
         else:
             native.unlink(missing_ok=True)
     stamp = datetime.utcnow().strftime("%H:%M")
-    label = f"{Path(fname).stem} (edited {stamp} UTC).{ext}"
+    stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(fname).stem)
+    if stem.lower() in _PLACEHOLDER_STEMS:      # „Untitled.docx” helyett a dokumentum saját címe (a Files-ban megkülönböztethető)
+        stem = _title_from(output_path(fid), ext) or stem
+    label = f"{stem} (edited {stamp} UTC).{ext}"
     write_meta(fid, label=label, source_file_id=source, operation="manual edit", original_filename=fname)
     result = {"file_id": fid, "url": public_url(fid), "size_kb": len(data) // 1024, "label": label}
     events.emit("tool_done", tool="editor_save", params={"source": source, "name": fname}, result=result)
