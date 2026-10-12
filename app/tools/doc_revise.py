@@ -26,7 +26,7 @@ Outline of the document — one line per paragraph: #index p<page> [style] begin
 
 The user asks: {request}
 
-Reply with ONE JSON object {{"steps": [...], "summary": "one short sentence in the language of the request"}}.
+Reply with ONE JSON object {{"steps": [...], "summary": "one short sentence in the language of the request — English if the request is only a few words or its language is unclear"}}.
 Steps (use the #index numbers above; "to" is inclusive; omit "to" for a single paragraph):
   {{"op":"indent","from":i,"to":j,"first_line_cm":1.0}}             first-line indent (like a tab) on body paragraphs
   {{"op":"insert_image","after":i,"stock":"2-4 English words"}}      a real photo (free) after paragraph i

@@ -62,7 +62,7 @@ that contrasts with that area, keep the subject in a crop. Use moderate values u
 Use "ai" backgrounds only if the user asks for a generated/imagined background.
 Logo provided: {logo}.
 Request: {request}
-Reply with ONE JSON object: {"steps":[...], "summary":"one sentence in the language of the request"}"""
+Reply with ONE JSON object: {"steps":[...], "summary":"one sentence in the language of the request — English if the request is only a few words or its language is unclear"}"""
 
 
 # ---------- tervezés ----------
