@@ -104,7 +104,7 @@ async def plan(doc, pages: list[int], request: str) -> dict[str, Any]:
     from app.llm.siliconflow import _call_model, _strip_json_fences
     prompt = _PROMPT.format(outline=outline(doc, pages), request=request.strip()[:2000])
     last: Exception = RuntimeError("no plan")
-    for model in (settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY):
+    for model in (settings.AGENT_MODEL, settings.AGENT_MODEL_FALLBACK):
         try:
             raw = await _call_model(model, [{"role": "user", "content": prompt}], thinking=False)
             data = json.loads(_strip_json_fences(raw)[_strip_json_fences(raw).find("{"):])

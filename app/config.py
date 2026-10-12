@@ -35,6 +35,8 @@ class Settings(BaseModel):
     LLM_MODEL_FALLBACK: str = os.getenv("LLM_MODEL_FALLBACK", "moonshotai/Kimi-K2.6")
     # A szerkesztő-ügynök (iteratív „kérj változtatást”, régi agent_edit): DeepSeek V4.1 Flash (Kommandant, 10-11)
     AGENT_MODEL: str = os.getenv("AGENT_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash")
+    # Az ügynök tartaléka: GLM-5.3-Flash (Kimi NEM kerül az ügynök sorába — Kommandant, 10-12)
+    AGENT_MODEL_FALLBACK: str = os.getenv("AGENT_MODEL_FALLBACK", "zai-org/GLM-5.3-Flash")
     # Vision/OCR: Kimi marad — magyar regényoldalon 98,4% vs GLM-5.3-Flash 85% karakter-egyezés (10-11)
     LLM_MODEL_VISION: str = os.getenv("LLM_MODEL_VISION", "moonshotai/Kimi-K2.6")
     LLM_TIMEOUT_S: int = int(os.getenv("LLM_TIMEOUT_S", "120"))

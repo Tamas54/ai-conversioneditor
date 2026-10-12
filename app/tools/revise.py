@@ -84,7 +84,7 @@ async def _revise_deck(spec: dict[str, Any], request: str, theme: Optional[dict[
         style = f"\nThe user gave a style example: {theme.get('mood', '')}. Its theme is already set in the JSON; match the tone."
     prompt = _DECK_PROMPT.format(request=request.strip()[:2000], deck=json.dumps(work, ensure_ascii=False), style=style)
     last: Exception = RuntimeError("no answer")
-    for model in (settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY):
+    for model in (settings.AGENT_MODEL, settings.AGENT_MODEL_FALLBACK):
         try:
             raw = _strip_json_fences(await _call_model(model, [{"role": "user", "content": prompt}], thinking=False))
             new = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])

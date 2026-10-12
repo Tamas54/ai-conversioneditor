@@ -1,5 +1,5 @@
 """
-Autonomous document-editing agent — tool-use loop with Kimi K2.6.
+Autonomous document-editing agent — tool-use loop (AGENT_MODEL: DeepSeek V4.1 Flash, GLM fallback).
 
 Architecture:
     user instruction + initial file_id
@@ -14,8 +14,8 @@ Architecture:
         → final file_id + summary + trace + iterations
 
 Why an agent loop instead of single-call planning:
-    - Kimi can SEE results (matches_count, errors) and self-correct
-    - Creative work: Kimi generates new text via repeated read → write cycles
+    - the model can SEE results (matches_count, errors) and self-correct
+    - Creative work: the model generates new text via repeated read → write cycles
     - Multi-step plans where step N depends on step N-1's outcome
 """
 from __future__ import annotations
@@ -1218,7 +1218,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "anchor": {"type": "string", "description": "Exact text of paragraph to replace"},
                     "new_text": {"type": "string", "description": "Proposed replacement text"},
-                    "author": {"type": "string", "description": "Author name shown in Word's review pane (default 'Kimi K2.6')"},
+                    "author": {"type": "string", "description": "Author name shown in Word's review pane (default 'AI editor')"},
                 },
                 "required": ["anchor", "new_text"],
             },
@@ -1465,7 +1465,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "extract_citations",
             "description": (
                 "Extract structured academic citations from any document "
-                "(PDF/DOCX/HTML/MD) via Kimi K2.6. Returns "
+                "(PDF/DOCX/HTML/MD) with the language model. Returns "
                 "[{authors, title, year, journal, volume, issue, pages, "
                 "doi, isbn, kind, raw}] with deduplication by "
                 "first-author+year+title-prefix. Useful for bibliography "
@@ -1519,11 +1519,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Cross-document term-consistency check. Either pass an "
                 "explicit glossary [{canonical, allowed_variants}] OR rely "
-                "on auto_detect=true (default) to let Kimi K2.6 identify "
+                "on auto_detect=true (default) to let the language model identify "
                 "important terms (legal definitions, proper nouns, technical "
                 "terms). Then scans all listed documents for surface-form "
                 "variations and flags inconsistent usage. Use for legal "
-                "review (Megrendelő/Vevő/Ügyfél consistency), translation "
+                "review (Client/Customer/Buyer consistency), translation "
                 "QA (same source term → same target), brand-name "
                 "capitalization (iPhone vs Iphone)."
             ),
@@ -1551,7 +1551,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         },
                         "description": "Optional explicit term list",
                     },
-                    "auto_detect": {"type": "boolean", "description": "If true and no glossary, Kimi auto-detects terms (default true)"},
+                    "auto_detect": {"type": "boolean", "description": "If true and no glossary, terms are detected automatically (default true)"},
                 },
                 "required": ["file_ids"],
             },
@@ -1562,7 +1562,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "chart_redraw",
             "description": (
-                "Read an existing chart from an image (PNG/JPG) via Kimi K2.6 "
+                "Read an existing chart from an image (PNG/JPG) with the vision model "
                 "vision, extract its structure (type, axes, categories, "
                 "series, values), and re-render it via matplotlib with a "
                 "new palette or brand. Useful for re-coloring third-party "
@@ -1605,7 +1605,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "PPTX) — fast and free. Scores the result on text quality "
                 "heuristics (char density, replacement chars, printable ratio). "
                 "If quality is below threshold (typically a scan-only PDF or "
-                "broken CMap), automatically falls back to Kimi K2.6 vision "
+                "broken CMap), automatically falls back to vision-model "
                 "OCR per page. Returns whichever method scored higher with "
                 "full provenance metadata. Use this INSTEAD of read_document "
                 "when you suspect the document might have extraction issues "
@@ -1614,7 +1614,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "force_vision": {"type": "boolean", "description": "Skip native parser, go straight to Kimi vision"},
+                    "force_vision": {"type": "boolean", "description": "Skip native parser, go straight to vision OCR"},
                     "quality_threshold": {"type": "number", "description": "Minimum native-parser score to skip vision fallback (default 0.55, range 0..1)"},
                     "max_vision_pages": {"type": "integer", "description": "Cap vision OCR to N pages (omit for all)"},
                 },
@@ -1627,8 +1627,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "legal_term_consistency",
             "description": (
                 "PLACEHOLDER (not yet implemented): flag inconsistent use "
-                "of defined terms within a document (e.g. Megrendelő vs. "
-                "Vevő used interchangeably)."
+                "of defined terms within a document (e.g. Client vs. "
+                "Customer used interchangeably)."
             ),
             "parameters": {
                 "type": "object",
@@ -1665,16 +1665,22 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "ribbon, headless). Use for structure and formatting the simple tools can't do: "
                 "styles, tables, TOC, footnotes, comments, tracked changes. commands: "
                 "[{command, params}] e.g. review.trackChanges {value:true}, edit.replaceAll "
-                "{text, with, matchCase:true}, select.text {text} + review.newComment {text}, "
-                "references.toc {levels:2} (after review.acceptAll). The result becomes the working document."
+                "{text, with, matchCase:true} (ALWAYS pass matchCase), select.text {text} + "
+                "review.newComment {text}, edit.goto {paragraph: n}, para.align {value: 'center'}, "
+                "insert.picture {file_id, width} then caret.end before text.newParagraph, "
+                "references.toc {levels:2} (after review.acceptAll). The result becomes the working "
+                "document. read instead of editing: 'review' (tracked changes and comments, compact), "
+                "'text', 'info', 'inspect' (structure JSON) or 'commands' (pass query for params, "
+                "e.g. 'table') — look up a command before guessing its id."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "commands": {"type": "array", "items": {"type": "object"}},
-                    "author": {"type": "string", "description": "name on tracked changes/comments"},
+                    "author": {"type": "string", "description": "name on tracked changes/comments (default 'AI editor')"},
+                    "read": {"type": "string", "enum": ["review", "text", "info", "inspect", "commands"]},
+                    "query": {"type": "string", "description": "with read='commands': filter, e.g. 'table'"},
                 },
-                "required": ["commands"],
             },
         },
     },
@@ -1684,15 +1690,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "build_deck",
             "description": (
                 "Create a complete, designed 16:9 PowerPoint deck in ONE call (replaces slide-by-slide "
-                "building). spec = {title, footer?, theme?|brand?, slides:[{layout, ...}]}; layouts: cover, "
-                "section, bullets(+image), image_left, image_right, full_image, quote, stats, chart, table, "
-                "gallery, closing. image = file_id | {generate: prompt} | {stock: words} | {url}. "
-                "The new deck becomes the working document."
+                "building). EITHER spec = {title, footer?, theme?|brand?, slides:[{layout, ...}]}; layouts: "
+                "cover, section, bullets(+image), image_left, image_right, full_image, quote, stats, chart, "
+                "table, gallery, closing. image = file_id | {generate: prompt} | {stock: words} | {url}. "
+                "OR from_document=true: the working document (docx/pdf/md…) is turned into slides by the "
+                "server — its headings become slides, its facts and pictures are kept (instructions, slides, "
+                "images stock|ai|doc|none). template_file_id = a .pptx/.potx whose masters, layouts, "
+                "backgrounds, logo and fonts are used. The new deck becomes the working document."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"spec": {"type": "object"}},
-                "required": ["spec"],
+                "properties": {
+                    "spec": {"type": "object"},
+                    "from_document": {"type": "boolean"},
+                    "instructions": {"type": "string", "description": "with from_document: e.g. '10-minute talk for the board'"},
+                    "slides": {"type": "integer", "description": "with from_document: 4-15, omit for automatic"},
+                    "images": {"type": "string", "enum": ["stock", "ai", "doc", "none"]},
+                    "template_file_id": {"type": "string"},
+                },
             },
         },
     },
@@ -1701,17 +1716,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "design_piece",
             "description": (
-                "Make a designed PDF from a template (VectorCraft): poster, flyer, report_cover, "
+                "Make a designed piece from a template (VectorCraft): poster, flyer, report_cover, "
                 "certificate, social, booklet. data holds the texts and image (file_id | {generate} | {stock}). "
-                "The PDF becomes the working document."
+                "export: pdf | png | svg | jpg | vectorcraft (the editable design file, text stays text) — "
+                "default ['pdf', 'png']. The first exported file becomes the working document."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "template": {"type": "string"},
+                    "template": {"type": "string", "enum": ["poster", "flyer", "report_cover", "certificate", "social", "booklet"]},
                     "data": {"type": "object"},
                     "size": {"type": "string"},
                     "theme": {"type": "object"},
+                    "brand": {"type": "string"},
+                    "export": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["template", "data"],
             },
@@ -1720,12 +1738,145 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "office",
+            "description": (
+                "Office engines, one tool. app = 'deck' (PowerPoint-like: pptx), 'pdf' (Acrobat-like), "
+                "'layout' (InDesign-like: .designcraft/.idml) or 'sheet' (Excel-like: xlsx/csv). Opens file_id "
+                "(omit = the working document if this app can open it, otherwise starts empty; 'new' = start "
+                "empty), runs commands, saves a NEW file in save_format (default: the source format; deck → "
+                "pptx, layout → pdf, sheet → xlsx), which becomes the working document (png/jpg exports are "
+                "previews: they come back as image_file_id and the working document stays).\n"
+                "deck: [{command: 'file.new', params: {blank: true}}, {command: 'slide.new', params: {layout: "
+                "'titleAndContent', title, body: 'line\\nline'}}, {command: 'insert.picture', params: {file_id, "
+                "rect: [x,y,w,h]}}, {command: 'insert.chart', params: {type: 'column', categories, series: "
+                "[{name, values}]}}, then chart.options {title: null}]. save_format pdf/png exports.\n"
+                "sheet: range.setValues {range: 'A1', values: [[...]]} (strings starting with = are formulas), "
+                "cell.set {cell, input}, insert.chart {range, type}, data.sort.\n"
+                "pdf: commands are tool steps [{tool: 'page_add_text', args: {page: 1, text, at: [x, y]}}, "
+                "{tool: 'redact_mark', args: {find}}, {tool: 'redact_apply', args: {}}, form_fill, page_rotate/"
+                "delete/move, bookmark_add…] — the document is opened and saved for you.\n"
+                "layout: file.new {preset: 'A4', pages, facingPages, margins, bleed} and layout commands.\n"
+                "read = 'info' | 'text' (pdf text, sheet csv) | 'commands' (ids; pass query for params and "
+                "descriptions — always look before guessing) — reading changes nothing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app": {"type": "string", "enum": ["deck", "pdf", "layout", "sheet"]},
+                    "file_id": {"type": "string"},
+                    "commands": {"type": "array", "items": {"type": "object"}},
+                    "save_format": {"type": "string"},
+                    "read": {"type": "string", "enum": ["info", "text", "commands"]},
+                    "query": {"type": "string"},
+                },
+                "required": ["app"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vectorcraft",
+            "description": (
+                "Free-form vector design with VectorCraft (Illustrator-like, ~730 commands): posters, flyers, "
+                "brochures, multi-page PDFs, SVG. Opens file_id (svg/pdf/ai/eps/.vectorcraft; omit = the working "
+                "document if it is one of those, 'new' = empty) and exports every format in export (default "
+                "['pdf']; also svg, png, jpg, webp, eps, vectorcraft). The first non-image export becomes the "
+                "working document. Typical: file.new {width: '210 mm', height: '297 mm'} → shape.rectangle {x, y, "
+                "width, height} → paint.setFill {color} (a new shape stays selected) → text.create {x, y, text, "
+                "size, font, color, area: {width, height}} → file.place {file_id, rect: [x, y, w, h]} → "
+                "artboard.new {width, height} (next page). Points (A4 = 595×842); fonts 'Source Serif 4', "
+                "'Source Sans 3'; later objects stack on top. read = 'info' | 'commands' (+ query)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "commands": {"type": "array", "items": {"type": "object"}},
+                    "export": {"type": "array", "items": {"type": "string"}},
+                    "read": {"type": "string", "enum": ["info", "commands"]},
+                    "query": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pdf_tools",
+            "description": (
+                "Finished PDF jobs in one call (PdfCraft); the result becomes the working document. "
+                "file_ids = the PDFs (omit = the working PDF; for merge/compare the working PDF goes first "
+                "if you pass only the other one). action: merge (in order) | compress | to_word (→ docx) | "
+                "page_numbers (position center|right|left) | watermark (text) | redact (words and/or patterns "
+                "email|phone|credit-card|ssn|date — the text is removed for good) | ocr (scan → searchable, "
+                "English only) | protect (password, ≥4 chars) | compare (old, new → a report PDF) | "
+                "make_fillable (a printed digital form → real fields) | form_fields (list the fields; changes "
+                "nothing) | fill_form (values {field: value}, or data_file_id = CSV/XLSX for one copy per row; "
+                "flatten=true bakes the answers in for printing)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["merge", "compress", "to_word", "page_numbers", "watermark",
+                                                          "redact", "ocr", "protect", "compare", "make_fillable",
+                                                          "form_fields", "fill_form"]},
+                    "file_ids": {"type": "array", "items": {"type": "string"}},
+                    "text": {"type": "string"},
+                    "position": {"type": "string", "enum": ["center", "right", "left"]},
+                    "words": {"type": "array", "items": {"type": "string"}},
+                    "patterns": {"type": "array", "items": {"type": "string"}},
+                    "password": {"type": "string"},
+                    "values": {"type": "object"},
+                    "data_file_id": {"type": "string"},
+                    "flatten": {"type": "boolean"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scan_to_text",
+            "description": (
+                "Photographed or scanned pages (images in page order, or a scanned PDF) → editable documents. "
+                "A vision model reads every page: old spelling kept, hyphenation and paragraphs rejoined, "
+                "running heads and page numbers dropped, footnotes kept; printed pictures are cut out and "
+                "placed. file_ids omit = the working file. outputs ⊆ docx (default), pdf (new typeset), "
+                "searchable_pdf (original look + text layer), txt, md, fillable_pdf (a printed form rebuilt "
+                "with real fields). language = hint, e.g. 'German'. max_pages = only the first N. "
+                "The Word document (else the first output) becomes the working document. Long books can take "
+                "minutes: if it is still running when the wait ends you get its job_id."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_ids": {"type": "array", "items": {"type": "string"}},
+                    "outputs": {"type": "array", "items": {"type": "string"}},
+                    "language": {"type": "string"},
+                    "max_pages": {"type": "integer"},
+                    "job_id": {"type": "string", "description": "keep waiting for an earlier run"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "photo_edit",
             "description": (
-                "Edit an image with PhotoCraft: remove_background (neural cut-out), background_file_id "
-                "(+ background_blur px) to put another image behind the subject, or commands like "
-                "image.autoTone, image.imageSize {width,height}, type.create {x,y,text,size,color}. "
-                "Returns a new image file_id (use it in documents/decks)."
+                "Edit one image (omit image_file_id = the working image). Three ways:\n"
+                "1) PhotoCraft (Photoshop-like) directly: remove_background (neural cut-out), "
+                "background_file_id (+ background_blur px) to put another image behind the subject, or "
+                "commands like image.autoTone, image.imageSize {width,height}, type.create {x,y,text,size,color}.\n"
+                "2) instruction = the edit in plain words ('Instagram 4:5, warmer, darker sky, headline "
+                "\"Summer sale\" at the top, logo bottom right' + logo_file_id): planned and carried out step "
+                "by step as layers — a PSD plus a JPG, nothing repainted.\n"
+                "3) restore=true: repair an old photo (scratches, stains, fading; colorize true/false/omit = "
+                "black-and-white only) — costs credits.\n"
+                "Returns the new image_file_id. If you edited the working image, the result becomes the "
+                "working document; otherwise use the id in documents/decks."
             ),
             "parameters": {
                 "type": "object",
@@ -1736,8 +1887,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "background_blur": {"type": "number"},
                     "commands": {"type": "array", "items": {"type": "object"}},
                     "save_format": {"type": "string"},
+                    "instruction": {"type": "string"},
+                    "logo_file_id": {"type": "string"},
+                    "restore": {"type": "boolean"},
+                    "colorize": {"type": "boolean"},
+                    "job_id": {"type": "string", "description": "keep waiting for an earlier instruction/restore run"},
                 },
-                "required": ["image_file_id"],
             },
         },
     },
@@ -1823,7 +1978,7 @@ Vision capabilities:
   • If the user references an uploaded image (its file_id ends in .png/.jpg/.webp),
     you can call ocr_image (read text), describe_image (free-form Q&A),
     extract_table_from_image (structured rows), or image_to_xlsx (table photo → Excel).
-  • For "fotózott táblázatból Excel" or "kézírás → editable doc" tasks, you'll
+  • For "photographed table → Excel" or "handwriting → editable doc" tasks, you'll
     typically use ocr_image / image_to_xlsx and then write the result into a
     new or existing document via insert_after / find_replace.
 
@@ -1840,12 +1995,16 @@ PDF strategy (IMPORTANT — preserves layout):
 
 IMAGE-TO-DOCUMENT strategy (CRITICAL when source is .jpg/.jpeg/.png/.webp/.bmp/.gif):
   When the user asks you to TRANSCRIBE, REPRODUCE, COPY, BUILD, or otherwise
-  capture the image content into a real artifact (typical Hungarian verbs:
-  "iratold le", "reprodukáld", "építsd meg", "csinálj egy <formátum>-et",
-  "másold át <formátum>-be"), a real DOCUMENT must be produced — it is NOT
+  capture the image content into a real artifact (in any language, e.g.
+  "type this up", "reproduce it", "rebuild it", "make a <format> of it",
+  "copy it into <format>"), a real DOCUMENT must be produced — it is NOT
   enough to OCR/describe and only return the text in your finish summary.
 
   Required workflow:
+    0. A photographed or scanned page that is mostly TEXT (a book page, a
+       letter, an article, a form) → call scan_to_text ONCE and finish; it
+       reads, typesets and keeps the pictures. Steps 1-3 are for images that
+       are mostly tables, charts or mixed layouts you rebuild by hand.
     1. PARALLEL VISION READ — in ONE tool-calling round, call all needed
        READ-ONLY vision tools at once (parallelism is supported and ~halves
        wall time):
@@ -1888,7 +2047,7 @@ IMAGE-TO-DOCUMENT strategy (CRITICAL when source is .jpg/.jpeg/.png/.webp/.bmp/.
   finish summary, then calling finish() without ever calling docx_create.
   This produces no artifact for the user — the post-loop hook will then
   convert the ORIGINAL IMAGE to the requested format, yielding a useless
-  raster-PDF (just the photo on a page). When the user asks to "iratold le",
+  raster-PDF (just the photo on a page). When the user asks to transcribe,
   they want a REAL document with the transcribed content, not a re-rendered
   photo.
 
@@ -1973,25 +2132,52 @@ PPTX strategy (CRITICAL — DO NOT use convert_format(target='pptx')):
       sentence; no commas-soup, no semicolons stacking ideas).
     • Content slide: MAX 5-6 short lines, each ≤ 80 characters.
     • Table slide: ideally 5-7 columns × 4-6 data rows. Larger → SPLIT
-      into two table slides ('Rész 1' / 'Rész 2').
-    • Source phrases like "S1 · Optimista — Islamabad Protocol —
-      pakisztáni-kínai mediáció sikerrel zárul, Brent 75, CPI 3,2%"
+      into two table slides ('Part 1' / 'Part 2').
+    • Source phrases like "S1 · Optimistic — Islamabad Protocol —
+      Pakistani-Chinese mediation succeeds, Brent 75, CPI 3.2%"
       must become 2-3 SHORT bullets OR a single TABLE row, NEVER a
       150-char mega-bullet.
     • If a bullet is over ~70 chars, split it; if a slide has > 5 bullets,
       split it. These are REQUIRED, not soft suggestions.
 
 ENGINES (prefer these for bigger jobs — one call instead of many):
+  Every engine call below that produces a file makes it the WORKING DOCUMENT
+  (the next tools continue from it), unless noted. file_id parameters: omit
+  them to work on the working document; pass "new" to start empty.
+  • wordcraft_commands — Word-level DOCX work: styles, tables, TOC, footnotes,
+    comments, tracked changes (author "AI editor"). read="review"|"text"|
+    "inspect"|"commands" looks without changing anything.
   • build_deck — a whole designed, illustrated deck at once (instead of
-    pptx_create + slide-by-slide). Respect the density limits above.
-  • design_piece — posters, flyers, certificates, social cards, booklets.
-  • wordcraft_commands — Word-level DOCX structure: styles, tables, TOC,
-    comments, tracked changes (pass author "Kimi (szerkesztő)").
-  • photo_edit — background removal / replacement, retouch, captions.
+    pptx_create + slide-by-slide), from your spec OR from_document=true
+    (the working document's headings become slides). Respect the density
+    limits above.
+  • design_piece — posters, flyers, report covers, certificates, social
+    cards, booklets (export "vectorcraft" too when the person will want to
+    edit the design by hand).
+  • office — the PowerPoint-, Acrobat-, InDesign- and Excel-like engines:
+    app="deck" (pptx slides, charts, pictures), "pdf" (PdfCraft tool steps
+    on the working PDF: text, pages, bookmarks, forms, redaction), "layout"
+    (multi-page print layout), "sheet" (xlsx: values, formulas, charts).
+    Unsure of a command? read="commands" with a query first — never guess ids.
+  • vectorcraft — free-form vector design (Illustrator-like): shapes, text
+    boxes, placed images, multi-page PDF/SVG/PNG.
+  • pdf_tools — finished PDF jobs in one call: merge, compress, to_word,
+    page_numbers, watermark, redact (removes the text for good), ocr
+    (English), protect, compare, make_fillable, form_fields, fill_form.
+    Prefer it over office(app="pdf") for these.
+  • scan_to_text — photographed or scanned pages (images or a scanned PDF)
+    → an editable Word document (also a new PDF / searchable PDF / txt /
+    a fillable form). Prefer it over ocr_image for whole pages and books.
+  • photo_edit — one image: PhotoCraft commands, background removal or
+    replacement; instruction="…" for an edit in plain words (crop, light,
+    colour, sky, headline, logo — a layered PSD, nothing repainted);
+    restore=true repairs an old photo (costs credits).
   After build_deck / design_piece: verify AT MOST ONCE (render + look).
   If there are no real defects (overlap, cut-off text, wrong language),
   call finish immediately — do not rebuild just to polish. Stock image
   queries: 2-4 plain words ("storm clouds", "old library"), not sentences.
+  Texts you write into files are in the language of the document or the
+  instruction; tool arguments, summaries and author names are in English.
 """
 
 
@@ -2010,6 +2196,8 @@ class AgentState:
     trace: list[dict[str, Any]] = field(default_factory=list)
     do_task_depth: int = 0  # incremented when spawning a sub-agent via do_task
     spawned_file_ids: list[str] = field(default_factory=list)  # for ephemeral marking
+    deadline: float = 0.0     # started_at + wall budget (háttérmunkák ennyit várnak)
+    keep_format: bool = False  # pdf_tools to_word / scan_to_text: a Word-kimenet szándékos, nincs PDF-visszaalakítás
 
 
 # ============================================================
@@ -2458,7 +2646,7 @@ async def _tool_pptx_create(state: AgentState, args: dict, pool) -> dict:
 
 
 # Note: the *_add_* / *_set_styles tools always operate on state.current_fid
-# (the latest deck), ignoring any file_id Kimi specifies. This is necessary
+# (the latest deck), ignoring any file_id the model specifies. This is necessary
 # because each tool call produces a NEW file_id (decks are immutable), and
 # chaining must thread through state. Otherwise multiple parallel adds would
 # all start from the same stale file_id and only the last would survive.
@@ -2531,7 +2719,7 @@ async def _tool_pptx_set_slide_styles(state: AgentState, args: dict, pool) -> di
 
 
 async def _tool_pptx_slide_count(state: AgentState, args: dict, pool) -> dict:
-    # Inspect the latest deck unless Kimi explicitly named a different file_id.
+    # Inspect the latest deck unless the model explicitly named a different file_id.
     target = args.get("file_id") or state.current_fid
     return await pptx_builder.pptx_slide_count(target)
 
@@ -2599,7 +2787,7 @@ async def _tool_image_to_xlsx(state: AgentState, args: dict, pool) -> dict:
 async def _tool_docx_track_replace_paragraph(state: AgentState, args: dict, pool) -> dict:
     out = await docx_revisions.docx_track_replace_paragraph(
         state.current_fid, args["anchor"], args["new_text"],
-        author=args.get("author", "Kimi K2.6"),
+        author=args.get("author") or "AI editor",
     )
     state.current_fid = out["file_id"]
     return out
@@ -2608,7 +2796,7 @@ async def _tool_docx_track_replace_paragraph(state: AgentState, args: dict, pool
 async def _tool_docx_track_insert_after(state: AgentState, args: dict, pool) -> dict:
     out = await docx_revisions.docx_track_insert_after(
         state.current_fid, args["anchor"], args["new_text"],
-        author=args.get("author", "Kimi K2.6"),
+        author=args.get("author") or "AI editor",
     )
     state.current_fid = out["file_id"]
     return out
@@ -2617,7 +2805,7 @@ async def _tool_docx_track_insert_after(state: AgentState, args: dict, pool) -> 
 async def _tool_docx_track_delete_paragraph(state: AgentState, args: dict, pool) -> dict:
     out = await docx_revisions.docx_track_delete_paragraph(
         state.current_fid, args["anchor"],
-        author=args.get("author", "Kimi K2.6"),
+        author=args.get("author") or "AI editor",
     )
     state.current_fid = out["file_id"]
     return out
@@ -2642,8 +2830,8 @@ async def _tool_docx_list_revisions(state: AgentState, args: dict, pool) -> dict
 async def _tool_docx_add_comment(state: AgentState, args: dict, pool) -> dict:
     out = await docx_revisions.docx_add_comment(
         state.current_fid, args["anchor"], args["comment_text"],
-        author=args.get("author", "Kimi K2.6"),
-        initials=args.get("initials", "K"),
+        author=args.get("author") or "AI editor",
+        initials=args.get("initials") or "AI",
     )
     state.current_fid = out["file_id"]
     return out
@@ -2658,8 +2846,8 @@ async def _tool_docx_reply_to_comment(state: AgentState, args: dict, pool) -> di
         state.current_fid,
         int(args["parent_comment_id"]),
         args["reply_text"],
-        author=args.get("author", "Kimi K2.6"),
-        initials=args.get("initials", "K"),
+        author=args.get("author") or "AI editor",
+        initials=args.get("initials") or "AI",
     )
     state.current_fid = out["file_id"]
     return out
@@ -2795,8 +2983,60 @@ async def _tool_parse_with_quality(state: AgentState, args: dict, pool) -> dict:
     return out
 
 
+# ---------- Craft-motorok (az MCP-vel közös implementációk) ----------
+# file_id paraméter: hiányzik → a munkadokumentum (ha a motor meg tudja nyitni), "new" → üresen indul.
+_PREVIEW_EXTS = {"png", "jpg", "jpeg", "webp"}
+
+
+def _ext(fid: Optional[str]) -> str:
+    return fid.rsplit(".", 1)[1].lower() if fid and "." in fid else ""
+
+
+def _target(state: AgentState, file_id: Optional[str], exts) -> Optional[str]:
+    if file_id == "new":
+        return None
+    if file_id:
+        return file_id
+    return state.current_fid if _ext(state.current_fid) in exts else None
+
+
+def _advance(state: AgentState, file_ids: list[str]) -> Optional[str]:
+    """Az első nem-előnézet (nem png/jpg) eredmény lesz a munkadokumentum; csak képexport → marad a régi."""
+    for fid in file_ids:
+        if _ext(fid) not in _PREVIEW_EXTS:
+            state.current_fid = fid
+            return fid
+    return None
+
+
+async def _await_job(state: AgentState, job: dict[str, Any]) -> dict[str, Any]:
+    """Háttérmunka (OCR, fotószerkesztés, helyreállítás) megvárása — az ügynök idekeretéig, de legalább 60 s-ig."""
+    from app import jobs
+    wait_until = max(state.deadline, time.time() + 60)
+    while job.get("status") == "running" and time.time() < wait_until:
+        await asyncio.sleep(2)
+        job = await jobs.job_status(job["id"])
+    if job.get("status") == "done":
+        return job.get("result") or {}
+    if job.get("status") == "running":
+        return {"job_id": job["id"], "status": "running", "done": job.get("done"), "total": job.get("total"),
+                "note": "Still working — call the same tool again with this job_id to keep waiting."}
+    return {"error": job.get("error") or "the job failed"}
+
+
+def _pick(files: list[dict[str, Any]], prefer: list[str]) -> Optional[str]:
+    ids = [f["file_id"] for f in files if isinstance(f, dict) and f.get("file_id")]
+    for ext in prefer:
+        for fid in ids:
+            if _ext(fid) == ext:
+                return fid
+    return ids[0] if ids else None
+
+
 async def _tool_wordcraft_commands(state: AgentState, args: dict, pool) -> dict:
     from app.tools import wordcraft as wc
+    if args.get("read"):
+        return await wc.read(args["read"], file_id=state.current_fid, query=args.get("query"), offset=0, max_chars=12000)
     out = await wc.run(file_id=state.current_fid, commands=args.get("commands") or [],
                        author=args.get("author") or "AI editor")
     state.current_fid = out["file_id"]
@@ -2805,26 +3045,132 @@ async def _tool_wordcraft_commands(state: AgentState, args: dict, pool) -> dict:
 
 async def _tool_build_deck(state: AgentState, args: dict, pool) -> dict:
     from app.tools import pptx_deck
-    out = await pptx_deck.build(args["spec"])
+    if args.get("from_document"):
+        from app.routes.make import make_deck
+        out = await make_deck({"mode": "document", "source_file_id": state.current_fid,
+                               "brief": args.get("instructions") or "", "slides": args.get("slides"),
+                               "images": args.get("images") or "stock", "style_file_id": args.get("template_file_id")})
+    else:
+        spec = args.get("spec")
+        if not isinstance(spec, dict) or not spec.get("slides"):
+            return {"error": "Give spec {title, slides: [...]}, or from_document=true."}
+        if args.get("template_file_id") and not spec.get("template_file_id"):
+            spec["template_file_id"] = args["template_file_id"]
+        out = await pptx_deck.build(spec)
     state.current_fid = out["file_id"]
-    return {"file_id": out["file_id"], "slides": out["slides"], "images": out["images"], "ms": out["ms_elapsed"]}
+    return {"file_id": out["file_id"], "slides": out.get("slides"), "images": out.get("images"), "ms": out.get("ms_elapsed")}
 
 
 async def _tool_design_piece(state: AgentState, args: dict, pool) -> dict:
     from app.tools import design as dz
-    out = await dz.render(args["template"], args.get("data") or {}, size=args.get("size"),
-                          theme=args.get("theme"), export=["pdf", "png"])
+    out = await dz.render(args["template"], args.get("data") or {}, size=args.get("size"), theme=args.get("theme"),
+                          brand=args.get("brand"), export=args.get("export") or ["pdf", "png"])
     state.current_fid = out["file_id"]
-    return {"file_id": out["file_id"], "files": [f["file_id"] for f in out["files"]], "pages": out["pages"]}
+    return {"file_id": out["file_id"], "files": [f["file_id"] for f in out["files"]], "pages": out.get("pages")}
+
+
+async def _tool_office(state: AgentState, args: dict, pool) -> dict:
+    from app.tools import crafts
+    app_name = args.get("app") or ""
+    if app_name not in crafts.OFFICE:
+        return {"error": f"app: deck | pdf | layout | sheet (got {app_name!r})"}
+    fid = _target(state, args.get("file_id"), crafts.OFFICE[app_name]["open"])
+    if args.get("read"):
+        return await crafts.office_read(app_name, args["read"], file_id=fid, query=args.get("query"), max_chars=12000)
+    out = await crafts.office_run(app_name, file_id=fid, commands=args.get("commands"), save_format=args.get("save_format"))
+    if not _advance(state, [out["file_id"]]):
+        out["image_file_id"] = out["file_id"]       # előnézet-kép: a munkadokumentum marad
+    return out
+
+
+async def _tool_vectorcraft(state: AgentState, args: dict, pool) -> dict:
+    from app.tools import crafts
+    fid = _target(state, args.get("file_id"), crafts.VECTOR_OPEN)
+    if args.get("read"):
+        return await crafts.vector_read(args["read"], file_id=fid, query=args.get("query"), max_chars=12000)
+    out = await crafts.vector_run(file_id=fid, commands=args.get("commands"), export=args.get("export"))
+    ids = [f["file_id"] for f in out["files"]]
+    working = _advance(state, ids)
+    return {"file_id": working or out["file_id"], "files": ids, "commands_run": out["commands_run"],
+            "ms": out["ms_elapsed"], "results": out.get("results")}
+
+
+async def _tool_pdf_tools(state: AgentState, args: dict, pool) -> dict:
+    from app.routes import make as mk
+    action = args.get("action") or ""
+    ids = [i for i in args.get("file_ids") or [] if i]
+    cur_pdf = state.current_fid if _ext(state.current_fid) == "pdf" else None
+    if action in ("merge", "compare"):
+        if len(ids) < 2 and cur_pdf and cur_pdf not in ids:
+            ids = [cur_pdf] + ids
+    elif not ids:
+        ids = [state.current_fid]
+    if action == "form_fields":
+        return await mk.form_fields(ids[0])
+    if action == "fill_form":
+        out = await mk.make_fill_form({"file_id": ids[0], "values": args.get("values"),
+                                       "data_file_id": args.get("data_file_id"), "flatten": bool(args.get("flatten"))})
+    else:
+        out = await mk.make_pdf({"action": action, "file_ids": ids, "text": args.get("text"),
+                                 "position": args.get("position"), "words": args.get("words") or [],
+                                 "patterns": args.get("patterns") or [], "password": args.get("password")})
+    state.current_fid = out["file_id"]
+    if action == "to_word":
+        state.keep_format = True     # kifejezetten Wordöt kért: a végén NE alakítsuk vissza PDF-be
+    return out
+
+
+async def _tool_scan_to_text(state: AgentState, args: dict, pool) -> dict:
+    from app import jobs
+    if args.get("job_id"):
+        job = await jobs.job_status(args["job_id"])
+    else:
+        from app.routes.make import make_digitize
+        ids = [i for i in args.get("file_ids") or [] if i] or [state.current_fid]
+        job = await make_digitize({"file_ids": ids, "outputs": args.get("outputs") or ["docx"],
+                                   "language": args.get("language"), "max_pages": args.get("max_pages")})
+    res = await _await_job(state, job)
+    if not res.get("files"):
+        return res
+    fid = _pick(res["files"], ["docx", "pdf", "md", "txt"])
+    state.current_fid = fid
+    state.keep_format = True
+    return {"file_id": fid, "files": [f["file_id"] for f in res["files"]], "pages": res.get("pages"),
+            "words": res.get("words"), "figures": res.get("figures"), "truncated": res.get("truncated")}
 
 
 async def _tool_photo_edit(state: AgentState, args: dict, pool) -> dict:
-    from app.tools import crafts
-    out = await crafts.photo_run(
-        file_id=args["image_file_id"], commands=args.get("commands"), save_format=args.get("save_format"),
-        remove_background=bool(args.get("remove_background")), background_file_id=args.get("background_file_id"),
-        background_blur=float(args.get("background_blur") or 0))
-    return {"image_file_id": out["file_id"], "ms": out["ms_elapsed"]}
+    src = args.get("image_file_id") or state.current_fid
+    if args.get("job_id") or args.get("restore") or args.get("instruction"):
+        from app import jobs
+        if args.get("job_id"):
+            job = await jobs.job_status(args["job_id"])
+        elif args.get("restore"):
+            from app.routes.make import make_restore
+            job = await make_restore({"file_ids": [src], "colorize": args.get("colorize"), "split_prints": True})
+        else:
+            from app.routes.make import make_photo_edit
+            job = await make_photo_edit({"file_ids": [src], "instruction": args["instruction"],
+                                         "logo_file_id": args.get("logo_file_id")})
+        res = await _await_job(state, job)
+        if not res.get("files"):
+            return res
+        # a forrás típusa marad (PSD → PSD), különben a megnézhető JPG
+        new = _pick(res["files"], ["psd", "jpg", "png"] if _ext(src) == "psd" else ["jpg", "png", "psd"])
+        out = {"image_file_id": new, "files": [f["file_id"] for f in res["files"]], "summary": res.get("summary"),
+               "plan": res.get("plan")}
+    else:
+        from app.tools import crafts
+        r = await crafts.photo_run(
+            file_id=src, commands=args.get("commands"), save_format=args.get("save_format"),
+            remove_background=bool(args.get("remove_background")), background_file_id=args.get("background_file_id"),
+            background_blur=float(args.get("background_blur") or 0))
+        new = r["file_id"]
+        out = {"image_file_id": new, "ms": r["ms_elapsed"]}
+    if src == state.current_fid:
+        state.current_fid = new          # a munkakép szerkesztése: az eredmény a munkadokumentum
+        out["file_id"] = new
+    return out
 
 
 TOOL_HANDLERS: dict[str, Callable[[AgentState, dict, Any], Awaitable[dict]]] = {
@@ -2918,6 +3264,10 @@ TOOL_HANDLERS: dict[str, Callable[[AgentState, dict, Any], Awaitable[dict]]] = {
     "build_deck": _tool_build_deck,
     "design_piece": _tool_design_piece,
     "photo_edit": _tool_photo_edit,
+    "office": _tool_office,
+    "vectorcraft": _tool_vectorcraft,
+    "pdf_tools": _tool_pdf_tools,
+    "scan_to_text": _tool_scan_to_text,
     # mega-tool — recursive sub-agent
     "do_task": _tool_do_task,
 }
@@ -2938,7 +3288,7 @@ def _resolve(file_id: str) -> Path:
 # ============================================================
 
 
-_KIMI_TOOL_CALL_RX = re.compile(
+_TEXT_TOOL_CALL_RX = re.compile(
     r"<\|tool_call_begin\|>\s*functions\.([\w]+):(\d+)\s*"
     r"<\|tool_call_argument_begin\|>(.*?)"
     r"<\|tool_call_end\|>",
@@ -2949,8 +3299,8 @@ _KIMI_TOOL_CALL_RX = re.compile(
 # any nested-object args (e.g. glossary, replacements).
 
 
-def _parse_kimi_text_tool_calls(content: str) -> list[dict]:
-    """Parse Kimi K2.6's native tool-call format embedded in content.
+def _parse_text_tool_calls(content: str) -> list[dict]:
+    """Parse a native tool-call format (Kimi K2.6 style) embedded in content.
 
     Format: `<|tool_calls_section_begin|><|tool_call_begin|>functions.NAME:N
     <|tool_call_argument_begin|>{json_args}<|tool_call_end|>...`
@@ -2958,10 +3308,10 @@ def _parse_kimi_text_tool_calls(content: str) -> list[dict]:
     if "<|tool_call_begin|>" not in content:
         return []
     out = []
-    for m in _KIMI_TOOL_CALL_RX.finditer(content):
+    for m in _TEXT_TOOL_CALL_RX.finditer(content):
         name, idx, args_raw = m.group(1), m.group(2), m.group(3).strip()
         out.append({
-            "id": f"call_kimi_{idx}",
+            "id": f"call_txt_{idx}",
             "type": "function",
             "function": {"name": name, "arguments": args_raw},
         })
@@ -3026,9 +3376,8 @@ async def _call_llm(model: str, messages: list[dict], tools: list[dict]) -> dict
 
 
 async def _call_with_fallback(messages: list[dict], tools: list[dict]) -> tuple[dict, str]:
-    """AGENT_MODEL (DeepSeek V4.1 Flash), hibánál LLM_MODEL_PRIMARY, végül LLM_MODEL_FALLBACK."""
-    chain = [m for i, m in enumerate((settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY, settings.LLM_MODEL_FALLBACK))
-             if m and m not in (settings.AGENT_MODEL, settings.LLM_MODEL_PRIMARY, settings.LLM_MODEL_FALLBACK)[:i]]
+    """AGENT_MODEL (DeepSeek V4.1 Flash), hibánál AGENT_MODEL_FALLBACK (GLM-5.3-Flash). Kimi nincs a sorban."""
+    chain = list(dict.fromkeys(m for m in (settings.AGENT_MODEL, settings.AGENT_MODEL_FALLBACK) if m))
     last: Exception = RuntimeError("no model")
     for k, model in enumerate(chain):
         try:
@@ -3075,14 +3424,16 @@ async def run_agent(
         original_format=src_fmt,
         do_task_depth=do_task_depth,
     )
+    state.deadline = state.started_at + wall_budget_s
 
     # Initial preview — only for document formats; images go straight to vision tools
     if is_image:
         size_kb = src.stat().st_size // 1024
         intro = (
             f"INPUT FILE: image, format={src_fmt}, size={size_kb} kB, file_id={file_id}\n"
-            f"This is an IMAGE — use vision tools (ocr_image, describe_image, "
-            f"extract_table_from_image, image_to_xlsx) to read or process it. "
+            f"This is an IMAGE. Photographed/scanned text pages → scan_to_text (an editable Word "
+            f"document, also a new PDF); editing the picture → photo_edit; reading it → vision tools "
+            f"(ocr_image, describe_image, extract_table_from_image, image_to_xlsx). "
             f"The standard read_document/find_replace tools won't work on images "
             f"unless you first convert the image into a document (e.g. via image_to_xlsx).\n"
         )
@@ -3092,7 +3443,8 @@ async def run_agent(
             doc_preview = initial.get("text", "")[:DOC_PREVIEW_CHARS]
             truncated = len(initial.get("text", "")) > DOC_PREVIEW_CHARS
             intro = (
-                f"DOCUMENT FORMAT: {detect_from_path(_resolve(state.current_fid))}\n"
+                f"DOCUMENT FORMAT: {detect_from_path(_resolve(state.current_fid))}, "
+                f"working file_id={state.current_fid}\n"
                 f"DOCUMENT PREVIEW (first {DOC_PREVIEW_CHARS} chars"
                 f"{', truncated' if truncated else ''}):\n```\n{doc_preview}\n```\n"
             )
@@ -3147,12 +3499,12 @@ async def run_agent(
         msg = data["choices"][0]["message"]
         tool_calls = msg.get("tool_calls") or []
 
-        # FALLBACK: Kimi K2.6 sometimes emits tool calls as RAW TEXT in content
+        # FALLBACK: some models (Kimi K2.6 style) emit tool calls as RAW TEXT in content
         # using its native format `<|tool_calls_section_begin|><|tool_call_begin|>
         # functions.NAME:N<|tool_call_argument_begin|>{json}<|tool_call_end|>...`
         # instead of the OpenAI-compatible `tool_calls` array. Parse it ourselves.
         if not tool_calls and msg.get("content"):
-            tool_calls = _parse_kimi_text_tool_calls(msg["content"]) or []
+            tool_calls = _parse_text_tool_calls(msg["content"]) or []
             if tool_calls:
                 # Strip the parsed marker text from the content so it doesn't
                 # confuse subsequent turns
@@ -3162,7 +3514,7 @@ async def run_agent(
                 ).strip()
 
         # Append assistant message verbatim (with any reasoning + tool_calls).
-        # Kimi K2.6 in thinking mode REQUIRES `reasoning_content` to be passed
+        # Thinking-mode models REQUIRE `reasoning_content` to be passed
         # back unchanged on the next call — otherwise SiliconFlow returns
         # `400 code 20015: "reasoning_content in the thinking mode must be passed back"`.
         asst_msg: dict[str, Any] = {"role": "assistant", "content": msg.get("content") or ""}
@@ -3183,7 +3535,7 @@ async def run_agent(
         messages.append(asst_msg)
 
         if not tool_calls:
-            # Kimi just talked — try one more nudge then stop.
+            # The model just talked — stop.
             warnings.append(f"iteration {it + 1}: no tool call (content: {(msg.get('content') or '')[:120]})")
             break
 
@@ -3257,7 +3609,7 @@ async def run_agent(
                     write_meta(
                         fid,
                         source_file_id=state.original_fid,
-                        operation=f"kimi: {name}",
+                        operation=f"agent: {name}",
                         label=f"{src_stem}.{out_ext}" if out_ext else src_stem,
                     )
             except Exception:
@@ -3305,7 +3657,7 @@ async def run_agent(
     final_fid = state.current_fid
     final_path = _resolve(final_fid)
     final_fmt = detect_from_path(final_path)
-    if src_fmt == "pdf" and final_fmt in {"docx", "doc", "odt"}:
+    if src_fmt == "pdf" and final_fmt in {"docx", "doc", "odt"} and not state.keep_format:
         rt = await t_convert(pool, file_id=final_fid, target_format="pdf")
         final_fid = rt["file_id"]
         warnings.append(
@@ -3314,12 +3666,12 @@ async def run_agent(
         )
 
     # No regex-based format detection here on purpose. The agent's system
-    # prompt explicitly instructs Kimi to honour user-requested output
-    # formats ("docx fájlba", "pdf-ben", "as pptx" etc.) by calling the
+    # prompt explicitly instructs the model to honour user-requested output
+    # formats ("in docx", "as a pdf", "as pptx" etc.) by calling the
     # appropriate builder/convert tools itself. Trying to patch missed
     # format requests with hand-rolled Hungarian inflection regex is exactly
-    # the wrong abstraction layer when there's a 1T-parameter multilingual
-    # LLM in the loop. If Kimi finishes in the wrong format, the right fix
+    # the wrong abstraction layer when there's a multilingual
+    # LLM in the loop. If the model finishes in the wrong format, the right fix
     # is to strengthen the SYSTEM_PROMPT, not enumerate suffixes here.
     #
     # Sanity check: if the agent finished WITHOUT producing any new file
