@@ -73,6 +73,8 @@ class Settings(BaseModel):
     VECTORCRAFT_WEB_DIR: Path = Path(os.getenv("VECTORCRAFT_WEB_DIR", "/opt/vectorcraft-web"))
     # Háttéreltávolítás (rembg): ISNet — egy nehéz, ellenfényes fotón messze a legjobb (10-11 mérés).
     CUTOUT_MODEL_PATH: Path = Path(os.getenv("CUTOUT_MODEL_PATH", "/opt/models/isnet-general-use.onnx"))
+    # emberszegmentálás (U2Net human-seg): a kivágás minden embert egészben megtart; hiányában csak az ISNet fut
+    HUMAN_SEG_MODEL_PATH: Path = Path(os.getenv("HUMAN_SEG_MODEL_PATH", "/opt/models/u2net_human_seg.onnx"))
     EDITOR_MAX_SAVE_MB: int = int(os.getenv("EDITOR_MAX_SAVE_MB", "100"))
 
     # --- Public base URL (Railway sets this) ---
