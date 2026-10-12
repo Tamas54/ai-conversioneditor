@@ -59,8 +59,9 @@ mcp = FastMCP(
         "`edit_url`: give it to the person — it opens that file in the matching built-in editor (Word-like, "
         "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
         "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
-        "a manuscript → a Word-typeset book (design template=book). Start empty with new_file (document, "
-        "presentation, design, photo, book, pdf) and hand the person its edit_url. PICTURES: this server does NOT "
+        "a manuscript → a Word-typeset book (design template=book). The person's earlier files: files(action=\"list\", "
+        "query=\"words from the name\") — search by name, don't page through everything. Start empty with "
+        "files(action=\"new\", kind=document|presentation|design|photo|book|pdf) and hand the person its edit_url. PICTURES: this server does NOT "
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
         "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
         "generate_image(stock_search=…) to show the person candidates."
@@ -95,6 +96,10 @@ def _links(res):
             for v in o:
                 walk(v, depth + 1)
     walk(res)
+    # háttérmunka (jobs.start): a leírások „call again with job_id”-t mondanak — a kulcs is legyen ott
+    if isinstance(res, dict) and res.get("status") in ("running", "done", "failed", "cancelled") and "id" in res \
+            and "kind" in res and "job_id" not in res:
+        res["job_id"] = res["id"]
     return res
 
 
@@ -104,13 +109,36 @@ def linked(fn):
 
     @functools.wraps(fn)
     async def w(*a, **k):
+        import time
         from app import tenancy
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
+        t0 = time.monotonic()
         try:
-            return _links(await fn(*a, **k))
+            res = _links(await fn(*a, **k))
+            log.info("mcp %s(%s) ok %.1fs", fn.__name__, _arg_brief(k), time.monotonic() - t0)
+            return res
+        except Exception as e:
+            log.warning("mcp %s(%s) FAILED %.1fs: %s", fn.__name__, _arg_brief(k), time.monotonic() - t0, str(e)[:300])
+            raise
         finally:
             tenancy.client_makes_images.reset(tok)
     return w
+
+
+def _arg_brief(k: dict) -> str:
+    """Napló: melyik eszköz, milyen paraméterekkel (rövidítve; tartalom/base64/aláírt link nem kerül a naplóba)."""
+    out = []
+    for key, v in k.items():
+        if v is None or key in ("content_base64",):
+            continue
+        if isinstance(v, str):
+            v = v.split("?", 1)[0] if v.startswith("http") else v
+            out.append(f"{key}={v[:60]!r}")
+        elif isinstance(v, (int, float, bool)):
+            out.append(f"{key}={v}")
+        else:
+            out.append(f"{key}=<{type(v).__name__}>")
+    return ", ".join(out)[:400]
 
 
 _CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
@@ -209,13 +237,52 @@ except Exception as _e:  # a séma-finomítás nem kötelező — az eszköz en�
     log.warning("upload_from_url séma nem finomítható: %s", _e)
 
 
+_LIST_KINDS = {
+    "image": {"png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "gif", "heic", "avif", "bmp"},
+    "photo": {"png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "gif", "heic", "avif", "bmp"},
+    "picture": {"png", "jpg", "jpeg", "webp", "psd", "tif", "tiff", "gif", "heic", "avif", "bmp"},
+    "document": {"docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "epub"},
+    "presentation": {"pptx", "ppt", "odp", "deckcraft"}, "deck": {"pptx", "ppt", "odp", "deckcraft"},
+    "slide": {"pptx", "ppt", "odp", "deckcraft"},
+    "pdf": {"pdf"}, "spreadsheet": {"xlsx", "xls", "csv", "tsv", "ods"},
+    "design": {"vectorcraft", "designcraft", "svg", "ai", "eps", "idml"},
+}
+
+
+# keresésnél nem számító szavak (angol + magyar névelők, kötőszók, birtokos)
+_STOP = {"the", "a", "an", "of", "my", "our", "and", "or", "for", "to", "in", "on", "with", "from", "this", "that", "file",
+         "az", "egy", "es", "meg", "is", "fajl", "fajlom", "file-om"}
+
+
+def _name_words(text: str) -> list[str]:
+    """Fájlnév / keresőszó → kisbetűs, ékezet nélküli szavak (_ - . szóköz mind határ)."""
+    import re
+    import unicodedata
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return [w for w in re.split(r"[^0-9a-z]+", t) if w]
+
+
+def _word_hits(w: str, name_words: list[str]) -> int:
+    """Egy keresőszó illik-e a névre: egyezés, vagy közös eleje (ragozás: „fotóját” ~ „foto”, „lapot” ~ „lap”)."""
+    for nw in name_words:
+        if w == nw:
+            return 2
+        k = min(len(w), len(nw))
+        if k >= 3 and (w.startswith(nw) or nw.startswith(w) or (k >= 5 and w[:5] == nw[:5])):
+            return 1
+    return 0
+
+
 @mcp.tool()
 @linked
 async def files(
     action: str = "list",
+    query: Optional[str] = None,
     kind: Optional[str] = None,
     ext: Optional[str] = None,
     limit: int = 20,
+    offset: int = 0,
     size: Optional[str] = None,
     orientation: Optional[str] = None,
     background: Optional[str] = None,
@@ -223,21 +290,42 @@ async def files(
 ) -> dict:
     """The person's files, and empty new ones.
 
-    action="list": their most recent files (uploads and results, newest first) — {file_id, name, ext, size_kb,
-      when, edit_url}. Filter with ext (e.g. "pptx"). Use it when the person says "my deck", "the file I uploaded".
+    action="list": their files (uploads and results, newest first) — {file_id, name, ext, size_kb, when, made_from,
+      edit_url}, plus total. To FIND a file ("the application form photo", "my contract"), pass query = words from
+      its name — the person's own words first, names are often in their language (accents and _/- don't matter;
+      best matches first). Narrow with kind = image |
+      document | presentation | pdf | spreadsheet | design, or ext (e.g. "pptx"). More: offset.
     action="new": an EMPTY file, ready in the editor — kind = document | presentation | design (social post:
       size square|portrait|story|landscape) | print (size A4|A3|A5|Letter, orientation portrait|landscape) |
       photo (size 1920x1080|1080x1080|1080x1350|3000x2000, background white|transparent) | book (size A5|A4|6x9) |
       pdf (size A4|Letter). Give the person its edit_url — it opens the blank file in the matching editor.
     """
-    if action == "list":
+    if action in ("list", "find", "search"):
+        import datetime
         from app.routes.dashboard import api_files
         d = await api_files()
         items = sorted([*d.get("inputs", []), *d.get("outputs", [])], key=lambda f: f.get("mtime", 0), reverse=True)
         if ext:
             items = [f for f in items if f.get("ext") == ext.lower().lstrip(".")]
-        return {"files": [{"file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
-                           "when": f.get("mtime")} for f in items[:max(1, min(100, limit))]]}
+        kinds = _LIST_KINDS.get((kind or "").lower().rstrip("s")) if kind else None
+        if kinds:
+            items = [f for f in items if f.get("ext") in kinds]
+        if query and query.strip():
+            words = [w for w in _name_words(query) if w not in _STOP] or _name_words(query)
+            scored = [(sum(_word_hits(w, _name_words(f"{f.get('label') or ''} {f.get('original_filename') or ''}")) for w in words), f)
+                      for f in items]
+            best = max((sc for sc, _ in scored), default=0)
+            # a legjobb találatok (és a majdnem-legjobbak) elöl, azon belül a frissebb
+            items = [f for sc, f in sorted(scored, key=lambda t: -t[0]) if sc > 0 and sc >= best * 0.5]
+        n, o = max(1, min(100, limit)), max(0, offset)
+        page = items[o:o + n]
+        hint = ({"hint": "Nothing has those words in its name — names are often in the person's own language (or a "
+                         "camera name like IMG_1234): try other words, or list by kind (e.g. kind=\"image\") and look."}
+                if query and query.strip() and not items else {})
+        return {**hint, "total": len(items), "offset": o, "more": o + n < len(items), "files": [{
+            "file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
+            "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "made_from": f.get("source_label")} for f in page]}
     if action != "new":
         raise ValueError('action: "list" or "new"')
     k = (kind or "").lower()

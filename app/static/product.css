@@ -32,7 +32,7 @@ a { color: inherit; }
 .btn.wide { width: 100%; justify-content: center; }
 .btn:disabled { opacity: .5; cursor: progress; }
 label { display: grid; gap: 6px; font-weight: 600; font-size: 13px; margin-bottom: 14px; }
-input[type=text], input[type=email], input[type=password], input[type=number], textarea, select {
+input[type=text], input[type=search], input[type=email], input[type=password], input[type=number], textarea, select {
   font: 15px/1.4 var(--f-body); color: var(--ink); background: var(--paper); border: 1px solid var(--rule);
   border-radius: 8px; padding: 10px 12px; width: 100%; }
 textarea { min-height: 110px; resize: vertical; }
@@ -505,3 +505,10 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
 .connect details.advanced summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--graphite); }
 .connect details.advanced[open] summary { margin-bottom: 14px; }
 @media (max-width: 560px) { .addr-row { flex-direction: column; } .addr-row .btn { justify-content: center; } .consent-actions .btn { flex: 1; } }
+
+/* My workspace: keresés + típus-szűrő (telefonon a gombsor a saját sávjában görget, az oldal nem) */
+.ws-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 4px 0 18px; }
+.ws-bar input[type=search] { flex: 1 1 220px; max-width: 380px; margin: 0; }
+.ws-kinds { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.ws-kinds button .muted { font-weight: 500; opacity: .7; margin-left: 2px; }
+.ws-kinds button[aria-pressed="true"] .muted { color: inherit; }

@@ -920,6 +920,8 @@ async def pptx_render_slide(
     pdf_out = await _convert(pool, file_id=file_id, target_format="pdf")
     pdf_fid = pdf_out["file_id"]
     pdf_path = _resolve(pdf_fid)
+    from app.tools.visual_feedback import _hide
+    _hide(pdf_fid, file_id)                      # ellenőrző render: rejtett, nem a felhasználó anyaga
 
     # Step 2: PyMuPDF rasterizes each PDF page → PNG
     doc = fitz.open(str(pdf_path))
@@ -935,6 +937,7 @@ async def pptx_render_slide(
         png_fid = new_file_id("png")
         with open(output_path(png_fid), "wb") as f:
             f.write(pix.tobytes("png"))
+        _hide(png_fid, file_id)
         return {
             "slide_index": idx,
             "image_file_id": png_fid,

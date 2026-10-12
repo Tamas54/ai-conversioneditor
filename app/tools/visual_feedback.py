@@ -24,9 +24,15 @@ from app.storage import (
     output_path,
     public_url,
 )
+from app.storage.metadata import write_meta
 from app.tools.formats import detect_from_path
 
 log = logging.getLogger("aice.visual_feedback")
+
+
+def _hide(fid: str, source_id: Optional[str] = None) -> None:
+    """Ellenőrző render (oldalkép, köztes PDF) — rejtett: nem a felhasználó anyaga, ne töltse tele a munkaterületét."""
+    write_meta(fid, source_file_id=source_id, operation="page preview", extra={"ephemeral": True})
 
 
 def _resolve(file_id: str) -> Path:
@@ -37,7 +43,7 @@ def _resolve(file_id: str) -> Path:
 
 
 def _rasterize_pdf(pdf_path: Path, page_indices: Optional[list[int]] = None,
-                   dpi: int = 110) -> list[dict]:
+                   dpi: int = 110, source_id: Optional[str] = None) -> list[dict]:
     import fitz
     doc = fitz.open(str(pdf_path))
     n = doc.page_count
@@ -53,6 +59,7 @@ def _rasterize_pdf(pdf_path: Path, page_indices: Optional[list[int]] = None,
         png_fid = new_file_id("png")
         with open(output_path(png_fid), "wb") as f:
             f.write(pix.tobytes("png"))
+        _hide(png_fid, source_id)
         out.append({
             "page_index": i,
             "image_file_id": png_fid,
@@ -71,7 +78,7 @@ async def pdf_render_pages(
     if detect_from_path(src) != "pdf":
         raise ValueError(f"pdf_render_pages only works on PDF (got {src.suffix})")
     t0 = time.time()
-    rendered = _rasterize_pdf(src, page_indices, dpi)
+    rendered = _rasterize_pdf(src, page_indices, dpi, file_id)
     return {
         "page_count": _pdf_page_count(src),
         "rendered": rendered,
@@ -101,8 +108,9 @@ async def docx_render_pages(
     t0 = time.time()
     pdf_out = await _convert(pool, file_id=file_id, target_format="pdf")
     pdf_path = _resolve(pdf_out["file_id"])
+    _hide(pdf_out["file_id"], file_id)
 
-    rendered = _rasterize_pdf(pdf_path, page_indices, dpi)
+    rendered = _rasterize_pdf(pdf_path, page_indices, dpi, file_id)
     return {
         "page_count": _pdf_page_count(pdf_path),
         "rendered": rendered,
@@ -133,6 +141,7 @@ async def html_render_screenshot(
     fid = new_file_id("png")
     with open(output_path(fid), "wb") as f:
         f.write(png_bytes)
+    _hide(fid, file_id)
     return {
         "image_file_id": fid,
         "url": public_url(fid),

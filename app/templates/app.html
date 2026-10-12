@@ -30,7 +30,7 @@
   <a class="brand" href="/app">{{PRODUCT}}</a>
   <nav aria-label="Main">
     <a href="/app" data-nav="home">Make</a>
-    <a href="/app/files" data-nav="files">Files</a>
+    <a href="/app/files" data-nav="files">My workspace</a>
     <a href="/app/connect" data-nav="connect">Connect your AI</a>
   </nav>
   <span class="spacer"></span>
@@ -98,8 +98,12 @@
 
 <template id="t-files">
   <section class="sheet">
-    <div class="row-head"><h2>Files</h2>
+    <div class="row-head"><h2>My workspace</h2>
       <label class="btn" style="margin:0">Upload<input type="file" id="upload" hidden></label></div>
+    <div class="ws-bar" role="search">
+      <input type="search" id="ws-q" placeholder="Search by name…" aria-label="Search your files by name" autocomplete="off">
+      <div class="seg-mini ws-kinds" id="ws-kinds" aria-label="Show"></div>
+    </div>
     <div class="files" id="all-files"></div>
   </section>
 </template>
@@ -334,6 +338,12 @@ function groupFiles(list) {
   }
   return out;
 }
+// My workspace: típuscsoportok (a szűrő-gombok sorrendje = WS_LABELS) és a név-normalizálás (ékezet, _ - . mind szóköz)
+const WS_KINDS = { doc: ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm", "epub"], deck: ["pptx", "ppt", "odp", "key", "deckcraft"],
+  pdf: ["pdf"], image: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "psd", "psb", "tif", "tiff", "heic", "avif"],
+  design: ["vectorcraft", "designcraft", "svg", "ai", "eps", "idml"], sheet: ["xlsx", "xls", "csv", "tsv", "ods"] };
+const WS_LABELS = { doc: "Documents", deck: "Presentations", pdf: "PDFs", image: "Images", design: "Designs", sheet: "Spreadsheets", other: "Other" };
+const normName = t => (t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim();
 function renderFiles(el, list) {
   list = groupFiles(list);
   el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — make something above, or upload a file.</div>`;
@@ -411,7 +421,31 @@ const views = {
       const f = e.target.files[0]; if (!f) return;
       await uploadFile(f); toast(`Uploaded ${f.name}`); await views.files();
     });
-    await loadFiles(); renderFiles($("#all-files"), files);
+    await loadFiles();
+    // keresés (ékezet és _/- nélkül, minden szó számít) + típus-szűrő; a választás a fülön marad (sessionStorage)
+    const kindOf = f => Object.keys(WS_KINDS).find(k => WS_KINDS[k].includes(f.ext)) || "other";
+    const counts = {};                                    // a gombon annyi, ahány KÁRTYA lesz (egy készítés testvérei egy kártya)
+    for (const k of [...Object.keys(WS_LABELS)]) counts[k] = groupFiles(files.filter(f => kindOf(f) === k)).length;
+    let st = { q: "", kind: "all" };
+    try { st = { ...st, ...JSON.parse(sessionStorage.getItem("ws") || "{}") }; } catch {}
+    if (st.kind !== "all" && !counts[st.kind]) st.kind = "all";
+    const kinds = [["all", "All", groupFiles(files).length], ...Object.keys(WS_LABELS).filter(k => counts[k]).map(k => [k, WS_LABELS[k], counts[k]])];
+    $("#ws-kinds").innerHTML = kinds.map(([k, t, n]) => `<button type="button" data-k="${k}" aria-pressed="${k === st.kind}">${t} <span class="muted">${n}</span></button>`).join("");
+    const q = $("#ws-q"); q.value = st.q;
+    const draw = () => {
+      const words = normName(st.q).split(" ").filter(Boolean);
+      const list = files.filter(f => (st.kind === "all" || kindOf(f) === st.kind)
+        && words.every(w => normName(`${f.label || ""} ${f.original_filename || ""} ${f.source_label || ""}`).includes(w)));
+      renderFiles($("#all-files"), list);
+      if (!list.length && files.length) $("#all-files").innerHTML = `<div class="empty">Nothing matches${st.q ? ` “${esc(st.q)}”` : ""}. Names are kept as you uploaded them — try another word, or <a href="#" id="ws-clear">show everything</a>.</div>`;
+      $("#ws-clear")?.addEventListener("click", e => { e.preventDefault(); st = { q: "", kind: "all" }; q.value = ""; sync(); });
+      try { sessionStorage.setItem("ws", JSON.stringify(st)); } catch {}
+    };
+    const sync = () => { $("#ws-kinds").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === st.kind)); draw(); };
+    $("#ws-kinds").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { st.kind = b.dataset.k; sync(); } });
+    q.addEventListener("input", () => { st.q = q.value; draw(); });
+    q.addEventListener("keydown", e => { if (e.key === "Escape" && q.value) { q.value = ""; st.q = ""; draw(); } });
+    draw();
     if (account?.guest) $("#all-files").insertAdjacentHTML("beforebegin", `<p class="muted small" style="margin:-6px 0 14px">You're working as a guest: files are kept for 24 hours and uploads up to ${account.guest_max_upload_mb} MB. <a href="/signup?next=/app">Create a free account</a> to keep them.</p>`);
   },
   async connect() {
@@ -550,7 +584,7 @@ function setTitle(t) {
   document.title = SEO_PAGE && location.pathname.replace(/\/+$/, "") === aboutPath ? SERVER_TITLE
     : t ? `${t} — ${PRODUCT}` : `${PRODUCT} — documents, slides, photos and PDFs, changed by asking`;
 }
-const VIEW_TITLES = { files: "Files", connect: "Connect your AI", plans: "Plans & pricing" };
+const VIEW_TITLES = { files: "My workspace", connect: "Connect your AI", plans: "Plans & pricing" };
 let baseTitle = "";            // az aktuális nézet címe (a készítő-fiók bezárásakor ez áll vissza)
 async function route() {
   appSteps++;
@@ -621,7 +655,7 @@ window.addEventListener("message", e => {
       history.replaceState(history.state, "", `/app/file/${encodeURIComponent(cur.file_id)}` + (app ? `/edit/${app}` : ""));
     }
   }
-  if (e.data.type === "save_failed") toast("Couldn't save to your files — it was downloaded instead");
+  if (e.data.type === "save_failed") toast("Couldn't save to your workspace — it was downloaded instead");
 });
 
 // ---------- feltöltés + képválasztó ----------
@@ -802,14 +836,14 @@ const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend st
   <div class="swatches">${ACCENTS.map((c, i) => `<input type="radio" name="accent" value="${c}" style="--c:${c}" aria-label="${c}" ${i ? "" : "checked"}>`).join("")}</div></fieldset>`;
 
 // ---------- ÁTJÁRÁS-RENDSZER ----------
-// 1) Fájlhely: MINDEN készítő MINDEN fájlmezője ez — feltöltés, „From your files”, vagy kívülről átadott fájl.
+// 1) Fájlhely: MINDEN készítő MINDEN fájlmezője ez — feltöltés, „From your workspace”, vagy kívülről átadott fájl.
 const EXT = {
   image: ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif", "psd"],
   doc: ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm"],
   slides: ["pptx", "potx", "ppt", "odp"], pdf: ["pdf"],
 };
 const extOf = n => (String(n).split(/[?#]/)[0].split(".").pop() || "").toLowerCase();
-// Saját ejtőzóna: a natív <input type=file> rejtve (a böngésző nyelvén írna, és nem tudna a „From your files”-ról);
+// Saját ejtőzóna: a natív <input type=file> rejtve (a böngésző nyelvén írna, és nem tudna a „From your workspace”-ról);
 // a kiválasztott fájlok EGY helyen látszanak: bélyegkép + név + ✕ (saját fájl és most feltöltendő egyaránt).
 const ICON_UP = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>`;
 const extList = exts => [...new Set((exts || []).map(e => ({ jpeg: "jpg", tiff: "tif", htm: "html", potx: "pptx" }[e] || e)))];
@@ -818,7 +852,7 @@ function fileSlot(name, { exts = null, multiple = false, label = "File", hint = 
     ${label ? `<span class="slot-label">${label}</span>` : ""}
     <div class="slot-drop" role="button" tabindex="0"><input type="file" name="${name}" accept="${exts ? exts.map(e => "." + e).join(",") : ""}"${multiple ? " multiple" : ""} hidden tabindex="-1">
       <span class="slot-drop-icon">${ICON_UP}</span><span class="slot-drop-text"></span>
-      <button type="button" class="btn ghost slot-pick">From your files</button></div>
+      <button type="button" class="btn ghost slot-pick">From your workspace</button></div>
     <div class="slot-list" hidden></div><div class="slot-chips"></div>${hint}</div>`;
 }
 const slotEl = (form, name) => form.querySelector(`.slot[data-slot="${name}"]`);
@@ -1217,7 +1251,7 @@ async function blankSubmit(kind, fd) {
     background: fd.get("bbg"), width: fd.get("bw"), height: fd.get("bh") }) });
   return { ...r, edit: true, msg: `A blank ${BLANK[kind].what} is open in the ${BLANK[kind].editor}` };
 }
-// fájl érkezik (ráejtés, „From your files”, átvitel) egy „New” módban álló ablakba → a fájlos módra vált (nincs rejtett, elnyelt fájl)
+// fájl érkezik (ráejtés, „From your workspace”, átvitel) egy „New” módban álló ablakba → a fájlos módra vált (nincs rejtett, elnyelt fájl)
 function leaveNewOnFile(form, field, fallback) {
   form.addEventListener("slotchange", () => {
     if (form.querySelector(`[name=${field}]:checked`)?.value !== "new") return;
@@ -1345,7 +1379,7 @@ const MAKERS = {
     },
   },
   social: {
-    cta: "Make the post", title: "Social post", sub: "Headline + picture → every size you tick. It opens in the design editor to fine-tune; the ready-to-post PNGs are in your files.",
+    cta: "Make the post", title: "Social post", sub: "Headline + picture → every size you tick. It opens in the design editor to fine-tune; the ready-to-post PNGs are in your workspace.",
     fields: () => `<label>Headline<input type="text" name="headline" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
@@ -1364,7 +1398,7 @@ const MAKERS = {
       if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
       const r = await api("/api/make/social", { method: "POST", body: JSON.stringify(body) });
       const n = r.posts.length;
-      return { ...editNative(r.posts[0].files, n), msg: `Opening the design editor — the PNG${n > 1 ? `s of all ${n} sizes are` : " is"} in your files too` };
+      return { ...editNative(r.posts[0].files, n), msg: `Opening the design editor — the PNG${n > 1 ? `s of all ${n} sizes are` : " is"} in your workspace too` };
     },
   },
   book: {
@@ -1384,7 +1418,7 @@ const MAKERS = {
       $("#make-status").textContent = "Typesetting the book…";
       const r = await api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover"), style_file_id, layout: fd.get("layout") }) });
       return fd.get("layout") === "booklet" ? { ...r, edit: true, msg: "Your booklet is open in the PDF editor" }
-        : { ...r, edit: true, msg: "Your book is open in the Word editor — the PDF is in your files too" };
+        : { ...r, edit: true, msg: "Your book is open in the Word editor — the PDF is in your workspace too" };
     },
   },
   photo: {
@@ -1393,7 +1427,7 @@ const MAKERS = {
       return m === "new" ? BLANK.photo.cta : m === "restore" ? "Restore" : m === "open" ? "Open in editor"
         : m === "quick" ? ({ enhance: "Enhance", remove_background: "Remove the background", replace_background: "Swap the background" })[a] || "Fix it" : "Edit the photo";
     },
-    title: "Photos", sub: "The result opens in the photo editor. Edits and restorations come as a layered Photoshop file (PSD) — nothing is lost, every step can be undone by hand; a JPG is in your files too.",
+    title: "Photos", sub: "The result opens in the photo editor. Edits and restorations come as a layered Photoshop file (PSD) — nothing is lost, every step can be undone by hand; a JPG is in your workspace too.",
     fields: () => `<div data-photo-files>${fileSlot("photos", { exts: EXT.image, multiple: true, label: "Photos" })}</div>
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="new"><span>New</span></label>
       <label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
@@ -1436,7 +1470,7 @@ const MAKERS = {
       if (mode !== "quick" && mode !== "open" && account?.guest) throw needAccount();
       const ids = await readSlot(form, "photos", "a photo");
       if (mode === "open") {
-        return { file_id: ids[0], n: ids.length, edit: true, msg: ids.length > 1 ? "Opening the first one — the others are in your files" : "Opening the photo editor…" };
+        return { file_id: ids[0], n: ids.length, edit: true, msg: ids.length > 1 ? "Opening the first one — the others are in your workspace" : "Opening the photo editor…" };
       }
       const instr = instr0, action = mode === "quick" ? fd.get("action") : "", st = $("#make-status");
       if (mode === "restore") {
@@ -1444,7 +1478,7 @@ const MAKERS = {
         const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the pictures…");
         await loadAccount();
         const psd = r.files.find(x => x.file_id.endsWith(".psd"));
-        const many = r.photos > 1 ? ` — all ${r.photos} restored pictures are in your files` : "";
+        const many = r.photos > 1 ? ` — all ${r.photos} restored pictures are in your workspace` : "";
         return { file_id: (psd || r).file_id, n: r.files.length, edit: true, msg: `Restored — the layers are open in the photo editor${many}` };
       }
       if (instr) {
@@ -1461,11 +1495,11 @@ const MAKERS = {
         last = await api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: id, action, background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
       }
       return { ...last, n: ids.length, edit: true, msg: (quickNote ? quickNote + "Describe an edit next time for more. " : "")
-        + (ids.length > 1 ? `Opening the last one in the photo editor — all ${ids.length} are in your files` : "Opening the photo editor…") };
+        + (ids.length > 1 ? `Opening the last one in the photo editor — all ${ids.length} are in your workspace` : "Opening the photo editor…") };
     },
   },
   print: {
-    cta: "Make the design", title: "Print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your files.",
+    cta: "Make the design", title: "Print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your workspace.",
     fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
       <label>Title / name<input type="text" name="title" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
@@ -1480,7 +1514,7 @@ const MAKERS = {
         ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
         : { title: fd.get("title"), subtitle: fd.get("subtitle"), body: fd.get("body"), date: fd.get("meta"), author: fd.get("meta"), image: img };
       const r = await api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent"), editable: true }) });
-      return { ...editNative(r.files, 1), msg: "Opening the design editor — the print-ready PDF is in your files too" };
+      return { ...editNative(r.files, 1), msg: "Opening the design editor — the print-ready PDF is in your workspace too" };
     },
   },
   scan: {
@@ -1515,7 +1549,7 @@ const MAKERS = {
       const open = r.files.find(x => x.file_id.endsWith(".docx")) || r.files.find(x => x.file_id.endsWith(".pdf")) || r;
       const where = EDITOR_NAMES[editorsFor(extOf(open.file_id))[0]?.[0]];
       return { file_id: open.file_id, n: r.files.length, msg: parts.join(" · ") + (where ? ` — open in the ${where}` : "")
-        + (r.files.length > 2 ? `; the other ${r.files.length - 1} files are in your files` : r.files.length > 1 ? "; the other file is in your files too" : "") };
+        + (r.files.length > 2 ? `; the other ${r.files.length - 1} files are in your workspace` : r.files.length > 1 ? "; the other file is in your workspace too" : "") };
     },
   },
   convert: {
@@ -1895,8 +1929,8 @@ function openMaker(kind, opts = {}) {
       $("#drawer").close(); await loadAccount();
       // ELV: minden készítő a LÁTHATÓ szerkesztőbe visz, ha az eredmény típusára van szerkesztő (kivéve: edit:false)
       const ed = editorsFor(extOf(r.file_id))[0], edit = r.edit ?? !!ed;
-      const more = r.n > 2 ? ` — the other ${r.n - 1} files are in your files` : r.n > 1 ? " — the other file is in your files too" : "";
-      toast(r.msg || (edit && ed ? `Opening the ${EDITOR_NAMES[ed[0]]}…${more}` : r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
+      const more = r.n > 2 ? ` — the other ${r.n - 1} files are in your workspace` : r.n > 1 ? " — the other file is in your workspace too" : "";
+      toast(r.msg || (edit && ed ? `Opening the ${EDITOR_NAMES[ed[0]]}…${more}` : r.n > 1 ? `Done — ${r.n} files are in your workspace` : "Done"));
       nav("/app/file/" + encodeURIComponent(r.file_id) + (edit && ed ? "/edit" : ""));
     } catch (err) {
       go.disabled = false; if (alt) alt.disabled = false;
