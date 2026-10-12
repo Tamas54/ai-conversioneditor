@@ -112,9 +112,11 @@ async def _commons(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
 
 async def _stock_progressive(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
     """Túl részletes keresőkifejezésre (ügynökök szeretik) nincs találat — egyre rövidebb változattal
-    újrapróbál (az utolsó szavak a legkevésbé lényegesek), és csak a végén hibázik."""
+    újrapróbál, és csak a végén hibázik. Angolban a fő szó többnyire a VÉGÉN áll („shiny blonde girl” → girl),
+    ezért előbb a záró szavak maradnak (a jelzők esnek ki), csak utána az elejük (pl. „Parliament building at night”)."""
     words = query.split()
-    tries = [query] + [" ".join(words[:n]) for n in (4, 3, 2) if len(words) > n]
+    tries = ([query] + [" ".join(words[-n:]) for n in (3, 2) if len(words) > n]
+             + [" ".join(words[:n]) for n in (4, 3, 2) if len(words) > n])
     last: Exception = ValueError(f"No stock photo for {query!r}")
     for q in dict.fromkeys(tries):
         try:

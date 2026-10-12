@@ -77,7 +77,7 @@ image_left|image_right {{title, bullets[] or text, image}} · full_image {{title
 stats {{title, stats:[{{value,label}}]}} · chart {{title, chart_type: column|bar|line|pie, categories[], series:[{{name, values[]}}]}} ·
 table {{title, headers[], rows[][]}} · gallery {{title, images[]}} · closing {{title, subtitle}}.
 Pictures: strings like "IMAGE#3" are existing pictures — keep them unless asked to change them. For a NEW picture use
-{{"query": "2-4 plain English words"}} (stock photo, free) or {{"ai": "prompt"}} (generated, costs a credit — only if asked).
+{{"query": "2-4 plain English words, the main noun last"}} (stock photo, free) or {{"ai": "prompt"}} (generated, costs a credit — only if asked).
 Theme colours are under "theme" ({{primary, accent, bg, panel, text, muted, font_heading, font_body}}) if the user asks
 for other colours or fonts.{style}
 Request: {request}

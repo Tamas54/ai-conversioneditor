@@ -29,7 +29,7 @@ The user asks: {request}
 Reply with ONE JSON object {{"steps": [...], "summary": "one short sentence in the language of the request — English if the request is only a few words or its language is unclear"}}.
 Steps (use the #index numbers above; "to" is inclusive; omit "to" for a single paragraph):
   {{"op":"indent","from":i,"to":j,"first_line_cm":1.0}}             first-line indent (like a tab) on body paragraphs
-  {{"op":"insert_image","after":i,"stock":"2-4 English words"}}      a real photo (free) after paragraph i
+  {{"op":"insert_image","after":i,"stock":"2-4 English words"}}      a real photo (free) after paragraph i (main noun last)
   {{"op":"insert_image","after":i,"ai":"prompt"}}                    a generated picture (costs a credit) — only if asked
       optional for images: "width_cm": 6-16, "caption": "text under it"
   {{"op":"insert_text","after":i,"text":"...","style":"Normal|Heading 1|Heading 2|Heading 3|Quote"}}
