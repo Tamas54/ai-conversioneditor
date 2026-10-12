@@ -31,6 +31,7 @@
   <nav aria-label="Main">
     <a href="/app" data-nav="home">Make</a>
     <a href="/app/files" data-nav="files">My workspace</a>
+    <a href="/app/brand" data-nav="brand">Brand</a>
     <a href="/app/connect" data-nav="connect">Connect your AI</a>
   </nav>
   <span class="spacer"></span>
@@ -98,6 +99,22 @@
   <section class="sheet">
     <div class="row-head"><h2>Recent</h2><a class="small" href="/app/files">All files</a></div>
     <div class="files" id="recent"></div>
+  </section>
+</template>
+
+<template id="t-brand">
+  <section class="sheet">
+    <div class="row-head"><h2>Your brand</h2><a class="small" href="/app/make/social-post/design">Make a design <span aria-hidden="true">→</span></a></div>
+    <p class="muted" style="margin:-4px 0 18px;max-width:62ch">Show it a few examples — posts, slides, a PDF, your logo. It learns your colours, fonts, logo and layout habits, and every design comes out on-brand. Change anything below; switch it off any time.</p>
+    <div id="brand-list"></div>
+    <form class="quick brand-learn" id="brand-learn" novalidate>
+      <h3 style="margin:0 0 4px">Learn a brand from examples <em class="ai-badge">AI</em></h3>
+      <p class="muted small" style="margin:0 0 12px">2–6 examples work best: things you've already published, a deck, a PDF, a logo file.</p>
+      <div id="brand-slot"></div>
+      <label>Name<input type="text" name="bname" maxlength="80" placeholder="e.g. Northside Band"></label>
+      <p class="quick-status muted small" hidden></p>
+      <div class="actions" style="justify-content:flex-start"><button class="btn primary" type="submit" id="brand-go">Learn my brand</button></div>
+    </form>
   </section>
 </template>
 
@@ -358,6 +375,52 @@ function renderFiles(el, list) {
   el.querySelectorAll(".thumb img").forEach(img => img.addEventListener("error", () => { const t = img.parentElement; t.innerHTML = glyph(t.dataset.ext); }, { once: true }));
 }
 
+// ---------- arculat ----------
+// A saját arculat (Postgres) magától rákerül minden dizájnra; a készítőkben egy sor mutatja, ott cserélhető/kikapcsolható.
+let brandsCache = null;
+async function loadBrands(force = false) {
+  if (account?.guest) return [];
+  if (!brandsCache || force) { try { brandsCache = (await api("/api/brand-kits")).brands || []; } catch { brandsCache = []; } }
+  return brandsCache;
+}
+const brandDots = b => ["primary", "accent", "bg", "text"].map(k => b.colors?.[k] ? `<i style="--c:${esc(b.colors[k])}" title="${k} ${esc(b.colors[k])}"></i>` : "").join("");
+const brandField = () => `<div class="brand-line" data-brand-line><span class="muted small">Looking for your brand…</span></div>`;
+async function wireBrand(form) {
+  const box = form.querySelector("[data-brand-line]"); if (!box) return;
+  const acc = () => form.querySelector(".swatches")?.closest("fieldset");
+  if (account?.guest) { box.innerHTML = `<span class="muted small">Your own colours, fonts and logo on every design: <a href="/signup?next=/app/brand">create a free account</a>.</span>`; return; }
+  const list = await loadBrands();
+  if (!list.length) { box.innerHTML = `<span class="muted small">No brand yet — <a href="/app/brand">teach it your look</a> from a few examples, and every design comes out on-brand.</span>`; return; }
+  const def = list.find(b => b.is_default && b.auto_apply);
+  box.innerHTML = `<label class="brand-pick">Brand<select name="brand">${list.map(b => `<option value="${b.id}"${def?.id === b.id ? " selected" : ""}>${esc(b.name)}</option>`).join("")}
+    <option value="none"${def ? "" : " selected"}>No brand</option></select></label><span class="brand-dots" aria-hidden="true"></span><a class="small" href="/app/brand">Edit</a>`;
+  const sel = box.querySelector("select");
+  const sync = () => { const b = list.find(x => String(x.id) === sel.value); box.querySelector(".brand-dots").innerHTML = b ? brandDots(b) : "";
+    const a = acc(); if (a) a.hidden = !!b; };
+  sel.addEventListener("change", sync); sync();
+}
+const readBrand = fd => fd.get("brand") || undefined;    // nincs sor (vendég, nincs arculat): a szerver dönt
+
+function brandCard(b) {
+  const fonts = BRAND_FONTS || { heading: [], body: [] };
+  const opt = (list, cur) => list.map(f => `<option${f.family === cur ? " selected" : ""}>${esc(f.family)}</option>`).join("");
+  const c = b.colors || {}, r = b.rules || {};
+  return `<article class="brand-card" data-brand="${b.id}">
+    <div class="brand-head">${b.logo_url ? `<img class="brand-logo" src="${esc(b.logo_url)}" alt="Logo">` : `<span class="brand-logo none">No logo</span>`}
+      <label class="grow">Name<input type="text" name="name" value="${esc(b.name || "")}" maxlength="80"></label>
+      ${b.is_default ? `<span class="badge-cur">Default</span>` : `<button type="button" class="btn ghost" data-act="default">Make default</button>`}</div>
+    <div class="brand-colors">${["primary", "accent", "bg", "text"].map(k => `<label class="color"><input type="color" name="c-${k}" value="${esc((c[k] || "#888888").toLowerCase())}"><span>${{ primary: "Main", accent: "Highlight", bg: "Background", text: "Text" }[k]}</span></label>`).join("")}</div>
+    <div class="two"><label>Headline font<select name="f-heading">${opt(fonts.heading, b.fonts?.heading)}</select></label>
+      <label>Text font<select name="f-body">${opt(fonts.body, b.fonts?.body)}</select></label></div>
+    ${b.fonts?.heading_declared && b.fonts.heading_declared !== b.fonts.heading ? `<p class="muted small" style="margin:-6px 0 10px">Your examples use ${esc(b.fonts.heading_declared)}${b.fonts.body_declared && b.fonts.body_declared !== b.fonts.heading_declared ? ` and ${esc(b.fonts.body_declared)}` : ""} — the closest available faces are used.</p>` : ""}
+    ${r.mood || (r.layouts || []).length ? `<p class="muted small" style="margin:0 0 10px">${esc(r.mood || "")}${(r.layouts || []).length ? ` · favours ${esc(r.layouts.join(", ").replace(/_/g, " "))}` : ""}</p>` : ""}
+    <label class="checks" style="margin:0 0 12px"><span><input type="checkbox" name="auto"${b.auto_apply ? " checked" : ""}> Put it on my designs automatically</span></label>
+    <div class="actions" style="justify-content:flex-start"><button type="button" class="btn primary" data-act="save">Save</button>
+      <a class="btn ghost" href="/app/make/social-post/design">Try it on a design</a><button type="button" class="btn ghost danger" data-act="delete">Delete</button></div>
+  </article>`;
+}
+let BRAND_FONTS = null;
+
 // ---------- csomagok ----------
 const FEATURES = {
   free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
@@ -419,6 +482,58 @@ const views = {
       pendingPreset = p; nav(makeLink(p.kind, p.mode));
     }));
     await loadFiles(); renderFiles($("#recent"), groupFiles(files).slice(0, 10));
+  },
+  async brand() {
+    mount("t-brand");
+    await loadAccount();
+    const listEl = $("#brand-list"), form = $("#brand-learn");
+    if (account.guest) {
+      listEl.innerHTML = `<div class="empty">Your own colours, fonts and logo on every design — <a href="/signup?next=/app/brand">create a free account</a> to keep a brand.</div>`;
+      form.hidden = true; return;
+    }
+    if (!BRAND_FONTS) BRAND_FONTS = await api("/api/brand-kits/fonts").catch(() => ({ heading: [], body: [] }));
+    $("#brand-slot").innerHTML = fileSlot("samples", { exts: [...EXT.image, "svg", "pdf", "pptx", "potx", "docx"], multiple: true, label: "Examples" });
+    wireSlots(form);
+    const draw = async () => {
+      const list = await loadBrands(true);
+      listEl.innerHTML = list.length ? list.map(brandCard).join("") : `<div class="empty">No brand yet — add a few examples below.</div>`;
+    };
+    await draw();
+    listEl.addEventListener("click", async e => {
+      const b = e.target.closest("[data-act]"); if (!b) return;
+      const card = b.closest("[data-brand]"), id = card.dataset.brand, q = n => card.querySelector(`[name="${n}"]`);
+      try {
+        if (b.dataset.act === "save") {
+          await api(`/api/brand-kits/${id}`, { method: "PATCH", body: JSON.stringify({ name: q("name").value,
+            colors: { primary: q("c-primary").value, accent: q("c-accent").value, bg: q("c-bg").value, text: q("c-text").value },
+            fonts: { heading: q("f-heading").value, body: q("f-body").value }, auto_apply: q("auto").checked }) });
+          toast("Saved — your next designs use it"); await draw();
+        } else if (b.dataset.act === "default") {
+          await api(`/api/brand-kits/${id}`, { method: "PATCH", body: JSON.stringify({ is_default: true }) }); await draw();
+        } else if (b.dataset.act === "delete") {          // azonnal eltűnik, 8 mp-ig visszavonható
+          card.hidden = true;
+          const h = setTimeout(async () => { try { await api(`/api/brand-kits/${id}`, { method: "DELETE" }); } catch (err) { toast(err.message); } await draw(); }, 8000);
+          toastAction(`Deleted “${q("name").value}”`, "Undo", () => { clearTimeout(h); card.hidden = false; toast("Restored"); });
+        }
+      } catch (err) { toast(err.message); }
+    });
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      const st = form.querySelector(".quick-status"), go = $("#brand-go");
+      go.disabled = true; st.hidden = false;
+      try {
+        const ids = await readSlot(form, "samples", "a few examples");
+        const job = await api("/api/brand-kits/learn", { method: "POST", body: JSON.stringify({ file_ids: ids, name: form.querySelector("[name=bname]").value || undefined }) });
+        const r = await pollJob(job, j => j.stage === "looking at the examples" ? "Looking at your examples…" : j.total ? `Reading example ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Reading the examples…", st);
+        st.textContent = `Learned “${r.brand.name}” — it's your default now.`;
+        setSlotPicked(form, "samples", []); form.querySelector("[name=samples]").value = ""; drawSlot(slotEl(form, "samples"));
+        await draw();
+      } catch (err) {
+        if (err.cta) { location.href = "/signup?next=/app/brand"; return; }
+        st.textContent = err.message;
+        if (err.slot) slotEl(form, err.slot).addEventListener("slotchange", () => form.requestSubmit(), { once: true });
+      } finally { go.disabled = false; }
+    });
   },
   async files() {
     mount("t-files");
@@ -589,7 +704,7 @@ function setTitle(t) {
   document.title = SEO_PAGE && location.pathname.replace(/\/+$/, "") === aboutPath ? SERVER_TITLE
     : t ? `${t} — ${PRODUCT}` : `${PRODUCT} — documents, slides, photos and PDFs, changed by asking`;
 }
-const VIEW_TITLES = { files: "My workspace", connect: "Connect your AI", plans: "Plans & pricing" };
+const VIEW_TITLES = { files: "My workspace", connect: "Connect your AI", plans: "Plans & pricing", brand: "Your brand" };
 let baseTitle = "";            // az aktuális nézet címe (a készítő-fiók bezárásakor ez áll vissza)
 async function route() {
   appSteps++;
@@ -991,7 +1106,7 @@ const TAKES = {
   doc: [["docfile", EXT.doc, "open"], ["style", ["docx", "odt", "rtf", "pdf", "pptx", ...EXT.image], null]],
   deck: [["source", [...EXT.doc, "pdf"], "document"], ["pfile", ["pptx", "ppt", "odp"], "open"], ["style", ["pptx", "potx", "pdf", ...EXT.image], null]],
   social: [["img-file", EXT.image, null]],
-  print: [["img-file", EXT.image, null], ["rebuild-file", [...EXT.image, "pdf"], "rebuild"]],
+  print: [["img-file", EXT.image, null], ["rebuild-file", [...EXT.image, "pdf"], "rebuild"], ["data", ["csv", "xlsx", "xls", "tsv"], null]],
   infographic: [["data", ["csv", "tsv", "xlsx", ...EXT.image], null]],
   photo: [["photos", EXT.image, null]],
   book: [["manuscript", ["docx"], null], ["cover-file", EXT.image, null], ["album-photos", EXT.image, "album"], ["album-text", ["docx", "md", "txt"], "album"]],
@@ -1294,6 +1409,29 @@ function withNew(kind, m, other, otherLabel, extra = []) {
 }
 const blankDocLink = `<p class="blank-alt"><a href="/app/make/document/new">Start a blank document instead <span aria-hidden="true">→</span></a></p>`;
 
+// automata tervező: a választható méretek [kulcs, felirat, alapból bejelölve]
+const DESIGN_SIZES = [["ig_post", "Instagram post 1080×1080", true], ["ig_portrait", "Instagram portrait 1080×1350", false],
+  ["ig_story", "Story / Reel 1080×1920", false], ["youtube", "YouTube thumbnail 1280×720", false], ["link", "Link preview 1200×630", true],
+  ["x_post", "X post 1600×900", false], ["A4", "A4 poster (PDF)", false], ["A3", "A3 poster (PDF)", false]];
+// három terv egymás mellett a fiókban: kattintásra azzal megy tovább; „Three more” újakat kér
+function chooseVariant(form, r) {
+  const box = form.querySelector("[data-variants]");
+  box.hidden = false;
+  box.innerHTML = `<p class="variants-head"><b>Pick the one you like</b> — it's then made in every size. You can still change anything in the editor.</p>
+    <div class="variant-grid">${r.variants.map((v, i) => `<button type="button" class="variant" data-v="${i}">
+      <span class="variant-img"><img src="${esc(v.preview)}" alt="${esc(v.name)}"></span><b>${esc(v.name)}</b><span class="muted small">${esc(v.why || "")}</span></button>`).join("")}</div>
+    <button type="button" class="btn ghost" data-again>${r.ai ? "Three more ideas" : "Three more"}</button>`;
+  box.scrollIntoView({ block: "start", behavior: "smooth" });
+  $("#make-status").textContent = r.ai ? "Three designs — pick one." : "Three designs — pick one. (With a free account an AI art director plans them for your words.)";
+  return new Promise(res => {
+    box.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () => {
+      box.querySelectorAll("[data-v]").forEach(x => x.setAttribute("aria-pressed", x === b));
+      res(r.variants[+b.dataset.v]);
+    }, { once: true }));
+    box.querySelector("[data-again]").addEventListener("click", () => { box.innerHTML = ""; res("again"); }, { once: true });
+  });
+}
+
 // ---------- készítők ----------
 const MAKERS = {
   doc: {
@@ -1397,26 +1535,45 @@ const MAKERS = {
     },
   },
   social: {
-    cta: "Make the post", title: "Social post", sub: "Headline + picture → every size you tick. It opens in the design editor to fine-tune; the ready-to-post PNGs are in your workspace.",
-    fields: () => `<label>Headline<input type="text" name="headline" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
+    cta: form => form.querySelector("[name=pick3]")?.checked ? "Show me 3 designs" : "Make the design",
+    title: "Social post", sub: "Your words and a picture → three different designs to choose from, then every size you tick, re-laid out for each (not stretched). It opens in the design editor; the PNGs — and print PDFs — are in your workspace.",
+    fields: () => `<label>Headline<input type="text" name="headline" maxlength="120" placeholder="e.g. Midnight Soul Revue — or leave empty and type it in the editor"></label>
+      <label>What is it for? <em class="ai-badge">AI</em><input type="text" name="goal" maxlength="200" placeholder="e.g. a poster for our summer concert in the park"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
-      <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
-      <div class="checks"><label><input type="checkbox" name="sizes" value="square" checked> Square 1080×1080</label>
-      <label><input type="checkbox" name="sizes" value="landscape" checked> Landscape 1200×630</label>
-      <label><input type="checkbox" name="sizes" value="story"> Story 1080×1920</label></div>
+      <div class="two"><label>Date<input type="text" name="date" maxlength="80" placeholder="e.g. Saturday 14 June, 8 pm"></label>
+        <label>Place<input type="text" name="place" maxlength="120"></label></div>
+      <details class="more-fields"><summary>More text — a line above the headline, link, handle</summary>
+        <label>Small line above the headline<input type="text" name="kicker" maxlength="60" placeholder="e.g. Live in the park"></label>
+        <label>Call to action or website<input type="text" name="cta" maxlength="80" placeholder="e.g. Tickets at example.com"></label>
+        <label>Handle<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label></details>
       ${imagePicker("img")}
       <label class="checks" style="margin:0 0 10px"><span><input type="checkbox" name="cut"> Cut out my photo's subject and put it on a new background</span></label>
       <div id="bg-wrap" hidden>${imagePicker("bg", { allowNone: false, label: "New background" })}</div>
-      ${swatches()}`,
-    wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
+      <fieldset style="border:0;padding:0;margin:0 0 12px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Sizes</legend>
+      <div class="checks size-checks">${DESIGN_SIZES.map(([v, t, on]) => `<label><input type="checkbox" name="sizes" value="${v}"${on ? " checked" : ""}> ${t}</label>`).join("")}</div></fieldset>
+      <label class="checks" style="margin:0 0 12px"><span><input type="checkbox" name="pick3" checked> Show me 3 different designs to choose from</span></label>
+      ${brandField()}
+      <div class="variants" data-variants hidden></div>`,
+    wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); wireBrand(form);
+      form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
     async submit(fd, form) {
-      if (!fd.get("headline")) fd.set("headline", "Your headline here");   // üresen: a szerkesztőben írja be
-      const body = { headline: fd.get("headline"), subtitle: fd.get("subtitle"), handle: fd.get("handle"), sizes: fd.getAll("sizes"),
-        image: await readPicker(form, "img"), accent: fd.get("accent"), editable: true };
-      if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
-      const r = await api("/api/make/social", { method: "POST", body: JSON.stringify(body) });
-      const n = r.posts.length;
-      return { ...editNative(r.posts[0].files, n), msg: `Opening the design editor — the PNG${n > 1 ? `s of all ${n} sizes are` : " is"} in your workspace too` };
+      const sizes = fd.getAll("sizes").length ? fd.getAll("sizes") : ["ig_post"];
+      const body = { title: fd.get("headline") || "Your headline here", goal: fd.get("goal"), subtitle: fd.get("subtitle"), date: fd.get("date"),
+        place: fd.get("place"), kicker: fd.get("kicker"), cta: fd.get("cta"), handle: fd.get("handle"), sizes, brand: readBrand(fd),
+        image: await readPicker(form, "img"), variants: fd.get("pick3") ? 3 : 1 };
+      if (fd.get("cut") && body.image) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
+      let chosen;
+      for (;;) {
+        $("#make-status").textContent = body.variants > 1 ? "Designing three different takes…" : "Designing…";
+        const r = await api("/api/make/design/auto", { method: "POST", body: JSON.stringify(body) });
+        if (r.variants.length === 1) { chosen = r.variants[0]; break; }
+        chosen = await chooseVariant(form, r);
+        if (chosen !== "again") break;
+      }
+      $("#make-status").textContent = sizes.length > 1 ? `Laying it out in all ${sizes.length} sizes…` : "Finishing…";
+      const p = await api("/api/make/design/package", { method: "POST", body: JSON.stringify({ from_file_id: chosen.file_id, sizes }) });
+      const n = p.posts.length;
+      return { file_id: p.file_id, n: p.n, edit: true, msg: n > 1 ? `Opening the design editor — all ${n} sizes are in your workspace` : "Opening the design editor…" };
     },
   },
   book: {
@@ -1518,21 +1675,74 @@ const MAKERS = {
     },
   },
   print: {
-    cta: "Make the design", title: "Print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your workspace.",
-    fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
-      <label>Title / name<input type="text" name="title" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
-      <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
-      <label>Text<textarea name="body" placeholder="Main text (flyers flow it into two columns)"></textarea></label>
-      <label>Date / place / author<input type="text" name="meta" maxlength="120" placeholder="e.g. 12 November · City Hall"></label>
-      ${imagePicker("img")}${swatches()}`,
-    wire(form) { wirePicker(form, "img"); },
+    cta: form => form.querySelector("[name=many]")?.checked ? "Make all the copies" : "Make the design",
+    title: "Print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your workspace. One for every row of a spreadsheet works too.",
+    fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option>
+        <option value="certificate">Certificate</option><option value="invitation">Invitation</option><option value="card">Business card</option></select></label>
+      <label data-lbl="title">Title / name<input type="text" name="title" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
+      <label data-lbl="subtitle">Subtitle<input type="text" name="subtitle" maxlength="160"></label>
+      <label data-lbl="body">Text<textarea name="body" placeholder="Main text (flyers flow it into two columns)"></textarea></label>
+      <label data-lbl="meta">Date / place / author<input type="text" name="meta" maxlength="120" placeholder="e.g. 12 November · City Hall"></label>
+      <div data-img-row>${imagePicker("img")}</div>
+      <label class="checks" style="margin:0 0 10px"><span><input type="checkbox" name="many"> Make one for every row of a spreadsheet (names, courses, products…)</span></label>
+      <div data-many hidden>${fileSlot("data", { exts: ["csv", "xlsx", "xls", "tsv"], label: "Spreadsheet — column names in the first row" })}
+        <p class="muted small" data-cols style="margin:-4px 0 12px">Write <b>{column}</b> in any field above — e.g. Title / name: <b>{name}</b>.</p>
+        ${fileSlot("own", { exts: ["vectorcraft", "svg"], label: "Or your own design, with {placeholders} in its texts (optional)" })}</div>
+      ${brandField()}${swatches()}`,
+    wire(form) {
+      wirePicker(form, "img"); wireBrand(form);
+      const LBL = { certificate: ["Name (recipient)", "Title (e.g. Certificate of Completion)", "Text (e.g. for completing …)", "Date / place"],
+        card: ["Name", "Role", "Contact — one per line: phone, email, website, address", "Organisation"],
+        invitation: ["Title (e.g. You're invited)", "Greeting (e.g. Dear {name})", "Text", "Date · place"] };
+      const sync = () => {
+        const t = form.querySelector("[name=template]").value, l = LBL[t] || ["Title / name", "Subtitle", "Text", "Date / place / author"];
+        ["title", "subtitle", "body", "meta"].forEach((k, i) => { const el = form.querySelector(`[data-lbl=${k}]`); el.firstChild.textContent = l[i]; });
+        form.querySelector("[data-img-row]").hidden = t === "card" || t === "certificate";
+      };
+      form.querySelector("[name=template]").addEventListener("change", sync); sync();
+      const many = form.querySelector("[name=many]");
+      many.addEventListener("change", () => { form.querySelector("[data-many]").hidden = !many.checked; });
+      form.addEventListener("slotchange", async e => {            // a táblázat oszlopai: ezek írhatók {…}-be
+        if (e.target.dataset?.slot !== "data" || form._colBusy) return;
+        if (!many.checked) { many.checked = true; form.querySelector("[data-many]").hidden = false; }
+        let [id] = slotPicked(form, "data"); const hint = form.querySelector("[data-cols]");
+        const inp = slotEl(form, "data").querySelector("input[type=file]");
+        if (!id && inp.files.length) {                            // most választott fájl: feltöltjük, hogy az oszlopai látsszanak
+          form._colBusy = true;
+          try { [id] = await readSlot(form, "data"); inp.value = ""; presetSlot(form, "data", [id]); $("#make-status").textContent = ""; }
+          catch (err) { $("#make-status").textContent = err.message; }
+          finally { form._colBusy = false; }
+        }
+        if (!id) return;
+        try { const c = await api(`/api/design/columns?file_id=${encodeURIComponent(id)}`);
+          hint.innerHTML = `${c.rows} rows · columns: ${c.columns.map(x => `<b>{${esc(x)}}</b>`).join(" ")} — write them in any field above.`; } catch {}
+      });
+    },
     async submit(fd, form) {
-      if (!fd.get("title")) fd.set("title", t0(fd.get("template")));   // üresen: a szerkesztőben írja be
-      const t = fd.get("template"), img = await readPicker(form, "img");
+      const t = fd.get("template"), img = form.querySelector("[data-img-row]").hidden ? null : await readPicker(form, "img");
+      const many = fd.get("many");
+      if (!fd.get("title") && !many) fd.set("title", t0(t));   // üresen: a szerkesztőben írja be
+      const lines = (fd.get("body") || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
       const data = t === "certificate"
         ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
+        : t === "card"
+        ? { name: fd.get("title"), role: fd.get("subtitle"), organization: fd.get("meta"), email: lines.find(x => x.includes("@")),
+            phone: lines.find(x => /^[+()\d][\d ()\-/.]{5,}$/.test(x)), web: lines.find(x => /^(https?:|www\.)|\.[a-z]{2,}$/i.test(x) && !x.includes("@")),
+            address: lines.filter(x => !x.includes("@") && !/^[+()\d][\d ()\-/.]{5,}$/.test(x) && !/^(https?:|www\.)/i.test(x)).join(", ") || undefined }
+        : t === "invitation"
+        ? { title: fd.get("title") || "You're invited", recipient: fd.get("subtitle"), text: fd.get("body"), date: fd.get("meta"), image: img }
         : { title: fd.get("title"), subtitle: fd.get("subtitle"), body: fd.get("body"), date: fd.get("meta"), author: fd.get("meta"), image: img };
-      const r = await api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent"), editable: true }) });
+      if (many) {
+        const [data_file_id] = await readSlot(form, "data", "the spreadsheet");
+        const [design_file_id] = await readSlot(form, "own");
+        const job = await api("/api/make/design/mass", { method: "POST", body: JSON.stringify({ template: t, data, data_file_id, design_file_id,
+          brand: readBrand(fd), accent: fd.get("accent") }) });
+        const r = await pollJob(job, j => j.total ? `Making copy ${Math.min(j.done, j.total)} of ${j.total}…` : "Reading the spreadsheet…");
+        if (r.missing?.length) toast(`No column for ${r.missing.map(x => `{${x}}`).join(", ")} — left empty`);
+        return { file_id: r.file_id, n: r.files.length, edit: true,
+          msg: `${r.copies} copies in one PDF — opening it; a ZIP with one file each is in your workspace${r.note ? ` (${r.note})` : ""}` };
+      }
+      const r = await api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent"), brand: readBrand(fd), editable: true }) });
       return { ...editNative(r.files, 1), msg: "Opening the design editor — the print-ready PDF is in your workspace too" };
     },
   },

@@ -1,4 +1,4 @@
-"""Dizájnsablonok a VectorCrafttal: plakát, szórólap, jelentés-borító, oklevél, közösségi kártya, füzet.
+"""Dizájnsablonok a VectorCrafttal: plakát, szórólap, jelentés-borító, oklevél, közösségi kártya, füzet, névjegy, meghívó.
 
 Egy sablon = paraméteres elrendezés, VectorCraft-parancsokká fordítva (vector_run), PDF/PNG/SVG kimenettel.
 Képek: images.resolve (file_id / URL / FLUX / stock), a keret arányára vágva, beágyazva.
@@ -13,12 +13,13 @@ from typing import Any, Optional
 
 from app.tools import crafts, images
 
-TEMPLATES = {"poster", "flyer", "report_cover", "certificate", "social", "booklet"}
+TEMPLATES = {"poster", "flyer", "report_cover", "certificate", "social", "booklet", "card", "invitation"}
 DEFAULT_THEME = {
     "primary": "#14213D", "accent": "#FCA311", "bg": "#FFFFFF", "panel": "#F4F5F7",
     "text": "#1E2430", "muted": "#6B7280", "font_heading": "Noto Serif", "font_body": "Source Sans 3",
 }
-SIZES = {"A4": (595.3, 841.9), "A3": (841.9, 1190.6), "A5": (419.5, 595.3), "letter": (612, 792)}
+SIZES = {"A4": (595.3, 841.9), "A3": (841.9, 1190.6), "A5": (419.5, 595.3), "A6": (297.6, 419.5), "letter": (612, 792)}
+CARD = (240.9, 155.9)          # névjegy: 85×55 mm, fekvő
 GAP = 60  # pt az artboardok között
 
 
@@ -84,17 +85,61 @@ class Doc:
             self._add("text.thread.create")
 
 
-def _theme(data: dict[str, Any], theme: Optional[dict], brand: Optional[str]) -> dict[str, str]:
+def _theme(data: dict[str, Any], theme: Optional[dict], brand: Optional[Any]) -> dict[str, str]:
+    """A sablon színei/betűi: alap → arculat (a katalógus neve, vagy a felhasználó arculata dictként) → kézi téma."""
     t = dict(DEFAULT_THEME)
-    if brand:
+    if isinstance(brand, str) and brand:
         from app.brands import get_brand
         b = get_brand(brand)
         if b is None:
             raise ValueError(f"Unknown brand: {brand}")
         t.update(primary=b.colors.primary, accent=b.colors.accent, bg=b.colors.body_bg, panel=b.colors.panel_bg,
                  text=b.colors.text_primary, muted=b.colors.text_muted)
+    elif isinstance(brand, dict):
+        from app.tools.design_auto import font_family, mix, readable
+        c, f = brand.get("colors") or {}, brand.get("fonts") or {}
+        bg = c.get("bg") or t["bg"]
+        if c.get("bg") and sum(int(bg[i:i + 2], 16) for i in (1, 3, 5)) < 384:     # sötét arculat-háttér: a lap maradjon világos
+            bg = "#FFFFFF"
+        t.update(primary=c.get("primary") or t["primary"], accent=c.get("accent") or t["accent"], bg=bg,
+                 panel=mix(c.get("primary") or t["primary"], "#FFFFFF", 0.92), text=readable(c.get("text") or t["text"], bg),
+                 muted=mix(readable(c.get("text") or t["text"], bg), bg, 0.4))
+        if f.get("heading"):
+            t["font_heading"] = font_family(f["heading"]) or t["font_heading"]
+        if f.get("body"):
+            t["font_body"] = font_family(f["body"], body=True) or t["font_body"]
     t.update({k: v for k, v in (theme or {}).items() if k in DEFAULT_THEME and v})
     return t
+
+
+def _logo(d: Doc, brand: Optional[Any], template: str) -> None:
+    """A felhasználó arculatának logója a lap sarkába (oklevélen/meghívón fent középre)."""
+    lp = brand.get("_logo_path") if isinstance(brand, dict) else None
+    if not lp:
+        return
+    try:
+        from PIL import Image
+        with Image.open(lp) as im:
+            lw, lh = im.size
+    except Exception:
+        return
+    W, H = d.w, d.h
+    base = min(W, H)
+    w = base * (0.22 if template == "card" else 0.16)
+    h = w * lh / max(lw, 1)
+    if h > base * 0.1:
+        h = base * 0.1
+        w = h * lw / max(lh, 1)
+    if template == "certificate":                     # a keret bal felső sarkába (középen a címre lógna)
+        x, y = 58, 52
+    elif template == "invitation":
+        x, y = (W - w) / 2, base * 0.07
+    else:
+        x, y = W - base * 0.06 - w, base * 0.05
+    from app.tools.design_auto import place_logo
+    t = _theme({}, None, brand)
+    under = t["primary"] if template in ("poster", "flyer", "report_cover", "social") else ("#FFFDF7" if template == "certificate" else t["bg"])
+    place_logo(d, lp, x, y, w, h, under)
 
 
 # ---------- sablonok ----------
@@ -103,7 +148,9 @@ def _poster(d: Doc, data, t, img):
     W, H = d.w, d.h
     m = W * 0.07
     d.rect(0, 0, W, H, t["primary"])
-    ih = H * 0.56
+    ih = H * 0.56 if img else H * 0.3                 # kép nélkül a szöveg feljebb kezd (ne maradjon üres fél lap)
+    if not img:
+        d.rect(0, 0, W * 0.32, H * 0.22, t["accent"], opacity=90)
     if img:
         d.image(img.path, 0, 0, W, ih)
         d.rect(0, ih - H * 0.12, W, H * 0.12, t["primary"], opacity=55)
@@ -196,8 +243,11 @@ def _certificate(d: Doc, data, t, img):
     d.rect(34, 34, W - 68, H - 68, t["accent"], opacity=12)
     d.rect(40, 40, W - 80, H - 80, "#FFFDF7")
     c = dict(w=W - 160, align="center")
-    d.text(80, H * 0.13, (data.get("title") or "Certificate").upper(), size=40, font=t["font_heading"], style="Bold",
-           color=t["primary"], h=56, tracking=150, **c)
+    # hosszú cím („Certificate of Completion”) egy sorban, kisebben — a ritkított nagybetű különben levágódna
+    title = (data.get("title") or "Certificate").upper()
+    tsize = max(20, min(40, (W - 160) / (max(len(title), 1) * 0.88)))
+    d.text(80, H * 0.13, title, size=round(tsize, 1), font=t["font_heading"], style="Bold",
+           color=t["primary"], h=56, tracking=150 if len(title) <= 14 else 90, fit="shrinkText", **c)
     d.rect(W / 2 - 40, H * 0.255, 80, 3, t["accent"])
     d.text(80, H * 0.3, data.get("lead", "This certificate is presented to"), size=15, font=t["font_body"], color=t["muted"], h=24, **c)
     d.text(80, H * 0.36, data.get("recipient", ""), size=38, font=t["font_heading"], style="Bold Italic",
@@ -237,6 +287,61 @@ def _social(d: Doc, data, t, img):
     if data.get("handle"):
         d.text(m, H * 0.93, data["handle"], size=W * 0.022, font=t["font_body"], style="Bold", color=t["accent"],
                w=W - 2 * m, h=H * 0.05)
+
+
+def _card(d: Doc, data, t, img):
+    """Névjegy (85×55 mm): név, beosztás, szervezet, elérhetőségek; bal oldalt színcsík."""
+    W, H = d.w, d.h
+    m = W * 0.08
+    d.rect(0, 0, W, H, t["bg"])
+    d.rect(0, 0, W * 0.035, H, t["primary"])
+    d.rect(W * 0.035, 0, W * 0.012, H, t["accent"])
+    x0 = W * 0.047 + m
+    d.text(x0, H * 0.16, data.get("name") or data.get("recipient") or "", size=15, font=t["font_heading"], style="Bold",
+           color=t["primary"], w=W - x0 - m, h=22, fit="shrinkText")
+    if data.get("role"):
+        d.text(x0, H * 0.33, data["role"], size=8.5, font=t["font_body"], color=t["muted"], w=W - x0 - m, h=13, fit="shrinkText")
+    if data.get("organization"):
+        d.text(x0, H * 0.43, data["organization"].upper(), size=7, font=t["font_body"], style="Bold", color=t["accent"],
+               w=W - x0 - m, h=11, tracking=80, fit="shrinkText")
+    lines = [x for x in (data.get("phone"), data.get("email"), data.get("web"), data.get("address")) if x]
+    if lines:
+        d.text(x0, H * 0.6, "\n".join(lines), size=7.5, font=t["font_body"], color=t["text"], w=W - x0 - m, h=H * 0.34,
+               leading=10.5, fit="shrinkText")
+
+
+def _invitation(d: Doc, data, t, img):
+    """Meghívó: középre zárt, keretes; „Dear {name}” sor, szöveg, időpont/hely, visszajelzés."""
+    W, H = d.w, d.h
+    m = W * 0.09
+    d.rect(0, 0, W, H, t["bg"])
+    d.rect(m * 0.4, m * 0.4, W - m * 0.8, H - m * 0.8, t["accent"], opacity=10)
+    d.rect(m * 0.4 + 3, m * 0.4 + 3, W - m * 0.8 - 6, H - m * 0.8 - 6, t["bg"])
+    c = dict(w=W - 2 * m, align="center")
+    y = H * 0.16
+    if img:
+        ih = H * 0.24
+        d.image(img.path, m, y, W - 2 * m, ih)
+        y += ih + H * 0.04
+    d.text(m, y, data.get("title") or "You're invited", size=W * 0.075, font=t["font_heading"], style="Bold",
+           color=t["primary"], h=H * 0.12, fit="shrinkText", leading=W * 0.085, **c)
+    y += H * 0.13
+    d.rect(W / 2 - 26, y, 52, 2.5, t["accent"])
+    y += H * 0.035
+    if data.get("recipient"):
+        d.text(m, y, data["recipient"], size=W * 0.04, font=t["font_heading"], style="Italic", color=t["text"], h=H * 0.06,
+               fit="shrinkText", **c)
+        y += H * 0.065
+    if data.get("text"):
+        d.text(m, y, data["text"], size=W * 0.028, font=t["font_body"], color=t["text"], h=H * 0.18, fit="shrinkText",
+               leading=W * 0.042, **c)
+        y += H * 0.19
+    meta = "\n".join(x for x in (data.get("date"), data.get("place")) if x)
+    if meta:
+        d.text(m, y, meta, size=W * 0.032, font=t["font_body"], style="Bold", color=t["primary"], h=H * 0.1, fit="shrinkText",
+               leading=W * 0.046, **c)
+    if data.get("rsvp"):
+        d.text(m, H * 0.86, data["rsvp"], size=W * 0.024, font=t["font_body"], color=t["muted"], h=H * 0.05, fit="shrinkText", **c)
 
 
 def _booklet(d: Doc, data, t, imgs: dict):
@@ -300,21 +405,33 @@ async def _trim_empty_pages(d: Doc) -> None:
 
 def _frame_aspect(template: str, w: float, h: float) -> float:
     return {"poster": w / (h * 0.56), "flyer": (w * 0.84) / (h * 0.27), "report_cover": w / h,
-            "social": w / h, "certificate": 1.0}.get(template, w / h)
+            "social": w / h, "certificate": 1.0, "invitation": (w * 0.82) / (h * 0.24)}.get(template, w / h)
+
+
+FNS = {"poster": _poster, "flyer": _flyer, "report_cover": _report_cover, "certificate": _certificate, "social": _social,
+       "card": _card, "invitation": _invitation}
+
+
+def size_for(template: str, size: Optional[str]) -> tuple[float, float]:
+    """A sablon lapmérete (pt): közösségi méretek, fekvő oklevél, névjegy, nyomtatott lapméretek."""
+    if template == "social":
+        return {"landscape": (1200, 630), "square": (1080, 1080), "story": (1080, 1920)}.get(size or "landscape", (1200, 630))
+    if template == "certificate":
+        return SIZES.get(size or "A4", SIZES["A4"])[::-1]          # fekvő
+    if template == "card":
+        return CARD
+    if template == "invitation":
+        return SIZES.get(size or "A5", SIZES["A5"])
+    return SIZES.get(size or "A4", SIZES["A4"])
 
 
 async def render(template: str, data: dict[str, Any], *, size: Optional[str] = None, theme: Optional[dict] = None,
-                 brand: Optional[str] = None, export: Optional[list[str]] = None) -> dict[str, Any]:
+                 brand: Optional[Any] = None, export: Optional[list[str]] = None) -> dict[str, Any]:
     if template not in TEMPLATES:
         raise ValueError(f"Unknown template: {template} (choose from {', '.join(sorted(TEMPLATES))})")
     t = _theme(data, theme, brand)
-    if template == "social":
-        w, h = {"landscape": (1200, 630), "square": (1080, 1080), "story": (1080, 1920)}.get(size or "landscape", (1200, 630))
-    elif template == "certificate":
-        w, h = SIZES.get(size or "A4", SIZES["A4"])[::-1]          # fekvő
-    else:
-        w, h = SIZES.get(size or "A4", SIZES["A4"])
-    d = Doc(w, h, data.get("title") or template)
+    w, h = size_for(template, size)
+    d = Doc(w, h, data.get("title") or data.get("name") or template)
 
     reqs: list[tuple[str, Any, float]] = []
     if template == "booklet":
@@ -328,10 +445,10 @@ async def render(template: str, data: dict[str, Any], *, size: Optional[str] = N
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
     imgs = {r[0]: x for r, x in zip(reqs, resolved)}
     try:
-        fn = {"poster": _poster, "flyer": _flyer, "report_cover": _report_cover, "certificate": _certificate,
-              "social": _social}.get(template)
+        fn = FNS.get(template)
         if fn:
             fn(d, data, t, imgs.get("main"))
+            _logo(d, brand, template)
         else:
             _booklet(d, data, t, imgs)
             await _trim_empty_pages(d)

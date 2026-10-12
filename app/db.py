@@ -100,6 +100,19 @@ CREATE TABLE IF NOT EXISTS stripe_events (
 );
 -- OCR-eredmény oldalanként (a kép bájtjainak sha256-ja + prompt-verzió + modell): amit egyszer
 -- kiolvastunk, nem fizetjük meg újra (ugyanaz a szkennelt oldal másodszor = 0 LLM-hívás)
+-- a felhasználó arculatai (mintákból tanulva vagy kézzel): színek, betűk, logó, elrendezési szabályok (spec, JSON);
+-- az alapértelmezett (is_default) minden dizájnra rákerül, ha auto_apply igaz — a felületen kikapcsolható
+CREATE TABLE IF NOT EXISTS brand_kits (
+    id              bigserial PRIMARY KEY,
+    owner_id        text NOT NULL,
+    name            text NOT NULL,
+    spec            jsonb NOT NULL,
+    is_default      boolean NOT NULL DEFAULT false,
+    auto_apply      boolean NOT NULL DEFAULT true,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS brand_kits_owner_idx ON brand_kits (owner_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS ocr_cache (
     sha256          text NOT NULL,
     prompt_ver      text NOT NULL,
@@ -405,9 +418,69 @@ async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str) -> 
 
 
 async def reassign_owner(src_uid: str, dst_uid: str) -> None:
-    """Vendég → fiók: a verziótörténet sorai az új tulajdonoshoz."""
+    """Vendég → fiók: a verziótörténet sorai és az arculatok az új tulajdonoshoz."""
     if enabled():
         await _rows("UPDATE file_versions SET owner_id = %s WHERE owner_id = %s", (dst_uid, src_uid))
+        await _rows("UPDATE brand_kits SET owner_id = %s, is_default = is_default AND NOT EXISTS "
+                    "(SELECT 1 FROM brand_kits b WHERE b.owner_id = %s AND b.is_default) WHERE owner_id = %s",
+                    (dst_uid, dst_uid, src_uid))
+
+
+# ---------- arculatok (brand kits) ----------
+
+_BRAND_COLS = "id, name, spec, is_default, auto_apply, created_at, updated_at"
+
+
+async def brand_list(uid: str) -> list[dict[str, Any]]:
+    return await _rows(f"SELECT {_BRAND_COLS} FROM brand_kits WHERE owner_id = %s ORDER BY is_default DESC, updated_at DESC", (uid,))
+
+
+async def brand_get(uid: str, brand_id: int) -> Optional[dict[str, Any]]:
+    rows = await _rows(f"SELECT {_BRAND_COLS} FROM brand_kits WHERE owner_id = %s AND id = %s", (uid, brand_id))
+    return rows[0] if rows else None
+
+
+async def brand_by_name(uid: str, name: str) -> Optional[dict[str, Any]]:
+    rows = await _rows(f"SELECT {_BRAND_COLS} FROM brand_kits WHERE owner_id = %s AND lower(name) = lower(%s) "
+                       "ORDER BY updated_at DESC LIMIT 1", (uid, name))
+    return rows[0] if rows else None
+
+
+async def brand_default(uid: str) -> Optional[dict[str, Any]]:
+    rows = await _rows(f"SELECT {_BRAND_COLS} FROM brand_kits WHERE owner_id = %s AND is_default LIMIT 1", (uid,))
+    return rows[0] if rows else None
+
+
+async def brand_create(uid: str, name: str, spec: dict[str, Any], make_default: Optional[bool] = None) -> dict[str, Any]:
+    """Új arculat; az első mindig alapértelmezett (make_default=None), különben csak kérésre."""
+    has = await _rows("SELECT 1 FROM brand_kits WHERE owner_id = %s AND is_default LIMIT 1", (uid,))
+    default = (not has) if make_default is None else make_default
+    if default:
+        await _rows("UPDATE brand_kits SET is_default = false WHERE owner_id = %s", (uid,))
+    rows = await _rows(f"INSERT INTO brand_kits (owner_id, name, spec, is_default) VALUES (%s, %s, %s, %s) RETURNING {_BRAND_COLS}",
+                       (uid, name[:80], json.dumps(spec, ensure_ascii=False), default))
+    return rows[0]
+
+
+async def brand_update(uid: str, brand_id: int, *, name: Optional[str] = None, spec: Optional[dict[str, Any]] = None,
+                       auto_apply: Optional[bool] = None, is_default: Optional[bool] = None) -> Optional[dict[str, Any]]:
+    if is_default:
+        await _rows("UPDATE brand_kits SET is_default = false WHERE owner_id = %s AND id <> %s", (uid, brand_id))
+    rows = await _rows(
+        f"""UPDATE brand_kits SET name = COALESCE(%s, name), spec = COALESCE(%s::jsonb, spec),
+               auto_apply = COALESCE(%s, auto_apply), is_default = COALESCE(%s, is_default), updated_at = now()
+            WHERE owner_id = %s AND id = %s RETURNING {_BRAND_COLS}""",
+        (name[:80] if name else None, json.dumps(spec, ensure_ascii=False) if spec is not None else None, auto_apply, is_default,
+         uid, brand_id))
+    return rows[0] if rows else None
+
+
+async def brand_delete(uid: str, brand_id: int) -> bool:
+    rows = await _rows("DELETE FROM brand_kits WHERE owner_id = %s AND id = %s RETURNING is_default", (uid, brand_id))
+    if rows and rows[0]["is_default"]:            # a következő legyen az alapértelmezett (ha van)
+        await _rows("UPDATE brand_kits SET is_default = true WHERE id = (SELECT id FROM brand_kits WHERE owner_id = %s "
+                    "ORDER BY updated_at DESC LIMIT 1)", (uid,))
+    return bool(rows)
 
 
 # ---------- számlázás: havi keretek, ingyenes feltöltés, Stripe ----------

@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Serifet tesz a Word-dokumentumokba (325 vs 390 oldal ugyanarra; velük 342 vs 344)
     fonts-crosextra-caladea \
     fonts-crosextra-carlito \
+    # az automata tervező címbetűi (design_auto.FONT_PAIRS: condensed / heavy / playful) — OFL
+    fonts-bebas-neue \
+    fonts-lato \
+    fonts-lobster \
     # WeasyPrint runtime deps:
     libpango-1.0-0 \
     libpangoft2-1.0-0 \

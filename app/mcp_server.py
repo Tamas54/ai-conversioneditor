@@ -59,7 +59,8 @@ mcp = FastMCP(
         "`edit_url`: give it to the person — it opens that file in the matching built-in editor (Word-like, "
         "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
         "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
-        "a manuscript → a Word-typeset book (design template=book). The person's earlier files: files(action=\"list\", "
+        "a manuscript → a Word-typeset book (design template=book); posters/posts: design(template=\"auto\") → 3 options "
+        "to choose from → design(from_design=…, sizes=[…]) for every platform size. The person's earlier files: files(action=\"list\", "
         "query=\"words from the name\") — search by name, don't page through everything. Start empty with "
         "files(action=\"new\", kind=document|presentation|design|photo|book|pdf) and hand the person its edit_url. PICTURES: this server does NOT "
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
@@ -764,61 +765,113 @@ async def history(
 @mcp.tool()
 @linked
 async def design(
-    template: str,
+    template: str = "auto",
     data: Optional[dict] = None,
     size: Optional[str] = None,
     theme: Optional[dict] = None,
     brand: Optional[str] = None,
     export: Optional[list[str]] = None,
+    variants: int = 3,
+    sizes: Optional[list[str]] = None,
+    from_design: Optional[str] = None,
+    data_file_id: Optional[str] = None,
+    design_file_id: Optional[str] = None,
+    learn_brand: Optional[list[str]] = None,
     rebuild_from: Optional[str] = None,
 ) -> dict:
     """
-    Designed print/social pieces from templates (VectorCraft) → PDF + PNG
-    (export: pdf | png | svg | jpg | vectorcraft — the editable design file,
-    text stays text; its edit_url opens it in the design editor). One call.
-    template / data:
+    Designed graphics (VectorCraft — text stays editable; every file has edit_url to the design editor). One tool:
+
+    1) template="auto" — an art director: data {title, goal? ("poster for a summer soul concert"), kicker?, subtitle?,
+       body?, date?, place?, cta?, handle?, image?} → `variants` (default 3) CLEARLY different designs (layout,
+       type, colours, whitespace) in `size` (default the first of `sizes`, else ig_post). Show the person the
+       previews (each variant: name, why, preview PNG, file_id) and let them choose. Then:
+    2) from_design=<the chosen variant's file_id>, sizes=[…] → the campaign pack: the same design re-laid out for
+       every size (not stretched: the photo re-cropped around the person/subject, type sized to the format).
+       Sizes: ig_post 1080×1080 · ig_portrait 1080×1350 · ig_story 1080×1920 · youtube 1280×720 · link 1200×630
+       (Facebook/LinkedIn) · x_post 1600×900 · A4 · A3 · A5 · letter (print: PDF too). data may update the texts.
+       Shortcut: template="auto", variants=1, sizes=[…] makes one design in all sizes at once.
+    3) Templates (one fixed layout, fast): template / data:
       poster        {title, subtitle?, body?, image?, date?, place?, footer?}   size A4|A3|A5
       flyer         {title, kicker?, subtitle?, image?, body (2 columns), highlights[≤3]?, cta?, contact?}
       report_cover  {title, subtitle?, organization?, author?, date?, image?}
       certificate   {recipient, title?="Certificate", lead?, text, place?, date?, signatures[{name, role}]}  (landscape)
+      card          {name, role?, organization?, phone?, email?, web?, address?}   (business card 85×55 mm)
+      invitation    {title?, recipient? ("Dear Anna"), text, date?, place?, rsvp?, image?}   size A5|A6|A4
       social        {title, subtitle?, handle?, image?}   size landscape (1200×630) | square | story
-      booklet       {title, subtitle?, organization?, author?, date?, cover_image?,
-                     sections[{heading, text, image?}]}   long text flows onto extra pages
-      book          {file_id (manuscript .docx, Heading 1 chapters), title?, author?, cover_image?,
-                     style_file_id?}  size A5|A4 → a WORD-typeset book (title page, book type) + its PDF;
-                     the person checks it in the Word editor (edit_url) before publishing
+      booklet       {title, subtitle?, organization?, author?, date?, cover_image?, sections[{heading, text, image?}]}
+      book          {file_id (manuscript .docx, Heading 1 chapters), title?, author?, cover_image?, style_file_id?}
+                    size A5|A4 → a WORD-typeset book + its PDF; the person checks it in the Word editor
       infographic   {data_file_id (CSV/XLSX) | table_image (a photo of a table), title?, brief?, source?}
-                     size portrait (1080×1350) | landscape (1600×900) | both → 2–4 highlighted numbers, 1–2 charts and a
-                     short explanation; every number is computed from the cells (check.verified names the cells)
+                    size portrait (1080×1350) | landscape (1600×900) | both → 2–4 highlighted numbers, 1–2 charts and a
+                    short explanation; every number is computed from the cells (check.verified names the cells)
       album         {photos [image, …], manuscript_file_id? (.docx with Heading 1 chapters | .md | .txt), title?,
-                     subtitle?, author?, captions? [one per photo], auto_captions? (AI writes them), cover? image}
-                     size A4 | A4-landscape | square | A5 → a photo album in the LAYOUT editor: facing pages, photos in
-                     their own proportions, captions, contents page, cover; + print PDF (3 mm bleed, crop marks)
-    rebuild_from = "<file_id>" (template ignored): a photo, screenshot or PDF of a poster / flyer / graphic → the SAME
-      design rebuilt as an EDITABLE one: every text a real text box, solid blocks as shapes, photos and logos as movable
-      pictures. data {page? (PDF), ai_clean? (AI also wipes the old text off the background, 1 credit), hint? (language)}.
-      Returns comparison_url (before / after side by side) — look at it.
+                    subtitle?, author?, captions? [one per photo], auto_captions? (AI writes them), cover? image}
+                    size A4 | A4-landscape | square | A5 → a photo album in the LAYOUT editor: facing pages, photos in
+                    their own proportions, captions, contents page, cover; + print PDF (3 mm bleed, crop marks)
+    4) MANY COPIES from a spreadsheet: data_file_id = CSV/XLSX (first row = column names, one row per copy) with
+       template (certificate, card, invitation, poster, flyer, social) and data using {column} placeholders
+       (e.g. {"recipient": "{name}", "text": "for completing {course}"}; empty main fields fill themselves from a
+       matching column such as "name") — OR design_file_id = the person's own .vectorcraft design with {placeholders}
+       in its texts. → ONE printable PDF (a page per row) + a ZIP of single PDFs (+ the editable all-copies design).
+    5) BRAND: brand = the person's brand by name or id, "mine", or "none". Left out: the person's default brand is
+       applied automatically when they have one (colours, fonts, logo). learn_brand = [file_ids of examples: posts,
+       slides (pptx), PDFs, docx, the logo] → learns and saves their brand (palette, fonts, logo, layout habits) and
+       makes it their default; returns it.
+    6) REBUILD: rebuild_from = "<file_id>" (template ignored): a photo, screenshot or PDF of a poster / flyer / graphic →
+       the SAME design rebuilt as an EDITABLE one: every text a real text box, solid blocks as shapes, photos and logos
+       as movable pictures. data {page? (PDF), ai_clean? (AI also wipes the old text off the background, 1 credit),
+       hint? (language)}. Returns comparison_url (before / after side by side) — look at it.
     Results carry check {status ok | needs_check | failed, findings, verified} — read it before you say it's done.
-    image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"} | {"stock": "<words>"}
-    theme {primary, accent, bg, text, muted} or brand=<name>. Titles shrink to fit.
+    image = "<file_id>" | {"file_id"} | {"url"} (e.g. a picture you made with your own image tool) | {"stock": "<words>"}.
+    theme {primary, accent, bg, text, muted} overrides colours on templates. export (templates): pdf|png|svg|jpg|vectorcraft.
     """
-    data = data or {}
+    data = dict(data or {})
+    if learn_brand:
+        from app import db, tenancy
+        from app.brands import learn, user as user_brands
+        if not db.enabled():
+            raise ValueError("Brands are kept in the database, which isn't connected right now.")
+        spec = await learn.learn(list(learn_brand), data.get("name") or data.get("brand_name"))
+        row = await db.brand_create(tenancy.current_user_id(), spec["name"], spec, make_default=True)
+        return {"brand": user_brands.public(user_brands._from_row(row)),
+                "note": "Saved and set as the default: it is applied to designs automatically (brand='none' to skip)."}
     if rebuild_from or template == "rebuild":
         from app.tools import rebuild
         return await rebuild.rebuild(rebuild_from or data.get("file_id"), page=int(data.get("page") or 1),
                                      ai_clean=bool(data.get("ai_clean")), hint=data.get("hint"))
     if template == "infographic":
+        # a táblázat jöhet a data-ban VAGY a felső szintű data_file_id-ben (az a tömeggyártásé is — itt ugyanazt jelenti)
+        from app.brands import user as user_brands
         from app.tools import infographic
-        return await infographic.make(data_file_id=data.get("data_file_id") or data.get("file_id"),
+        return await infographic.make(data_file_id=data.get("data_file_id") or data.get("file_id") or data_file_id,
                                       table_image_file_id=data.get("table_image"), title=data.get("title"),
                                       brief=data.get("brief"), source=data.get("source"),
-                                      orientation=size or data.get("orientation") or "portrait", theme=theme, brand=brand)
+                                      orientation=size or data.get("orientation") or "portrait", theme=theme,
+                                      brand=await user_brands.resolve(brand))
     if template == "album":
+        from app.brands import user as user_brands
         from app.tools import album
         return await album.make(data.get("photos") or [], manuscript_file_id=data.get("manuscript_file_id"),
                                 title=data.get("title"), subtitle=data.get("subtitle"), author=data.get("author"), size=size,
                                 captions=data.get("captions"), auto_captions=bool(data.get("auto_captions")),
-                                cover=data.get("cover"), theme=theme, brand=brand)
+                                cover=data.get("cover"), theme=theme, brand=await user_brands.resolve(brand))
+    if from_design:
+        from app.routes.studio import package
+        return await package({"from_file_id": from_design, "sizes": sizes, "content": data})
+    if data_file_id:
+        from app.brands import user as user_brands
+        from app.tools import design_mass
+        return await design_mass.run(data_file_id=data_file_id, template=None if design_file_id else (template if template != "auto" else "certificate"),
+                                     data=data, design_file_id=design_file_id, size=size, theme=theme,
+                                     brand=await user_brands.resolve(brand))
+    if template == "auto":
+        from app.routes.studio import auto_variants, package
+        body = {**data, "image": data.get("image"), "brand": brand, "size": size, "sizes": sizes, "variants": variants}
+        res = await auto_variants(body)
+        if variants == 1 and sizes:
+            return await package({"from_file_id": res["variants"][0]["file_id"], "sizes": sizes})
+        return res
     if template == "book":
         from app.routes.make import make_book
         cover = data.get("cover_image")
@@ -827,8 +880,9 @@ async def design(
                                 "cover": {"file_id": cover} if isinstance(cover, str) else
                                          ({"stock": cover["stock"]} if isinstance(cover, dict) and cover.get("stock") else
                                           {"ai": cover["generate"]} if isinstance(cover, dict) and cover.get("generate") else None)})
+    from app.brands import user as user_brands
     from app.tools import design as dz
-    return await dz.render(template, data, size=size, theme=theme, brand=brand, export=export)
+    return await dz.render(template, data, size=size, theme=theme, brand=await user_brands.resolve(brand), export=export)
 
 
 @mcp.tool()

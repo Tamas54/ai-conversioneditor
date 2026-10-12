@@ -283,6 +283,8 @@ async def make_social(body: dict[str, Any]) -> dict[str, Any]:
     sizes = [s for s in body.get("sizes") or ["square"] if s in SOCIAL_SIZES] or ["square"]
     files, group = [], _new_group()
     try:
+        from app.brands import user as user_brands
+        brand = await user_brands.resolve(body.get("brand"))
         image = await _materialize(_image_spec(body.get("image")))
         if image and body.get("remove_background") and body.get("background"):
             # alany kivágása + új háttér, egyszer — minden méret ezt használja
@@ -294,7 +296,8 @@ async def make_social(body: dict[str, Any]) -> dict[str, Any]:
         for size in sizes:
             res = await design.render("social", {"title": headline, "subtitle": body.get("subtitle"),
                                                  "handle": body.get("handle"), "image": image},
-                                      size=size, theme={"accent": body["accent"]} if body.get("accent") else None,
+                                      size=size, brand=brand,
+                                      theme={"accent": body["accent"]} if body.get("accent") and not brand else None,
                                       export=["png", "pdf", *(["vectorcraft"] if body.get("editable") else [])])
             _label_outputs(res, f"{headline[:60]} ({size})", group=group, variant=size)
             files.append({"size": size, **res})
@@ -329,8 +332,10 @@ async def make_design(body: dict[str, Any]) -> dict[str, Any]:
         if isinstance(data.get(k), dict):
             data[k] = _image_spec(data[k])
     try:
-        out = await design.render(body.get("template") or "poster", data, size=body.get("size"),
-                                  theme={"accent": body["accent"]} if body.get("accent") else None,
+        from app.brands import user as user_brands
+        brand = await user_brands.resolve(body.get("brand"))     # a saját arculat magától (kikapcsolható: "none")
+        out = await design.render(body.get("template") or "poster", data, size=body.get("size"), brand=brand,
+                                  theme={"accent": body["accent"]} if body.get("accent") and not brand else None,
                                   export=["pdf", "png", *(["vectorcraft"] if body.get("editable") else [])])
     except Exception as e:
         raise _fail(e)

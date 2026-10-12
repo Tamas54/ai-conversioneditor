@@ -28,7 +28,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.mcp_server import mcp as _mcp_instance, mount_mcp
 from app.auth import auth_middleware, log_auth_state, router as auth_router
-from app.routes import files, upload, health, dashboard, preview, editor, reviews, make, product, pictures
+from app.routes import files, upload, health, dashboard, preview, editor, reviews, make, product, pictures, studio
 from app import billing, jobs
 from app.storage.cleanup import cleanup_loop
 from app.workers.pool import WorkerPool
@@ -104,6 +104,7 @@ app.include_router(make.router)
 app.include_router(pictures.router)
 from app.routes import graphics  # noqa: E402  (újraépítés · infografika · album)
 app.include_router(graphics.router)
+app.include_router(studio.router)
 app.include_router(jobs.router)
 app.include_router(billing.router)
 app.include_router(product.router)
