@@ -18,6 +18,9 @@ from app import tenancy
 
 SEP = " – "
 _VER = re.compile(r"\s+v(\d+)$", re.I)
+# a régi (zárójeles) művelet-utótagok is a gyökérhez tartoznak — különben láncban halmozódnak
+# („x (fillable) (3 filled) (3 filled).pdf", 10-12)
+_LEGACY = re.compile(r"\s*\((?:fillable|filled|\d+ filled|searchable|original|restored(?:, [a-z ]+)?|edited[^)]*|enhanced|layers|book)\)$", re.I)
 
 
 def root_name(source_label: Optional[str], fallback: str = "file") -> str:
@@ -25,6 +28,8 @@ def root_name(source_label: Optional[str], fallback: str = "file") -> str:
     stem = Path(source_label or "").stem if source_label else ""
     stem = stem.split(SEP, 1)[0].strip()
     stem = _VER.sub("", stem).strip()
+    while _LEGACY.search(stem):
+        stem = _LEGACY.sub("", stem).strip()
     return stem or fallback
 
 

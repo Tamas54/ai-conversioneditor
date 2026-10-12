@@ -705,15 +705,15 @@ async def make_fill_form(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(400, "Choose the form (a PDF with fields).")
     flatten = bool(body.get("flatten"))
     out_id = new_file_id("pdf")
-    stem = Path(display_label(fid)).stem
+    from app.storage.naming import result_stem
     try:
         if body.get("data_file_id"):
             rows = forms.read_rows(crafts.existing(body["data_file_id"]))
             info = await forms.fill_batch(fid, rows, flatten, output_path(out_id))
-            label = f"{stem} ({info['copies']} filled).pdf"
+            label = result_stem(fid, f"{info['copies']} filled copies") + ".pdf"
         else:
             info = await forms.fill(fid, dict(body.get("values") or {}), flatten, output_path(out_id))
-            label = f"{stem} (filled).pdf"
+            label = result_stem(fid, "filled") + ".pdf"
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
     except Exception as e:
