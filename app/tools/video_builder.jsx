@@ -59,7 +59,16 @@ function background(comp, sc, dur) {
     var s = Math.max(D.W / f.width, D.H / f.height) * 100, z = s * 1.12;
     var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
     var m = sc.motion || "in", dx = D.W * 0.035;
-    if (m === "out") { S.setValueAtTime(0, [z, z]); S.setValueAtTime(dur, [s, s]); }
+    if (m === "kb-in" || m === "kb-out") {
+      // Ken Burns: közelítés ÉS úsztatás egyszerre, a kép érdekes pontja (sc.focus, 0–1) a keret közepe felé;
+      // a pozíció úgy korlátozva, hogy a kép végig kitöltse a keretet (lineáris skála + lineáris út → közben is)
+      var Z = s * 1.28, fo = sc.focus || [0.5, 0.45], hw = f.width * Z / 200, hh = f.height * Z / 200;
+      var px = D.W / 2 - (fo[0] * f.width - f.width / 2) * Z / 100, py = D.H / 2 - (fo[1] * f.height - f.height / 2) * Z / 100;
+      px = Math.min(hw, Math.max(D.W - hw, px)); py = Math.min(hh, Math.max(D.H - hh, py));
+      var a = [[s, s], [D.W / 2, D.H / 2]], b = [[Z, Z], [px, py]];
+      if (m === "kb-out") { var tmp = a; a = b; b = tmp; }
+      S.setValueAtTime(0, a[0]); S.setValueAtTime(dur, b[0]); P.setValueAtTime(0, a[1]); P.setValueAtTime(dur, b[1]);
+    } else if (m === "out") { S.setValueAtTime(0, [z, z]); S.setValueAtTime(dur, [s, s]); }
     else if (m === "left" || m === "right") {
       var k = s * 1.09, sign = m === "left" ? 1 : -1;
       S.setValue([k, k]);

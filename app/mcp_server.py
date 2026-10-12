@@ -1405,6 +1405,7 @@ async def video(
     file_id: Optional[str] = None,
     job_id: Optional[str] = None,
     draft: bool = False,
+    ken_burns: str = "some",
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
 
@@ -1419,6 +1420,8 @@ async def video(
       and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
       music_file_id / voice_file_id: audio the person gave (upload it first). There is no text-to-speech here —
       with a voice-over the video follows its length. accent: a hex colour for bars and numbers.
+      ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
+      | all | off (only a gentle drift).
     action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
       draft=true renders half size, fast.
     action="info": a project's compositions, length, media files and last render (file_id).
@@ -1443,7 +1446,8 @@ async def video(
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
-            "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language}
+            "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
+            "ken_burns": ken_burns}
     return await make_video(body)
 
 

@@ -379,8 +379,50 @@ def _rgb(hex_color: Optional[str]) -> list[float]:
     return [round(int(h[i:i + 2], 16) / 255, 4) for i in (0, 2, 4)]
 
 
+def _focus(path: Path) -> list[float]:
+    """A kép „érdekes pontja" (0–1 koordináták) a Ken Burns-mozgás céljának: spectral residual szaliencia
+    (Hou–Zhang; csak numpy + OpenCV-alap — az OpenCV 5-ből kikerült az arcfelismerő), enyhe középre húzással."""
+    import cv2
+    import numpy as np
+    from PIL import Image
+    try:
+        im = Image.open(path).convert("L")
+        im.thumbnail((128, 128))
+        g = np.asarray(im, dtype=np.float32)
+        F = np.fft.fft2(g)
+        la = np.log(np.abs(F) + 1e-6)
+        sal = np.abs(np.fft.ifft2(np.exp((la - cv2.blur(la, (3, 3))) + 1j * np.angle(F)))) ** 2
+        sal = cv2.GaussianBlur(sal.astype(np.float32), (0, 0), 3)
+        h, w = sal.shape
+        yy, xx = np.mgrid[0:h, 0:w]
+        sal *= np.exp(-(((xx - w / 2) / w) ** 2 + ((yy - h / 2) / h) ** 2))      # enyhe középre húzás
+        top = (sal >= np.quantile(sal, 0.95)).astype(np.uint8)
+        n, lab, stats, cent = cv2.connectedComponentsWithStats(top)
+        if n > 1:      # a legerősebb összefüggő folt közepe (a szétszórt csúcsok átlaga középre húzna)
+            k = 1 + int(np.argmax([sal[lab == j].sum() for j in range(1, n)]))
+            cx, cy = cent[k]
+        else:
+            cx, cy = w / 2, h / 2
+        return [float(round(min(0.8, max(0.2, cx / w)), 3)), float(round(min(0.8, max(0.2, cy / h)), 3))]
+    except Exception:
+        return [0.5, 0.45]
+
+
+def _motions(n: int, ken_burns: str) -> list[str]:
+    """Jelenetenkénti képmozgás. ken_burns: some (alap: kb. minden második jelenet határozott Ken Burns —
+    közelítés + úsztatás a kép érdekes pontja felé, minden második ilyen fordítva, kifelé —, a többi finom
+    mozgás) | all | off (csak a finom mozgás)."""
+    gentle = ["in", "left", "out", "right"]
+    out = []
+    for i in range(n):
+        kb = ken_burns == "all" or (ken_burns == "some" and i % 2 == 0)
+        out.append(("kb-out" if (i // 2 if ken_burns == "some" else i) % 2 else "kb-in") if kb else gentle[i % 4])
+    return out
+
+
 def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: list[Optional[str]],
-            accent: Optional[str], credits: str, voice: Optional[str], voice_s: Optional[float], music: Optional[str]) -> dict[str, Any]:
+            accent: Optional[str], credits: str, voice: Optional[str], voice_s: Optional[float], music: Optional[str],
+            focus: Optional[dict[str, list[float]]] = None, ken_burns: str = "some") -> dict[str, Any]:
     """A forgatókönyvből a builder adatcsomagja (D): méretek, jelenet-hosszak, feliratok időzítve."""
     W, H = FORMATS[fmt]
     L = _layout(W, H)
@@ -406,6 +448,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     max_chunk = int(cpl * 2 * 0.9)
     captions, t = [], Tt - X
     d_scenes = []
+    motions = _motions(len(scenes), ken_burns)
     for i, (s, d) in enumerate(zip(scenes, durs)):
         cap = s.get("caption") or ""
         parts = _chunks(cap, max_chunk) if cap else []
@@ -421,7 +464,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         if stat:      # a nagy szám EGY sorban férjen el (10-12: „7,800 MW” két sorba tört és a címkére csúszott)
             stat = {**stat, "size": round(min(L["statSize"], W * 0.88 / (0.62 * max(len(stat["value"]), 1))))}
         d_scenes.append({"headline": head, "stat": stat, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
-                         "motion": ["in", "left", "out", "right"][i % 4],
+                         "motion": motions[i], "focus": (focus or {}).get(images[i + 1] if i + 1 < len(images) else "") or [0.5, 0.45],
                          "size": _size_for(head, m * (0.066 if fmt != "landscape" else 0.058), 34, m * 0.046)})
         t += d - X
     title = story.get("title") or ""
@@ -690,7 +733,10 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
         # a képernyőn rövid: név + licenc, linkek nélkül („Photo: X (Wikimedia Commons), CC BY 4.0 — https://…”)
         short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", c)).strip() for c in credit_list]
         on_screen = ("Pictures: " + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
-        D = compose(story, fmt=fmt, total=total, images=names, accent=body.get("accent"), credits=on_screen,
+        kb = str(body.get("ken_burns") or "some").lower()
+        kb = kb if kb in ("some", "all", "off") else "some"
+        focus = {nm: await asyncio.to_thread(_focus, work / nm) for nm in names if nm} if kb != "off" else {}
+        D = compose(story, fmt=fmt, total=total, images=names, accent=body.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
                     voice=voice, voice_s=voice_s, music=music)
         # előre megrajzolt rétegek (képkockánként effekt helyett): sötét átmenet a cím/jelenet alá, elmosott zárókép
         W, H = FORMATS[fmt]
