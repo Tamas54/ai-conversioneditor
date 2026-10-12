@@ -1525,8 +1525,10 @@ async def video(
       parks come from OpenStreetMap (a city or district), country borders from Natural Earth (a country or region,
       the named country highlighted); both credited on screen. Then place anything ON it by name or coordinates
       instead of x, y: {"shape": "pin", "place": "Dóm tér, Szeged", "text": "Dóm tér"}; from / to / points take
-      {"place": …} or {"lat": …, "lon": …} too (a route between places is drawn straight, point to point). The map
-      widens to show every placed element. Up to 80 elements, each its own layer (editable by hand); a text
+      {"place": …} or {"lat": …, "lon": …} too (a route between places is drawn straight, point to point). Pins and a
+      route may also sit inside the map: {"shape": "map", "place": …, "pins": [{"place", "label"}], "route": [places]}.
+      The map widens to show every placed element. Anything left out of a graphic (unknown shape, no position, a
+      number not in the source) is listed in the check's findings. Up to 80 elements, each its own layer (editable by hand); a text
       with a number that isn't in the source is left out (the check says which).
       script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
       comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):

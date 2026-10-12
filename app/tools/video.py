@@ -355,10 +355,46 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         if isinstance(q, dict) and num(q.get("lat")) is not None and num(q.get("lon")) is not None:
             return {"lat": max(-85.0, min(85.0, float(q["lat"]))), "lon": max(-180.0, min(180.0, float(q["lon"])))}
         return None
-    out, dropped = [], []
+    out, dropped, warn, expanded = [], [], [], 0
+    alias = {"marker": "pin", "point": "pin", "place": "pin", "label": "text", "title": "text", "route": "path",
+             "polyline": "path", "dot": "circle", "ellipse": "circle", "square": "rect", "rectangle": "rect", "box": "rect",
+             "picture": "image", "photo": "image", "animation": "lottie", "basemap": "map"}
+    flat: list[Any] = []
     for e in (c.get("elements") or [])[:80]:
+        if isinstance(e, dict) and isinstance(e.get("shape"), str):
+            e = {**e, "shape": alias.get(e["shape"].lower(), e["shape"].lower())}
+        flat.append(e)
+        if isinstance(e, dict) and e.get("shape") == "map":       # a térképbe írt tűk és útvonalak külön elemként
+            for key in ("pins", "markers", "places", "points_of_interest"):
+                for q in e.get(key) or []:
+                    q = {"place": q} if isinstance(q, str) else q
+                    if isinstance(q, dict):
+                        flat.append({"shape": "pin", "anim": "pop", **q, "text": q.get("text") or q.get("label") or q.get("name") or ""})
+                        expanded += 1
+            for key in ("route", "routes", "paths", "lines"):
+                rs = e.get(key) or []
+                rs = [rs] if rs and not isinstance(rs[0], list) and not (isinstance(rs[0], dict) and "points" in rs[0]) else rs
+                for r_ in rs:
+                    pts_ = r_.get("points") if isinstance(r_, dict) else r_
+                    if isinstance(pts_, list) and len(pts_) >= 2:
+                        pts_ = [{"place": q} if isinstance(q, str) else q for q in pts_]
+                        flat.append({"shape": "path", "stroke": "accent", "width": 8, "anim": "draw",
+                                     **({k: v for k, v in r_.items() if k != "points"} if isinstance(r_, dict) else {}), "points": pts_})
+                        expanded += 1
+    for n_, e in enumerate(flat[:120], 1):
         if not isinstance(e, dict) or e.get("shape") not in _GFX_SHAPES:
+            what = e.get("shape") if isinstance(e, dict) else type(e).__name__
+            warn.append(f"element {n_}: unknown shape “{what}” — left out (use {', '.join(_GFX_SHAPES)})")
             continue
+        for k_ in ("location", "position"):                          # rokon kulcsok a helyre
+            if e.get(k_) is not None and not e.get("place") and "lat" not in e:
+                q = e[k_]
+                if isinstance(q, str):
+                    e = {**e, "place": q}
+                elif isinstance(q, dict) and (q.get("place") or "lat" in q):
+                    e = {**e, **{k: q[k] for k in ("place", "lat", "lon") if k in q}}
+                elif isinstance(q, (list, tuple)) and len(q) == 2 and "x" not in e:
+                    e = {**e, "x": q[0], "y": q[1]}
         el: dict[str, Any] = {"shape": e["shape"]}
         for k in ("x", "y", "w", "h", "r"):
             if num(e.get(k)) is not None:
@@ -401,6 +437,7 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         if e["shape"] in ("image", "lottie"):
             src = e.get("image") or e.get("lottie") or e.get("file_id") or e.get("url") or e.get("src")   # src: mentett alak
             if not src:
+                warn.append(f"element {n_} ({e['shape']}): no {e['shape']} given — left out")
                 continue
             el["fit"] = "cover" if e.get("fit") == "cover" else "contain"
             el["loop"] = e.get("loop") is not False
@@ -410,20 +447,26 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
             if isinstance(e.get("credit"), str) and e["credit"].strip():
                 el["credit"] = e["credit"].strip()[:200]
         if e["shape"] in ("path", "polygon") and len(el.get("points") or el.get("geo_points") or []) < 2:
+            warn.append(f"element {n_} ({e['shape']}): fewer than 2 usable points — left out")
             continue
         if e["shape"] in ("line", "arrow") and not ((el.get("from") or el.get("geo_from")) and (el.get("to") or el.get("geo_to"))):
+            warn.append(f"element {n_} ({e['shape']}): needs from and to ([x, y], {{\"place\"}} or {{\"lat\", \"lon\"}}) — left out")
             continue
+        if e["shape"] == "map" and not (el.get("map") or {}).get("place") and not (el.get("map") or {}).get("bbox"):
+            pass                                          # hely nélkül a tűk köré rajzol (geo.build) — ha nincs tű, ott jelez
         out.append(el)
     title = _clean(c.get("title"), 60, "Chart title")
+    warns = [f"⚠ Graphic “{title or 'custom'}”: {w}." for w in warn[:8]]
+    if dropped:
+        warns.append(f"⚠ Graphic “{title or 'custom'}”: left out {len(dropped)} text(s) with a number not in the source, "
+                     f"e.g. “{dropped[0][:60]}”.")
     if not out:
-        return None, f"A suggested graphic “{title}” had nothing to draw." if c.get("elements") else None
+        return None, [f"⚠ A suggested graphic “{title}” had nothing to draw."] + warns if c.get("elements") else None
     g = {"type": "graphic", "title": title, "unit": "", "items": [], "elements": out}
     if num(c.get("backdrop")) is not None:
         g["backdrop"] = max(0.0, min(1.0, float(c["backdrop"])))
-    note = f"Graphic “{title or 'custom'}”: {len(out)} elements."
-    if dropped:
-        note += f" Left out {len(dropped)} text(s) with a number not in the source, e.g. “{dropped[0][:60]}”."
-    return g, note
+    note = f"Graphic “{title or 'custom'}”: {len(out)} elements" + (f" ({expanded} pins/routes taken from inside the map)" if expanded else "") + "."
+    return g, [note] + warns
 
 
 def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -2043,7 +2086,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                                               for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
                          "music_asset": music, "keep_wording": bool(opts.get("keep_wording"))},
-                "source": (source_text or "")[:30000], "chart_notes": chart_notes, "timeline": D.get("timeline")}
+                "source": (source_text or "")[:30000], "chart_notes": [n for n in chart_notes if not n.startswith("⚠ ")],
+                "timeline": D.get("timeline")}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
                    extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
         for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra + gfx_names:
@@ -2079,7 +2123,13 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                     f"Only {ns} scene(s) for {D['total']:.0f} s, so much of the text may be missing. Add scenes "
                     "(action=edit, add) or make it again without keep_wording."]
             if result["check"] and chart_notes:
-                result["check"]["verified"] = result["check"].get("verified", []) + chart_notes
+                ok_notes = [n for n in chart_notes if not n.startswith("⚠ ")]
+                bad = [n[2:] for n in chart_notes if n.startswith("⚠ ")]
+                result["check"]["verified"] = result["check"].get("verified", []) + ok_notes
+                if bad:
+                    result["check"]["findings"] = result["check"].get("findings", []) + bad
+                    if result["check"].get("status") == "ok":
+                        result["check"]["status"] = "needs_check"
             result["video"] = vid
             result["files"] = [result["project"], vid]
         else:
@@ -2329,8 +2379,14 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
         if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
             cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a mértékegység)
         chart, note = _chart_from_plan(cc, source) if cc else (None, None)
-        if note:
-            notes.append(note)
+        for n in (note if isinstance(note, list) else [note] if note else []):
+            # ⚠ = figyelmeztetés (a check findings-be): ami kimaradt, nem mehet el csendben (10-12: a térkép tűi kiestek,
+            # a check mégis ok volt — a megjegyzés a „verified” közé került)
+            notes.append(n if n.startswith("⚠ ") or chart else "⚠ " + n)
+        if cc and chart is None and not note:
+            t_ = cc.get("type") if isinstance(cc, dict) else None
+            notes.append(f"⚠ The suggested {t_ or 'chart'} “{(cc.get('title') if isinstance(cc, dict) else '') or ''}” was left out: "
+                         f"{'unknown type' if t_ not in _CHART_TYPES else 'not enough usable items (check items / elements)'}.")
         sc["chart"] = chart
         if chart:
             sc["stat"] = None
