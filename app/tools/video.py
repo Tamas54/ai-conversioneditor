@@ -88,13 +88,51 @@ def fmt_name(fmt: Optional[str]) -> str:
     return f
 
 
-async def _run(*args: str, cwd: Path, timeout: Optional[int] = None) -> str:
-    """effectcraft-cli a megadott mappában (a szkriptek csak a projekt mappájából olvashatnak fájlt)."""
+_JAIL: list[bool] = []
+
+
+async def _jail_ok(exe: str) -> bool:
+    """Egyszeri önteszt: a motor elindul-e a zárkában (1+1). Ha nem — a megbízható munka zárka nélkül fut tovább
+    (naplózva), idegen szkript viszont nem."""
+    from app.tools import jail
+    if not _JAIL:
+        ok = False
+        if jail.available():
+            work = Path(tempfile.mkdtemp(prefix="jailtest-", dir=str(temp_path("").parent)))
+            try:
+                argv, env = jail.command(exe, ["script", "--eval", "1+1", "--empty"], work=str(work))
+                proc = await asyncio.create_subprocess_exec(*argv, cwd=str(work), env=env, stdout=asyncio.subprocess.PIPE,
+                                                            stderr=asyncio.subprocess.PIPE)
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
+                ok = proc.returncode == 0 and out.decode("utf-8", "replace").strip().endswith("2")
+                if not ok:
+                    log.error("a videómotor zárkája nem indul (rc %s): %s", proc.returncode, err.decode("utf-8", "replace")[-300:])
+            except Exception as e:
+                log.error("a videómotor zárkája nem indul: %s", e)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+        _JAIL.append(ok)
+        log.info("videómotor zárkában: %s (Landlock ABI %s)", ok, jail.abi())
+    return _JAIL[0]
+
+
+async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: bool = False) -> str:
+    """effectcraft-cli a megadott mappában, ZÁRKÁBAN (jail.py): csak a munkamappát írja, rajta kívül csak a
+    rendszerkönyvtárakat és a mappába linkelt médiát olvassa, hálózat és alfolyamat nélkül, a környezeti változók
+    (kulcsok) nélkül. A motor saját kapuja is él (a szkriptek csak a projekt mappájából olvasnak, nem írnak, nem
+    hálóznak) — a zárka a második fal. untrusted (az ügynök saját szkriptje): zárka nélkül NEM fut."""
+    from app.tools import jail
     exe = effect_cli()
     if exe is None:
         raise RuntimeError("The video engine (EffectCraft) isn't installed on this server")
-    env = {**os.environ, "EFFECTCRAFT_NO_PREFS": "1"}
-    proc = await asyncio.create_subprocess_exec(exe, *args, cwd=str(cwd), env=env,
+    argv, env = [exe, *args], {**os.environ, "EFFECTCRAFT_NO_PREFS": "1"}
+    if await _jail_ok(exe):
+        argv, env = jail.command(exe, list(args), work=str(cwd), env={"EFFECTCRAFT_NO_PREFS": "1"})
+    elif untrusted:
+        raise RuntimeError("Custom scripts need the sandbox, and it isn't available on this server — use a graphic (type \"graphic\") instead.")
+    else:
+        log.warning("zárka nélkül fut a videómotor (a kernel nem tud Landlockot)")
+    proc = await asyncio.create_subprocess_exec(*argv, cwd=str(cwd), env=env,
                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout or settings.VIDEO_TIMEOUT_S)
@@ -298,8 +336,87 @@ def _text_numbers(text: str) -> set[float]:
     return out
 
 
+_GFX_SHAPES = ("rect", "circle", "line", "arrow", "path", "polygon", "text", "image", "pin", "lottie")
+_GFX_ANIMS = ("appear", "pop", "grow", "draw", "slide-left", "slide-right", "slide-up", "slide-down", "pulse", "none")
+
+
+def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Saját grafika elemekből (az ügynök rajzolja le): alakzatok, nyilak, útvonalak, szövegek, képek, tűk, Lottie —
+    a képkocka arányában (0–1), mozgással. Ellenőrzés: ismert elemek, ésszerű koordináták, legfeljebb 80 elem, a
+    szövegekben csak forrásbeli szám (különben AZ az elem kimarad — a többi marad, a check jelzi)."""
+    nums = _text_numbers(source)
+    num = lambda x, d=None: float(x) if isinstance(x, (int, float)) else d
+    pt = lambda q: [max(-0.2, min(1.2, num(q[0], 0.5))), max(-0.2, min(1.2, num(q[1], 0.5)))] if isinstance(q, (list, tuple)) and len(q) >= 2 else None
+    out, dropped = [], []
+    for e in (c.get("elements") or [])[:80]:
+        if not isinstance(e, dict) or e.get("shape") not in _GFX_SHAPES:
+            continue
+        el: dict[str, Any] = {"shape": e["shape"]}
+        for k in ("x", "y", "w", "h", "r"):
+            if num(e.get(k)) is not None:
+                el[k] = max(-0.2, min(1.2, float(e[k])))
+        for k in ("size", "width", "radius", "at", "dur", "opacity"):
+            if num(e.get(k)) is not None:
+                el[k] = float(e[k])
+        for k in ("from", "to", "move_to"):
+            if pt(e.get(k)):
+                el[k] = pt(e[k])
+        if isinstance(e.get("points"), list):
+            pts = [pt(q) for q in e["points"][:200]]
+            el["points"] = [q for q in pts if q]
+        for k in ("fill", "stroke", "color", "align", "weight"):
+            if isinstance(e.get(k), str):
+                el[k] = e[k][:24]
+        el["anim"] = e.get("anim") if e.get("anim") in _GFX_ANIMS else "appear"
+        if e["shape"] in ("text", "pin"):
+            txt = _clean(e.get("text") or e.get("label") or "", 160, "Graphic text")
+            if [x for x in _text_numbers(txt) if x not in nums]:
+                dropped.append(txt)
+                continue
+            el["text"] = txt
+        if e["shape"] in ("image", "lottie"):
+            src = e.get("image") or e.get("lottie") or e.get("file_id") or e.get("url")
+            if not src:
+                continue
+            el["fit"] = "cover" if e.get("fit") == "cover" else "contain"
+            el["loop"] = e.get("loop") is not False
+            el["src"] = src if isinstance(src, (str, dict)) else None
+            if e.get("asset"):
+                el["asset"] = str(e["asset"])
+        if e["shape"] in ("path", "polygon") and len(el.get("points") or []) < 2:
+            continue
+        if e["shape"] in ("line", "arrow") and not (el.get("from") and el.get("to")):
+            continue
+        out.append(el)
+    title = _clean(c.get("title"), 60, "Chart title")
+    if not out:
+        return None, f"A suggested graphic “{title}” had nothing to draw." if c.get("elements") else None
+    g = {"type": "graphic", "title": title, "unit": "", "items": [], "elements": out}
+    if num(c.get("backdrop")) is not None:
+        g["backdrop"] = max(0.0, min(1.0, float(c["backdrop"])))
+    note = f"Graphic “{title or 'custom'}”: {len(out)} elements."
+    if dropped:
+        note += f" Left out {len(dropped)} text(s) with a number not in the source, e.g. “{dropped[0][:60]}”."
+    return g, note
+
+
+def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Az ügynök saját EffectCraft-szkriptje egy jelenetre (After Effects-szerű JS: comp.layers.addShape…). ZÁRKÁBAN fut
+    (jail.py) — a motor saját kapuja mellett. A számait a build után a jelenet szövegrétegeiből ellenőrizzük."""
+    code = c.get("code") if isinstance(c.get("code"), str) else ""
+    title = _clean(c.get("title"), 60, "Chart title")
+    if not code.strip():
+        return None, f"A suggested script scene “{title}” had no code."
+    if len(code) > 20000:
+        return None, f"A suggested script scene “{title}” is too long ({len(code)} characters; 20 000 at most)."
+    g = {"type": "script", "title": title, "unit": "", "items": [], "code": code}
+    if isinstance(c.get("backdrop"), (int, float)):
+        g["backdrop"] = max(0.0, min(1.0, float(c["backdrop"])))
+    return g, f"Script scene “{title or 'custom'}”: {code.count(chr(10)) + 1} lines, run in the sandbox."
+
+
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
-                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote")
+                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script")
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -311,6 +428,10 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
     typ = str(c.get("type") or "column").lower()
     if typ not in _CHART_TYPES:
         return None, None
+    if typ == "graphic":
+        return _graphic_from_plan(c, source)
+    if typ == "script":
+        return _script_from_plan(c)
     title = _clean(c.get("title"), 60, "Chart title")
     nums = _text_numbers(source)
     src = re.sub(r"\s+", " ", source or "").lower()
@@ -693,9 +814,93 @@ def _arc(out: list, name: str, cx: float, cy: float, r: float, th: float, a0: fl
                     "t0": round(t0 + dur * i / k, 3), "dur": 0.08})
 
 
+def _gfx_color(v: Any, acc: list[float], default: Any = "accent") -> Any:
+    v = (v or default) if not isinstance(v, list) else v
+    named = {"accent": "accent", "white": [1, 1, 1], "muted": [0.62, 0.65, 0.72], "dark": [0.06, 0.06, 0.08],
+             "black": [0, 0, 0], "red": [0.9, 0.2, 0.2], "green": [0.2, 0.7, 0.35], "blue": [0.2, 0.45, 0.9],
+             "yellow": [0.95, 0.78, 0.2], "none": None}
+    if isinstance(v, str) and v.lower() in named:
+        return named[v.lower()]
+    if isinstance(v, str) and re.fullmatch(r"#?[0-9a-fA-F]{6}", v):
+        return _rgb(v if v.startswith("#") else "#" + v)
+    return named.get(str(default), "accent")
+
+
+def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> list[dict[str, Any]]:
+    """A „graphic” elemei builder-rétegekké: arányos koordináták → pixel; méretek 1080-as rövid oldalra értve."""
+    m = min(W, H)
+    k = m / 1080
+    px = lambda q: [round(q[0] * W, 1), round(q[1] * H, 1)]
+    out: list[dict[str, Any]] = []
+    for i, e in enumerate(ch.get("elements") or []):
+        sh, name = e["shape"], f"{e['shape'].capitalize()} {i + 1}"
+        t0, dur = max(0.0, e.get("at", 0.3 + 0.25 * i)), max(0.1, e.get("dur", 0.6))
+        anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
+        if e.get("move_to"):
+            anim["move_to"] = px(e["move_to"])
+        op = int(max(5, min(100, e.get("opacity", 100))))
+        if sh in ("rect", "circle", "pin"):
+            if sh == "rect":
+                size = [e.get("w", 0.2) * W, e.get("h", 0.1) * H]
+                rnd = e.get("radius", 0) * k
+            else:
+                d = 2 * e.get("r", 0.03 if sh == "pin" else 0.06) * m
+                size, rnd = [d, d], d / 2
+            el = {"k": "rect", "name": name, "size": [round(max(size[0], 2), 1), round(max(size[1], 2), 1)],
+                  "pos": px([e.get("x", 0.5), e.get("y", 0.5)]), "color": _gfx_color(e.get("fill"), acc, "accent" if sh != "rect" or not e.get("stroke") else "none"),
+                  "opacity": op, "round": round(rnd, 1), **anim}
+            if e.get("stroke"):
+                el["stroke"], el["stroke_w"] = _gfx_color(e["stroke"], acc), round(e.get("width", 4) * k, 1)
+            out.append(el)
+            if sh == "pin" and e.get("text"):
+                ts = round(e.get("size", 34) * k)
+                out.append({"k": "text", "name": f"Pin label {i + 1}", "str": e["text"], "size": ts, "box": [round(W * 0.3, 1), round(ts * 2.8, 1)],
+                            "pos": [round(e.get("x", 0.5) * W + size[0] / 2 + W * 0.15 + 6, 1), round(e.get("y", 0.5) * H + ts * 0.65, 1)],
+                            "align": "left", "font": "semibold", "color": _gfx_color(e.get("color"), acc, "white"),
+                            "anim": "appear", "t0": round(t0 + 0.2, 3), "dur": 0.4})
+        elif sh in ("line", "arrow", "path", "polygon"):
+            pts = [e["from"], e["to"]] if sh in ("line", "arrow") else e["points"]
+            el = {"k": "path", "name": name, "points": [px(q) for q in pts], "closed": sh == "polygon",
+                  "fill": _gfx_color(e.get("fill"), acc, "accent" if sh == "polygon" else "none"),
+                  "stroke": _gfx_color(e.get("stroke"), acc, "none" if sh == "polygon" and e.get("fill") else "accent"),
+                  "stroke_w": round(e.get("width", 8) * k, 1), "opacity": op, **anim}
+            if sh == "arrow":           # nyílhegy: kis háromszög a végpontnál, a vonal irányába fordítva
+                (ax, ay), (bx, by) = px(pts[0]), px(pts[1])
+                ang = math.atan2(by - ay, bx - ax)
+                L = max(18, e.get("width", 8) * k * 3.2)
+                tip = [bx, by]
+                l = [bx - L * math.cos(ang) + L * 0.6 * math.sin(ang), by - L * math.sin(ang) - L * 0.6 * math.cos(ang)]
+                r_ = [bx - L * math.cos(ang) - L * 0.6 * math.sin(ang), by - L * math.sin(ang) + L * 0.6 * math.cos(ang)]
+                out.append(el)
+                out.append({"k": "path", "name": f"Arrowhead {i + 1}", "points": [[round(v, 1) for v in tip], [round(v, 1) for v in l], [round(v, 1) for v in r_]],
+                            "closed": True, "fill": el["stroke"] if el["stroke"] else "accent", "stroke": None, "stroke_w": 0, "opacity": op,
+                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2})
+                continue
+            out.append(el)
+        elif sh == "text":
+            ts = round(e.get("size", 44) * k)
+            bw = e.get("w", 0.6) * W
+            st = e.get("text") or ""
+            fs = _fit_size(st, ts, bw, ts * 3.6, name)
+            out.append({"k": "text", "name": name, "str": st, "size": fs, "box": [round(bw, 1), round(fs * 3.6, 1)],
+                        "pos": [round(e.get("x", 0.5) * W, 1), round(e.get("y", 0.5) * H + fs * 1.15, 1)],
+                        "align": e.get("align") if e.get("align") in ("left", "center", "right") else "center",
+                        "font": {"bold": "bold", "regular": "regular"}.get(e.get("weight") or "", "semibold"),
+                        "color": _gfx_color(e.get("color"), acc, "white"), **anim})
+        elif sh in ("image", "lottie"):
+            if not e.get("file"):
+                continue
+            out.append({"k": sh, "name": name, "file": e["file"], "comp": e.get("comp"), "fit": e.get("fit", "contain"),
+                        "loop": e.get("loop", True), "pos": px([e.get("x", 0.5), e.get("y", 0.5)]),
+                        "size": [round(e.get("w", 0.3) * W, 1), round(e.get("h", 0.3) * H, 1)], "opacity": op, **anim})
+    return out
+
+
 def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Optional[list[float]] = None) -> list[dict[str, Any]]:
     """Egy mozgó grafikon rétegei (a builder csak lerakja): oszlop / sáv / vonal, értékcímkék, kategóriacímkék,
     alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
+    if ch["type"] == "script":           # a jelenetet az ügynök szkriptje rajzolja (builder: runScript)
+        return []
     m, vertical = min(W, H), H > W * 1.2
     items = ch["items"]
     n, vals = len(items), [float(i["value"]) if i.get("value") is not None else 0.0 for i in items]
@@ -846,6 +1051,8 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
                 if it.get("text"):
                     text(f"Text {k + 1}", it["text"], round(m * 0.032), (tw, m * 0.1), (tx + tw / 2, py + m * 0.055), align="left",
                          font="regular", color=soft, t0=t0 + 0.3)
+    elif typ == "graphic":            # saját grafika: az elemek a képkocka arányában (0–1) → pixel
+        out += _graphic_elements(ch, W, H, accent or _rgb(None))
     elif typ == "counter":            # felpörgő szám: 0 → érték, egymást váltó rétegekben, alatta a címke
         v, dec = vals[0], _decimals(vals[0])
         final = _fmt_val(v, unit, lang)
@@ -1099,7 +1306,10 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         chart = s.get("chart")
         if chart:
             stat = None
-            chart = {"title": chart.get("title") or head, "elements": chart_elements(chart, W, H, lang, _rgb(accent))}
+            chart = {"title": chart.get("title") if chart["type"] in ("graphic", "script") else (chart.get("title") or head),
+                     "elements": chart_elements(chart, W, H, lang, _rgb(accent)),
+                     **({"backdrop": chart["backdrop"]} if chart.get("backdrop") is not None else {}),
+                     **({"code": chart["code"], "id": s.get("id") or f"s{i + 1}"} if chart["type"] == "script" else {})}
         d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
                          "motion": motions[i], "focus": (focus or {}).get(images[i + 1] if i + 1 < len(images) else "") or [0.5, 0.45],
                          "size": _size_for(head, m * (0.066 if fmt != "landscape" else 0.058), 34, m * 0.046)})
@@ -1488,6 +1698,84 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
                            pre_verified=pre_v, pre_findings=[], scene_plan=True)
 
 
+def _script_report(out: str, source: str) -> list[str]:
+    """A build kimenetéből: a szkriptjelenetek hibái és a szövegeikben a forrásban nem szereplő számok."""
+    nums, found = _text_numbers(source), []
+    for ln in out.splitlines():
+        if ln.startswith("SCRIPT_ERROR "):
+            sid, _, msg = ln[13:].partition(": ")
+            found.append(f"Scene {sid}: the script failed — {msg[:300]}. The scene shows only its picture and title; "
+                         f"fix the code (chart.code) with action=edit.")
+        elif ln.startswith("SCRIPT_TEXT "):
+            sid, _, raw = ln[12:].partition(" ")
+            try:
+                texts = [str(t) for t in json.loads(raw)]
+            except ValueError:
+                continue
+            bad = sorted({t for t in texts for x in _text_numbers(t) if x not in nums})
+            if bad:
+                found.append(f"Scene {sid}: the script shows numbers that aren't in the source: "
+                             + "; ".join(f"“{b[:60]}”" for b in bad[:4]) + ".")
+    return found
+
+
+async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[str]) -> tuple[list[str], list[tuple[str, str]], list[str]]:
+    """A saját grafikák képei és Lottie-animációi → a munkamappába. → (asset-nevek, [(lottie-fájl, kompozíció-név)], kreditek).
+    A szülőprojekt meglévő elemei ({"asset"}) letöltés nélkül jönnek; a Lottie JSON-t ellenőrizzük és egyedi nevet kap."""
+    import httpx
+    from app.tools import images as imgs
+    parent_assets = assets_of(parent) if parent else {}
+    names, lotties, credits = [], [], []
+    n = 0
+    for si, sc in enumerate(story.get("scenes") or []):
+        ch = sc.get("chart") or {}
+        if ch.get("type") != "graphic":
+            continue
+        for ei, e in enumerate(ch.get("elements") or []):
+            if e.get("shape") not in ("image", "lottie"):
+                continue
+            n += 1
+            ext = ".json" if e["shape"] == "lottie" else ".jpg"
+            name = e.get("asset") if e.get("asset") and parent_assets.get(e["asset"]) else f"gfx-{n:02d}-{sc.get('id') or si}{ext}"
+            try:
+                if e.get("asset") and parent_assets.get(e["asset"]):
+                    shutil.copyfile(crafts.existing(parent_assets[e["asset"]]), work / name)
+                elif e["shape"] == "image":
+                    r = await imgs.resolve(_img_spec(e.get("src")), max_px=1600)
+                    name = f"gfx-{n:02d}-{sc.get('id') or si}{r.path.suffix or '.jpg'}"
+                    shutil.move(str(r.path), work / name)
+                    if r.attribution:
+                        credits.append(r.attribution)
+                else:
+                    src = e.get("src")
+                    sid = src.get("file_id") if isinstance(src, dict) else src
+                    if isinstance(src, dict) and src.get("url"):
+                        sid = src["url"]
+                    if isinstance(sid, str) and sid.startswith("http"):
+                        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+                            resp = await c.get(sid)
+                            resp.raise_for_status()
+                            raw = resp.content[:6_000_000]
+                    else:
+                        raw = crafts.existing(str(sid)).read_bytes()[:6_000_000]
+                    data = json.loads(raw.decode("utf-8"))
+                    if not isinstance(data, dict) or "layers" not in data or not data.get("fr"):
+                        raise ValueError("not a Lottie animation (JSON with fr and layers)")
+                    data["nm"] = f"Lottie {n}"
+                    (work / name).write_text(json.dumps(data), "utf-8")
+                    lotties.append((name, data["nm"]))
+                    e["comp"] = data["nm"]
+                e["file"] = e["asset"] = name
+                names.append(name)
+                if e["shape"] == "lottie" and not e.get("comp"):
+                    e["comp"] = json.loads((work / name).read_text("utf-8")).get("nm")
+                    lotties.append((name, e["comp"]))
+            except Exception as ex:
+                log.warning("grafika-elem (%s) nem jött le: %s", e.get("shape"), ex)
+                e["file"] = None
+    return names, lotties, credits
+
+
 async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any], *, chart_notes: list[str],
                     source_text: str, source_file_id: Optional[str], step: Callable[..., None], render: bool = True,
                     parent: Optional[str] = None, label_stem: Optional[str] = None, operation: str = "video",
@@ -1499,6 +1787,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         names, credit_list, per_credit = await _materialize_images(specs, fmt, work, parent)
+        gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
+        credit_list = credit_list + [c for c in gfx_credits if c not in credit_list]
         voice = music = None
         voice_s = None
         parent_assets = assets_of(parent) if parent else {}
@@ -1545,8 +1835,17 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         D["shade"] = {"title": "shade-title.png", "scene": "shade-scene.png"}
         step(3, 5, "building the timeline")
         (work / "build.jsx").write_text("var D = " + json.dumps(D, ensure_ascii=False) + ";\n" + BUILDER_JS.read_text("utf-8"), "utf-8")
+        base = []
+        for lf, _nm in lotties:            # Lottie: előbb beimportáljuk (külön kompozíció), a szkript erre a projektre épít
+            args = ["exec", "file.importLottie", "--params", json.dumps({"path": lf})]
+            args += ["--project", "base.ecproj", "--save"] if base else ["--empty", "--save-as", "base.ecproj"]
+            await _run(*args, cwd=work, timeout=120)
+            base = ["base.ecproj"]
+        scripted = any(((x.get("chart") or {}).get("type") == "script") for x in story.get("scenes") or [])
         async with _render_gate():
-            out = await _run("script", "build.jsx", "--save-as", "project.ecproj", cwd=work)
+            out = await _run("script", "build.jsx", *base, "--save-as", "project.ecproj", cwd=work,
+                             untrusted=scripted, timeout=300 if scripted else None)
+        script_findings = _script_report(out, source_text or "") if scripted else []
         log.info("videó felépítve: %s", out.strip().splitlines()[-2:] if out.strip() else "")
         stem = label_stem or _title_stem(story["title"])
         pid = new_file_id("ecproj")
@@ -1565,7 +1864,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 "source": (source_text or "")[:30000], "chart_notes": chart_notes, "timeline": D.get("timeline")}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
                    extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
-        for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra:
+        for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra + gfx_names:
             add_asset(pid, name, work / name)
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": fmt,
                                   "duration": D["total"], "scenes": len(D["scenes"]), "captions": len(D["captions"]),
@@ -1585,7 +1884,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 if fitted:
                     chk["verified"].append(f"Fitted to their boxes: {len(fitted)} graphic text(s) set smaller, e.g. "
                                            + "; ".join(fitted[:4]) + ".")
-                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + cov_f + (
+                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + script_findings + cov_f + (
                     [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]])
                 if chk["findings"] and chk.get("status") == "ok":
                     chk["status"] = "needs_check"
@@ -1789,7 +2088,8 @@ async def thumb(src: Path, raw: Path) -> None:
             await _run("script", "t.jsx", "--save-as", "project.ecproj", cwd=work, timeout=120)
             proj, comp, t = work / "project.ecproj", "Thumb", "1"
         await _run("render-frame", "--project", proj.name, "--comp", comp, "--time", t, "--max-side", "640",
-                   "--out", str(raw), cwd=work, timeout=120)
+                   "--out", "thumb.png", cwd=work, timeout=120)
+        shutil.move(str(work / "thumb.png"), str(raw))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -1476,6 +1476,24 @@ async def video(
       (separate %s) | gauge (one value on a min–max scale) | funnel (shrinking stages) | timeline (dated events: label =
       date) | steps (how-to) | proscons (label "+"/"-", text) | quote (text word for word from the source, label =
       who). Every number, date and quote is checked against the source — one that isn't there drops the graphic.
+      graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
+      {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
+      {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie, x, y (centre, 0–1 of the
+      frame), w, h (0–1), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
+      (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
+      color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity,
+      anim: appear | pop | grow | draw (lines and outlines draw themselves) | slide-left | slide-right | slide-up |
+      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there),
+      image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id or URL of a Lottie JSON — e.g.
+      from LottieFiles; it loops unless loop=false)}]}. Up to 80 elements, each its own layer (editable by hand); a text
+      with a number that isn't in the source is left out (the check says which).
+      script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
+      comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
+      {"type": "script", "title"?, "backdrop"?, "code": "…"}; the code gets comp (the scene composition), W, H, dur
+      (seconds), accent ([r, g, b], 0–1) and D (D.font.bold|semibold|regular). It runs in a sandbox (no files outside
+      the project, no network, no processes; 20 000 characters at most). A script error, or a number on screen that
+      isn't in the source, comes back in the check; fix it with action=edit {"chart": {"code": "…"}} and look at it
+      with files(action="preview", scene=…, frames=6) or video(action="render", scene=…).
       Or pass data_file_id (CSV/XLSX: a chart per column, values from the cells).
       The result's check also reports COVERAGE (which source sentences and numbers made it in — `coverage` lists the
       missing ones), shortened texts, and where your pictures went. See it scene by scene: files(action="preview",

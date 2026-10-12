@@ -31,14 +31,21 @@ function textLayer(comp, box, str, o) {
   }
   return t;
 }
-function rect(comp, name, size, pos, color, opacity, round) {
+function rect(comp, name, size, pos, color, opacity, round, stroke, strokeW) {
   var s = comp.layers.addShape(); s.name = name;
   var g = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
   var r = g.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Rect");
   r.property("ADBE Vector Rect Size").setValue(size);
   if (round) r.property("ADBE Vector Rect Roundness").setValue(round);
-  var f = g.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");
-  f.property("ADBE Vector Fill Color").setValue([color[0], color[1], color[2], 1]);
+  if (color) {
+    var f = g.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");
+    f.property("ADBE Vector Fill Color").setValue([color[0], color[1], color[2], 1]);
+  }
+  if (stroke) {
+    var st = g.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Stroke");
+    st.property("ADBE Vector Stroke Color").setValue([stroke[0], stroke[1], stroke[2], 1]);
+    st.property("ADBE Vector Stroke Width").setValue(strokeW || 4);
+  }
   tp(s).property("ADBE Position").setValue(pos);
   if (opacity !== undefined && opacity !== 100) tp(s).property("ADBE Opacity").setValue(opacity);
   return s;
@@ -145,23 +152,109 @@ function grower(layer, el) {   // kinövés: a horgony a növekedés kezdő él�
     o.setValueAtTime(el.t0, 0); o.setValueAtTime(el.t0 + el.dur, full);
   }
 }
+function col(v) { return v === "accent" ? D.accent : v; }
+function pathLayer(comp, el) {   // vonal / nyíl / útvonal / sokszög: a pontok KOMPOZÍCIÓ-pixelben (a réteg a [0,0]-ban)
+  var s = comp.layers.addShape(); s.name = el.name;
+  tp(s).property("ADBE Position").setValue([0, 0]);
+  var g = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+  var p = g.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Group");
+  var sh = new Shape(); sh.vertices = el.points; sh.closed = !!el.closed;
+  p.property("ADBE Vector Shape").setValue(sh);
+  if (el.fill) {
+    var f = g.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill"), fc = col(el.fill);
+    f.property("ADBE Vector Fill Color").setValue([fc[0], fc[1], fc[2], 1]);
+  }
+  if (el.stroke) {
+    var st = g.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Stroke"), sc_ = col(el.stroke);
+    st.property("ADBE Vector Stroke Color").setValue([sc_[0], sc_[1], sc_[2], 1]);
+    st.property("ADBE Vector Stroke Width").setValue(el.stroke_w || 6);
+    try { st.property("ADBE Vector Stroke Line Cap").setValue(2); st.property("ADBE Vector Stroke Line Join").setValue(2); } catch (e) {}
+  }
+  if (el.opacity !== undefined && el.opacity !== 100) tp(s).property("ADBE Opacity").setValue(el.opacity);
+  if (el.anim === "draw") {        // kirajzolódik: Trim Paths vége 0 → 100
+    var tr = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Filter - Trim");
+    var e_ = tr.property("ADBE Vector Trim End"); e_.setValueAtTime(el.t0, 0); e_.setValueAtTime(el.t0 + el.dur, 100); ease(e_);
+  } else animate(s, el);
+  return s;
+}
+function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | grow | slide-* | pulse | none (+ move_to)
+  var T = tp(layer), a = el.anim || "appear", t0 = el.t0 || 0, d = el.dur || 0.6, full = el.opacity || 100;
+  var O = T.property("ADBE Opacity"), S = T.property("ADBE Scale"), P = T.property("ADBE Position");
+  if (a === "appear" || a === "grow" || a.indexOf("slide-") === 0) { O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + Math.min(d, 0.5), full); }
+  if (a === "pop" || a === "grow") { S.setValueAtTime(t0, [0, 0]); S.setValueAtTime(t0 + d, [100, 100]); ease(S); }
+  if (a.indexOf("slide-") === 0) {
+    var p = P.value, off = Math.min(D.W, D.H) * 0.12;
+    var dx = a === "slide-left" ? off : a === "slide-right" ? -off : 0, dy = a === "slide-up" ? off : a === "slide-down" ? -off : 0;
+    P.setValueAtTime(t0, [p[0] + dx, p[1] + dy]); P.setValueAtTime(t0 + d, p); ease(P);
+  }
+  if (a === "pulse") {
+    O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + 0.3, full);
+    for (var q = 0; q < 3; q++) { var b = t0 + 0.3 + q * 0.8; S.setValueAtTime(b, [100, 100]); S.setValueAtTime(b + 0.4, [112, 112]); S.setValueAtTime(b + 0.8, [100, 100]); }
+    ease(S);
+  }
+  if (el.move_to) {                // odasiklik: a megjelenés után a jelenet végéig
+    var p0 = P.value, tm = t0 + d + 0.2;
+    P.setValueAtTime(tm, p0); P.setValueAtTime(tm + Math.max(0.8, d * 2), el.move_to); ease(P);
+  }
+}
+function mediaLayer(comp, el) {   // kép vagy Lottie egy dobozba illesztve
+  var src = null;
+  if (el.k === "lottie") {
+    for (var i = 1; i <= app.project.numItems; i++) if (app.project.item(i).name === el.comp) src = app.project.item(i);
+  } else {
+    src = FOOT[el.file] || (FOOT[el.file] = app.project.importFile(new ImportOptions(new File(el.file))));
+  }
+  if (!src) return null;
+  var L = comp.layers.add(src); L.name = el.name;
+  var fx = el.size[0] / src.width, fy = el.size[1] / src.height;
+  var k = (el.fit === "cover" ? Math.max(fx, fy) : Math.min(fx, fy)) * 100;   // cover: kitölti a dobozt (a túllógó rész kilóg)
+  tp(L).property("ADBE Scale").setValue([k, k]);
+  tp(L).property("ADBE Position").setValue(el.pos);
+  if (el.k === "lottie") {
+    L.startTime = el.t0 || 0;
+    if (el.loop !== false) {      // ismétlődik a jelenet végéig: időtérkép + loopOut
+      try {
+        L.timeRemapEnabled = true;
+        L.property("ADBE Time Remapping").expression = 'loopOut("cycle")';
+        L.outPoint = comp.duration;
+      } catch (e) { writeLn("lottie loop: " + e); }
+    }
+  }
+  if (el.opacity !== undefined && el.opacity !== 100) tp(L).property("ADBE Opacity").setValue(el.opacity);
+  animate(L, el);
+  return L;
+}
 function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria: minden oszlop / pont / felirat külön réteg
   var F = { bold: D.font.bold, semibold: D.font.semibold, regular: D.font.regular };
   for (var k = 0; k < ch.elements.length; k++) {
     var el = ch.elements[k];
     if (el.k === "rect") {
-      var r = rect(c, el.name, el.size, el.pos, el.color === "accent" ? D.accent : el.color, el.opacity, el.round);
+      var r = rect(c, el.name, el.size, el.pos, col(el.color), el.opacity, el.round, el.stroke ? col(el.stroke) : null, el.stroke_w);
       if (el.rot && el.grow !== "rotate") tp(r).property("ADBE Rotate Z").setValue(el.rot);
-      if (el.grow) grower(r, el);
+      if (el.grow) grower(r, el); else if (el.anim) animate(r, el);
+    } else if (el.k === "path") {
+      pathLayer(c, el);
+    } else if (el.k === "image" || el.k === "lottie") {
+      mediaLayer(c, el);
     } else {
       var tl = textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
         font: F[el.font] || D.font.semibold, color: el.color });
       if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
         tl.inPoint = el.t0 || 0;
         if (el.t1 !== undefined) tl.outPoint = el.t1;
-      } else fadeIn(tl, el.t0 || 0, 0.4, 0);
+      } else if (el.anim) animate(tl, el); else fadeIn(tl, el.t0 || 0, 0.4, 0);
     }
   }
+}
+function runScript(c, sc) {      // az ügynök saját kódja a jelenetre: comp, W, H, dur, accent, D (+ a fenti segédfüggvények)
+  try {
+    (new Function("comp", "W", "H", "dur", "accent", "D", sc.chart.code))(c, D.W, D.H, sc.dur, D.accent, D);
+  } catch (e) { writeLn("SCRIPT_ERROR " + sc.chart.id + ": " + (e && e.message ? e.message : String(e))); }
+  var texts = [];                 // a szövegek számait a Python ellenőrzi a forráson
+  for (var i = 1; i <= c.numLayers; i++) {
+    try { var tp_ = c.layer(i).property("ADBE Text Properties"); if (tp_) texts.push(String(tp_.property("ADBE Text Document").value.text)); } catch (e) {}
+  }
+  writeLn("SCRIPT_TEXT " + sc.chart.id + " " + JSON.stringify(texts));
 }
 function contentScene(sc, i) {
   var c = app.project.items.addComp("Scene " + i + " – " + sc.headline.substring(0, 32), D.W, D.H, 1, sc.dur, D.fps);
@@ -170,11 +263,13 @@ function contentScene(sc, i) {
   if (sc.chart) {        // mozgó grafikon: sötétített kép, fent a cím, alatta a grafikon
     shade(c, sc.dur, "even");
     // + egyenletes sötét fátyol: zsúfolt képen (10-12: EEG-görbe az idővonal mögött) is olvasható maradjon az ábra
-    rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], 58);
+    var bd = sc.chart.backdrop === undefined || sc.chart.backdrop === null ? 58 : Math.round(sc.chart.backdrop * 100);
+    if (bd > 0) rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
     var cs = Math.round(Math.min(D.W, D.H) * 0.052);
-    fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
+    if (sc.chart.title) fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
       leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
     chartLayers(c, sc.chart);
+    if (sc.chart.code) runScript(c, sc);
     return c;
   }
   if (sc.stat) {
