@@ -447,3 +447,26 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
 .tool-about .faq h3 { font: 700 16px/1.3 var(--f-display); margin: 18px 0 6px; }
 .tool-about .faq p { margin: 0; color: var(--graphite); line-height: 1.55; }
 .tool-about .more { margin-top: 26px; font-size: 14px; line-height: 1.9; }
+
+/* ---------- képválasztó: stock-jelöltek rácsa + a fájl képei (a felhasználó választ, nincs szűrés) ---------- */
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin: 2px 0 8px;
+  max-height: 340px; overflow: auto; padding: 2px; scrollbar-width: thin; }
+.pick { all: unset; box-sizing: border-box; cursor: pointer; position: relative; aspect-ratio: 4 / 3; border-radius: 8px; overflow: hidden;
+  background: var(--paper-2); border: 2px solid transparent; transition: transform .12s ease, border-color .12s ease; }
+.pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pick:hover { transform: translateY(-1px); border-color: var(--graphite); }
+.pick:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.pick[aria-pressed="true"] { border-color: var(--signal); box-shadow: 0 0 0 2px var(--signal); }
+.pick[aria-pressed="true"]::after { content: "✓"; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font: 700 13px/1 var(--f-body); color: #fff; background: var(--signal); }
+.pick-empty { grid-column: 1 / -1; margin: 6px 0; }
+.pick-info { margin: 0 0 12px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pic-row { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: thin; }
+.pic { all: unset; box-sizing: border-box; cursor: pointer; flex: none; width: 128px; display: grid; gap: 6px; padding: 6px; border-radius: 10px;
+  border: 1px solid var(--rule); background: var(--card); font: 600 12px/1.2 var(--f-body); color: var(--graphite); }
+.pic img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: var(--paper-2); display: block; }
+.pic span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pic:hover { border-color: var(--graphite); }
+.pic:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.pic[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); color: var(--ink); }
+@media (max-width: 520px) { .pick-grid { grid-template-columns: repeat(3, 1fr); } .pic { width: 104px; } }

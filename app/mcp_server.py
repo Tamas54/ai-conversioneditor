@@ -837,15 +837,34 @@ async def docx_render_pages(
 @mcp.tool()
 @linked
 async def insert_image(
-    file_id: str, anchor: str, image_file_id: str,
+    file_id: str, anchor: Optional[str] = None, image_file_id: Optional[str] = None,
     width_inches: Optional[float] = None,
     svg_file_id: Optional[str] = None,
+    slot: Optional[str] = None,
+    image_url: Optional[str] = None,
+    credit: Optional[str] = None,
+    ai_prompt: Optional[str] = None,
 ) -> dict:
-    """Insert an image into the working DOCX after the anchor paragraph.
-    image_file_id must point to an already-uploaded PNG/JPG. If svg_file_id
-    is also given, a vector SVG layer is attached (Word 2016+ / LO 7+
-    render the SVG as vector; older readers fall back to PNG). Combine with
-    chart_redraw(also_svg=true) for vector charts in the final PDF."""
+    """Insert an image into the working DOCX after the anchor paragraph — OR change an existing picture.
+
+    Insert: file_id + anchor + image_file_id (an uploaded PNG/JPG). If svg_file_id is also given, a vector
+    SVG layer is attached (Word 2016+ / LO 7+ render it as vector). Combine with chart_redraw(also_svg=true).
+
+    Pictures (decks and Word documents): file_id alone → the file's pictures [{slot, where, query?}].
+    file_id + slot + ONE of image_file_id | image_url (+credit, e.g. a candidate from
+    generate_image(stock_search=…)) | ai_prompt (generated, costs a credit) → a NEW version with that
+    picture replaced (same frame, nothing else changes). Let the person choose: show them the candidates."""
+    from app.tools import pictures
+    if slot or not anchor:
+        if not slot:
+            return {"pictures": await pictures.list_pictures(file_id)}
+        pick = ({"ai": ai_prompt} if ai_prompt else {"url": image_url, "credit": credit} if image_url
+                else {"file_id": image_file_id} if image_file_id else None)
+        if not pick:
+            raise ValueError("Give image_file_id, image_url or ai_prompt for the new picture.")
+        return await pictures.replace(file_id, slot, pick)
+    if not image_file_id:
+        raise ValueError("image_file_id is needed to insert a picture after the anchor.")
     return await t_insert_image(
         file_id=file_id, anchor=anchor, image_file_id=image_file_id,
         width_inches=width_inches, svg_file_id=svg_file_id,
@@ -916,15 +935,26 @@ async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
 @mcp.tool()
 @linked
 async def generate_image(
-    prompt: str,
+    prompt: Optional[str] = None,
     size: str = "1024x1024",
     model: str = "black-forest-labs/FLUX.2-pro",
+    stock_search: Optional[str] = None,
+    n: int = 12,
 ) -> dict:
     """Generate an image from text via SiliconFlow image-gen (FLUX.2-pro
-    by default). Useful for: missing figures, conceptual illustrations,
+    by default; costs a credit). Useful for: missing figures, conceptual illustrations,
     decorative covers. size "WIDTHxHEIGHT", 256–2048 px a side, e.g.
     1792x1024 (wide), 1024x1792 (tall), 1024x1024, 1600x900 (16:9 slide).
-    Returns image_file_id usable in insert_image."""
+    Returns image_file_id usable in insert_image.
+
+    stock_search="words" instead: free stock photo CANDIDATES (Wikimedia Commons + Openverse, unfiltered) —
+    [{thumb_url, url, credit, title, width, height, source}]; nothing is generated. Show them to the person
+    and let them pick; then insert_image(file_id, slot, image_url=…, credit=…)."""
+    if stock_search:
+        from app.tools import images
+        return {"candidates": await images.search(stock_search, max(1, min(30, n)))}
+    if not prompt:
+        raise ValueError("Give a prompt (or stock_search words for free stock candidates).")
     return await vision_ops.generate_image(prompt, model=model, size=size)
 
 

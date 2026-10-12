@@ -156,6 +156,80 @@ async def _openverse(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
     raise ValueError(f"None of the stock photos for {query!r} could be downloaded")
 
 
+# ---------- jelöltek a képválasztóhoz (a felhasználó választ; tartalmi szűrés NINCS — Kommandant, 10-12) ----------
+
+def _commons_credit(ii: dict[str, Any]) -> str:
+    import html as _html
+    import re as _re
+    meta = ii.get("extmetadata") or {}
+    lic = (meta.get("LicenseShortName") or {}).get("value", "free licence")
+    who = _re.sub(r"<[^>]+>", "", _html.unescape((meta.get("Artist") or {}).get("value", ""))).strip() or "unknown author"
+    return f"Photo: {who[:80]} (Wikimedia Commons), {lic} — {ii.get('descriptionurl', ii.get('url', ''))}"
+
+
+async def _commons_candidates(query: str, n: int) -> list[dict[str, Any]]:
+    r = await _get("https://commons.wikimedia.org/w/api.php", params={
+        "action": "query", "format": "json", "generator": "search", "gsrnamespace": 6, "gsrlimit": min(50, n * 2),
+        "gsrsearch": f"{query} filetype:bitmap", "prop": "imageinfo",
+        "iiprop": "url|size|mime|extmetadata", "iiurlwidth": 1600})
+    pages = sorted((r.json().get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
+    out = []
+    for pg in pages:
+        ii = (pg.get("imageinfo") or [{}])[0]
+        if not ii.get("url") or not str(ii.get("mime", "")).startswith("image/"):
+            continue                                   # csak technikai: legyen letölthető kép
+        full, orig = ii.get("thumburl") or ii["url"], ii["url"].split("?")[0]
+        # a Wikimedia csak szabványos bélyegkép-szélességeket ad (pl. 250/330/500; a 400 → HTTP 400)
+        out.append({"thumb_url": _wikimedia_thumb(orig, 330) if (ii.get("width") or 0) > 330 else orig,
+                    "url": full, "credit": _commons_credit(ii), "title": (pg.get("title") or "").removeprefix("File:"),
+                    "width": ii.get("width"), "height": ii.get("height"), "source": "Wikimedia Commons"})
+    return out[:n]
+
+
+async def _openverse_candidates(query: str, n: int) -> list[dict[str, Any]]:
+    r = await _get("https://api.openverse.org/v1/images/", params={"q": query, "license_type": "commercial",
+                                                                  "page_size": min(40, max(n, 10)), "size": "large"})
+    out = []
+    for hit in r.json().get("results", []):
+        if not hit.get("url"):
+            continue
+        lic = f"CC {hit.get('license', '').upper()} {hit.get('license_version') or ''}".strip()
+        out.append({"thumb_url": hit.get("thumbnail") or hit["url"], "url": _wikimedia_thumb(hit["url"].split("?")[0], 1600),
+                    "credit": f"Photo: {hit.get('creator') or 'unknown author'} ({hit.get('source')}), {lic} — "
+                              f"{hit.get('foreign_landing_url') or hit['url']}",
+                    "title": hit.get("title") or "", "width": hit.get("width"), "height": hit.get("height"),
+                    "source": hit.get("source") or "Openverse"})
+    return out[:n]
+
+
+async def search(query: str, n: int = 12) -> list[dict[str, Any]]:
+    """Stock-jelöltek a választóhoz, letöltés nélkül: [{thumb_url, url, credit, title, width, height, source}].
+    Commons + Openverse; kevés találatnál a rövidített keresés (a fő szó a végén, ld. _stock_progressive) tölti fel."""
+    query = " ".join(query.split())[:120]
+    if not query:
+        return []
+    words = query.split()
+    tries = list(dict.fromkeys([query] + [" ".join(words[-k:]) for k in (3, 2) if len(words) > k]
+                               + [" ".join(words[:k]) for k in (4, 3, 2) if len(words) > k]))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for q in tries:
+        for fn in (_commons_candidates, _openverse_candidates):
+            try:
+                found = await fn(q, n)
+            except Exception as e:
+                log.info("képjelöltek (%s, %s): %s", fn.__name__, q, e)
+                continue
+            for c in found:
+                if c["url"] not in seen:
+                    seen.add(c["url"]); out.append(c)
+            if len(out) >= n:
+                return out[:n]
+        if len(out) >= max(4, n // 2):
+            break
+    return out[:n]
+
+
 def _crop_to(data_or_path: Union[bytes, Path], aspect: Optional[float], max_px: int) -> Path:
     from PIL import Image, ImageOps
     src = Image.open(io.BytesIO(data_or_path) if isinstance(data_or_path, bytes) else data_or_path)

@@ -362,6 +362,10 @@ def _persist_spec(spec: dict[str, Any], by_slot: dict) -> dict[str, Any]:
             shutil.copy(x.path, output_path(fid))
             write_meta(fid, operation="deck image", label=f"slide {i + 1} image.jpg", extra={"ephemeral": True, "credit": x.attribution})
         ref = {"file_id": fid, **({"credit": x.attribution} if x.attribution else {})}
+        orig = spec["slides"][i].get("image") if j < 0 else (spec["slides"][i].get("images") or [None] * (j + 1))[j]
+        if isinstance(orig, dict):     # a képválasztó ebből tölti elő a keresést / az AI-promptot
+            q, pr = orig.get("query") or orig.get("stock"), orig.get("prompt") or orig.get("generate")
+            ref.update({k: v for k, v in (("query", q), ("prompt", pr)) if isinstance(v, str) and v})
         if j < 0:
             saved["slides"][i]["image"] = ref
         else:

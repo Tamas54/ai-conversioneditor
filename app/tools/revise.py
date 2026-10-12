@@ -38,6 +38,8 @@ def _version_step(op: str) -> Optional[str]:
         return "change"
     if op == "manual edit":
         return "edited by hand"
+    if op == "picture":
+        return "new picture"
     if op.startswith("pdf ") and op not in ("pdf to_word", "pdf compare"):
         return {"merge": "merged", "compress": "made smaller", "page_numbers": "page numbers", "make_fillable": "made fillable",
                 "ocr": "made searchable", "redact": "blacked out", "protect": "password"}.get(op[4:], op[4:].replace("_", " "))
@@ -157,8 +159,18 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
     if not request:
         raise ValueError("Say what should change.")
     out_id, summary, extra_files = None, "", []
+    swap = None
+    if ext in ("pptx", "docx") and not style_file_id:      # EGY kép cseréje: közvetlenül (nem ügynök), a választó nyílik
+        from app.tools import pictures
+        swap = await pictures.detect_swap(file_id, request)
 
-    if ext in IMAGES:
+    if swap:
+        res = await pictures.replace(file_id, swap["slot"], {"ai": swap["prompt"]} if swap["ai"]
+                                     else {"stock": swap["query"]})
+        out_id = res["file_id"]
+        summary = (f"New AI picture on {res['where'].split(' · ')[0].lower()}." if swap["ai"] else
+                   f"New picture on {res['where'].split(' · ')[0].lower()} — pick another one or generate one below.")
+    elif ext in IMAGES:
         from app.tools import photo_edit
         res = await photo_edit.run([file_id], request, None, ["psd", "jpg"])
         out = [f for f in res["files"] if not f["file_id"].endswith(".psd")] or res["files"]
@@ -223,7 +235,16 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
     label = f"{stem} (v{len(history(file_id)) + 1}).{out_id.rsplit('.', 1)[1]}"
     write_meta(out_id, source_file_id=file_id, operation="revise", label=label,
                extra={"instruction": request, "summary": summary, **({"style_file_id": style_file_id} if style_file_id else {})})
-    return {"file_id": out_id, "url": public_url(out_id), "label": label, "summary": summary, "also": extra_files}
+    changed: list[dict[str, Any]] = []
+    if out_id.rsplit(".", 1)[-1].lower() in ("pptx", "docx") and ext in ("pptx", "docx"):   # új/kicserélt képek → a választó
+        from app.tools import pictures
+        changed = await pictures.changed(file_id, out_id)
+        for p in changed:
+            if swap and p["slot"] == swap["slot"]:
+                p["query"], p["prompt"] = p.get("query") or swap["query"], p.get("prompt") or swap["prompt"]
+            p["prompt"] = p.get("prompt") or request
+    return {"file_id": out_id, "url": public_url(out_id), "label": label, "summary": summary, "also": extra_files,
+            "pictures_changed": changed}
 
 
 def _docx_source(pdf_id: str) -> Optional[str]:

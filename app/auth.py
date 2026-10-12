@@ -39,7 +39,8 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
 _GUEST_OK = (
     ("GET", "/app"), ("GET", "/editor/"), ("GET", "/preview/"), ("GET", "/api/thumb/"), ("GET", "/api/print/"), ("GET", "/api/files"),
     ("GET", "/api/account"), ("GET", "/api/convert/targets"), ("GET", "/api/forms/fields"), ("GET", "/api/jobs/"),
-    ("GET", "/api/revisions"), ("GET", "/api/billing/plans"),
+    ("GET", "/api/revisions"), ("GET", "/api/billing/plans"), ("GET", "/api/images/search"), ("GET", "/api/pictures"),
+    ("POST", "/api/make/picture"),                                    # a képválasztó: AI-képnél a végpont maga kér fiókot
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
     ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),

@@ -473,7 +473,7 @@ const views = {
     // PDF-nél, képnél és saját dizájnnál a szerkesztő a központ: széles képernyőn rögtön abban nyílik (Preview = sima nézet);
     // telefonon az előnézet marad (a szerkesztők asztali felületek), a gyors-eszközsáv ott is működik
     const quick = wireQuick(f);
-    if (eds.length && (sub === "edit" || ((quick || NATIVE[f.ext]) && !sub && matchMedia("(min-width: 900px)").matches)))
+    if (eds.length && (sub === "edit" || (((quick && quick.center !== false) || NATIVE[f.ext]) && !sub && matchMedia("(min-width: 900px)").matches)))
       openEditor((eds.find(([a]) => a === wantApp) || eds[0])[0], true);
     wireRevise(f);
   },
@@ -586,14 +586,20 @@ function imagePicker(name, { allowNone = true, ai = true, label = "Image" } = {}
   return `<fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">${label}</legend>
     <div class="seg" role="radiogroup">${opts.map(([v, t], i) => `<label><input type="radio" name="${name}-src" value="${v}" ${i === 1 ? "checked" : ""}><span>${t}</span></label>`).join("")}</div>
     <div data-upload-of="${name}" hidden>${fileSlot(`${name}-file`, { exts: EXT.image, label: "" })}</div>
-    <input type="text" name="${name}-q" placeholder="What should it show? e.g. city skyline at dusk"></fieldset>`;
+    <input type="text" name="${name}-q" autocomplete="off" placeholder="What should it show? e.g. city skyline at dusk">
+    <div class="pick-grid" data-grid-of="${name}" hidden></div><p class="pick-info muted small" data-info-of="${name}" hidden></p>
+    <input type="hidden" name="${name}-pick"></fieldset>`;
 }
 function wirePicker(form, name) {
+  const q = form.querySelector(`[name=${name}-q]`), grid = form.querySelector(`[data-grid-of="${name}"]`), info = form.querySelector(`[data-info-of="${name}"]`);
+  const pick = form.querySelector(`[name=${name}-pick]`);
+  const cands = wireCandidates(q, grid, info, sel => { pick.value = sel ? JSON.stringify({ url: sel.url, credit: sel.credit }) : ""; });
   const sync = () => {
     const v = form.querySelector(`[name=${name}-src]:checked`).value;
     form.querySelector(`[data-upload-of="${name}"]`).hidden = v !== "upload";
-    const q = form.querySelector(`[name=${name}-q]`); q.hidden = !(v === "stock" || v === "ai");
-    q.placeholder = v === "ai" ? `Describe the image — costs ${account?.image_credit_cost ?? 1} credit` : "Search words, e.g. city skyline";
+    q.hidden = !(v === "stock" || v === "ai");
+    q.placeholder = v === "ai" ? `Describe the image — costs ${account?.image_credit_cost ?? 1} credit` : "Search words, e.g. city skyline — then click the one you want";
+    cands.enable(v === "stock");
   };
   form.querySelectorAll(`[name=${name}-src]`).forEach(r => r.addEventListener("change", sync)); sync();
 }
@@ -605,7 +611,143 @@ async function readPicker(form, name) {
   }
   const q = form.querySelector(`[name=${name}-q]`)?.value.trim();
   if (!q) return null;
-  return v === "ai" ? { ai: q } : v === "stock" ? { stock: q } : null;
+  if (v === "stock") {                          // a rácsból kiválasztott kép; ha nem választott, az első találat
+    try { const p = JSON.parse(form.querySelector(`[name=${name}-pick]`)?.value || "null"); if (p?.url) return p; } catch {}
+    return { stock: q };
+  }
+  return v === "ai" ? { ai: q } : null;
+}
+// ---------- KÉPVÁLASZTÓ ----------
+// Ahol kép kerül egy fájlba, a felhasználó VÁLASZT (Kommandant, 10-12: „ne szűrj ki semmit”): stock-jelöltek rácsa a
+// keresőszóból (Commons + Openverse, szűrés nélkül), „Generate with AI”, vagy saját kép. Az automatikus kép csak alapérték.
+const PICK_N = 12;
+function drawCandidates(grid, list, chosen) {
+  grid.innerHTML = list.length
+    ? list.map((c, i) => `<button type="button" class="pick" data-i="${i}" aria-pressed="${c.url === chosen}" title="${esc(c.title || "Photo")} — ${esc(c.source)}"><img src="${esc(c.thumb_url)}" alt="${esc(c.title || "")}" loading="lazy" referrerpolicy="no-referrer"></button>`).join("")
+    : `<p class="muted small pick-empty">Nothing found for these words — try others, or generate the picture with AI.</p>`;
+  grid.querySelectorAll(".pick img").forEach(img => img.addEventListener("error", () => img.closest(".pick").remove(), { once: true }));
+}
+// keresőmező + rács + egy sor tájékoztató; onChange(kiválasztott jelölt | null). enable(false) = rejtve (más forrás).
+function wireCandidates(input, grid, info, onChange) {
+  let list = [], sel = null, timer = 0, seq = 0, on = true, last = "";
+  const describe = () => {
+    info.hidden = !on || (!list.length && !sel);
+    info.textContent = sel ? `Chosen: ${sel.title || "photo"} — ${sel.credit.replace(/ — https?:\/\/\S+$/, "")}`
+      : list.length ? "Click the one you want — otherwise the first one is used." : "";
+  };
+  const search = async () => {
+    const q = input.value.trim(), my = ++seq;
+    if (!on || q.length < 2) { list = []; grid.hidden = true; describe(); return; }
+    if (q === last && list.length) { grid.hidden = false; describe(); return; }
+    grid.hidden = false; grid.innerHTML = `<p class="muted small pick-empty">Looking for pictures…</p>`;
+    try {
+      const { candidates } = await api(`/api/images/search?q=${encodeURIComponent(q)}&n=${PICK_N}`);
+      if (my !== seq) return;
+      list = candidates; last = q;
+    } catch (e) { if (my === seq) grid.innerHTML = `<p class="muted small pick-empty">${esc(e.message)}</p>`; return; }
+    drawCandidates(grid, list, sel?.url); describe();
+  };
+  input.addEventListener("input", () => { clearTimeout(timer); if (sel) { sel = null; onChange(null); } timer = setTimeout(search, 600); });
+  input.addEventListener("keydown", e => { if (e.key === "Enter" && on) { e.preventDefault(); clearTimeout(timer); search(); } });
+  grid.addEventListener("click", e => {
+    const b = e.target.closest(".pick"); if (!b) return;
+    const c = list[+b.dataset.i]; sel = sel?.url === c.url ? null : c;
+    grid.querySelectorAll(".pick").forEach(x => x.setAttribute("aria-pressed", String(!!sel && list[+x.dataset.i].url === sel.url)));
+    describe(); onChange(sel);
+  });
+  return {
+    search, get: () => sel,
+    enable(v) { on = v; if (!v) { grid.hidden = true; info.hidden = true; } else if (input.value.trim()) search(); },
+  };
+}
+// „Change a picture”: a fájl képei → az egyik kicserélése (stock-jelölt / AI / saját kép) → új verzió. Promise: {file_id, msg}.
+let nextPick = null;                                   // a „Kérj változtatást” után ide kerül, melyik képet kínálja fel
+const takePendingPick = id => { try { const v = JSON.parse(sessionStorage.getItem("aice-pick:" + id) || "null"); sessionStorage.removeItem("aice-pick:" + id); return v; } catch { return null; } };
+async function pickPicture(fileId) {
+  const pre = nextPick; nextPick = null;
+  const { pictures } = await api(`/api/pictures?file_id=${encodeURIComponent(fileId)}`);
+  if (!pictures.length) throw new Error("This file has no pictures yet — ask for one below, e.g. “add a photo of the Colosseum after the first paragraph”.");
+  let slot = pre?.slot && pictures.some(p => p.slot === pre.slot) ? pre.slot : pictures[0].slot;
+  const form = $("#make-form"), dlg = $("#drawer"), credit = account?.image_credit_cost ?? 1;
+  const imgUrl = s => `/api/pictures/img?file_id=${encodeURIComponent(fileId)}&slot=${encodeURIComponent(s)}`;
+  form.innerHTML = `<h2 id="drawer-title">Change a picture</h2>
+    <p class="muted" style="margin:0 0 16px">${esc(pre?.note || "Choose the picture to change, then the new one — a stock photo, an AI picture or one of your own. Every change is a new version.")}</p>
+    <div class="pic-row" role="radiogroup" aria-label="Pictures in this file">${pictures.map(p => `<button type="button" class="pic" data-slot="${esc(p.slot)}" aria-pressed="${p.slot === slot}"><img src="${imgUrl(p.slot)}" alt="" loading="lazy"><span>${esc(p.where)}</span></button>`).join("")}</div>
+    <div class="seg" role="radiogroup" style="margin-top:14px"><label><input type="radio" name="psrc" value="stock" checked><span>Stock photos</span></label>
+      <label><input type="radio" name="psrc" value="ai"><span>Generate with AI</span></label><label><input type="radio" name="psrc" value="own"><span>Your picture</span></label></div>
+    <div data-psrc="stock"><label>What should it show?<input type="text" name="pq" autocomplete="off" placeholder="e.g. smiling blonde girl, city skyline at dusk"></label>
+      <div class="pick-grid" id="pick-grid" hidden></div><p class="pick-info muted small" id="pick-info" hidden></p></div>
+    <div data-psrc="ai" hidden><label>Describe the picture <em class="ai-badge">AI</em><textarea name="pprompt" placeholder="e.g. A smiling young woman with blonde hair in a sunny meadow, natural light, photograph"></textarea></label>
+      <p class="muted small" style="margin:-6px 0 12px">${account?.guest ? "AI pictures need a free account — it takes a minute." : `Costs ${credit} credit${credit > 1 ? "s" : ""}. You'll see it right away and can still pick another.`}</p></div>
+    <div data-psrc="own" hidden>${fileSlot("pfile", { exts: EXT.image, label: "Picture" })}</div>
+    <p class="status" id="make-status"></p>
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">Use this picture</button></div>`;
+  const q = form.querySelector("[name=pq]"), prompt = form.querySelector("[name=pprompt]"), go = $("#make-go"), st = $("#make-status");
+  const cands = wireCandidates(q, $("#pick-grid"), $("#pick-info"), () => {});
+  const fill = () => {                                   // a kép eredeti keresőszava / promptja (vagy a kérés) előtöltve
+    const p = pictures.find(x => x.slot === slot), mine = pre && pre.slot === slot;
+    q.value = (mine && pre.query) || p.query || ""; prompt.value = (mine && pre.prompt) || p.prompt || p.query || "";
+  };
+  const src = () => form.querySelector("[name=psrc]:checked").value;
+  const syncSrc = () => {
+    form.querySelectorAll("[data-psrc]").forEach(d => d.hidden = d.dataset.psrc !== src());
+    go.innerHTML = src() === "ai" ? `Generate it <em class="ai-badge">AI</em>` : "Use this picture";
+    cands.enable(src() === "stock");
+    (src() === "stock" ? q : src() === "ai" ? prompt : null)?.focus();
+  };
+  form.querySelector(".pic-row").addEventListener("click", e => {
+    const b = e.target.closest(".pic"); if (!b || b.dataset.slot === slot) return;
+    slot = b.dataset.slot; form.querySelectorAll(".pic").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.slot === slot)));
+    fill(); if (src() === "stock") cands.search();
+  });
+  form.querySelectorAll("[name=psrc]").forEach(r => r.addEventListener("change", syncSrc));
+  wireSlots(form);
+  fill(); syncSrc();
+  if (!dlg.open) dlg.showModal();
+  form.scrollTop = 0; dlg.scrollTop = 0;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const onClose = () => { if (!done) { done = true; reject(Object.assign(new Error(""), { quiet: true })); } };
+    dlg.addEventListener("close", onClose, { once: true });
+    form.onsubmit = async e => {
+      if (e.submitter?.value !== "go") return;
+      e.preventDefault();
+      let pick;
+      try {
+        if (src() === "stock") {
+          const sel = cands.get(), words = q.value.trim();
+          if (!sel && !words) { q.focus(); st.textContent = "Type what the picture should show — or switch to Generate with AI."; return; }
+          pick = sel ? { url: sel.url, credit: sel.credit, query: words } : { stock: words };
+        } else if (src() === "ai") {
+          if (account?.guest) return accountCta("Generate a picture with AI");
+          const p = prompt.value.trim(); if (p.length < 3) { prompt.focus(); st.textContent = "Describe the picture in a few words."; return; }
+          pick = { ai: p };
+        } else {
+          const [id] = await readSlot(form, "pfile", "a picture");
+          pick = { file_id: id };
+        }
+      } catch (err) {
+        st.textContent = err.message;
+        if (err.slot) {                                    // nincs még kép: a választó nyitva — kiválasztás után magától folytatja
+          const s = slotEl(form, err.slot), resume = () => { s.removeEventListener("slotchange", resume); form.requestSubmit(go); };
+          s.addEventListener("slotchange", resume);
+        }
+        return;
+      }
+      go.disabled = true;
+      st.textContent = pick.ai ? "Generating the picture — about 15 seconds…" : "Putting the picture in…";
+      try {
+        const r = await api("/api/make/picture", { method: "POST", body: JSON.stringify({ file_id: fileId, slot, pick }) });
+        if (pick.ai) loadAccount().catch(() => {});
+        done = true; dlg.removeEventListener("close", onClose); dlg.close();
+        resolve({ file_id: r.file_id, label: r.label, msg: `New picture on ${r.where.split(" · ")[0].toLowerCase()} — ${r.label}` });
+      } catch (err) {
+        go.disabled = false;
+        if (err.cta) return accountCta("Generate a picture with AI");
+        st.textContent = err.message;
+      }
+    };
+  });
 }
 const ACCENTS = ["#FF5A36", "#2F80ED", "#1E9E6A", "#8E44AD", "#F2B705", "#15191B"];
 const swatches = () => `<fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Accent colour</legend>
@@ -866,6 +1008,15 @@ const QUICK = [
         return { file_id: psd.file_id, msg: "Restored — the original, the repair and the colour are separate layers" };
       } },
   ] },
+  // Pakli / Word: a képek cseréje a KÉPVÁLASZTÓVAL (a jobb oldali fiókban). A sáv csak akkor látszik, ha van kép a fájlban;
+  // a „Kérj változtatást” után magától nyílik az új/kicserélt képre. center:false — ettől még nem a szerkesztő a nyitónézet.
+  { title: "Pictures", exts: ["pptx", "docx"], uses: [], covers: [], center: false,
+    when: f => api(`/api/pictures?file_id=${encodeURIComponent(f.file_id)}`).then(r => r.pictures.length > 0).catch(() => false),
+    auto: (f, start) => { const pre = takePendingPick(f.file_id); if (pre) { nextPick = pre; start(0); } },
+    items: [
+      { label: "Change a picture", doing: "Choose the new picture in the panel on the right…", hint: "A stock photo, an AI picture or one of your own",
+        run: id => pickPicture(id) },
+  ] },
 ];
 const FIT_PREVIEW = [...IMG, "psd", "psb", "tif", "tiff", "vectorcraft", "ai", "eps"];
 function wireQuick(f) {
@@ -875,7 +1026,8 @@ function wireQuick(f) {
   const ai = '<em class="ai-badge">AI</em>';
   row.innerHTML = `<span class="quick-h">${esc(g.title)}</span>` + g.items.map((it, i) => `<button type="button" class="qb" data-q="${i}"${it.hint ? ` title="${esc(it.hint)}"` : ""}${it.form ? ' aria-expanded="false"' : ""}>${esc(it.label)}${it.ai ? " " + ai : ""}</button>`).join("")
     + (uses.length ? `<span class="quick-sep" aria-hidden="true"></span>` + uses.map((u, i) => `<button type="button" class="qb qb-go" data-use="${i}" title="${esc(u[4])}">${esc(u[4].split(" — ")[0])} <span aria-hidden="true">→</span></button>`).join("") : "");
-  wrap.hidden = false;
+  wrap.hidden = !!g.when;                                         // feltételes sáv: csak ha van mire (pl. képek a fájlban)
+  if (g.when) g.when(f).then(ok => { if (ok && cur?.file_id === f.file_id) { wrap.hidden = false; g.auto?.(f, i => run(g.items[i], null)); } });
   const say = msg => { st.textContent = msg || ""; st.hidden = !msg; };
   let open = -1, busy = false;
   const close = () => { open = -1; panel.hidden = true; panel.innerHTML = ""; row.querySelectorAll("[aria-expanded]").forEach(b => b.setAttribute("aria-expanded", "false")); };
@@ -893,7 +1045,7 @@ function wireQuick(f) {
     } catch (e) {
       lock(false);
       if (e.cta) { say(""); return accountCta(it.label); }
-      say(e.message);
+      say(e.quiet ? "" : e.message);
       if (e.slot && fm) {                                          // hiányzó fájl: a választó nyitva — kiválasztás után magától folytatja
         const s = slotEl(fm, e.slot);
         const resume = () => { if (!slotPicked(fm, e.slot).length && !s.querySelector("input[type=file]")?.files?.length) return;
@@ -1485,6 +1637,10 @@ async function wireRevise(f) {
       const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, instruction, style_file_id: styleId }) });
       const r = await pollJob(job, () => "Working on it…", st);
       toast(r.summary || "Done — new version");
+      if (r.pictures_changed?.length) try {     // a kép csak alapérték: a választó magától nyílik rá
+        sessionStorage.setItem("aice-pick:" + r.file_id, JSON.stringify({ ...r.pictures_changed[0],
+          note: `Is this the picture you wanted on ${r.pictures_changed[0].where.split(" · ")[0].toLowerCase()}? Pick another one — or generate one with AI.` }));
+      } catch {}
       await loadAccount();
       const sameEditor = app && editorsFor(r.file_id.split(".").pop()).some(([a]) => a === app);   // szerkesztőből: ott marad
       nav("/app/file/" + encodeURIComponent(r.file_id) + (sameEditor ? `/edit/${app}` : ""));

@@ -35,6 +35,8 @@ def _image_spec(src: Optional[dict]) -> Optional[Any]:
         return None
     if src.get("file_id"):
         return src["file_id"]
+    if src.get("url"):                       # a képválasztó rácsából kiválasztott stockkép (forrásmegjelöléssel)
+        return {"url": src["url"], **({"credit": src["credit"]} if src.get("credit") else {})}
     if src.get("stock"):
         return {"stock": src["stock"]}
     if src.get("ai"):
