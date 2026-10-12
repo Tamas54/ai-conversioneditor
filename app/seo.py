@@ -55,7 +55,7 @@ PAGES: dict[str, dict[str, Any]] = {
         "title": "Poster, flyer & certificate maker",
         "desc": "Posters, flyers, report covers and certificates — type the words, get a print-ready PDF with real typography, then fine-tune it in the design editor.",
         "h1": "Design posters, flyers and certificates",
-        "intro": "Choose a format and fill in the words; layout and typography are done for you. You get a print-ready PDF and PNG, and with “Make & edit” the design opens in an Illustrator-like editor with every text still editable.",
+        "intro": "Choose a format and fill in the words; layout and typography are done for you. It opens in an Illustrator-like design editor with every text still editable, and the print-ready PDF and PNG are in your files.",
         "points": ["Print-ready PDF", "Posters, flyers, report covers, certificates", "Your picture, a stock photo or an AI image", "Editable design file"],
         "faq": [("Is it print-ready?", "Yes — a vector PDF at the right paper size (A3, A4, A5, Letter).")],
     },

@@ -468,6 +468,7 @@ async def make_book(body: dict[str, Any]) -> dict[str, Any]:
         out = await design.render("booklet", data, size=body.get("size") or "A5", export=["pdf"])
     except Exception as e:
         raise _fail(e)
+    _label_outputs(out, f"{str(data['title'])[:60]} (booklet)")     # a szerkesztő címsorában ne „design.pdf” álljon
     events.emit("tool_done", tool="make_book", result={"file_id": out["file_id"]})
     return out
 

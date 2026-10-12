@@ -181,6 +181,8 @@ const EDITORS = [
   ["vectorcraft", "Edit as design", ["svg","svgz","pdf","ai","eps","vectorcraft"]],
 ];
 const editorsFor = ext => EDITORS.filter(([, , exts]) => exts.includes((ext || "").toLowerCase()));
+const EDITOR_NAMES = { wordcraft: "Word editor", deckcraft: "slide editor", pdfcraft: "PDF editor", gridcraft: "spreadsheet editor",
+  photocraft: "photo editor", designcraft: "layout editor", vectorcraft: "design editor" };
 let account = null, files = [];
 
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3800); }
@@ -760,7 +762,7 @@ const MAKERS = {
         const style_file_id = await readStyle(form);
         r = await api("/api/make/document", { method: "POST", body: JSON.stringify({ mode: "template", template: fd.get("template"), style_file_id }) });
       }
-      return { ...r, edit: true, msg: r.msg || (m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the editor…") };
+      return { ...r, edit: true, msg: r.msg || (m === "brief" ? "Written — edit it by hand, or ask for changes below" : "Opening the Word editor…") };
     },
   },
   deck: {
@@ -814,13 +816,14 @@ const MAKERS = {
         body.style_file_id = await readStyle(form);
         $("#make-status").textContent = m === "document" ? "Reading the document and writing the slides…" : "Writing the slides…";
         r = await api("/api/make/deck", { method: "POST", body: JSON.stringify(body) });
-        return { ...r, msg: ex ? "Made from the example brief — write your own any time" : "Done — fix anything in the slide editor, or ask for changes below" };
+        return { ...r, edit: true, msg: ex ? "Made from the example brief — it's open in the slide editor; write your own brief any time"
+          : "Your deck is open in the slide editor — fix anything by hand, or ask for changes below" };
       }
       return { ...r, edit: true, msg: "Opening the slide editor…" };
     },
   },
   social: {
-    alt: "Make & edit", altLoose: true, title: "New social post", sub: "Headline + picture → every size you tick, ready to post. “Make & edit” opens it in the design editor to fine-tune.",
+    title: "New social post", sub: "Headline + picture → every size you tick. It opens in the design editor to fine-tune; the ready-to-post PNGs are in your files.",
     fields: () => `<label>Headline<input type="text" name="headline" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
       <label>Handle or URL<input type="text" name="handle" maxlength="60" placeholder="@yourbrand"></label>
@@ -832,14 +835,14 @@ const MAKERS = {
       <div id="bg-wrap" hidden>${imagePicker("bg", { allowNone: false, label: "New background" })}</div>
       ${swatches()}`,
     wire(form) { wirePicker(form, "img"); wirePicker(form, "bg"); form.querySelector("[name=cut]").addEventListener("change", e => form.querySelector("#bg-wrap").hidden = !e.target.checked); },
-    async submit(fd, form, opts = {}) {
-      if (!fd.get("headline")) { opts.alt = true; fd.set("headline", "Your headline here"); }   // üresen: a szerkesztőben írja be
+    async submit(fd, form) {
+      if (!fd.get("headline")) fd.set("headline", "Your headline here");   // üresen: a szerkesztőben írja be
       const body = { headline: fd.get("headline"), subtitle: fd.get("subtitle"), handle: fd.get("handle"), sizes: fd.getAll("sizes"),
-        image: await readPicker(form, "img"), accent: fd.get("accent"), editable: !!opts.alt };
+        image: await readPicker(form, "img"), accent: fd.get("accent"), editable: true };
       if (fd.get("cut")) { body.remove_background = true; body.background = await readPicker(form, "bg"); }
       const r = await api("/api/make/social", { method: "POST", body: JSON.stringify(body) });
-      if (opts.alt) return editNative(r.posts[0].files, r.posts.length);
-      return { file_id: r.posts[0].files.find(f => f.file_id.endsWith(".png"))?.file_id || r.posts[0].file_id, n: r.posts.length };
+      const n = r.posts.length;
+      return { ...editNative(r.posts[0].files, n), msg: `Opening the design editor — the PNG${n > 1 ? `s of all ${n} sizes are` : " is"} in your files too` };
     },
   },
   book: {
@@ -858,11 +861,12 @@ const MAKERS = {
       const style_file_id = await readStyle(form);
       $("#make-status").textContent = "Typesetting the book…";
       const r = await api("/api/make/book", { method: "POST", body: JSON.stringify({ file_id: m.file_id, title: fd.get("title"), author: fd.get("author"), size: fd.get("size"), cover: await readPicker(form, "cover"), style_file_id, layout: fd.get("layout") }) });
-      return fd.get("layout") === "booklet" ? r : { ...r, edit: true, msg: "Your book is open in the editor — the PDF is in your files too" };
+      return fd.get("layout") === "booklet" ? { ...r, edit: true, msg: "Your booklet is open in the PDF editor" }
+        : { ...r, edit: true, msg: "Your book is open in the Word editor — the PDF is in your files too" };
     },
   },
   photo: {
-    cta: "Go", alt: "Go & edit", title: "Photos", sub: "Every result is a layered Photoshop file (PSD) plus a JPG — nothing is lost, every step can be undone by hand. “Go & edit” opens the result in the photo editor.",
+    cta: "Go", title: "Photos", sub: "The result opens in the photo editor. Edits and restorations come as a layered Photoshop file (PSD) — nothing is lost, every step can be undone by hand; a JPG is in your files too.",
     fields: () => `${fileSlot("photos", { exts: EXT.image, multiple: true, label: "Photos" })}
       <div class="seg" style="margin:0 0 16px"><label><input type="radio" name="mode" value="edit" checked><span>Edit with words</span></label>
       <label><input type="radio" name="mode" value="restore"><span>Restore old photos</span></label>
@@ -893,7 +897,7 @@ const MAKERS = {
         const ta = form.querySelector("[name=instruction]"); ta.value = (ta.value.trim() ? ta.value.trim().replace(/[.,]?$/, ", ") : "") + b.dataset.chip; ta.focus();
       }));
     },
-    async submit(fd, form, opts = {}) {
+    async submit(fd, form) {
       let mode = fd.get("mode"), quickNote = "";
       const instr0 = mode === "edit" ? (fd.get("instruction") || "").trim() : "";
       if (mode === "edit" && !instr0) { mode = "quick"; fd.set("action", "enhance"); quickNote = "No instructions — gave it a quick enhance. "; }
@@ -908,8 +912,8 @@ const MAKERS = {
         const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the pictures…");
         await loadAccount();
         const psd = r.files.find(x => x.file_id.endsWith(".psd"));
-        if (opts.alt && psd) return { file_id: psd.file_id, n: r.files.length, edit: true, msg: "Opening the restored picture in the photo editor…" };
-        return { file_id: r.file_id, n: r.files.length, msg: `Restored ${r.photos} picture${r.photos > 1 ? "s" : ""} — layered PSDs are in your files` };
+        const many = r.photos > 1 ? ` — all ${r.photos} restored pictures are in your files` : "";
+        return { file_id: (psd || r).file_id, n: r.files.length, edit: true, msg: `Restored — the layers are open in the photo editor${many}` };
       }
       if (instr) {
         const [logo = null] = await readSlot(form, "logo");
@@ -917,19 +921,19 @@ const MAKERS = {
         const r = await pollJob(job, j => j.stage === "planning the edit" ? "Planning the edit…" : `Editing photo ${Math.min(j.done + 1, j.total)} of ${j.total}…`);
         const jpg = r.files.find(x => /\.(jpe?g|png)$/.test(x.file_id)) || r.files[0];
         const psd = r.files.find(x => x.file_id.endsWith(".psd"));
-        if (opts.alt && psd) return { file_id: psd.file_id, n: r.files.length, edit: true, msg: `${r.summary || "Done"} — every step is its own layer` };
-        return { file_id: jpg.file_id, n: r.files.length, msg: `${r.summary || "Done"} — layered PSD in your files` };
+        return { file_id: (psd || jpg).file_id, n: r.files.length, edit: true, msg: `${r.summary || "Done"} — open in the photo editor, every step is its own layer` };
       }
       let last;
       for (const [i, id] of ids.entries()) {
         st.textContent = `Working on photo ${i + 1} of ${ids.length}…`;
         last = await api("/api/make/photo", { method: "POST", body: JSON.stringify({ file_id: id, action, background: await readPicker(form, "bg"), blur: +fd.get("blur") }) });
       }
-      return { ...last, n: ids.length, edit: !!opts.alt, msg: quickNote ? quickNote + "Describe an edit next time for more." : undefined };
+      return { ...last, n: ids.length, edit: true, msg: (quickNote ? quickNote + "Describe an edit next time for more. " : "")
+        + (ids.length > 1 ? `Opening the last one in the photo editor — all ${ids.length} are in your files` : "Opening the photo editor…") };
     },
   },
   print: {
-    alt: "Make & edit", altLoose: true, title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. “Make & edit” opens it in the design editor.",
+    title: "New print design", sub: "Pick a format and fill in the words — layout and typography are done for you. It opens in the design editor to fine-tune; the print-ready PDF is in your files.",
     fields: () => `<label>Format<select name="template"><option value="poster">Poster</option><option value="flyer">Flyer</option><option value="report_cover">Report cover</option><option value="certificate">Certificate</option></select></label>
       <label>Title / name<input type="text" name="title" maxlength="120" placeholder="Leave empty to type it in the design editor"></label>
       <label>Subtitle<input type="text" name="subtitle" maxlength="160"></label>
@@ -937,18 +941,18 @@ const MAKERS = {
       <label>Date / place / author<input type="text" name="meta" maxlength="120" placeholder="e.g. 12 November · City Hall"></label>
       ${imagePicker("img")}${swatches()}`,
     wire(form) { wirePicker(form, "img"); },
-    async submit(fd, form, opts = {}) {
-      if (!fd.get("title")) { opts.alt = true; fd.set("title", t0(fd.get("template"))); }   // üresen: a szerkesztőben írja be
+    async submit(fd, form) {
+      if (!fd.get("title")) fd.set("title", t0(fd.get("template")));   // üresen: a szerkesztőben írja be
       const t = fd.get("template"), img = await readPicker(form, "img");
       const data = t === "certificate"
         ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
         : { title: fd.get("title"), subtitle: fd.get("subtitle"), body: fd.get("body"), date: fd.get("meta"), author: fd.get("meta"), image: img };
-      const r = await api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent"), editable: !!opts.alt }) });
-      return opts.alt ? editNative(r.files, 1) : r;
+      const r = await api("/api/make/design", { method: "POST", body: JSON.stringify({ template: t, data, accent: fd.get("accent"), editable: true }) });
+      return { ...editNative(r.files, 1), msg: "Opening the design editor — the print-ready PDF is in your files too" };
     },
   },
   scan: {
-    cta: "Read the pages", title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and give you an editable document.",
+    cta: "Read the pages", title: "Scan to text", sub: "Photos or scans of printed pages — an old book, letters, a magazine. We read every page and open it as an editable document in the Word editor.",
     fields: () => `${fileSlot("pages", { exts: [...EXT.image, "pdf"], multiple: true, label: "Pages, in order" })}
       <p class="muted small" style="margin:-6px 0 14px">Phone photos are fine — flat, well lit, one page per photo. A scanned PDF works too. Up to ${account?.ocr_max_pages ?? 60} pages at a time.</p>
       <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">You get</legend>
@@ -975,11 +979,15 @@ const MAKERS = {
       if (r.words) parts.push(`${r.words.toLocaleString("en")} words`);
       if (r.figures) parts.push(`${r.figures} picture${r.figures > 1 ? "s" : ""}`);
       if (r.fields?.length) parts.push(`${r.fields.length} form fields`);
-      return { file_id: r.file_id, n: r.files.length, msg: parts.join(" · ") };
+      // a szerkesztőbe: a Word-dokumentum, ha kérte; különben az első PDF (PDF-szerkesztő), végül az első kimenet
+      const open = r.files.find(x => x.file_id.endsWith(".docx")) || r.files.find(x => x.file_id.endsWith(".pdf")) || r;
+      const where = EDITOR_NAMES[editorsFor(extOf(open.file_id))[0]?.[0]];
+      return { file_id: open.file_id, n: r.files.length, msg: parts.join(" · ") + (where ? ` — open in the ${where}` : "")
+        + (r.files.length > 2 ? `; the other ${r.files.length - 1} files are in your files` : r.files.length > 1 ? "; the other file is in your files too" : "") };
     },
   },
   convert: {
-    cta: "Convert", title: "Convert a file", sub: "Pick a file and the format you need. The original stays as it was.",
+    cta: "Convert", title: "Convert a file", sub: "Pick a file and the format you need — the result opens in the matching editor. The original stays as it was.",
     fields: () => `${fileSlot("file", { label: "File" })}
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
     wire(form) {
@@ -1005,8 +1013,9 @@ const MAKERS = {
     },
   },
   pdf: {
-    cta: "Run", title: "PDF tools", sub: "Pick a job, add your PDF — you get a new file; the original stays as it was.",
+    cta: "Open in editor", title: "PDF tools", sub: "Open a PDF in the PDF editor, or pick a job — the result opens in the editor as a new file; the original stays as it was.",
     fields: () => `<label>Job<select name="action">
+        <option value="open">Open in the PDF editor — read, annotate, fill in, sign</option>
         <option value="merge">Merge PDFs into one</option><option value="compress">Make the file smaller</option>
         <option value="to_word">Convert to Word (.docx)</option><option value="page_numbers">Add page numbers</option>
         <option value="watermark">Add a watermark</option><option value="redact">Black out text for good</option>
@@ -1026,11 +1035,13 @@ const MAKERS = {
         s.toggleAttribute("data-multiple", many); s.querySelector("input[type=file]").multiple = many;
         s.querySelector(".slot-label").textContent = a === "merge" ? "PDFs, in order (pick several)" : a === "compare" ? "Old version, then new version (pick both)" : "PDF";
         form.querySelectorAll("[data-for]").forEach(d => d.hidden = d.dataset.for !== a);
+        form.querySelector("#make-go") && (form.querySelector("#make-go").textContent = a === "open" ? "Open in editor" : "Run");
       };
       form.querySelector("[name=action]").addEventListener("change", sync); sync();
     },
     async submit(fd, form) {
       const a = fd.get("action"), ids = await readSlot(form, "pdfs", "a PDF");
+      if (a === "open") return { file_id: ids[0], n: ids.length, edit: true, msg: "Opening the PDF editor…" };
       if ((a === "merge" || a === "compare") && ids.length < 2) {   // egy PDF-fel: a lista nyílik, a másodiknál magától folytatja
         const s = slotEl(form, "pdfs");
         if (s.querySelector(".slot-list").hidden) s.querySelector(".slot-pick").click();
@@ -1131,7 +1142,7 @@ function restoreForm(form, st) {
       else if (e.type === type) e.value = value;
     });
   }
-  form.querySelectorAll("input[type=radio]:checked, input[type=checkbox]").forEach(e => e.dispatchEvent(new Event("change", { bubbles: true })));
+  form.querySelectorAll("input[type=radio]:checked, input[type=checkbox], select").forEach(e => e.dispatchEvent(new Event("change", { bubbles: true })));
   $("#make-status").textContent = "Your last settings are filled in — change what you like and make it again." + (st.hadFiles ? " Pick the files again." : "");
 }
 // ZSÁKUTCA NINCS: minden gomb visz valahova. Üres szövegmező → a helyőrző példája; vendég AI-n → fiók-ajánlat;
@@ -1142,7 +1153,7 @@ function example(form, name) {
   return el.value;
 }
 const needAccount = () => Object.assign(new Error(AI_NOTE), { cta: true });
-// „Make & edit”: a natív (VectorCraft) dizájnfájl rögtön a dizájn-szerkesztőben nyílik
+// social/print: a natív (VectorCraft) dizájnfájl a dizájn-szerkesztőben nyílik (a PNG/PDF mellette a fájlok közt)
 function editNative(list, n) {
   const nat = (list || []).find(f => f.file_id.endsWith(".vectorcraft")) || list[0];
   return { file_id: nat.file_id, n, edit: true, msg: "Opening the design editor…" };
@@ -1195,8 +1206,11 @@ function openMaker(kind, opts = {}) {
       if (here().startsWith("/app/make/")) history.replaceState({ again: true }, "", here());
       keepMakeLink = true;
       $("#drawer").close(); await loadAccount();
-      toast(r.msg || (r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
-      nav("/app/file/" + encodeURIComponent(r.file_id) + (r.edit ? "/edit" : ""));
+      // ELV: minden készítő a LÁTHATÓ szerkesztőbe visz, ha az eredmény típusára van szerkesztő (kivéve: edit:false)
+      const ed = editorsFor(extOf(r.file_id))[0], edit = r.edit ?? !!ed;
+      const more = r.n > 2 ? ` — the other ${r.n - 1} files are in your files` : r.n > 1 ? " — the other file is in your files too" : "";
+      toast(r.msg || (edit && ed ? `Opening the ${EDITOR_NAMES[ed[0]]}…${more}` : r.n > 1 ? `Done — ${r.n} files are in your files` : "Done"));
+      nav("/app/file/" + encodeURIComponent(r.file_id) + (edit && ed ? "/edit" : ""));
     } catch (err) {
       go.disabled = false; if (alt) alt.disabled = false;
       if (err.cta) return accountCta(m.title);                 // vendég AI-n: a fiók-ajánlat (nem zsákutca)
