@@ -182,12 +182,30 @@ async def photo_run(
     commands: Optional[list[Command]] = None, save_format: Optional[str] = None,
     quality: Optional[int] = None, remove_background: bool = False,
     background_file_id: Optional[str] = None, background_blur: float = 0,
+    keep: Any = None, drop: Any = None, mask_file_id: Optional[str] = None, refine_file_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """PhotoCraft-parancsok egy képen (vagy új vásznon), új output file_id-be.
-    remove_background: előbb ISNet-kivágás (az alany marad, átlátszó háttér).
+    remove_background: előbb neurális kivágás (BiRefNet + emberek; az alany és minden ember marad).
+    keep / drop: megőrzendő / eldobandó tárgyak (szavak, pixeles dobozok, sokszögek); mask_file_id: külső maszk
+    (fehér = marad); refine_file_id: egy korábbi kivágás (vagy az arra épült kompozit) célzott javítása — a
+    kivágás maszkja a kimenet metaadatában (cutout.mask) marad meg ehhez. Az eredményben `check`.
     background_file_id: ez a kép kerül az alany mögé, a vásznat kitöltve (+ background_blur px elmosás)."""
     from app.storage import temp_path
+    from app.storage.metadata import read_meta
     t0 = time.time()
+    base_alpha: Optional[Path] = None
+    if refine_file_id:
+        # a korábbi kivágás: a metaadatában a forrás és a maszk; ha nincs ilyen, egy átlátszó PNG alfája
+        cm = (read_meta(refine_file_id) or {}).get("cutout") or {}
+        if cm.get("mask"):
+            base_alpha = existing(cm["mask"])
+            file_id = file_id or cm.get("source")
+        else:
+            base_alpha = existing(refine_file_id)
+            file_id = file_id or refine_file_id
+        remove_background = True
+    if keep or drop or mask_file_id:
+        remove_background = True
     if not file_id and not new:
         raise ValueError("Give file_id, or new (e.g. {\"width\": 1200, \"height\": 800})")
     src = existing(file_id) if file_id else None
@@ -196,13 +214,20 @@ async def photo_run(
     if fmt not in PHOTO_SAVE:
         raise ValueError(f"save_format: {fmt} (choose from {', '.join(sorted(PHOTO_SAVE))})")
     tmp: list[Path] = []
+    check: Optional[dict[str, Any]] = None
+    mask_fid = ""
     try:
         if remove_background:
             if not src:
                 raise ValueError("remove_background needs a file_id")
             from app.tools import cutout
             cut = temp_path(f"{new_file_id('png')}")
-            await cutout.remove_background(src, cut)
+            # a végső maszk rejtett fájlként marad: így a kivágás később célzottan javítható (refine_file_id)
+            mask_fid = new_file_id("png")
+            check = await cutout.remove_background(
+                src, cut, keep=keep, drop=drop, mask=existing(mask_file_id) if mask_file_id else None,
+                base_alpha=base_alpha, alpha_out=output_path(mask_fid))
+            write_meta(mask_fid, source_file_id=file_id, operation="cut-out mask", extra={"ephemeral": True})
             tmp.append(cut)
             src = cut
         args = ["run", str(src)] if src else ["run", "--new", json.dumps(new)]
@@ -215,6 +240,7 @@ async def photo_run(
                 # „cover”: a háttér a teljes vásznat kitölti; +8 %, hogy az elmosás széle ne látsszon
                 scale = max(a.width / b.width, a.height / b.height) * 108
             steps.append(("file.placeEmbedded", {"path": str(existing(background_file_id)), "scale": round(scale, 1)}))
+            steps.append(("layer.renameLayer", {"name": "New background"}))    # különben a fájl azonosítója a neve
             if background_blur:
                 steps.append(("filter.blur.gaussianBlur", {"radius": float(background_blur)}))
             steps.append(("layer.arrange.sendToBack", None))
@@ -242,6 +268,11 @@ async def photo_run(
     after = await _photo_info(output_path(fid))
     if after:
         res["before_after"] = {"before": before, "after": after} if before else {"after": after}
+    if check is not None:
+        write_meta(fid, extra={"cutout": {"source": file_id, "mask": mask_fid}})
+        if background_file_id:
+            check["verified"].append("new background placed behind the subject")
+        res["check"] = check
     return res
 
 

@@ -1869,7 +1869,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "photo_edit",
             "description": (
                 "Edit one image (omit image_file_id = the working image). Three ways:\n"
-                "1) PhotoCraft (Photoshop-like) directly: remove_background (neural cut-out), "
+                "1) PhotoCraft (Photoshop-like) directly: remove_background (neural cut-out; every person "
+                "stays; keep=[\"guitar\", …] / drop=[…] words for objects to keep or take out — the result's "
+                "check says if something a person holds was left out), "
                 "background_file_id (+ background_blur px) to put another image behind the subject, or "
                 "commands like image.autoTone, image.imageSize {width,height}, type.create {x,y,text,size,color}.\n"
                 "2) instruction = the edit in plain words ('Instagram 4:5, warmer, darker sky, headline "
@@ -1885,6 +1887,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "image_file_id": {"type": "string"},
                     "remove_background": {"type": "boolean"},
+                    "keep": {"type": "array", "items": {"type": "string"}},
+                    "drop": {"type": "array", "items": {"type": "string"}},
                     "background_file_id": {"type": "string"},
                     "background_blur": {"type": "number"},
                     "commands": {"type": "array", "items": {"type": "object"}},
@@ -3179,9 +3183,9 @@ async def _tool_photo_edit(state: AgentState, args: dict, pool) -> dict:
         r = await crafts.photo_run(
             file_id=src, commands=args.get("commands"), save_format=args.get("save_format"),
             remove_background=bool(args.get("remove_background")), background_file_id=args.get("background_file_id"),
-            background_blur=float(args.get("background_blur") or 0))
+            background_blur=float(args.get("background_blur") or 0), keep=args.get("keep"), drop=args.get("drop"))
         new = r["file_id"]
-        out = {"image_file_id": new, "ms": r["ms_elapsed"]}
+        out = {"image_file_id": new, "ms": r["ms_elapsed"], **({"check": r["check"]} if r.get("check") else {})}
     if src == state.current_fid:
         state.current_fid = new          # a munkakép szerkesztése: az eredmény a munkadokumentum
         out["file_id"] = new

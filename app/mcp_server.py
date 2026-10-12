@@ -810,6 +810,10 @@ async def photocraft(
     remove_background: bool = False,
     background_file_id: Optional[str] = None,
     background_blur: float = 0,
+    keep: Optional[list] = None,
+    drop: Optional[list] = None,
+    mask_file_id: Optional[str] = None,
+    refine_file_id: Optional[str] = None,
     save_format: Optional[str] = None,
     quality: Optional[int] = None,
     read: Optional[str] = None,
@@ -823,12 +827,22 @@ async def photocraft(
     {x, y, text, size, color}, filter.blur.gaussianBlur {radius},
     image.adjustments.photoFilter, layers… Result is a NEW file_id.
 
-    remove_background=true cuts the subject out with a neural net (ISNet:
-    keeps whiskers/hair). background_file_id puts that image behind the
-    subject, filling the canvas; background_blur (px, e.g. 18) fakes a
-    shallow depth of field. One call does "put this animal in front of
-    the Parliament": file_id=photo, remove_background=true,
-    background_file_id=<generate_image result>, background_blur=18.
+    remove_background=true cuts the subject out with a neural net (keeps
+    hair, thin objects and EVERY person). background_file_id puts that image
+    behind the subject, filling the canvas; background_blur (px, e.g. 18)
+    fakes a shallow depth of field. One call does "put this animal in front
+    of the Parliament": file_id=photo, remove_background=true,
+    background_file_id=<image>, background_blur=18.
+    The result has `check` {status: ok | needs_check | failed, findings,
+    verified, suggest}: people kept, and objects people hold (instrument,
+    microphone, bag…) that were left out. needs_check → read the findings;
+    usually rerun with refine_file_id=<this result> and keep=[…] (suggest
+    lists the names). keep / drop: words ("guitar", "hands",
+    "microphone stand"), boxes {"box": [x0,y0,x1,y1]} or exact outlines
+    {"polygon": [[x,y],…]} in source pixels — kept objects are added, dropped
+    ones taken out. mask_file_id: your own mask (white = keep).
+    refine_file_id: fix an earlier cut-out (or the picture made from it)
+    without starting over; file_id may be left out then.
 
     commands: [{"command": id, "params": {...}}]; files in params by
     "file_id" (e.g. file.placeEmbedded). new={"width":1200,"height":800}
@@ -842,7 +856,8 @@ async def photocraft(
     return await crafts.photo_run(
         file_id=file_id, new=new, commands=commands, save_format=save_format, quality=quality,
         remove_background=remove_background, background_file_id=background_file_id,
-        background_blur=background_blur,
+        background_blur=background_blur, keep=keep, drop=drop, mask_file_id=mask_file_id,
+        refine_file_id=refine_file_id,
     )
 
 
@@ -1039,7 +1054,9 @@ async def restore_photos(
     black-and-white prints only. Each photo becomes a layered PSD — the
     ORIGINAL at the bottom, "Restored (AI)" above it (aligned pixel for
     pixel), "Colour (AI)" on top in Color blend mode — plus a JPG, so a face
-    the AI got wrong can be masked back to the original. Costs credits
+    the AI got wrong can be masked back to the original. An album page with
+    several prints also gets ONE PSD of the whole page (album_file_id): the
+    page at the bottom and a layer group per picture, in place. Costs credits
     (1 per photo, +1 to colourise). Returns a job: call again with job_id.
     """
     from app import jobs

@@ -1477,8 +1477,9 @@ const MAKERS = {
         const job = await api("/api/make/restore", { method: "POST", body: JSON.stringify({ file_ids: ids, colorize: fd.get("colorize") ? null : false, split_prints: !!fd.get("split") }) });
         const r = await pollJob(job, j => j.total ? `Restoring picture ${Math.min(j.done + 1, j.total)} of ${j.total}…` : "Finding the pictures…");
         await loadAccount();
-        const psd = r.files.find(x => x.file_id.endsWith(".psd"));
-        const many = r.photos > 1 ? ` — all ${r.photos} restored pictures are in your workspace` : "";
+        // albumoldal: a közös PSD nyílik (fotónként egy rétegcsoport) — a külön PSD-k a munkaterületen
+        const psd = r.files.find(x => x.album) || r.files.find(x => x.file_id.endsWith(".psd"));
+        const many = r.photos > 1 ? ` — the whole page is one file, a layer group per picture; each one is also in your workspace on its own` : "";
         return { file_id: (psd || r).file_id, n: r.files.length, edit: true, msg: `Restored — the layers are open in the photo editor${many}` };
       }
       if (instr) {

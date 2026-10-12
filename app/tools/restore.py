@@ -42,6 +42,13 @@ PROMPT_COLOR = ("Colorize this black-and-white photograph with natural, realisti
 
 def find_prints(src: Path, workdir: Path) -> list[Path]:
     """A képen lévő papírképek (legfeljebb 6, egyenként ≥6% terület), kiegyenesítve; ha nincs, az egész kép."""
+    return [p for p, _ in find_prints_q(src, workdir)]
+
+
+def find_prints_q(src: Path, workdir: Path) -> list[tuple[Path, Optional[list[list[float]]]]]:
+    """Mint a find_prints, de minden kivágott (szegély nélküli) kép mellé a helye az oldalon: a négy sarka
+    (bal-felső, jobb-felső, jobb-alsó, bal-alsó) a forrás pixeleiben — a közös album-PSD ide teszi vissza a rétegeket.
+    Ha nincs papírkép (az egész kép egy fotó): (útvonal, None)."""
     import cv2
     import numpy as np
     img = cv2.imdecode(np.frombuffer(src.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
@@ -61,24 +68,29 @@ def find_prints(src: Path, workdir: Path) -> list[Path]:
             quads.append(approx.reshape(4, 2).astype("float32") / scale)
         if len(quads) == 6:
             break
-    out: list[Path] = []
+    out: list[tuple[Path, Optional[list[list[float]]]]] = []
     for i, q in enumerate(sorted(quads, key=lambda q: (q[:, 1].min() // (h / 4), q[:, 0].min()))):   # sorrend: soronként, balról
         s, d = q.sum(1), np.diff(q, axis=1).ravel()
         tl, br, tr, bl = q[np.argmin(s)], q[np.argmax(s)], q[np.argmin(d)], q[np.argmax(d)]
         W = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
         H = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
         M = cv2.getPerspectiveTransform(np.array([tl, tr, br, bl]), np.array([[0, 0], [W, 0], [W, H], [0, H]], dtype="float32"))
+        flat = cv2.warpPerspective(img, M, (W, H))
+        y0, y1, x0, x1 = _trim_box(flat)
         p = workdir / f"print-{i + 1}.png"
-        cv2.imwrite(str(p), trim_border(cv2.warpPerspective(img, M, (W, H))))
-        out.append(p)
+        cv2.imwrite(str(p), flat[y0:y1, x0:x1])
+        # a levágott (szegély nélküli) téglalap sarkai vissza az oldal koordinátáiba
+        rect = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype="float32")
+        quad = cv2.perspectiveTransform(rect, np.linalg.inv(M))[0]
+        out.append((p, [[float(x), float(y)] for x, y in quad]))
     if not out:
         p = workdir / "print-1.png"
         cv2.imwrite(str(p), img)
-        out.append(p)
+        out.append((p, None))
     return out
 
 
-def trim_border(img):
+def _trim_box(img) -> tuple[int, int, int, int]:
     """A régi papírkép fehér/világos szegélye nem a fotó része (a színező elszínezné, a Kontext keretnek nézné) → levágjuk:
     kívülről befelé, amíg a sor/oszlop szegély-szerű (a pixelek ≥90%-a egy világos tónus körül).
     10-12 (ChatGPT-teszt, albumoldal): a kiegyenesített kivágás legszélén 1-3 px sötét albumháttér marad (a talált
@@ -109,7 +121,13 @@ def trim_border(img):
     l = inward(lambda i: g[t:b, i], w)
     r = w - inward(lambda i: g[t:b, w - 1 - i], w)
     pad = 3 if (t or l or (h - b) or (w - r)) else 0     # a szegély és a kép közti árnyékcsík se maradjon
-    return img[min(h - 1, t + pad):max(t + 1, b - pad), min(w - 1, l + pad):max(l + 1, r - pad)]
+    return min(h - 1, t + pad), max(t + 1, b - pad), min(w - 1, l + pad), max(l + 1, r - pad)
+
+
+def trim_border(img):
+    """A szegély nélküli kép (lásd _trim_box)."""
+    y0, y1, x0, x1 = _trim_box(img)
+    return img[y0:y1, x0:x1]
 
 
 # ---------- AI-lépés + ráillesztés ----------
@@ -216,8 +234,10 @@ async def _refund(n: int, ref: str) -> None:
     await db.credits_add(tenancy.current_user_id(), settings.IMAGE_CREDIT_COST * n, "refund: restoration failed", ref=ref)
 
 
-async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_id: str) -> list[dict[str, Any]]:
-    """Egy papírkép → PSD (eredeti + helyreállított + szín) és JPG. colorize=None: fekete-fehérnél igen."""
+async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_id: str,
+                        layers_out: Optional[list] = None) -> list[dict[str, Any]]:
+    """Egy papírkép → PSD (eredeti + helyreállított + szín) és JPG. colorize=None: fekete-fehérnél igen.
+    layers_out: ide kerülnek a rétegképek (név, útvonal, keverés) a közös album-PSD-hez."""
     from app.storage import output_path, public_url, write_meta
     from app.storage.files import new_file_id
     from app.tools import crafts
@@ -240,6 +260,8 @@ async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_i
         if charged:
             await _refund(steps, stem)
         raise
+    if layers_out is not None:
+        layers_out += [("Original", src, None)] + layers
     # PSD: alul az eredeti (Background), felette a beágyazott AI-rétegek, pontosan fedésben
     from PIL import Image
     with Image.open(src) as im:
@@ -277,26 +299,98 @@ async def run(file_ids: list[str], colorize: Optional[bool], split_prints: bool,
     files: list[dict[str, Any]] = []
     try:
         prints: list[tuple[Path, str, str]] = []
+        pages: dict[str, list[tuple[Optional[list[list[float]]], list]]] = {}   # albumoldal → [(hely, rétegek)]
         for i, fid in enumerate(file_ids):
             src = crafts.existing(fid)
             sub = work / f"f{i:03d}"
             sub.mkdir()
             if split_prints:
-                found = await asyncio.to_thread(find_prints, src, sub)
+                found = await asyncio.to_thread(find_prints_q, src, sub)
             else:                      # munkapéldány a saját mappában (a forrás mellé semmit nem írunk)
                 from PIL import Image, ImageOps
                 one = sub / "print-1.png"
                 with Image.open(src) as im:
                     ImageOps.exif_transpose(im).convert("RGB").save(one)
-                found = [one]
+                found = [(one, None)]
             stem = Path(display_label(fid)).stem
-            prints += [(p, stem if len(found) == 1 else f"{stem} – {k + 1}", fid) for k, p in enumerate(found)]
+            if len(found) > 1:
+                pages[fid] = [(q, []) for _, q in found]
+            prints += [(p, stem if len(found) == 1 else f"{stem} – {k + 1}", fid) for k, (p, _) in enumerate(found)]
+        seen: dict[str, int] = {}
         for k, (p, stem, fid) in enumerate(prints):
             if progress:
                 progress(k, len(prints), "restoring")
-            files += await restore_print(p, colorize, stem, fid)
+            n = seen.get(fid, 0)
+            seen[fid] = n + 1
+            files += await restore_print(p, colorize, stem, fid, layers_out=pages[fid][n][1] if fid in pages else None)
         if progress:
             progress(len(prints), len(prints), "restoring")
+        # 10-12 (A8): az albumoldal képei EGY PSD-ben is — az oldal a háttér, fotónként egy rétegcsoport
+        # (eredeti / helyreállított / szín) pontosan a kép helyén; a külön PSD-k is megmaradnak.
+        for fid, placed in pages.items():
+            if all(q for q, _ in placed):
+                files.append(await album_psd(crafts.existing(fid), placed, Path(display_label(fid)).stem, fid, work))
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return {"files": files, "file_id": files[0]["file_id"], "photos": len(prints)}
+    album = next((f["file_id"] for f in files if f.get("album")), None)
+    return {"files": files, "file_id": files[0]["file_id"], "photos": len(prints),
+            **({"album_file_id": album} if album else {})}
+
+
+async def album_psd(page: Path, placed: list, stem: str, source_id: str, work: Path) -> dict[str, Any]:
+    """Közös album-PSD: alul az albumoldal, fölötte fotónként egy csoport („Photo 1”…) a rétegeivel.
+    A rétegeket MI torzítjuk a kép helyére (teljes vásznas, átlátszó PNG-k) — a PhotoCraft okosobjektum-
+    transzformációja más határokat adott (10-12 mérés); két CLI-menet: elhelyezés, aztán csoportosítás
+    (a rétegazonosítók a mentéskor átszámozódnak, ezért a második menet az `info`-ból dolgozik)."""
+    import json
+    import cv2
+    import numpy as np
+    from app.storage import output_path, public_url, write_meta
+    from app.storage.files import new_file_id
+    from app.tools import crafts
+    page_img = cv2.imdecode(np.frombuffer(page.read_bytes(), np.uint8), cv2.IMREAD_COLOR)   # mint a find_prints_q
+    H, W = page_img.shape[:2]
+    base = work / f"album-{source_id}.png"
+    cv2.imwrite(str(base), page_img)
+
+    def warp(path: Path, quad, dst: Path) -> None:
+        im = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        h, w = im.shape[:2]
+        M = cv2.getPerspectiveTransform(np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype="float32"),
+                                        np.array(quad, dtype="float32"))
+        rgb = cv2.warpPerspective(im, M, (W, H), flags=cv2.INTER_CUBIC)
+        a = cv2.warpPerspective(np.full((h, w), 255, np.uint8), M, (W, H), flags=cv2.INTER_LINEAR)
+        cv2.imwrite(str(dst), np.dstack([rgb, a]))
+
+    cmds: list[str] = []
+    names: list[list[str]] = []
+    for k, (quad, layers) in enumerate(placed, 1):
+        group = []
+        for j, (name, path, blend) in enumerate(layers):
+            dst = work / f"album-{source_id}-{k}-{j}.png"
+            await asyncio.to_thread(warp, path, quad, dst)
+            lname = f"Photo {k} · {name}"
+            cmds += ["--cmd", "file.placeEmbedded", "--params",
+                     json.dumps({"path": str(dst), "scale": 100, "fit": False, "center": [W / 2, H / 2]})]
+            cmds += ["--cmd", "layer.renameLayer", "--params", json.dumps({"name": lname})]
+            if blend:
+                cmds += ["--cmd", "layer.layerStyle.blendingOptions", "--params", json.dumps({"blend": blend})]
+            group.append(lname)
+        names.append(group)
+    flat = work / f"album-{source_id}-flat.psd"
+    await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "run", str(base), *cmds, "--out", str(flat))
+    info = json.loads(await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "info", str(flat), "--compact"))
+    ids = {l["name"]: l["id"] for l in info.get("layers") or []}
+    gcmds: list[str] = []
+    for k, group in enumerate(names, 1):
+        for j, lname in enumerate(group):
+            if lname in ids:
+                gcmds += ["--cmd", "layer.select", "--params",
+                          json.dumps({"layer": ids[lname], "mode": "replace" if j == 0 else "add"})]
+        gcmds += ["--cmd", "layer.groupLayers", "--params", json.dumps({"name": f"Photo {k}"})]
+    fid = new_file_id("psd")
+    await crafts.run_cli(crafts.photo_cli(), "photocraft-cli", "run", str(flat), *gcmds, "--out", str(output_path(fid)))
+    label = f"{stem} (album, restored layers).psd"
+    write_meta(fid, source_file_id=source_id, operation="restore (album layers)", label=label)
+    return {"file_id": fid, "url": public_url(fid), "label": label, "album": True, "photos": len(placed),
+            "size_kb": output_path(fid).stat().st_size // 1024}
