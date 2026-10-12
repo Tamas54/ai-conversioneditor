@@ -10,7 +10,7 @@ extraction:
   2. Quality score: heuristics on the extracted text (char density per page,
      replacement-char ratio, printable-char ratio, whitespace ratio).
   3. If quality is below threshold (typical: scan-only PDF, broken CMap,
-     embedded-font weirdness), fall back to Kimi K2.6 vision OCR per page.
+     embedded-font weirdness), fall back to AI vision OCR per page.
   4. Return whichever method scored higher, with full provenance metadata.
 
 Key insight: we don't try to detect "is this a scan?" upfront — we just
@@ -175,13 +175,13 @@ def _extract_pptx(src: Path) -> tuple[str, int]:
 
 
 # ============================================================
-# Kimi K2.6 vision fallback (per-page rasterize → OCR)
+# AI vision fallback (per-page rasterize → OCR)
 # ============================================================
 
 
 async def _extract_pdf_via_vision(src: Path, *, dpi: int = 150,
                                    max_pages: Optional[int] = None) -> tuple[str, int]:
-    """Rasterize each page → Kimi K2.6 OCR → join.
+    """Rasterize each page → AI OCR → join.
 
     Used as fallback when pdfplumber yields garbage. dpi=150 is the sweet spot:
     high enough for accurate OCR, low enough to keep token usage manageable.
@@ -236,14 +236,14 @@ async def parse_with_quality(
 
     Args:
       file_id: source document
-      force_vision: skip native parser, go straight to Kimi vision
+      force_vision: skip native parser, go straight to AI vision
       quality_threshold: minimum acceptable native-parser score (default 0.55)
       max_vision_pages: cap vision OCR to N pages (None = all)
 
     Returns:
       {
         "text": str,
-        "method": "pdfplumber" | "kimi_vision" | "docx_native" | "pptx_native" | ...,
+        "method": "pdfplumber" | "vision_ocr" | "docx_native" | "pptx_native" | ...,
         "quality_score": float,
         "page_count": int,
         "fallbacks_tried": list[dict],   # method + score for each attempt
@@ -271,7 +271,7 @@ async def parse_with_quality(
             primary_text, primary_pages = _extract_pptx(src)
         elif fmt in {"png", "jpg", "jpeg", "webp", "gif", "bmp"}:
             # Images have no native text — go straight to vision
-            primary_method = "kimi_vision"
+            primary_method = "vision_ocr"
             primary_text, primary_pages = await _extract_image_via_vision(src)
         elif fmt in {"md", "txt", "html", "htm"}:
             primary_method = "text_native"
@@ -325,7 +325,7 @@ async def parse_with_quality(
 
         vision_q = score_text_quality(vision_text, page_count=vision_pages)
         fallbacks.append({
-            "method": "kimi_vision", "score": vision_q["score"],
+            "method": "vision_ocr", "score": vision_q["score"],
             "char_count": vision_q["char_count"], "reason": vision_q["reason"],
         })
 
@@ -333,7 +333,7 @@ async def parse_with_quality(
         if force_vision or vision_q["score"] > (primary_score or 0):
             return {
                 "text": vision_text,
-                "method": "kimi_vision",
+                "method": "vision_ocr",
                 "quality_score": vision_q["score"],
                 "quality_details": vision_q["details"],
                 "page_count": vision_pages,

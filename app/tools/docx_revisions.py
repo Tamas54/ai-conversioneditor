@@ -139,7 +139,7 @@ def _wrap_in_del(runs: list, *, author: str, date: str, rid: int) -> Any:
 
 async def docx_track_replace_paragraph(
     file_id: str, anchor: str, new_text: str,
-    *, author: str = "Kimi K2.6", change_id: Optional[int] = None,
+    *, author: str = "AI editor", change_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Replace the text of the paragraph whose body equals `anchor`. Old runs
     become <w:del>; new_text becomes <w:ins>. The original paragraph keeps its
@@ -202,7 +202,7 @@ async def docx_track_replace_paragraph(
 
 async def docx_track_insert_after(
     file_id: str, anchor: str, new_text: str,
-    *, author: str = "Kimi K2.6",
+    *, author: str = "AI editor",
 ) -> dict[str, Any]:
     """Insert `new_text` as a new paragraph immediately after `anchor`,
     marked as <w:ins>."""
@@ -245,7 +245,7 @@ async def docx_track_insert_after(
 
 
 async def docx_track_delete_paragraph(
-    file_id: str, anchor: str, *, author: str = "Kimi K2.6",
+    file_id: str, anchor: str, *, author: str = "AI editor",
 ) -> dict[str, Any]:
     """Mark the paragraph whose text equals `anchor` for deletion (tracked).
     Word will show it strikethrough in the review pane."""
@@ -467,7 +467,7 @@ def _ensure_comments_part(zip_path: Path) -> tuple[bytes, str]:
 
 async def docx_add_comment(
     file_id: str, anchor: str, comment_text: str,
-    *, author: str = "Kimi K2.6", initials: str = "K",
+    *, author: str = "AI editor", initials: str = "AI",
 ) -> dict[str, Any]:
     """Anchor a comment to the paragraph whose text equals `anchor`. Manages
     word/comments.xml, [Content_Types].xml registration, and document
@@ -712,7 +712,7 @@ def _find_or_create_commentex(ext_root, para_id: str, *, parent_para_id: Optiona
 
 async def docx_reply_to_comment(
     file_id: str, parent_comment_id: int, reply_text: str,
-    *, author: str = "Kimi K2.6", initials: str = "K",
+    *, author: str = "AI editor", initials: str = "AI",
 ) -> dict[str, Any]:
     """Add a reply to comment `parent_comment_id`. Manages commentsExtended.xml
     threading via w15:paraIdParent. The reply itself has no body anchor — Word

@@ -102,7 +102,7 @@ async def read_layout(page: Path, hint: Optional[str] = None) -> dict[str, Any]:
         {"type": "image_url", "image_url": {"url": vision.image_to_data_url(page, long_edge=2048)}},
     ]}]
     last: Exception = RuntimeError("no answer")
-    for model in (settings.OCR_MODEL, settings.LLM_MODEL_VISION):
+    for model in (settings.OCR_MODEL, settings.LLM_MODEL_VISION_FALLBACK):
         try:
             data = _parse_json(await vision._call(msgs, max_tokens=8000, model=model))
             if isinstance(data.get("items"), list):

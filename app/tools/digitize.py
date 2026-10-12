@@ -136,15 +136,15 @@ async def _ocr_page(path: Path, hint: Optional[str]) -> tuple[str, bool]:
 
 
 async def _vision_text(msgs: list[dict[str, Any]]) -> str:
-    """OCR_MODEL (alap: DeepSeek-V4.1-Flash), hibánál a régi vision-modell (Kimi-K2.6)."""
+    """OCR_MODEL (DeepSeek-V4.1-Flash), hibánál LLM_MODEL_VISION_FALLBACK (GLM-5.3-Flash)."""
     from app.llm import vision
     try:
         return await vision._call(msgs, max_tokens=6000, model=settings.OCR_MODEL)
     except Exception as e:
-        if settings.OCR_MODEL == settings.LLM_MODEL_VISION:
+        if settings.OCR_MODEL == settings.LLM_MODEL_VISION_FALLBACK:
             raise
-        log.warning("OCR %s nem válaszolt (%s) — tartalék: %s", settings.OCR_MODEL, e, settings.LLM_MODEL_VISION)
-        return await vision._call(msgs, max_tokens=6000)
+        log.warning("OCR %s nem válaszolt (%s) — tartalék: %s", settings.OCR_MODEL, e, settings.LLM_MODEL_VISION_FALLBACK)
+        return await vision._call(msgs, max_tokens=6000, model=settings.LLM_MODEL_VISION_FALLBACK)
 
 
 def _clean(s: str) -> str:

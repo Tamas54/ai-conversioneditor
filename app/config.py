@@ -24,21 +24,20 @@ class Settings(BaseModel):
     CHROMIUM_WARM: int = int(os.getenv("CHROMIUM_WARM", "1"))
     CHROMIUM_MAX: int = int(os.getenv("CHROMIUM_MAX", "4"))
 
-    # --- LLM (SiliconFlow → Kimi K2.6) ---
+    # --- LLM (SiliconFlow) ---
+    # ⛔ Kommandant, 10-12: „minden a DeepSeek V4.1 Flash legyen, a Kimi egy csiga, drága és ostoba” — MINDEN
+    # szerep (szöveg, pakli-írás, ügynök, látás/OCR) DeepSeek-V4.1-Flash; tartalék: GLM-5.3-Flash (látni is tud).
+    # Kimi SEHOL, tartaléknak sem.
     SILICONFLOW_API_KEY: str = os.getenv("SILICONFLOW_API_KEY", "")
     SILICONFLOW_BASE_URL: str = os.getenv(
         "SILICONFLOW_BASE_URL", "https://api.siliconflow.com/v1"
     )
-    # Ügynök/szöveg: GLM-5.3-Flash (0,15/0,50 $ vs Kimi 0,77/3,40 $ per 1M token; ugyanazon az
-    # ügynökfeladaton 186 s vs 324 s, a tool-hívásai jók). Tartalék: Kimi-K2.6.
-    LLM_MODEL_PRIMARY: str = os.getenv("LLM_MODEL_PRIMARY", "zai-org/GLM-5.3-Flash")
-    LLM_MODEL_FALLBACK: str = os.getenv("LLM_MODEL_FALLBACK", "moonshotai/Kimi-K2.6")
-    # A szerkesztő-ügynök (iteratív „kérj változtatást”, régi agent_edit): DeepSeek V4.1 Flash (Kommandant, 10-11)
+    LLM_MODEL_PRIMARY: str = os.getenv("LLM_MODEL_PRIMARY", "deepseek-ai/DeepSeek-V4.1-Flash")
+    LLM_MODEL_FALLBACK: str = os.getenv("LLM_MODEL_FALLBACK", "zai-org/GLM-5.3-Flash")
     AGENT_MODEL: str = os.getenv("AGENT_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash")
-    # Az ügynök tartaléka: GLM-5.3-Flash (Kimi NEM kerül az ügynök sorába — Kommandant, 10-12)
     AGENT_MODEL_FALLBACK: str = os.getenv("AGENT_MODEL_FALLBACK", "zai-org/GLM-5.3-Flash")
-    # Vision/OCR: Kimi marad — magyar regényoldalon 98,4% vs GLM-5.3-Flash 85% karakter-egyezés (10-11)
-    LLM_MODEL_VISION: str = os.getenv("LLM_MODEL_VISION", "moonshotai/Kimi-K2.6")
+    LLM_MODEL_VISION: str = os.getenv("LLM_MODEL_VISION", "deepseek-ai/DeepSeek-V4.1-Flash")
+    LLM_MODEL_VISION_FALLBACK: str = os.getenv("LLM_MODEL_VISION_FALLBACK", "zai-org/GLM-5.3-Flash")
     LLM_TIMEOUT_S: int = int(os.getenv("LLM_TIMEOUT_S", "120"))
 
     # --- Auth ---

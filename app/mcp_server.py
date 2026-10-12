@@ -796,7 +796,7 @@ async def edit_with_instruction(
     """
     Edit a document using a natural-language instruction.
 
-    Pipeline: load → extract text → Kimi K2.6 plans operations →
+    Pipeline: load → extract text → the AI plans operations →
     deterministic execution → render back to original format.
 
     PDF inputs are auto-round-tripped via DOCX (with a layout-reflow warning).
@@ -891,7 +891,7 @@ async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> 
 @mcp.tool()
 @linked
 async def describe_image(image_file_id: str, question: Optional[str] = None) -> dict:
-    """Free-form Q&A on an image (Kimi K2.6 vision). Default: detailed
+    """Free-form Q&A on an image (AI vision). Default: detailed
     description. Pass `question` for targeted queries: 'is there overlap?',
     'what colors dominate?', 'count the people', etc."""
     return await vision_ops.describe_image(image_file_id, question=question)
@@ -968,7 +968,7 @@ async def chart_redraw(
     title_override: Optional[str] = None,
     also_svg: bool = False,
 ) -> dict:
-    """Read an existing chart from an image via Kimi K2.6 vision (extracts
+    """Read an existing chart from an image via AI vision (extracts
     type, axes, categories, series, values), and re-render via matplotlib
     with a new palette/brand. Returns new image_file_id. Pass also_svg=true
     for a vector copy (use with insert_image's svg_file_id for vector

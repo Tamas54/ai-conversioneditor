@@ -73,7 +73,7 @@ async def plan(image: Path, request: str, has_logo: bool) -> dict[str, Any]:
     msgs = [{"role": "user", "content": [{"type": "text", "text": prompt},
                                          {"type": "image_url", "image_url": {"url": vision.image_to_data_url(image, long_edge=1280)}}]}]
     last: Exception = RuntimeError("no plan")
-    for model in (settings.OCR_MODEL, settings.LLM_MODEL_VISION):
+    for model in (settings.OCR_MODEL, settings.LLM_MODEL_VISION_FALLBACK):
         try:
             raw = await vision._call(msgs, max_tokens=2000, model=model)
             raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())

@@ -100,7 +100,7 @@ async def _call(messages: list[dict[str, Any]], *, response_format: Optional[dic
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
     payload: dict[str, Any] = {
-        "model": model or settings.LLM_MODEL_VISION,  # Kimi K2.6 — leírás/kérdés; OCR: settings.OCR_MODEL
+        "model": model or settings.LLM_MODEL_VISION,  # DeepSeek-V4.1-Flash (leírás/kérdés/OCR)
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.1,
