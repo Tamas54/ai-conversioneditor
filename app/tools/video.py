@@ -337,7 +337,7 @@ def _text_numbers(text: str) -> set[float]:
     return out
 
 
-_GFX_SHAPES = ("rect", "circle", "line", "arrow", "path", "polygon", "text", "image", "pin", "lottie")
+_GFX_SHAPES = ("rect", "circle", "line", "arrow", "path", "polygon", "text", "image", "pin", "lottie", "map")
 _GFX_ANIMS = ("appear", "pop", "grow", "draw", "slide-left", "slide-right", "slide-up", "slide-down", "pulse", "none")
 
 
@@ -348,6 +348,13 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
     nums = _text_numbers(source)
     num = lambda x, d=None: float(x) if isinstance(x, (int, float)) else d
     pt = lambda q: [max(-0.2, min(1.2, num(q[0], 0.5))), max(-0.2, min(1.2, num(q[1], 0.5)))] if isinstance(q, (list, tuple)) and len(q) >= 2 else None
+
+    def geo(q: Any) -> Optional[dict[str, Any]]:      # földrajzi hely: {"place": "Dóm tér, Szeged"} | {"lat", "lon"}
+        if isinstance(q, dict) and isinstance(q.get("place"), str) and q["place"].strip():
+            return {"place": q["place"].strip()[:160]}
+        if isinstance(q, dict) and num(q.get("lat")) is not None and num(q.get("lon")) is not None:
+            return {"lat": max(-85.0, min(85.0, float(q["lat"]))), "lon": max(-180.0, min(180.0, float(q["lon"])))}
+        return None
     out, dropped = [], []
     for e in (c.get("elements") or [])[:80]:
         if not isinstance(e, dict) or e.get("shape") not in _GFX_SHAPES:
@@ -362,9 +369,25 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         for k in ("from", "to", "move_to"):
             if pt(e.get(k)):
                 el[k] = pt(e[k])
-        if isinstance(e.get("points"), list):
-            pts = [pt(q) for q in e["points"][:200]]
-            el["points"] = [q for q in pts if q]
+            elif geo(e.get(k)) or geo(e.get("geo_" + k)):
+                el["geo_" + k] = geo(e.get(k)) or geo(e.get("geo_" + k))
+        g_ = geo(e.get("geo")) or (geo(e) if e["shape"] != "map" else None)   # a tű / szöveg helye a jelenet térképén
+        if g_:
+            el["geo"] = g_
+        if isinstance(e.get("points"), list) or isinstance(e.get("geo_points"), list):
+            raw = e.get("points") if isinstance(e.get("points"), list) else e["geo_points"]
+            gp = [geo(q) for q in raw[:200]]
+            if any(gp):
+                el["geo_points"] = [q for q in gp if q]
+            else:
+                el["points"] = [q for q in (pt(q) for q in raw[:200]) if q]
+        if e["shape"] == "map":                          # valódi térkép: hely vagy bbox [s, w, n, e]; a tűk is rajta legyenek
+            mp = e.get("map") if isinstance(e.get("map"), dict) else e
+            el["map"] = {k: v for k, v in {
+                "place": mp.get("place").strip()[:160] if isinstance(mp.get("place"), str) and mp["place"].strip() else None,
+                "bbox": [float(v) for v in mp["bbox"]] if isinstance(mp.get("bbox"), list) and len(mp["bbox"]) == 4
+                and all(isinstance(v, (int, float)) for v in mp["bbox"]) else None,
+                "detail": mp.get("detail") if mp.get("detail") in ("streets", "outline") else None}.items() if v is not None}
         for k in ("fill", "stroke", "color", "align", "weight"):
             if isinstance(e.get(k), str):
                 el[k] = e[k][:24]
@@ -376,7 +399,7 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
                 continue
             el["text"] = txt
         if e["shape"] in ("image", "lottie"):
-            src = e.get("image") or e.get("lottie") or e.get("file_id") or e.get("url")
+            src = e.get("image") or e.get("lottie") or e.get("file_id") or e.get("url") or e.get("src")   # src: mentett alak
             if not src:
                 continue
             el["fit"] = "cover" if e.get("fit") == "cover" else "contain"
@@ -384,9 +407,11 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
             el["src"] = src if isinstance(src, (str, dict)) else None
             if e.get("asset"):
                 el["asset"] = str(e["asset"])
-        if e["shape"] in ("path", "polygon") and len(el.get("points") or []) < 2:
+            if isinstance(e.get("credit"), str) and e["credit"].strip():
+                el["credit"] = e["credit"].strip()[:200]
+        if e["shape"] in ("path", "polygon") and len(el.get("points") or el.get("geo_points") or []) < 2:
             continue
-        if e["shape"] in ("line", "arrow") and not (el.get("from") and el.get("to")):
+        if e["shape"] in ("line", "arrow") and not ((el.get("from") or el.get("geo_from")) and (el.get("to") or el.get("geo_to"))):
             continue
         out.append(el)
     title = _clean(c.get("title"), 60, "Chart title")
@@ -816,7 +841,9 @@ def _arc(out: list, name: str, cx: float, cy: float, r: float, th: float, a0: fl
 
 
 def _gfx_color(v: Any, acc: list[float], default: Any = "accent") -> Any:
-    v = (v or default) if not isinstance(v, list) else v
+    if isinstance(v, (list, tuple)) and len(v) >= 3 and all(isinstance(c, (int, float)) for c in v[:3]):
+        return [max(0.0, min(1.0, float(c))) for c in v[:3]]          # [r, g, b] 0–1 (a térkép saját színei)
+    v = v or default
     named = {"accent": "accent", "white": [1, 1, 1], "muted": [0.62, 0.65, 0.72], "dark": [0.06, 0.06, 0.08],
              "black": [0, 0, 0], "red": [0.9, 0.2, 0.2], "green": [0.2, 0.7, 0.35], "blue": [0.2, 0.45, 0.9],
              "yellow": [0.95, 0.78, 0.2], "none": None}
@@ -833,7 +860,10 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
     k = m / 1080
     px = lambda q: [round(q[0] * W, 1), round(q[1] * H, 1)]
     out: list[dict[str, Any]] = []
-    for i, e in enumerate(ch.get("elements") or []):
+    els = list(enumerate(ch.get("elements") or []))
+    for i, e in sorted(els, key=lambda ie: ie[1].get("shape") != "map"):     # a térkép legalul: ne takarja a tűket
+        if e.get("_skip"):
+            continue
         sh, name = e["shape"], f"{e['shape'].capitalize()} {i + 1}"
         t0, dur = max(0.0, e.get("at", 0.3 + 0.25 * i)), max(0.1, e.get("dur", 0.6))
         anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
@@ -888,6 +918,32 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                         "align": e.get("align") if e.get("align") in ("left", "center", "right") else "center",
                         "font": {"bold": "bold", "regular": "regular"}.get(e.get("weight") or "", "semibold"),
                         "color": _gfx_color(e.get("color"), acc, "white"), **anim})
+        elif sh == "map":                # valódi térkép: rétegcsoportok (utak, folyók, országok), a forrás feltüntetve
+            if not e.get("_groups"):
+                continue
+            t0 = max(0.0, e.get("at", 0.1))                  # a térkép a talaj: azonnal indul, nem a sorszáma szerint
+            anim = {**anim, "t0": round(t0, 3)}
+            pxs = lambda g: [[[round(x * W, 1), round(y * H, 1)] for x, y in path] for path in g["paths"]]
+            how = e.get("anim") if e.get("anim") in ("draw", "appear", "none") else "draw"
+            # két réteg: a területek (országok, parkok, víz) beúsznak; a vonalak (utak, folyók, határok) kirajzolódnak —
+            # a kitöltött sokszögre tett Trim Paths szilánkos foltokat rajzol
+            areas = [{"name": g["name"], "closed": True, "fill": _gfx_color(g["fill"], acc), "stroke": None, "stroke_w": 0,
+                      "paths": pxs(g)} for g in e["_groups"] if g["closed"] and g.get("fill")]
+            lines = [{"name": g["name"] + (" (borders)" if g["closed"] else ""), "closed": g["closed"], "fill": None,
+                      "stroke": _gfx_color(g["stroke"], acc), "stroke_w": round(g["width"], 1), "paths": pxs(g)}
+                     for g in e["_groups"] if g.get("stroke")]
+            if areas:
+                out.append({"k": "multipath", "name": "Map areas", "groups": areas, "opacity": op,
+                            **{**anim, "anim": "appear" if how == "draw" else how, "dur": 0.8}})
+            if lines:
+                out.append({"k": "multipath", "name": "Map lines", "groups": lines, "opacity": op,
+                            **{**anim, "anim": how, "dur": round(max(0.6, e.get("dur", 1.6)), 3)}})
+            bx, by = (e.get("x", 0.5) + e.get("w", 1.0) / 2) * W, (e.get("y", 0.5) + e.get("h", 1.0) / 2) * H
+            fs = round(max(14, 17 * k))
+            out.append({"k": "text", "name": "Map credit", "str": "© OpenStreetMap contributors" if "OpenStreetMap" in (e.get("_credit") or "")
+                        else "Natural Earth", "size": fs, "box": [round(W * 0.5, 1), round(fs * 1.6, 1)],
+                        "pos": [round(min(bx, W) - W * 0.25 - 12 * k, 1), round(min(by, H) - fs * 0.9 - 8 * k, 1)], "align": "right",
+                        "font": "regular", "color": [0.62, 0.65, 0.72], "anim": "appear", "t0": round(t0, 3), "dur": 0.4})
         elif sh in ("image", "lottie"):
             if not e.get("file"):
                 continue
@@ -1432,7 +1488,7 @@ def _contact_sheet(thumbs: list[bytes]) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-async def _rank(query: str, headline: str, cands: list[dict[str, Any]]) -> list[int]:
+async def _rank(query: str, headline: str, cands: list[dict[str, Any]], prompt: Optional[str] = None) -> list[int]:
     """A látómodell sorrendje a jelöltekre (0-tól), a legjobban illő elöl; hiba esetén a kereső sorrendje.
     Nem tartalmi szűrés (semmit nem dob ki): a kereső a FÁJLNÉVBEN keres, és absztrakt témánál mellé nyúl —
     10-12, gazdasági videó: „oil barrels" → vasúti fordítókorong, „bond" → múzeumi kötvénypapír."""
@@ -1442,7 +1498,7 @@ async def _rank(query: str, headline: str, cands: list[dict[str, Any]]) -> list[
     ok = [(i, t.content) for i, t in enumerate(thumbs) if not isinstance(t, Exception) and t.status_code == 200]
     if len(ok) < 2:
         return list(range(len(cands)))
-    prompt = (f'A scene of a short news video: "{headline}". Its full-screen background picture should show: "{query}". '
+    prompt = prompt or (f'A scene of a short news video: "{headline}". Its full-screen background picture should show: "{query}". '
               "Rank the numbered pictures by how well they fit: a clear, real photo of that subject first; old documents, "
               "maps, diagrams, logos or unrelated places last. Return JSON only: {\"ranking\": [numbers, best first]}")
     msgs = [{"role": "user", "content": [{"type": "text", "text": prompt},
@@ -1720,10 +1776,88 @@ def _script_report(out: str, source: str) -> list[str]:
     return found
 
 
+def _without_runtime(story: dict[str, Any]) -> dict[str, Any]:
+    """A forgatókönyv mentéshez: a futásidejű kulcsok (_groups, _skip, _credit…) nélkül."""
+    def clean(x: Any) -> Any:
+        if isinstance(x, dict):
+            return {k: clean(v) for k, v in x.items() if not str(k).startswith("_")}
+        if isinstance(x, list):
+            return [clean(v) for v in x]
+        return x
+    return clean(story)
+
+
+async def _place_on_maps(story: dict[str, Any], fmt: str) -> tuple[list[str], list[str]]:
+    """A saját grafikák térképei és földrajzi elemei: helynév → lat/lon → a képkocka arányában (x, y, from, to,
+    points); a térkép rétegei az elem "_groups" kulcsába (a mentett forgatókönyvbe nem kerül). → (kreditek, hibák)"""
+    from app.tools import geo as geomod
+    W, H = FORMATS[fmt]
+    credits, problems = [], []
+    for si, sc in enumerate(story.get("scenes") or []):
+        ch = sc.get("chart") or {}
+        if ch.get("type") != "graphic":
+            continue
+        els = ch.get("elements") or []
+        refs = [e for e in els if e.get("geo") or e.get("geo_from") or e.get("geo_to") or e.get("geo_points")]
+        maps = [e for e in els if e.get("shape") == "map"]
+        if not refs and not maps:
+            continue
+        sid = sc.get("id") or f"s{si + 1}"
+        if not maps:
+            problems.append(f"Scene {sid}: elements placed by place name need a map element (shape \"map\") — left out.")
+            for e in refs:
+                e["_skip"] = True
+            continue
+        coords: dict[str, tuple[float, float]] = {}
+
+        async def where(q: dict[str, Any]) -> Optional[tuple[float, float]]:
+            if "lat" in q:
+                return q["lat"], q["lon"]
+            if q["place"] not in coords:
+                try:
+                    g = await geomod.geocode(q["place"])
+                    coords[q["place"]] = (g["lat"], g["lon"])
+                except Exception as ex:
+                    problems.append(f"Scene {sid}: “{q['place']}” — {ex}.")
+                    coords[q["place"]] = None          # type: ignore[assignment]
+            return coords[q["place"]]
+        for e in refs:                                   # előbb minden hely: a térkép mindet mutassa
+            e["_ll"] = {k: await where(e[k]) for k in ("geo", "geo_from", "geo_to") if e.get(k)}
+            if e.get("geo_points"):
+                e["_ll"]["points"] = [await where(q) for q in e["geo_points"]]
+        pts = [v for e in refs for k, v in e["_ll"].items() if k != "points" and v] + \
+              [v for e in refs for v in (e["_ll"].get("points") or []) if v]
+        m = maps[0]
+        box = (W * (m.get("x", 0.5) - m.get("w", 1.0) / 2), H * (m.get("y", 0.5) - m.get("h", 1.0) / 2), W * m.get("w", 1.0), H * m.get("h", 1.0))
+        try:
+            built = await geomod.build(m.get("map") or {}, pts, box, W, H)
+        except Exception as ex:
+            problems.append(f"Scene {sid}: the map could not be made — {ex}.")
+            for e in refs + maps:
+                e["_skip"] = True
+            continue
+        m["_groups"], m["_credit"] = built["groups"], built["credit"]
+        if built["credit"] not in credits:
+            credits.append(built["credit"])
+        pr = built["proj"]
+        for e in refs:
+            ll = e.pop("_ll")
+            if e.get("geo") and ll.get("geo"):
+                e["x"], e["y"] = pr.frac(*ll["geo"])
+            for k in ("from", "to"):
+                if e.get("geo_" + k) and ll.get("geo_" + k):
+                    e[k] = pr.frac(*ll["geo_" + k])
+            if e.get("geo_points"):
+                e["points"] = [pr.frac(*v) for v in ll.get("points") or [] if v]
+            if (e.get("geo") and not ll.get("geo")) or (e.get("geo_points") and len(e.get("points") or []) < 2) or \
+               any(e.get("geo_" + k) and not ll.get("geo_" + k) for k in ("from", "to")):
+                e["_skip"] = True
+    return credits, problems
+
+
 async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[str]) -> tuple[list[str], list[tuple[str, str]], list[str]]:
     """A saját grafikák képei és Lottie-animációi → a munkamappába. → (asset-nevek, [(lottie-fájl, kompozíció-név)], kreditek).
     A szülőprojekt meglévő elemei ({"asset"}) letöltés nélkül jönnek; a Lottie JSON-t ellenőrizzük és egyedi nevet kap."""
-    import httpx
     from app.tools import images as imgs
     parent_assets = assets_of(parent) if parent else {}
     names, lotties, credits = [], [], []
@@ -1741,27 +1875,33 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
             try:
                 if e.get("asset") and parent_assets.get(e["asset"]):
                     shutil.copyfile(crafts.existing(parent_assets[e["asset"]]), work / name)
+                    if e.get("credit"):                                    # újraépítés: a kredit marad
+                        credits.append(str(e["credit"])[:200])
                 elif e["shape"] == "image":
                     r = await imgs.resolve(_img_spec(e.get("src")), max_px=1600)
                     name = f"gfx-{n:02d}-{sc.get('id') or si}{r.path.suffix or '.jpg'}"
                     shutil.move(str(r.path), work / name)
                     if r.attribution:
                         credits.append(r.attribution)
+                        e["credit"] = r.attribution[:200]
                 else:
+                    from app.tools import lottie as lot
                     src = e.get("src")
                     sid = src.get("file_id") if isinstance(src, dict) else src
                     if isinstance(src, dict) and src.get("url"):
                         sid = src["url"]
-                    if isinstance(sid, str) and sid.startswith("http"):
-                        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-                            resp = await c.get(sid)
-                            resp.raise_for_status()
-                            raw = resp.content[:6_000_000]
+                    if isinstance(src, dict) and src.get("search"):      # a LottieFiles könyvtárából, a látómodell választ
+                        data, cand = await lot.pick(str(src["search"]), sc.get("headline") or "")
+                        e["src"] = {"url": cand["json_url"]}
+                        e["credit"] = cand["credit"]
+                        credits.append(cand["credit"])
+                    elif isinstance(sid, str) and sid.startswith("http"):
+                        data = await lot.fetch(sid)
+                        if isinstance(src, dict) and src.get("credit"):
+                            e["credit"] = str(src["credit"])[:200]
+                            credits.append(e["credit"])
                     else:
-                        raw = crafts.existing(str(sid)).read_bytes()[:6_000_000]
-                    data = json.loads(raw.decode("utf-8"))
-                    if not isinstance(data, dict) or "layers" not in data or not data.get("fr"):
-                        raise ValueError("not a Lottie animation (JSON with fr and layers)")
+                        data = lot.check(json.loads(crafts.existing(str(sid)).read_bytes()[:lot.MAX_BYTES].decode("utf-8")))
                     data["nm"] = f"Lottie {n}"
                     (work / name).write_text(json.dumps(data), "utf-8")
                     lotties.append((name, data["nm"]))
@@ -1788,8 +1928,9 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         names, credit_list, per_credit = await _materialize_images(specs, fmt, work, parent)
+        map_credits, gfx_findings = await _place_on_maps(story, fmt)
         gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
-        credit_list = credit_list + [c for c in gfx_credits if c not in credit_list]
+        credit_list = credit_list + [c for c in gfx_credits + map_credits if c not in credit_list]
         voice = music = None
         voice_s = None
         parent_assets = assets_of(parent) if parent else {}
@@ -1815,10 +1956,12 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                     music = f"music.{ext}"
         if voice:
             voice_s = await _probe_duration(work, voice)
-        credits = ("Pictures: " + " · ".join(credit_list)) if credit_list else ""     # teljes (linkekkel): a projekt metájába
+        anim = any(c.startswith("Animation ") for c in credit_list)
+        label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else "Pictures: "
+        credits = (label + " · ".join(credit_list)) if credit_list else ""     # teljes (linkekkel): a projekt metájába
         # a képernyőn rövid: név + licenc, linkek nélkül („Photo: X (Wikimedia Commons), CC BY 4.0 — https://…”)
         short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", c)).strip() for c in credit_list]
-        on_screen = ("Pictures: " + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
+        on_screen = (label + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
         kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
         focus = {nm: await asyncio.to_thread(_focus, work / nm) for nm in names if nm} if kb != "off" else {}
@@ -1858,7 +2001,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         def _src(sp: Any) -> Any:
             sp = sp.get("src") if isinstance(sp, dict) and sp.get("asset") else sp
             return sp if isinstance(sp, (str, dict)) else None
-        spec = {"story": story, "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
+        spec = {"story": _without_runtime(story), "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
                                               for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
                          "music_asset": music, "keep_wording": bool(opts.get("keep_wording"))},
@@ -1869,7 +2012,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             add_asset(pid, name, work / name)
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": fmt,
                                   "duration": D["total"], "scenes": len(D["scenes"]), "captions": len(D["captions"]),
-                                  "credits": credits or None, "story": story}
+                                  "credits": credits or None, "story": _without_runtime(story)}
         if render:
             step(4, 5, "rendering the video")
             vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
@@ -1885,7 +2028,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 if fitted:
                     chk["verified"].append(f"Fitted to their boxes: {len(fitted)} graphic text(s) set smaller, e.g. "
                                            + "; ".join(fitted[:4]) + ".")
-                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + script_findings + cov_f + (
+                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + script_findings + gfx_findings + cov_f + (
                     [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]])
                 if chk["findings"] and chk.get("status") == "ok":
                     chk["status"] = "needs_check"

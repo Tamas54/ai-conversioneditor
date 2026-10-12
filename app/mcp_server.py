@@ -1511,14 +1511,22 @@ async def video(
       who). Every number, date and quote is checked against the source — one that isn't there drops the graphic.
       graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
       {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
-      {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie, x, y (centre, 0–1 of the
-      frame), w, h (0–1), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
+      {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie | map, x, y (centre, 0–1 of
+      the frame), w, h (0–1), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
       (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
       color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity,
       anim: appear | pop | grow | draw (lines and outlines draw themselves) | slide-left | slide-right | slide-up |
       slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there),
-      image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id or URL of a Lottie JSON — e.g.
-      from LottieFiles; it loops unless loop=false)}]}. Up to 80 elements, each its own layer (editable by hand); a text
+      image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
+      {"search": "bicycle"} — the server picks a free LottieFiles animation and credits it; it loops unless
+      loop=false)}]}. video(action="lottie", text="bicycle") lists animations with previews, to choose one yourself.
+      map — a REAL map under the other elements: {"shape": "map", "place": "Szeged" (or "bbox": [south, west, north,
+      east]), "detail": auto | streets | outline, x/y/w/h = its box (default the whole frame)}. Streets, rivers and
+      parks come from OpenStreetMap (a city or district), country borders from Natural Earth (a country or region,
+      the named country highlighted); both credited on screen. Then place anything ON it by name or coordinates
+      instead of x, y: {"shape": "pin", "place": "Dóm tér, Szeged", "text": "Dóm tér"}; from / to / points take
+      {"place": …} or {"lat": …, "lon": …} too (a route between places is drawn straight, point to point). The map
+      widens to show every placed element. Up to 80 elements, each its own layer (editable by hand); a text
       with a number that isn't in the source is left out (the check says which).
       script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
       comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
@@ -1580,8 +1588,16 @@ async def video(
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
                                     "title": title})
+    if act in ("lottie", "lottie_search"):          # Lottie-animációk a LottieFiles ingyenes könyvtárából
+        from app.tools import lottie
+        cands = await lottie.search(text or "", n=10)
+        return {"query": text, "animations": [{k: c[k] for k in ("name", "json_url", "thumb_url", "gif_url", "author", "page")}
+                                              for c in cands],
+                "how": 'Put one in a graphic: {"shape": "lottie", "lottie": {"url": json_url, "credit": …}} — or let the '
+                       'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
+                       "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
     if act != "make":
-        raise ValueError('action: "make" | "edit" | "to_pptx" | "render" | "info" | "status"')
+        raise ValueError('action: "make" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,

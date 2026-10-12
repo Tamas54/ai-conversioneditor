@@ -197,6 +197,33 @@ function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | g
     P.setValueAtTime(tm, p0); P.setValueAtTime(tm + Math.max(0.8, d * 2), el.move_to); ease(P);
   }
 }
+function multiPath(comp, el) {   // sok útvonal egy rétegen, csoportonként közös vonallal / kitöltéssel (térkép)
+  var s = comp.layers.addShape(); s.name = el.name;
+  tp(s).property("ADBE Position").setValue([0, 0]);
+  var root = s.property("ADBE Root Vectors Group");
+  for (var gi = 0; gi < el.groups.length; gi++) {
+    var G = el.groups[gi], g = root.addProperty("ADBE Vector Group"); g.name = G.name;
+    var vg = g.property("ADBE Vectors Group");
+    for (var pi = 0; pi < G.paths.length; pi++) {
+      var sh = new Shape(); sh.vertices = G.paths[pi]; sh.closed = !!G.closed;
+      vg.addProperty("ADBE Vector Shape - Group").property("ADBE Vector Shape").setValue(sh);
+    }
+    if (G.fill) { var f = vg.addProperty("ADBE Vector Graphic - Fill"), fc = col(G.fill); f.property("ADBE Vector Fill Color").setValue([fc[0], fc[1], fc[2], 1]); }
+    if (G.stroke) {
+      var st = vg.addProperty("ADBE Vector Graphic - Stroke"), c_ = col(G.stroke);
+      st.property("ADBE Vector Stroke Color").setValue([c_[0], c_[1], c_[2], 1]);
+      st.property("ADBE Vector Stroke Width").setValue(G.stroke_w || 2);
+      try { st.property("ADBE Vector Stroke Line Cap").setValue(2); st.property("ADBE Vector Stroke Line Join").setValue(2); } catch (e) {}
+    }
+  }
+  if (el.opacity !== undefined && el.opacity !== 100) tp(s).property("ADBE Opacity").setValue(el.opacity);
+  if (el.anim === "draw") {        // az utak kirajzolódnak, közben a réteg beúszik
+    var tr = root.addProperty("ADBE Vector Filter - Trim");
+    var e_ = tr.property("ADBE Vector Trim End"); e_.setValueAtTime(el.t0, 0); e_.setValueAtTime(el.t0 + el.dur, 100); ease(e_);
+    var O = tp(s).property("ADBE Opacity"); O.setValueAtTime(el.t0, 0); O.setValueAtTime(el.t0 + 0.4, el.opacity || 100);
+  } else animate(s, el);
+  return s;
+}
 function mediaLayer(comp, el) {   // kép vagy Lottie egy dobozba illesztve
   var src = null;
   if (el.k === "lottie") {
@@ -234,6 +261,8 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
       if (el.grow) grower(r, el); else if (el.anim) animate(r, el);
     } else if (el.k === "path") {
       pathLayer(c, el);
+    } else if (el.k === "multipath") {
+      multiPath(c, el);
     } else if (el.k === "image" || el.k === "lottie") {
       mediaLayer(c, el);
     } else {
@@ -266,10 +295,11 @@ function contentScene(sc, i) {
     var bd = sc.chart.backdrop === undefined || sc.chart.backdrop === null ? 58 : Math.round(sc.chart.backdrop * 100);
     if (bd > 0) rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
     var cs = Math.round(Math.min(D.W, D.H) * 0.052);
-    if (sc.chart.title) fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
-      leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
     chartLayers(c, sc.chart);
     if (sc.chart.code) runScript(c, sc);
+    // a cím az ábra FÖLÖTT (10-12: a teljes képes térkép útjai átfutottak rajta)
+    if (sc.chart.title) fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
+      leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
     return c;
   }
   if (sc.stat) {
