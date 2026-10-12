@@ -328,7 +328,7 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
         except ValueError:
             continue
         (items if round(v, 6) in nums else missing).append({"label": _clean(it.get("label"), 22 if typ not in ("ring", "icons") else 60), "value": v})
-    unit = _clean(c.get("unit"), 6)
+    unit = _clean(c.get("unit"), 14)   # „millió" is beférjen (10-12: „1,1 milli…”)
     out: dict[str, Any] = {"type": typ, "title": title, "unit": unit}
     if typ in ("ring", "icons"):
         if missing or not items:
@@ -1204,12 +1204,14 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             step(4, 5, "rendering the video")
             vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
             result["check"] = vid.pop("check", None)          # a közös check-szerződés: a feladat (a videó) ellenőrzése
-            longest = max((sc["dur"] for sc in D["scenes"]), default=0)
-            if result["check"] and longest > 14:              # technikailag jó, tartalmilag gyanús (10-12: 60 s, 1 jelenet)
+            # technikailag jó, tartalmilag gyanús: kevés jelenet a hosszhoz (10-12: 60 s, 1 jelenet — a szöveg nagy része kimaradt).
+            # Az ÁTLAG számít: egy 19 s-os idővonal három eseménnyel és három felirattal rendben van.
+            ns = max(1, len(D["scenes"]))
+            if result["check"] and (D["total"] / ns > 15 or (ns == 1 and D["total"] > 20)):
                 result["check"]["status"] = "needs_check"
                 result["check"]["findings"] = result["check"].get("findings", []) + [
-                    f"{len(D['scenes'])} scene(s) for {D['total']:.0f} s — the longest runs {longest:.0f} s, so much of the text may "
-                    "be missing. Add scenes (action=edit, add) or make it again without keep_wording."]
+                    f"Only {ns} scene(s) for {D['total']:.0f} s, so much of the text may be missing. Add scenes "
+                    "(action=edit, add) or make it again without keep_wording."]
             if result["check"] and chart_notes:
                 result["check"]["verified"] = result["check"].get("verified", []) + chart_notes
             result["video"] = vid
