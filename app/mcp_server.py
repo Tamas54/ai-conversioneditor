@@ -736,6 +736,8 @@ async def wordcraft(
     if address:
         if not file_id:
             raise ValueError("address needs file_id: the commented document")
+        if commands:
+            raise ValueError("Give address or commands, not both — run the commands in a second call on the new file_id")
         from app.tools import review_loop
         return await review_loop.address(file_id, address, author or await review_loop.default_author())
     return await wc.run(
