@@ -69,43 +69,52 @@ ENV WORDCRAFT_CLI=/opt/wordcraft/bin/wordcraft-cli \
 
 # --- PhotoCraft (képek) + VectorCraft (dizájn/layout): ugyanaz a minta, kész release, SHA256 ---
 # + ISNet háttéreltávolító modell (rembg release, onnxruntime-mal fut: app/tools/cutout.py)
+# A CLI-k az upstream release-ek; a webes szerkesztők a SAJÁT buildjeink (build/craft-web: közösségi/
+# idegen linkek nélkül, DeckCraft/GridCraft Calibri/Cambria-kompatibilis fontokkal) — release-ek:
+# github.com/Tamas54/ai-conversioneditor/releases/tag/<app>-web-<verzió>-aiceN
 ARG PHOTOCRAFT_VERSION=0.7.0
 ARG PHOTOCRAFT_CLI_SHA256=641f831252fd31b43ee1a12e572d7442e5652c2e5bf623de085741c370f0c91d
-ARG PHOTOCRAFT_WEB_SHA256=dfcbaac00f81f5d05ccffba36a14b320c1b1c7b23a4135fe54877f527e550eec
+ARG PHOTOCRAFT_WEB_TAG=photocraft-web-0.7.0-aice1
+ARG PHOTOCRAFT_WEB_SHA256=30c6e897ca59d4a6a4e1fbc3a5d25bcf32b5c24a7e04c2b1d6210d974d1633c3
 ARG VECTORCRAFT_VERSION=0.9.0
 ARG VECTORCRAFT_CLI_SHA256=afbc4a0904740dfd1208e717664eb294965055e74c227c2ac3dc53af502e46a4
-ARG VECTORCRAFT_WEB_SHA256=4ebe8829a22fa17975c96765dfe9812bd2834e3e721381b4b14abb802c4d7dc1
+ARG VECTORCRAFT_WEB_TAG=vectorcraft-web-0.9.0-aice1
+ARG VECTORCRAFT_WEB_SHA256=bb002f83cdf5db6d09c8cc292c1eb9904457dbe1de45d6bf5f1b27ff968fdf1d
 # Office-motorok (ugyanaz a release-minta): DeckCraft · PdfCraft · DesignCraft · GridCraft
 ARG DECKCRAFT_VERSION=0.5.0
 ARG DECKCRAFT_CLI_SHA256=c2648c6071f631ecc6639ce6b7d60f68eed83ddeaba6b1559b07c5046863117c
-ARG DECKCRAFT_WEB_SHA256=49d6aa4871dbfe4e2dd4ebc367db8fbfe6df6db6ba49872e10058e13175c5f51
+ARG DECKCRAFT_WEB_TAG=deckcraft-web-0.5.0-aice1
+ARG DECKCRAFT_WEB_SHA256=c12037eda3d6f18e61776b9c6cf04f31e23563ffa59197a0a10df85a092cc911
 ARG PDFCRAFT_VERSION=0.6.0
 ARG PDFCRAFT_CLI_SHA256=9a136e71e37b459ed5746dbe19a364ce84cf5d995c6f6c98af6147d818390a53
-ARG PDFCRAFT_WEB_SHA256=a957a75e35390fa8747ae97464b7a9f178cce61edda22b3b98764462060d15a5
+ARG PDFCRAFT_WEB_TAG=pdfcraft-web-0.6.0-aice1
+ARG PDFCRAFT_WEB_SHA256=bd51065418b5bd3218f1435b9155b2b4da13f0cbad227a17ba412bb1a7953022
 ARG DESIGNCRAFT_VERSION=0.6.0
 ARG DESIGNCRAFT_CLI_SHA256=abb661cd2fc53677d040fe0be3f241bbb8c0fad9619192a83109d53bd514bfb9
-ARG DESIGNCRAFT_WEB_SHA256=b43ebefc5b7900c8223953d632951308a347935adc6fad3ff00e4a7a1d050d63
+ARG DESIGNCRAFT_WEB_TAG=designcraft-web-0.6.0-aice1
+ARG DESIGNCRAFT_WEB_SHA256=40e57c9a5dba6ccb9beefe420448e31fea47cff768b6695994d3fbcc00209d6f
 ARG GRIDCRAFT_VERSION=0.5.0
 ARG GRIDCRAFT_CLI_SHA256=e6505c2f929f9854c350a0df26189c4e56c8adf87cc61625f80d6a8eec2b628d
-ARG GRIDCRAFT_WEB_SHA256=fbd9dbc48694676812c7bbca7f5f2e776cbc52c37d8f425a2dc033b5d23ce606
+ARG GRIDCRAFT_WEB_TAG=gridcraft-web-0.5.0-aice1
+ARG GRIDCRAFT_WEB_SHA256=7e73f8e8d39021fcb48a086c24c3b077c6a83dbf980275d5b5a44290c1e68f76
 ARG ISNET_SHA256=60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
 RUN set -eux; cd /tmp; \
-    for spec in "photocraft ${PHOTOCRAFT_VERSION} ${PHOTOCRAFT_CLI_SHA256} ${PHOTOCRAFT_WEB_SHA256}" \
-                "vectorcraft ${VECTORCRAFT_VERSION} ${VECTORCRAFT_CLI_SHA256} ${VECTORCRAFT_WEB_SHA256}" \
-                "deckcraft ${DECKCRAFT_VERSION} ${DECKCRAFT_CLI_SHA256} ${DECKCRAFT_WEB_SHA256}" \
-                "pdfcraft ${PDFCRAFT_VERSION} ${PDFCRAFT_CLI_SHA256} ${PDFCRAFT_WEB_SHA256}" \
-                "designcraft ${DESIGNCRAFT_VERSION} ${DESIGNCRAFT_CLI_SHA256} ${DESIGNCRAFT_WEB_SHA256}" \
-                "gridcraft ${GRIDCRAFT_VERSION} ${GRIDCRAFT_CLI_SHA256} ${GRIDCRAFT_WEB_SHA256}"; do \
-        set -- $spec; app=$1; ver=$2; \
+    for spec in "photocraft ${PHOTOCRAFT_VERSION} ${PHOTOCRAFT_CLI_SHA256} ${PHOTOCRAFT_WEB_TAG} ${PHOTOCRAFT_WEB_SHA256}" \
+                "vectorcraft ${VECTORCRAFT_VERSION} ${VECTORCRAFT_CLI_SHA256} ${VECTORCRAFT_WEB_TAG} ${VECTORCRAFT_WEB_SHA256}" \
+                "deckcraft ${DECKCRAFT_VERSION} ${DECKCRAFT_CLI_SHA256} ${DECKCRAFT_WEB_TAG} ${DECKCRAFT_WEB_SHA256}" \
+                "pdfcraft ${PDFCRAFT_VERSION} ${PDFCRAFT_CLI_SHA256} ${PDFCRAFT_WEB_TAG} ${PDFCRAFT_WEB_SHA256}" \
+                "designcraft ${DESIGNCRAFT_VERSION} ${DESIGNCRAFT_CLI_SHA256} ${DESIGNCRAFT_WEB_TAG} ${DESIGNCRAFT_WEB_SHA256}" \
+                "gridcraft ${GRIDCRAFT_VERSION} ${GRIDCRAFT_CLI_SHA256} ${GRIDCRAFT_WEB_TAG} ${GRIDCRAFT_WEB_SHA256}"; do \
+        set -- $spec; app=$1; ver=$2; tag=$4; \
         base="https://github.com/storytold/${app}/releases/download/v${ver}"; \
         curl -fsSL -o cli.tar.gz "$base/${app}-${ver}-linux-x86_64.tar.gz"; \
         echo "$3  cli.tar.gz" | sha256sum -c -; \
         mkdir -p /opt/${app}; \
         tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} \
             "${app}-${ver}-linux-x86_64/bin/${app}-cli" "${app}-${ver}-linux-x86_64/share/doc/${app}"; \
-        curl -fsSL -o web.zip "$base/${app}-web-${ver}.zip"; \
-        echo "$4  web.zip" | sha256sum -c -; \
-        unzip -q web.zip; mv "${app}-web-${ver}" /opt/${app}-web; \
+        curl -fsSL -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${tag}/${tag}.zip"; \
+        echo "$5  web.zip" | sha256sum -c -; \
+        unzip -q web.zip; mv "${tag}" /opt/${app}-web; \
         gzip -9 -k /opt/${app}-web/*.wasm /opt/${app}-web/*.js; \
         rm -f cli.tar.gz web.zip; \
         /opt/${app}/bin/${app}-cli --version >/dev/null; \
