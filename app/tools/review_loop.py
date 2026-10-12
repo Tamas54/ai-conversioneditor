@@ -242,7 +242,8 @@ def _comments(pkg: _Pkg) -> dict[str, dict[str, Any]]:
             by_para[pid] = cid
     for c in out.values():
         # a commentEx a megjegyzés UTOLSÓ bekezdésére mutat (MS-DOCX); a régebbi írók az elsőre — mindkettőt nézzük
-        info = next((ex[pid] for pid in reversed(c["para_ids"]) if pid in ex), (None, False))
+        c["ex_pid"] = next((pid for pid in reversed(c["para_ids"]) if pid in ex), None)
+        info = ex.get(c["ex_pid"], (None, False)) if c["ex_pid"] else (None, False)
         c["parent"] = by_para.get(info[0]) if info[0] else None
         c["done"] = info[1]
     for c in out.values():
@@ -654,7 +655,10 @@ def _comment_ex(pkg: _Pkg, pid: str):
 
 
 def _thread_pid(pkg: _Pkg, c: dict[str, Any], taken: set[str]) -> str:
-    """A megjegyzés utolsó bekezdésének w14:paraId-je (ha nincs, kap egyet) — erre mutat a commentsExtended."""
+    """Amire a commentsExtended már mutat; különben a megjegyzés utolsó bekezdésének w14:paraId-je (ha nincs, kap
+    egyet)."""
+    if c.get("ex_pid"):
+        return c["ex_pid"]
     if c["para_ids"]:
         return c["para_ids"][-1]
     ps = list(c["el"].iter(P))
@@ -727,7 +731,7 @@ def _reply(pkg: _Pkg, body, comments: dict[str, dict[str, Any]], root_id: str, t
         after.addnext(e)
         e.addnext(rr)
     comments[new_id] = {"el": c, "id": new_id, "author": ctx.author, "date": ctx.date, "text": text.strip(),
-                        "para_ids": [pid], "parent": root_id, "root": root_id, "done": False}
+                        "para_ids": [pid], "ex_pid": pid, "parent": root_id, "root": root_id, "done": False}
     return new_id
 
 
