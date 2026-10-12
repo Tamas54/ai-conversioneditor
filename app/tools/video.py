@@ -245,7 +245,7 @@ Rules:
   the source supports it — pick the type that fits:
     column / bar — 2–8 comparable numbers of the SAME kind (bar for long names or many items);
     line — a value over time, in time order;
-    donut — parts of one whole (shares adding up to about 100%, 2–6 items);
+    donut — parts of one whole (2–6 shares the source gives; leave out "the rest" — it is added automatically);
     ring — ONE percentage worth showing (unit "%", one item: label = what it is);
     icons — "x in N" or a percentage of people/things (one item: value = x; total = N, or unit "%" for x out of 100);
     timeline — 2–6 dated events in order (label = the date exactly as written in the source, text = what happened);
@@ -346,14 +346,19 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
             elif unit != "%":
                 return None, None
         return out, f"{'Ring' if typ == 'ring' else 'Icons'} “{title}”: the number is in the source text."
+    checked, rest = len(items), ""
+    # fánk: a „többiek" sora (100% − a többi) KISZÁMOLT érték, nem kitalált — a modell címkéjével marad
+    # (10-12: „48% telefon, 22% olvas, 18% tévé, a többiek…" — a 12% nincs a szövegben, a fánk emiatt kiesett)
+    if typ == "donut" and unit == "%" and len(missing) == 1 and abs(missing[0]["value"] - (100 - sum(i["value"] for i in items))) < 0.01:
+        items.append(missing.pop())
+        rest = f" “{items[-1]['label']}” is the rest of 100%."
     if missing or len(items) < 2:
         return None, left_out
-    checked, rest = len(items), ""
     if typ == "donut":
         tot = sum(i["value"] for i in items)
         if any(i["value"] < 0 for i in items) or len(items) > 6:
             return None, None
-        if unit == "%" and 60 <= tot < 99.5:          # a hiányzó rész „Egyéb" — kiszámolt, nem kitalált
+        if unit == "%" and 60 <= tot < 99.5 and not rest:   # a hiányzó rész „Egyéb" — kiszámolt, nem kitalált
             from app.tools.infographic import _HU
             items.append({"label": "Egyéb" if _HU.search(source or "") else "Other", "value": round(100 - tot, 6)})
             rest = f" “{items[-1]['label']}” is the rest of 100%."
