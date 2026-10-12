@@ -1055,7 +1055,10 @@ async def make(body: dict[str, Any], progress: Optional[Callable[..., None]] = N
     keep = mode == "text"
     dur = body.get("duration")
     total = None if (keep and not dur) else float(min(max(float(dur or 60), 10), 180))
-    n = len(_paragraphs(text)) if keep else max(2, min(12, round(((total or 60) - 7) / 6.5)))
+    # saját szövegnél is a hossz szerint bontunk (10-12: egy bekezdésként jött 60 s → 1 jelenet, a szöveg nagy része
+    # kimaradt); a bekezdések száma csak alsó határ — a modell a mondatokat gondolatonként csoportosítja
+    by_len = max(2, min(12, round(((total or 60) - 7) / 6.5)))
+    n = max(len(_paragraphs(text)), by_len if (total or len(text) > 400) else 1) if keep else by_len
     n = max(1, min(n, 14))
 
     step(1, 5, "writing the script")
@@ -1201,6 +1204,12 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             step(4, 5, "rendering the video")
             vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
             result["check"] = vid.pop("check", None)          # a közös check-szerződés: a feladat (a videó) ellenőrzése
+            longest = max((sc["dur"] for sc in D["scenes"]), default=0)
+            if result["check"] and longest > 14:              # technikailag jó, tartalmilag gyanús (10-12: 60 s, 1 jelenet)
+                result["check"]["status"] = "needs_check"
+                result["check"]["findings"] = result["check"].get("findings", []) + [
+                    f"{len(D['scenes'])} scene(s) for {D['total']:.0f} s — the longest runs {longest:.0f} s, so much of the text may "
+                    "be missing. Add scenes (action=edit, add) or make it again without keep_wording."]
             if result["check"] and chart_notes:
                 result["check"]["verified"] = result["check"].get("verified", []) + chart_notes
             result["video"] = vid
@@ -1439,7 +1448,10 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
     for a in changes.get("add") or []:
         after = max(0, min(n0, int(a.get("after", n0))))
         sc = _scene_from(a, source, notes)
-        pic = _img_spec(a["image"]) if a.get("image") else {"stock": _clean(a.get("image_query") or sc["headline"] or story["title"], 60)}
+        # keresőszó híján a videó (angol) keresőszava — a magyar cím a képtárban mellényúl („Mit tehetsz a méhekért?”)
+        near = next((e["scene"].get("image_query") for e in entries[max(0, after - 1):] if e["scene"].get("image_query")), "")
+        pic = _img_spec(a["image"]) if a.get("image") else {"stock": _clean(a.get("image_query") or near or story.get("image_query")
+                                                                            or sc["headline"] or story["title"], 60)}
         adds.setdefault(after, []).append({"scene": sc, "pic": pic, "remove": False})
     final = list(adds.get(0, []))
     for i, e in enumerate(entries, 1):

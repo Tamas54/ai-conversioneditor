@@ -67,8 +67,9 @@ mcp = FastMCP(
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
         "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
         "generate_image(stock_search=…) to show the person candidates. "
-        "CHECK YOUR WORK: every file result has `preview_url` (a PNG of the page/slide that changed — open it, or "
-        "call files(action=\"preview\", file_id, page) to see it) and `check` = {status: ok | needs_check | failed, "
+        "CHECK YOUR WORK: to SEE a result call files(action=\"preview\", file_id, page) — the picture comes back in the "
+        "tool result (pages of a document, slides, a video's frames: page 1–3); every file result also has `preview_url` "
+        "(the same PNG as a link, for the person) and `check` = {status: ok | needs_check | failed, "
         "findings, verified}. A file existing is not the task done: if status is needs_check, look at the preview; "
         "if failed or a finding says something is missing, fix it before telling the person it's done. "
         "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared."
@@ -1415,7 +1416,8 @@ async def video(
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
-      (text + keep_wording=true: their sentences become the captions) → title card, scenes with full-screen pictures
+      (text + keep_wording=true ONLY when they want their own sentences word for word as the captions; for an
+      article or notes to turn into a video, leave it false) → title card, scenes with full-screen pictures
       in gentle motion, headlines, timed captions, end card with picture credits → a video project (.ecproj) + the
       MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
       (result.project / result.video, each with edit_url) or "failed".
