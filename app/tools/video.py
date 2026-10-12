@@ -940,8 +940,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                             **{**anim, "anim": how, "dur": round(max(0.6, e.get("dur", 1.6)), 3)}})
             bx, by = (e.get("x", 0.5) + e.get("w", 1.0) / 2) * W, (e.get("y", 0.5) + e.get("h", 1.0) / 2) * H
             fs = round(max(14, 17 * k))
-            out.append({"k": "text", "name": "Map credit", "str": "© OpenStreetMap contributors" if "OpenStreetMap" in (e.get("_credit") or "")
-                        else "Natural Earth", "size": fs, "box": [round(W * 0.5, 1), round(fs * 1.6, 1)],
+            out.append({"k": "text", "name": "Map credit", "str": "OpenFreeMap © OpenMapTiles © OpenStreetMap contributors" if "OpenMapTiles" in (e.get("_credit") or "")
+                        else "© OpenStreetMap contributors" if "OpenStreetMap" in (e.get("_credit") or "") else "Natural Earth", "size": fs, "box": [round(W * 0.5, 1), round(fs * 1.6, 1)],
                         "pos": [round(min(bx, W) - W * 0.25 - 12 * k, 1), round(min(by, H) - fs * 0.9 - 8 * k, 1)], "align": "right",
                         "font": "regular", "color": [0.62, 0.65, 0.72], "anim": "appear", "t0": round(t0, 3), "dur": 0.4})
         elif sh in ("image", "lottie"):
