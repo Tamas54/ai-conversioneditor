@@ -5,6 +5,10 @@ minta SAJÁT elrendezéseibe kerülnek (címdia, tartalom, két hasáb, szakaszc
 Diagram / táblázat / kép a helyőrző helyére kerül; színt és betűt nem írunk felül → minden a sablon témájából
 öröklődik (a diagramsorozatok a téma accent-színeit kapják). Kevés elrendezésű sablonnál (pl. csak
 „cím + tartalom”) a legközelebbi elrendezés és a helyőrző területe szolgál.
+
+Ha a mesterdián NINCS dizájn, mert az a diákon ül (Canva/Gamma-export, saját paklik), a minta DIÁIT klónozzuk:
+pptx_clone. Ha azok sem klónozhatók (nincs dizájn a diákon, nincs szöveghely), usable() hamis → a hívó a téma-utat
+választja (színek, betűk).
 """
 from __future__ import annotations
 
@@ -72,6 +76,10 @@ def has_design(prs) -> bool:
     """A sablon hordoz-e látványt a mesterdián / elrendezéseken (háttér, kép, alakzat) — ha nem, a dizájn a diákon
     van (pl. Canva-export, a saját paklijaink), és a teljes-sablon út fehér paklit adna → téma-út kell."""
     from pptx.oxml.ns import qn
+    for m in prs.slide_masters:                   # sötét sablon: a „bg1” háttér a sötét témaszínre képeződik
+        cm = m._element.find(qn("p:clrMap"))
+        if cm is not None and cm.get("bg1") in ("dk1", "dk2"):
+            return True
     for part in [*prs.slide_masters, *_layouts(prs)]:
         bg = part._element.find(qn("p:cSld")).find(qn("p:bg"))
         if bg is not None and not _plain(bg):
@@ -82,12 +90,17 @@ def has_design(prs) -> bool:
 
 
 def usable(path: Path) -> bool:
-    """Teljes sablonként használható-e: van cím+tartalom elrendezése ÉS a mesterdián van dizájn."""
+    """Teljes sablonként használható-e: van cím+tartalom elrendezése ÉS a mesterdián van dizájn — vagy a dizájn a
+    diákon ül, és a diák klónozhatók (pptx_clone). Ha egyik sem, a hívó a téma-utat választja (színek, betűk)."""
     from pptx import Presentation
     try:
         tpl = _as_pptx(path)
         prs = Presentation(str(tpl))
-        ok = pick_layouts(prs)["content"] is not None and has_design(prs)
+        if has_design(prs):
+            ok = pick_layouts(prs)["content"] is not None
+        else:
+            from app.tools import pptx_clone
+            ok = pptx_clone.clonable(prs)
         if tpl != path:
             shutil.rmtree(tpl.parent, ignore_errors=True)
         return ok
@@ -370,6 +383,14 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
     t0 = time.time()
     tpl = _as_pptx(template)
     prs = Presentation(str(tpl))
+    if not has_design(prs):                       # a dizájn a diákon ül: a minta diáit klónozzuk
+        from app.tools import pptx_clone
+        if pptx_clone.clonable(prs):
+            try:
+                return await pptx_clone.build(spec, prs, t0)
+            finally:
+                if tpl != template:
+                    shutil.rmtree(tpl.parent, ignore_errors=True)
     usage: dict[str, int] = {}
     for sl in prs.slides:                         # melyik elrendezést használta a minta szerzője
         key = str(sl.slide_layout.part.partname)
