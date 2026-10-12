@@ -127,7 +127,8 @@ async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: 
         raise RuntimeError("The video engine (EffectCraft) isn't installed on this server")
     argv, env = [exe, *args], {**os.environ, "EFFECTCRAFT_NO_PREFS": "1"}
     if await _jail_ok(exe):
-        argv, env = jail.command(exe, list(args), work=str(cwd), env={"EFFECTCRAFT_NO_PREFS": "1"})
+        argv, env = jail.command(exe, list(args), work=str(cwd), env={"EFFECTCRAFT_NO_PREFS": "1"},
+                                 mem_gb=8.0 if untrusted else None)
     elif untrusted:
         raise RuntimeError("Custom scripts need the sandbox, and it isn't available on this server — use a graphic (type \"graphic\") instead.")
     else:

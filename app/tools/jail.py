@@ -7,7 +7,7 @@ Eszközök (rootjog és névterek nélkül — a Railway-konténerben az unshare
     unix-socket és jelküldés a zárkán belülre szűkítve. A ptrace a zárkán kívülre a Landlock miatt eleve tilos.
   * seccomp-BPF: socket(), fork/vfork, szálnak nem minősülő clone, ptrace, process_vm_*, io_uring, bpf, perf,
     kulcstartó, mount/unshare/setns… → EPERM (clone3 → ENOSYS, a glibc ilyenkor clone-ra vált).
-  * rlimit: memória (címtér), fájlméret, nyitott fájlok, core dump nincs.
+  * rlimit: fájlméret, nyitott fájlok, core dump nincs; idegen szkriptnél memória (címtér) is.
   * tiszta környezet: PATH, HOME/TMPDIR = munkamappa.
 
 Használat: argv, env = command(exe, args, work=…); a hívó ezt indítja (cwd=work). Ha a kernel nem tud Landlockot,
@@ -49,7 +49,7 @@ def _machine() -> str:
     return os.uname().machine
 
 
-def command(exe: str, args: list[str], *, work: str, read: tuple[str, ...] = (), mem_gb: float = 6.0,
+def command(exe: str, args: list[str], *, work: str, read: tuple[str, ...] = (), mem_gb: float | None = None,
             env: dict[str, str] | None = None) -> tuple[list[str], dict[str, str]]:
     """A zárkában futó parancs: [python, -I, -S, jail.py, <terv>] + a tiszta környezet."""
     exe = os.path.realpath(exe)
@@ -64,7 +64,7 @@ def command(exe: str, args: list[str], *, work: str, read: tuple[str, ...] = (),
     plan = {"exe": exe, "args": list(args), "work": os.path.realpath(work),
             "exec_dirs": [os.path.dirname(exe), os.path.dirname(os.path.dirname(exe))],
             "exec_files": sorted({os.path.realpath(p) for p in ("/lib64/ld-linux-x86-64.so.2",) if os.path.exists(p)}),
-            "read": [p for p in (*_RO_DEFAULT, *read, *linked) if os.path.exists(p)], "mem": int(mem_gb * 2**30)}
+            "read": [p for p in (*_RO_DEFAULT, *read, *linked) if os.path.exists(p)], "mem": int(mem_gb * 2**30) if mem_gb else None}
     clean = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": plan["work"], "TMPDIR": plan["work"],
              "XDG_CACHE_HOME": os.path.join(plan["work"], ".cache"), "LANG": "C.UTF-8", **(env or {})}
     return [sys.executable, "-I", "-S", os.path.abspath(__file__), json.dumps(plan)], clean
@@ -181,8 +181,12 @@ def _seccomp() -> None:
 
 def _limits(plan: dict) -> None:
     import resource
-    for res, val in ((resource.RLIMIT_AS, plan["mem"]), (resource.RLIMIT_FSIZE, 2 * 2**30),
-                     (resource.RLIMIT_NOFILE, 512), (resource.RLIMIT_CORE, 0)):
+    # címtér-korlát csak kérésre (idegen szkript): a sokszálas renderelő szálanként foglal virtuális tartalékot —
+    # 6 GB-nál az élő gépen (sok mag) a render elfogyott (10-12), helyben nem
+    lim = [(resource.RLIMIT_FSIZE, 2 * 2**30), (resource.RLIMIT_NOFILE, 512), (resource.RLIMIT_CORE, 0)]
+    if plan.get("mem"):
+        lim.append((resource.RLIMIT_AS, plan["mem"]))
+    for res, val in lim:
         try:
             resource.setrlimit(res, (val, val))
         except (ValueError, OSError):
