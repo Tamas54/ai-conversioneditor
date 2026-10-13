@@ -40,6 +40,14 @@ def _version_step(op: str) -> Optional[str]:
         return "change"
     if op == "manual edit":
         return "edited by hand"
+    if op == "check":
+        return "checks added"
+    if op == "live data":
+        return "data refreshed"
+    if op == "live link":
+        return "number linked"
+    if op == "merge":
+        return "merged"
     if op == "picture":
         return "new picture"
     if op.startswith("pdf ") and op not in ("pdf to_word", "pdf compare"):

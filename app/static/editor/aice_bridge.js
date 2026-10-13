@@ -8,7 +8,9 @@
 //   src  — betöltéskor letölti a fájlt és megnyitja (drop, EffectCraftnál addFile — előtte a projekt médiafájljai)
 //   save — a szerkesztő minden letöltését (Mentés, Exportálás, Render) elfogja, és POST-tal a szerverre
 //          küldi; hiba esetén marad a sima böngészős letöltés
-// A szülő ablak (dashboard) postMessage-et kap: opened | open_failed | saved | save_failed | touched
+// A szülő ablak (dashboard) postMessage-et kap: opened | open_failed | saved | save_failed | touched | activity |
+//   snapshot | snapshot_failed. A „snapshot” parancs (figyelő mód): ugyanaz a Ctrl+S, de a bájtok NEM új változatként
+//   mennek fel, hanem ideiglenes másolatként (/api/editor/snapshot) — a „touched” állapot marad.
 (() => {
   const q = new URLSearchParams(location.search);
   const src = q.get("src"), name = q.get("name") || "document.docx", save = q.get("save");
@@ -22,6 +24,7 @@
   const known = new Set();      // a projekt ismert médiafájl-nevei (EffectCraft) — mentés után csak az újak mennek fel
 
   let touched = false, savingAt = 0;   // savingAt: mikor indult az utolsó mentés-letöltés
+  let snapNext = false, lastActivity = 0;   // snapNext: a következő mentés-letöltés pillanatkép (nem változat)
 
   // EffectCraft: a böngészőben a projekthez adott képek/hangok/filmek a mentett projekt mellé a szerverre
   const uploadNewMedia = async (projectId) => {
@@ -45,6 +48,16 @@
     HTMLAnchorElement.prototype.click = function () {
       if (!(this.download && this.href.startsWith("blob:"))) return origClick.call(this);
       const anchor = this, fname = this.download;
+      if (snapNext) {                       // figyelő mód: ideiglenes másolat, nem változat; letöltés sincs
+        snapNext = false;
+        if (!/\.docx$/i.test(fname)) { notify({ type: "snapshot_failed", error: "not a Word document" }); return; }
+        fetch(this.href).then((r) => r.blob())
+          .then((blob) => fetch("/api/editor/snapshot", { method: "POST", body: blob, headers: { "Content-Type": "application/octet-stream" } }))
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+          .then((j) => notify({ type: "snapshot", ...j }))
+          .catch((e) => notify({ type: "snapshot_failed", error: String(e) }));
+        return;
+      }
       savingAt = Date.now();
       fetch(this.href)
         .then((r) => r.blob())
@@ -62,7 +75,10 @@
   // A dashboard ebből tudja, hogy elhagyás előtt rákérdezzen-e (a szerkesztő saját
   // „módosítva" jelzője a WASM-ban van, kívülről nem olvasható). Sikeres mentés nullázza.
   const touch = (e) => {
-    if (touched || !e.isTrusted) return;
+    if (!e.isTrusted) return;
+    const now = Date.now();
+    if (now - lastActivity > 3000) { lastActivity = now; notify({ type: "activity" }); }   // a figyelő a szünetet várja
+    if (touched) return;
     touched = true;
     notify({ type: "touched" });
   };
@@ -73,7 +89,8 @@
   // a fenti anchor-elfogás küldi a szerverre, és „saved” üzenet jön vissza. (Szintetikus esemény: a touch nem jelzi.)
   addEventListener("message", (e) => {
     if (e.source !== parent || e.origin !== location.origin || e.data?.target !== "aice_bridge") return;
-    if (e.data.cmd !== "save") return;
+    if (e.data.cmd !== "save" && e.data.cmd !== "snapshot") return;
+    if (e.data.cmd === "snapshot") { if (app !== "wordcraft") return; snapNext = true; setTimeout(() => { snapNext = false; }, 15000); }
     if (app === "effectcraft" && window.effectcraft) {     // saját parancs: File ▸ Save (a böngészőben le is tölti)
       effectcraft.execute("file.save", {}).catch((err) => notify({ type: "save_failed", name, error: String(err) }));
       return;

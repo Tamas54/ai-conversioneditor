@@ -113,6 +113,34 @@ CREATE TABLE IF NOT EXISTS brand_kits (
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS brand_kits_owner_idx ON brand_kits (owner_id, created_at DESC);
+-- tartalmi ellenőrzés (10-14): egy szöveg (hash) ellentmondás-/stílus-/állítás-eredménye — ugyanarra a szövegre nem
+-- fizetünk újra; az állítás-ítéletnél a kora számít (a tény elavulhat, ld. check_get max_age_s)
+CREATE TABLE IF NOT EXISTS content_checks (
+    kind            text NOT NULL,
+    key             text NOT NULL,
+    prompt_ver      text NOT NULL,
+    result          jsonb NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (kind, key, prompt_ver)
+);
+-- élő adatok (10-14): a dokumentumban egy könyvjelző (aice_…) a horgony — a Word és a WordCraft is megtartja —,
+-- itt a forrása (spec), a számformátum és az utolsó érték
+CREATE TABLE IF NOT EXISTS data_bindings (
+    id              text PRIMARY KEY,
+    owner_id        text,
+    label           text,
+    spec            jsonb NOT NULL,
+    fmt             jsonb NOT NULL,
+    value           double precision,
+    display         text,
+    period          text,
+    source_name     text,
+    source_url      text,
+    file_id         text,
+    checked_at      timestamptz,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS data_bindings_owner_idx ON data_bindings (owner_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS ocr_cache (
     sha256          text NOT NULL,
     prompt_ver      text NOT NULL,
@@ -417,6 +445,48 @@ async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str) -> 
                 "ON CONFLICT (sha256, prompt_ver, model) DO NOTHING", (sha256, prompt_ver, model, text))
 
 
+# ---------- tartalmi ellenőrzés (gyorsítótár) és élő adatok ----------
+
+async def check_get(kind: str, key: str, prompt_ver: str, max_age_s: Optional[int] = None) -> Optional[Any]:
+    if not enabled():
+        return None
+    rows = await _rows("SELECT result, extract(epoch FROM now() - created_at) AS age FROM content_checks "
+                       "WHERE kind = %s AND key = %s AND prompt_ver = %s", (kind, key, prompt_ver))
+    if not rows or (max_age_s is not None and float(rows[0]["age"]) > max_age_s):
+        return None
+    return rows[0]["result"]
+
+
+async def check_put(kind: str, key: str, prompt_ver: str, result: Any) -> None:
+    if not enabled():
+        return
+    await _rows("INSERT INTO content_checks (kind, key, prompt_ver, result) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (kind, key, prompt_ver) DO UPDATE SET result = EXCLUDED.result, created_at = now()",
+                (kind, key, prompt_ver, json.dumps(result, ensure_ascii=False, default=str)))
+
+
+async def binding_put(b: dict[str, Any]) -> None:
+    if not enabled():
+        raise RuntimeError("Live data needs the database (DATABASE_URL).")
+    await _rows(
+        """INSERT INTO data_bindings (id, owner_id, label, spec, fmt, value, display, period, source_name, source_url,
+                                      file_id, checked_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+           ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value, display = EXCLUDED.display, period = EXCLUDED.period,
+             source_name = EXCLUDED.source_name, source_url = EXCLUDED.source_url, file_id = EXCLUDED.file_id,
+             checked_at = now()""",
+        (b["id"], _owner(), b.get("label"), json.dumps(b["spec"], ensure_ascii=False), json.dumps(b["fmt"], ensure_ascii=False),
+         b.get("value"), b.get("display"), b.get("period"), b.get("source_name"), b.get("source_url"), b.get("file_id")))
+
+
+async def bindings_get(ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not enabled() or not ids:
+        return {}
+    rows = await _rows("SELECT * FROM data_bindings WHERE id = ANY(%s) AND owner_id IS NOT DISTINCT FROM %s",
+                       (list(ids), _owner()))
+    return {r["id"]: r for r in rows}
+
+
 async def reassign_owner(src_uid: str, dst_uid: str) -> None:
     """Vendég → fiók: a verziótörténet sorai és az arculatok az új tulajdonoshoz."""
     if enabled():
@@ -424,6 +494,7 @@ async def reassign_owner(src_uid: str, dst_uid: str) -> None:
         await _rows("UPDATE brand_kits SET owner_id = %s, is_default = is_default AND NOT EXISTS "
                     "(SELECT 1 FROM brand_kits b WHERE b.owner_id = %s AND b.is_default) WHERE owner_id = %s",
                     (dst_uid, dst_uid, src_uid))
+        await _rows("UPDATE data_bindings SET owner_id = %s WHERE owner_id = %s", (dst_uid, src_uid))
 
 
 # ---------- arculatok (brand kits) ----------

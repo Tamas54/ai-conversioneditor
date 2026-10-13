@@ -44,6 +44,7 @@
 <main id="view"></main>
 {{ABOUT}}
 
+<dialog class="merge-dlg" id="merge-dlg" aria-labelledby="merge-title"><button type="button" class="x-close drawer-x" id="merge-x" aria-label="Close" title="Close (Esc)">✕</button><div id="merge-body"></div></dialog>
 <dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><button type="button" class="x-close drawer-x" id="drawer-x" aria-label="Close" title="Close (Esc)">✕</button><form id="make-form" method="dialog"></form></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -203,6 +204,7 @@
       <span class="view-seg" id="edit-btns" role="group" aria-label="View or edit"></span>
       <span class="menu-wrap dl-split"><a class="btn" id="btn-download" download>Download</a><button type="button" class="btn dl-more" id="dl-more" aria-haspopup="menu" aria-expanded="false" aria-label="Other formats" hidden>▾</button>
         <div class="menu" id="dl-menu" role="menu" hidden></div></span>
+      <button type="button" class="btn ghost" id="btn-check" aria-expanded="false" aria-controls="checks" hidden title="Check the content: contradictions, tone, wording and facts">Check<span class="ck-badge" id="ck-badge" hidden></span></button>
       <span class="menu-wrap"><button type="button" class="btn ghost" id="btn-more" aria-haspopup="menu" aria-expanded="false">More ▾</button>
         <div class="menu menu-right" id="more-menu" role="menu" hidden></div></span>
       <a class="btn ghost x-close" id="btn-close" href="/app/files" aria-label="Close" title="Close">✕</a>
@@ -212,11 +214,17 @@
       <form class="quick-panel" id="quick-panel" hidden novalidate></form>
       <p class="quick-status" id="quick-status" role="status" aria-live="polite" hidden></p>
     </div>
-    <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+    <div class="work-main">
+      <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+      <aside class="ck-panel" id="checks" aria-label="Checks" hidden></aside>
+    </div>
     <form class="revise" id="revise" hidden>
       <ol class="versions" id="versions" aria-label="Versions"></ol>
+      <div class="branches" id="branches" hidden></div>
       <div class="rev-row">
         <input id="rev-input" autocomplete="off" placeholder="Ask for a change">
+        <button type="button" class="btn ghost rev-branch" id="rev-branch" aria-pressed="false" title="Make the change as a separate branch — the current version stays as it is, and you can merge the two later">Branch</button>
+        <input id="rev-branch-name" class="rev-branch-name" autocomplete="off" placeholder="Branch name" maxlength="60" hidden>
         <label class="btn ghost rev-style" title="Attach a style example: a Word file, pptx/template, PDF or picture whose look you want"><span id="rev-style-name">Style example</span><input type="file" id="rev-style" hidden accept=".pptx,.potx,.pdf,.docx,.odt,.rtf,image/*"></label>
         <button class="btn primary" id="rev-go">Apply <em class="ai-badge">AI</em></button>
       </div>
@@ -699,10 +707,11 @@ const views = {
     if (eds.length && (sub === "edit" || (((quick && quick.center !== false) || NATIVE[f.ext]) && !sub && matchMedia("(min-width: 900px)").matches)))
       openEditor((eds.find(([a]) => a === wantApp) || eds[0])[0], true);
     wireRevise(f);
+    wireChecks(f);
   },
 };
 let mounted = "";
-function mount(id) { mounted = id; $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
+function mount(id) { ckAbort?.abort(); ckAbort = null; mounted = id; $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
 let lastPlace = "/app";        // ahová a fájlnézet „bezárás” gombja visz
 let appSteps = 0;              // hány nézetet járt be az appon belül (a „← Back” csak ekkor lép a böngésző-előzményben)
 let underMaker = "/app";       // a készítő-fiók alatti nézet linkje — bezáráskor ide áll vissza a cím
@@ -2185,6 +2194,14 @@ async function wireRevise(f) {
     const note = h.instruction ? `“${esc(h.instruction.slice(0, 90))}”` : esc(step);
     return `<li><a href="/app/file/${encodeURIComponent(h.file_id)}" title="${esc(tip)}" ${cur ? 'aria-current="true"' : ""}>${i ? "v" + (i + 1) : "Original"}</a>${cur && note ? `<span class="muted">${note}</span>` : ""}</li>`;
   }).join("") : "";
+  if (f.ext === "docx") {
+    $("#rev-branch").addEventListener("click", e => {
+      const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+      e.currentTarget.setAttribute("aria-pressed", String(on)); $("#rev-branch-name").hidden = !on;
+      if (on) $("#rev-branch-name").focus();
+    });
+    drawBranches(f);
+  } else $("#rev-branch").hidden = true;
   let styleId = null;
   $("#rev-style").addEventListener("change", async e => {
     const sf = e.target.files[0]; if (!sf) return;
@@ -2201,7 +2218,8 @@ async function wireRevise(f) {
     try {
       if (!(await saveEditorFirst(m => st.textContent = m))) { go.disabled = false; input.disabled = false; return; }
       st.textContent = "Working on it…";
-      const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, instruction, style_file_id: styleId }) });
+      const branch = $("#rev-branch").getAttribute("aria-pressed") === "true" ? ($("#rev-branch-name").value.trim() || "New branch") : "";
+      const job = await api("/api/make/revise", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, instruction, style_file_id: styleId, branch }) });
       const r = await pollJob(job, () => "Working on it…", st);
       toast(r.summary || "Done — new version");
       if (r.pictures_changed?.length) try {     // a kép csak alapérték: a választó magától nyílik rá
@@ -2213,6 +2231,306 @@ async function wireRevise(f) {
       nav("/app/file/" + encodeURIComponent(r.file_id) + (sameEditor ? `/edit/${app}` : ""));
     } catch (err) { st.textContent = err.message; go.disabled = false; input.disabled = false; }
   };
+}
+
+// ---------- tartalmi ellenőrzés (10-14): egység · tények · élő adatok, a szerkesztő mellett ----------
+// A leletek egy „kosárba” kerülnek (Comment / Fix), és EGY mozdulattal mennek a dokumentumba — új változatként, a
+// szerkesztő margóján megjegyzésként, a javítás követett változásként (Accept / Reject). Figyelő módban a szerkesztő
+// egy gépelési szünet után csendes pillanatképet küld (nem új változat), és az ellenőrzés azon fut.
+const CK_KIND = { contradiction: ["Contradiction", "bad"], tone: ["Tone", "warn"], term: ["Wording", "warn"] };
+const CK_VERDICT = { contradicted: ["Wrong", "bad"], outdated: ["Outdated", "warn"], unverified: ["Not settled", ""], supported: ["Confirmed", "ok"] };
+const CK_WATCH = "aice-watch";
+let ckAbort = null;
+function wireChecks(f) {
+  ckAbort?.abort(); ckAbort = null;
+  if (f.ext !== "docx") return;
+  const btn = $("#btn-check"), panel = $("#checks"), badge = $("#ck-badge");
+  btn.hidden = false;
+  const ac = new AbortController(); ckAbort = ac;
+  const st = { tab: "consistency", res: null, facts: null, live: null, busy: false, picked: new Map(), dismissed: new Set(),
+    lastRun: 0, lastActivity: 0, changed: false, source: null };
+  let watch = false; try { watch = localStorage.getItem(CK_WATCH) === "1"; } catch {}
+  panel.innerHTML = `<div class="ck-head"><strong>Checks</strong><button type="button" class="ck-x" aria-label="Close checks">✕</button></div>
+    <div class="ck-tabs" role="tablist">
+      <button type="button" role="tab" data-tab="consistency">Consistency<span class="ck-n"></span></button>
+      <button type="button" role="tab" data-tab="facts">Facts<span class="ck-n"></span></button>
+      <button type="button" role="tab" data-tab="live">Live data<span class="ck-n"></span></button></div>
+    <div class="ck-bar"></div><p class="ck-status" role="status" aria-live="polite"></p>
+    <div class="ck-list"></div>
+    <div class="ck-foot"><button type="button" class="btn primary" id="ck-apply" disabled>Put into the document</button><span class="muted" id="ck-picked"></span></div>`;
+  const say = m => { panel.querySelector(".ck-status").textContent = m || ""; };
+  const frame = () => $("#file-frame");
+  const inEditor = () => /\/editor\/wordcraft\//.test(frame()?.getAttribute("src") || "");
+  const open = v => {
+    panel.hidden = !v; btn.setAttribute("aria-expanded", String(v));
+    try { sessionStorage.setItem("aice-checks", v ? "1" : ""); } catch {}
+    if (v && !st.res && !st.busy) runCheck(false);
+  };
+  btn.addEventListener("click", () => open(panel.hidden), { signal: ac.signal });
+  panel.querySelector(".ck-x").addEventListener("click", () => open(false), { signal: ac.signal });
+  panel.querySelector(".ck-tabs").addEventListener("click", e => {
+    const b = e.target.closest("[data-tab]"); if (!b) return;
+    st.tab = b.dataset.tab; draw();
+    if (st.tab === "live" && !st.live) loadLive();
+  }, { signal: ac.signal });
+
+  // ---- futtatás ----
+  async function runCheck(facts, snapshot_id = null) {
+    if (st.busy) return;
+    if (account?.guest) { say("Checks use AI — create a free account to try them."); return; }
+    st.busy = true; drawBar();
+    try {
+      const job = await api("/api/check", { method: "POST", body: JSON.stringify(snapshot_id ? { snapshot_id, facts } : { file_id: cur.file_id, facts }) });
+      const r = await pollJob(job, j => j.stage === "looking up the sources" || j.stage === "weighing the evidence"
+        ? `Checking facts${j.total ? ` (${Math.min(j.done + 8, j.total)} of ${j.total})` : ""}…` : facts ? "Finding the facts to check…" : "Reading the document…",
+        panel.querySelector(".ck-status"));
+      st.res = r.consistency; if (r.facts) st.facts = r.facts;
+      st.source = snapshot_id ? "your latest edits" : "the saved version";
+      st.lastRun = Date.now();
+      const nc = visible(st.res?.findings).length, nf = (st.facts?.claims || []).filter(c => ["contradicted", "outdated"].includes(c.verdict)).length;
+      say(`Checked ${st.source} · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` + (r.facts ? "" : nc ? "" : " — nothing found"));
+      if (facts) loadAccount();
+    } catch (err) { say(err.message); }
+    st.busy = false; draw();
+  }
+  const visible = list => (list || []).filter(x => !st.dismissed.has(x.id));
+
+  // ---- figyelő mód: gépelési szünet után pillanatkép ----
+  const tick = setInterval(() => {
+    if (!watch || st.busy || !st.changed || panel.hidden || !inEditor()) return;
+    const now = Date.now();
+    if (now - st.lastActivity < 5000 || now - st.lastRun < 40000) return;
+    st.changed = false; st.busy = true; say("Looking at your latest edits…");
+    frame().contentWindow.postMessage({ target: "aice_bridge", cmd: "snapshot" }, location.origin);
+    setTimeout(() => { if (st.busy && !st.res) st.busy = false; }, 20000);
+  }, 2000);
+  ac.signal.addEventListener("abort", () => clearInterval(tick));
+  window.addEventListener("message", e => {
+    if (e.origin !== location.origin || e.data?.source !== "wordcraft") return;
+    if (e.data.type === "activity" || e.data.type === "touched") { st.lastActivity = Date.now(); st.changed = true; }
+    if (e.data.type === "snapshot") { st.busy = false; runCheck(!!st.watchFacts, e.data.snapshot_id); }
+    if (e.data.type === "snapshot_failed") { st.busy = false; say("Couldn't read your latest edits — Check now uses the saved version."); }
+  }, { signal: ac.signal });
+
+  // ---- kosár → dokumentum ----
+  function itemsOf(id, mode) {
+    const c = (st.res?.findings || []).find(x => x.id === id), fct = (st.facts?.claims || []).find(x => x.id === id);
+    if (c) {
+      const [kind] = CK_KIND[c.kind] || ["Check"];
+      if (mode === "fix" && c.fix) return [{ id, quote: c.fix.quote, paragraph: c.fix.paragraph, replacement: c.fix.replacement, comment: `${kind}: ${c.note}` }];
+      return c.places.map((p, k) => ({ id: k ? `${id}.${k}` : id, quote: p.quote, paragraph: p.paragraph,
+        comment: `${kind}: ${c.note}` + (c.places.length > 1 ? `\nSee also: “${c.places.filter((_, j) => j !== k).map(x => x.quote).join("”, “")}”` : "") }));
+    }
+    if (fct) {
+      const [lab] = CK_VERDICT[fct.verdict] || ["Fact check"], s = fct.source || {};
+      const src = s.type === "web" ? `${s.title || ""} ${s.url || ""}`.trim() : s.source_name ? `${s.source_name}${s.period ? ", " + s.period : ""} ${s.source_url || ""}`.trim() : "";
+      return [{ id, quote: fct.quote, paragraph: fct.paragraph, comment: `Fact check — ${lab}: ${fct.explanation}` + (src ? `\nSource: ${src}` : ""),
+        ...(mode === "fix" && fct.replacement ? { replacement: fct.replacement } : {}) }];
+    }
+    return [];
+  }
+  panel.querySelector("#ck-apply").addEventListener("click", async () => {
+    const items = [...st.picked].flatMap(([id, mode]) => itemsOf(id, mode));
+    if (!items.length) return;
+    const go = panel.querySelector("#ck-apply"); go.disabled = true;
+    try {
+      if (!(await saveEditorFirst(say))) { go.disabled = false; return; }
+      say("Putting it into the document…");
+      const r = await api("/api/check/apply", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, items }) });
+      toast(r.summary + (r.skipped?.length ? ` ${r.skipped.length} couldn't be placed (the text changed).` : ""));
+      try { sessionStorage.setItem("aice-checks", "1"); } catch {}
+      const app = ((frame().getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
+      nav("/app/file/" + encodeURIComponent(r.file_id) + (app ? `/edit/${app}` : ""));
+    } catch (err) { say(err.message); go.disabled = false; }
+  }, { signal: ac.signal });
+  panel.querySelector(".ck-list").addEventListener("click", async e => {
+    const b = e.target.closest("button"); if (!b) return;
+    const card = b.closest("[data-id]"), id = card?.dataset.id;
+    if (b.classList.contains("ck-find")) {
+      try { await navigator.clipboard.writeText(b.dataset.q); toast("Copied — press Ctrl+F in the editor and paste to find it"); }
+      catch { toast("Press Ctrl+F in the editor and search for: " + b.dataset.q.slice(0, 60)); }
+      return;
+    }
+    const act = b.dataset.act; if (!act || !id) return;
+    if (act === "dismiss") { st.dismissed.add(id); st.picked.delete(id); }
+    else if (act === "bind") return bindLive(id, b);
+    else if (st.picked.get(id) === act) st.picked.delete(id);
+    else st.picked.set(id, act);
+    draw();
+  }, { signal: ac.signal });
+
+  // ---- élő adatok ----
+  async function loadLive() {
+    try { st.live = await api(`/api/live?file_id=${encodeURIComponent(cur.file_id)}`); } catch (err) { st.live = { bindings: [], error: err.message }; }
+    draw();
+  }
+  async function bindLive(id, b) {
+    const fct = (st.facts?.claims || []).find(x => x.id === id); if (!fct?.source?.spec) return;
+    b.disabled = true;
+    try {
+      if (!(await saveEditorFirst(say))) { b.disabled = false; return; }
+      say("Linking the number to its source…");
+      const r = await api("/api/live/bind", { method: "POST", body: JSON.stringify({ file_id: cur.file_id, quote: fct.quote, paragraph: fct.paragraph,
+        spec: fct.source.spec, claim: fct.claim }) });
+      toast(r.summary);
+      try { sessionStorage.setItem("aice-checks", "1"); sessionStorage.setItem("aice-checks-tab", "live"); } catch {}
+      const app = ((frame().getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
+      nav("/app/file/" + encodeURIComponent(r.file_id) + (app ? `/edit/${app}` : ""));
+    } catch (err) { say(err.message); b.disabled = false; }
+  }
+  async function refreshLive() {
+    if (st.busy) return; st.busy = true; drawBar();
+    try {
+      if (!(await saveEditorFirst(say))) { st.busy = false; drawBar(); return; }
+      const job = await api("/api/live/refresh", { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
+      const r = await pollJob(job, j => j.stage === "adjusting the wording" ? "Adjusting the sentences around the new numbers…" : "Getting the newest figures…", panel.querySelector(".ck-status"));
+      if (!r.file_id) { st.live = r; say(r.summary); st.busy = false; draw(); return; }
+      toast(r.summary);
+      try { sessionStorage.setItem("aice-checks", "1"); sessionStorage.setItem("aice-checks-tab", "live"); } catch {}
+      const app = ((frame().getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
+      nav("/app/file/" + encodeURIComponent(r.file_id) + (app ? `/edit/${app}` : ""));
+    } catch (err) { say(err.message); st.busy = false; drawBar(); }
+  }
+
+  // ---- rajzolás ----
+  const q = (text, paragraph) => `<div class="ck-q"><q>${esc(text)}</q><button type="button" class="ck-find" data-q="${esc(text)}">Find</button></div>`;
+  const acts = (id, { fix = false, bind = false } = {}) => `<div class="ck-act">
+      <button type="button" data-act="comment" aria-pressed="${st.picked.get(id) === "comment"}">Comment</button>
+      ${fix ? `<button type="button" data-act="fix" aria-pressed="${st.picked.get(id) === "fix"}" title="Suggest the fix as a tracked change you can accept or reject">Fix</button>` : ""}
+      ${bind ? `<button type="button" data-act="bind" title="Link this number to its source — Refresh updates it later">Keep it up to date</button>` : ""}
+      <button type="button" data-act="dismiss">Dismiss</button></div>`;
+  function drawBar() {
+    const bar = panel.querySelector(".ck-bar");
+    if (st.tab === "consistency") bar.innerHTML = `<button type="button" class="btn" id="ck-run" ${st.busy ? "disabled" : ""}>Check now</button>
+      <label title="After a pause in typing, check your latest edits (about once a minute at most)"><input type="checkbox" id="ck-watch" ${watch ? "checked" : ""}> Watch while I write</label>`;
+    else if (st.tab === "facts") bar.innerHTML = `<button type="button" class="btn" id="ck-facts" ${st.busy ? "disabled" : ""}>Check facts</button>
+      <span class="muted small">Statistics, exchange rates${st.facts?.web === false ? "" : " and other facts against sources"} · 1 credit per ${10} new facts</span>`;
+    else bar.innerHTML = `<button type="button" class="btn" id="ck-refresh" ${st.busy || !(st.live?.bindings || []).length ? "disabled" : ""}>Refresh all</button>
+      <span class="muted small">Numbers linked to their source update in one go</span>`;
+    bar.querySelector("#ck-run")?.addEventListener("click", () => runCheck(false));
+    bar.querySelector("#ck-facts")?.addEventListener("click", () => runCheck(true));
+    bar.querySelector("#ck-refresh")?.addEventListener("click", refreshLive);
+    bar.querySelector("#ck-watch")?.addEventListener("change", e => {
+      watch = e.target.checked; try { localStorage.setItem(CK_WATCH, watch ? "1" : ""); } catch {}
+      say(watch ? (inEditor() ? "Watching — your edits are checked after a pause in typing." : "Watching starts when you edit the document.") : "");
+    });
+  }
+  function draw() {
+    for (const b of panel.querySelectorAll(".ck-tabs [data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === st.tab));
+    const nc = visible(st.res?.findings).length, bad = visible(st.facts?.claims).filter(c => ["contradicted", "outdated"].includes(c.verdict)).length;
+    const nl = (st.live?.bindings || []).length;
+    const tabs = panel.querySelectorAll(".ck-n");
+    tabs[0].textContent = st.res ? ` ${nc}` : ""; tabs[1].textContent = st.facts ? ` ${bad}` : ""; tabs[2].textContent = st.live ? ` ${nl}` : "";
+    badge.hidden = !(nc + bad); badge.textContent = nc + bad;
+    drawBar();
+    const list = panel.querySelector(".ck-list");
+    if (st.tab === "consistency") {
+      const fs = visible(st.res?.findings);
+      list.innerHTML = !st.res ? `<p class="ck-empty">${st.busy ? "" : "Contradictions between places, sudden changes of tone and the same thing named two ways."}</p>`
+        : !fs.length ? `<p class="ck-empty">No contradictions, tone breaks or wording slips found.</p>`
+        : fs.map(c => { const [lab, cls] = CK_KIND[c.kind] || [c.kind, ""];
+            return `<article class="ck-card${st.picked.has(c.id) ? " picked" : ""}" data-id="${esc(c.id)}"><div class="ck-kind ${cls}">${esc(lab)}</div>
+              <p>${esc(c.note)}</p>${c.places.map(p => q(p.quote)).join("")}
+              ${c.fix ? `<p class="ck-fix"><b>Fix:</b> “${esc(c.fix.quote)}” → “${esc(c.fix.replacement)}”</p>` : ""}
+              ${acts(c.id, { fix: !!c.fix })}</article>`; }).join("");
+    } else if (st.tab === "facts") {
+      const cs = visible(st.facts?.claims);
+      const card = c => { const [lab, cls] = CK_VERDICT[c.verdict] || [c.verdict, ""], s = c.source || {};
+        const src = s.type === "web" ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a>`
+          : s.source_name ? (s.source_url ? `<a href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_name)}</a>` : esc(s.source_name)) + (s.period ? ` · ${esc(s.period)}` : "") : "";
+        const canBind = !!s.spec && ["contradicted", "outdated", "supported"].includes(c.verdict);
+        return `<article class="ck-card${st.picked.has(c.id) ? " picked" : ""}" data-id="${esc(c.id)}"><div class="ck-kind ${cls}">${esc(lab)}</div>
+          <p class="ck-claim">${esc(c.claim)}</p>${q(c.quote)}${c.explanation ? `<p>${esc(c.explanation)}</p>` : ""}
+          ${src ? `<p class="ck-src">Source: ${src}</p>` : ""}
+          ${c.replacement ? `<p class="ck-fix"><b>Fix:</b> “${esc(c.replacement)}”</p>` : ""}
+          ${acts(c.id, { fix: !!c.replacement, bind: canBind })}</article>`; };
+      const main = cs.filter(c => c.verdict !== "supported" && c.verdict !== "unverified"), unv = cs.filter(c => c.verdict === "unverified"), ok = cs.filter(c => c.verdict === "supported");
+      list.innerHTML = !st.facts ? `<p class="ck-empty">${st.busy ? "" : "Numbers, dates and named facts, each checked against a source — the source is shown with every result. A fact without a source is “not settled”, never “wrong”."}</p>`
+        : !cs.length ? `<p class="ck-empty">No checkable facts found.</p>`
+        : (main.length ? main.map(card).join("") : `<p class="ck-empty">Nothing wrong or outdated found.</p>`)
+          + (unv.length ? `<details class="ck-more"><summary>${unv.length} not settled — no source said yes or no</summary>${unv.map(card).join("")}</details>` : "")
+          + (ok.length ? `<details class="ck-more"><summary>${ok.length} confirmed by a source</summary>${ok.map(card).join("")}</details>` : "");
+    } else {
+      const bs = st.live?.bindings || [];
+      list.innerHTML = !st.live ? "" : st.live.error ? `<p class="ck-empty">${esc(st.live.error)}</p>`
+        : !bs.length ? `<p class="ck-empty">No live numbers yet. On the Facts tab, “Keep it up to date” links a statistic or an exchange rate to its source; Refresh all then updates every linked number and the words around it, as tracked changes.</p>`
+        : bs.map(b => `<article class="ck-card ck-live"><div class="ck-kind ${b.up_to_date ? "ok" : "warn"}">${esc(b.label || "Live number")}</div>
+            <p>In the document <b class="ck-val">${esc(b.text || "—")}</b>${b.up_to_date ? " · up to date" : ` · newest <b class="ck-val">${esc(b.display || "")}</b>`}</p>
+            <p class="ck-src">${b.source_url ? `<a href="${esc(b.source_url)}" target="_blank" rel="noopener">${esc(b.source_name || "Source")}</a>` : esc(b.source_name || "")}${b.period ? ` · ${esc(b.period)}` : ""}${b.checked_at ? ` · checked ${esc(ago(Date.parse(b.checked_at) / 1000))}` : ""}</p></article>`).join("");
+    }
+    const n = st.picked.size, go = panel.querySelector("#ck-apply");
+    go.disabled = !n || st.busy;
+    go.textContent = n ? `Put ${n} into the document` : "Put into the document";
+    panel.querySelector("#ck-picked").textContent = n ? "as comments · fixes as tracked changes" : "Pick Comment or Fix on a result";
+  }
+  draw();
+  let again = ""; try { again = sessionStorage.getItem("aice-checks") || ""; sessionStorage.removeItem("aice-checks");
+    st.tab = sessionStorage.getItem("aice-checks-tab") || st.tab; sessionStorage.removeItem("aice-checks-tab"); } catch {}
+  if (again) { open(true); if (st.tab === "live") loadLive(); }
+}
+
+// ---------- ágak és összefésülés (10-14): ugyanabból a változatból több irány, gondolatonként összefésülve ----------
+async function drawBranches(f) {
+  const box = $("#branches");
+  let t; try { t = await api(`/api/branches?file_id=${encodeURIComponent(f.file_id)}`); } catch { return; }
+  if (!box.isConnected || (t.heads || []).length < 2) { box.hidden = true; return; }
+  const mine = t.nodes.find(n => n.file_id === f.file_id);
+  const headOf = id => { const by = Object.fromEntries(t.nodes.map(n => [n.file_id, n])); let x = by[id];
+    while (x && x.children.length) x = by[x.children[x.children.length - 1]]; return x?.file_id; };
+  const myHead = headOf(f.file_id);
+  box.hidden = false;
+  box.innerHTML = `<span class="muted small">Branches</span>` + t.heads.map(h =>
+    `<a href="/app/file/${encodeURIComponent(h.file_id)}" class="br-chip" ${h.file_id === myHead ? 'aria-current="true"' : ""} title="${esc(h.label)}">${esc(h.branch)}</a>`).join("")
+    + `<button type="button" class="btn ghost br-merge" id="br-merge">Compare &amp; merge</button>`;
+  $("#br-merge").addEventListener("click", () => openMerge(t, myHead || f.file_id));
+}
+function openMerge(t, a) {
+  const dlg = $("#merge-dlg"), body = $("#merge-body");
+  const heads = t.heads, other = (heads.find(h => h.file_id !== a) || heads[0]).file_id;
+  const opt = sel => heads.map(h => `<option value="${esc(h.file_id)}" ${h.file_id === sel ? "selected" : ""}>${esc(h.branch)} — ${esc(h.label)}</option>`).join("");
+  body.innerHTML = `<h2 id="merge-title">Merge branches</h2>
+    <div class="mg-pick"><label>A <select id="mg-a">${opt(a)}</select></label><label>B <select id="mg-b">${opt(other)}</select></label>
+      <button type="button" class="btn" id="mg-compare">Compare</button></div>
+    <p class="muted small" id="mg-status" role="status" aria-live="polite"></p><div id="mg-units"></div>
+    <div class="mg-foot" hidden><input id="mg-how" autocomplete="off" placeholder="Or say how to combine them — e.g. keep A's opening, add B's data">
+      <button type="button" class="btn primary" id="mg-go">Merge <em class="ai-badge">AI</em></button></div>`;
+  let plan = null;
+  const compare = async () => {
+    const A = $("#mg-a").value, B = $("#mg-b").value;
+    if (A === B) { $("#mg-status").textContent = "Choose two different branches."; return; }
+    $("#mg-units").innerHTML = ""; body.querySelector(".mg-foot").hidden = true;
+    try {
+      const job = await api("/api/branches/compare", { method: "POST", body: JSON.stringify({ a: A, b: B }) });
+      plan = await pollJob(job, () => "Pairing up the ideas of the two branches…", $("#mg-status"));
+    } catch (err) { $("#mg-status").textContent = err.message; return; }
+    $("#mg-status").textContent = plan.summary + " Pick per place — or just say how to combine them.";
+    const txt = xs => xs.length ? xs.map(x => `<p>${esc(x.text)}</p>`).join("") : `<p class="muted">— nothing here —</p>`;
+    $("#mg-units").innerHTML = plan.units.map(u => `<section class="mg-unit" data-id="${esc(u.id)}">
+        <div class="mg-topic">${esc(u.topic || (u.kind === "only_b" ? "Only in B" : u.kind === "only_a" ? "Only in A" : "Changed"))}</div>
+        <div class="mg-cols"><div><span class="mg-tag">A</span>${txt(u.a)}</div><div><span class="mg-tag">B</span>${txt(u.b)}</div></div>
+        <div class="mg-choice" role="radiogroup" aria-label="Keep">${[["", "Let the AI decide"], ["a", "A"], ["b", "B"], ["both", "Both"], ["merge", "Write from both"]]
+          .map(([v, l]) => `<label><input type="radio" name="mg-${esc(u.id)}" value="${v}" ${v === "" ? "checked" : ""}> ${l}</label>`).join("")}</div></section>`).join("");
+    body.querySelector(".mg-foot").hidden = false;
+  };
+  $("#mg-compare").addEventListener("click", compare);
+  $("#mg-go").addEventListener("click", async () => {
+    if (!plan) return;
+    const choices = {}; for (const u of plan.units) { const v = body.querySelector(`input[name="mg-${CSS.escape(u.id)}"]:checked`)?.value; if (v) choices[u.id] = v; }
+    const instruction = $("#mg-how").value.trim();
+    if (!instruction && Object.keys(choices).length < plan.units.length) {
+      $("#mg-status").textContent = "Pick A, B or Both for every place — or say how to combine them below."; return; }
+    const go = $("#mg-go"); go.disabled = true;
+    try {
+      if (!(await saveEditorFirst(m => $("#mg-status").textContent = m))) { go.disabled = false; return; }
+      const job = await api("/api/branches/merge", { method: "POST", body: JSON.stringify({ a: plan.a, b: plan.b, choices, instruction }) });
+      const r = await pollJob(job, j => j.stage === "writing the merged parts" ? "Writing the merged parts…" : j.stage === "deciding place by place" ? "Deciding place by place…" : "Merging…", $("#mg-status"));
+      dlg.close(); toast(r.summary + " Accept or reject each change in the editor.");
+      nav("/app/file/" + encodeURIComponent(r.file_id) + "/edit/wordcraft");
+    } catch (err) { $("#mg-status").textContent = err.message; go.disabled = false; }
+  });
+  $("#merge-x").onclick = () => dlg.close();
+  if (!dlg.open) dlg.showModal();
+  compare();
 }
 
 // kitöltő űrlap a PDF saját mezőiből (név → címke: a mezőnévből olvasható alak)

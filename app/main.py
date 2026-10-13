@@ -106,7 +106,9 @@ from app.routes import graphics  # noqa: E402  (újraépítés · infografika ·
 app.include_router(graphics.router)
 app.include_router(studio.router)
 from app.routes import video as video_routes  # noqa: E402
+from app.routes import checks as checks_routes  # noqa: E402  (tartalmi ellenőrzés · élő adatok · ágak)
 app.include_router(video_routes.router)
+app.include_router(checks_routes.router)
 app.include_router(jobs.router)
 app.include_router(billing.router)
 app.include_router(product.router)

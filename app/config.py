@@ -85,6 +85,16 @@ class Settings(BaseModel):
     HUMAN_SEG_MODEL_PATH: Path = Path(os.getenv("HUMAN_SEG_MODEL_PATH", "/opt/models/u2net_human_seg.onnx"))
     EDITOR_MAX_SAVE_MB: int = int(os.getenv("EDITOR_MAX_SAVE_MB", "100"))
 
+    # --- Tartalmi ellenőrzés és élő adatok (10-14) ---
+    # StatData (saját szolgáltatás): makró-mutatók a legfrissebb időszakkal + MNB-árfolyam; REST /api/call, kulcs nélkül
+    STATDATA_URL: str = os.getenv("STATDATA_URL", "https://statadatokmcp-production.up.railway.app")
+    # Echolot ENGINE (saját szolgáltatás) webes kereséshez a tényellenőrzésben — a szolgáltatás gyökere (/mcp nélkül);
+    # üres kulcs = csak a statisztikai állítások ellenőrzése
+    ECHOLOT_ENGINE_URL: str = os.getenv("ECHOLOT_ENGINE_URL", "").removesuffix("/mcp").rstrip("/")
+    ECHOLOT_ENGINE_KEY: str = os.getenv("ECHOLOT_ENGINE_KEY", "")
+    # tényellenőrzés: ennyi újonnan ellenőrzött állításonként 1 kredit (a gyorsítótárból jövő ingyenes)
+    FACTCHECK_CLAIMS_PER_CREDIT: int = int(os.getenv("FACTCHECK_CLAIMS_PER_CREDIT", "10"))
+
     # --- Public base URL (Railway sets this) ---
     PUBLIC_BASE_URL: str = os.getenv(
         "PUBLIC_BASE_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000")

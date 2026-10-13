@@ -70,7 +70,11 @@ mcp = FastMCP(
         "generate_image(stock_search=…) to show the person candidates. "
         "CHECK YOUR WORK: a Word document, deck or PDF → validate_document(file_id): the pages come back as pictures "
         "with a machine-checked list of problems (\"3 errors, 2 warnings\", page, object, a cut-out of each) — fix every "
-        "error and validate again before saying it's done; describe_image is not a check. "
+        "error and validate again before saying it's done; describe_image is not a check. validate_document(content=true) "
+        "also reads a Word document for contradictions between places, tone breaks and the same thing named two ways; "
+        "facts(action=\"check\") checks its numbers and facts against sources (StatData, MNB, web search) and "
+        "facts(action=\"bind\"/\"refresh\") keeps linked numbers up to date. history(action=\"branches\"/\"merge\") "
+        "shows a document's branches and merges two of them idea by idea, as tracked changes. "
         "To SEE any other result call files(action=\"preview\", file_id, page) — the picture comes back in the "
         "tool result (pages of a document, slides, a video's frames: page 1–3); every file result also has `preview_url` "
         "(the same PNG as a link, for the person) and `check` = {status: ok | needs_check | failed, "
@@ -809,6 +813,8 @@ async def history(
     review_id: Optional[int] = None,
     resolution_file_id: Optional[str] = None,
     note: Optional[str] = None,
+    other_file_id: Optional[str] = None,
+    choices: Optional[dict[str, str]] = None,
 ) -> dict:
     """
     Version history and the human review inbox (Postgres).
@@ -820,7 +826,32 @@ async def history(
       action="resolve" + review_id (+ resolution_file_id, note) → close one.
     Typical loop: inbox → wordcraft(read="review") on the file → edit with
     tracked changes → resolve with the new file_id.
+    Branches (Word documents): several directions from the same version, merged idea by idea.
+      action="branches" + file_id  → the version tree: nodes and the branch heads [{file_id, branch, label}].
+      action="branch" + file_id, note=name → name a version's branch ("Sales focus"); any version you make
+                                     from an older one is a new branch.
+      action="compare" + file_id (A), other_file_id (B) → the places where they differ, paired by idea:
+                                     units [{id, topic, kind, a: [{text}], b: [{text}]}].
+      action="merge" + file_id (A), other_file_id (B), choices {unit id: "a"|"b"|"both"|"merge"} and/or
+                                     note = how to combine them ("keep A's opening, add B's data") → a new version
+                                     of A with B's parts as tracked changes the person accepts or rejects.
     """
+    if action in ("branches", "branch", "compare", "merge"):
+        import asyncio as _a
+        from app.tools import branches
+        if not file_id:
+            raise ValueError(f"{action} needs a file_id")
+        if action == "branches":
+            return await _a.to_thread(branches.tree, file_id)
+        if action == "branch":
+            return branches.set_branch(file_id, note or "")
+        if not other_file_id:
+            raise ValueError(f"{action} needs other_file_id (the B branch)")
+        if action == "compare":
+            return await branches.plan(file_id, other_file_id)
+        if not choices and not (note or "").strip():
+            raise ValueError("merge needs choices per unit or a note saying how to combine them")
+        return _links(await branches.merge(file_id, other_file_id, choices or {}, note or ""))
     from app import db
     if action == "lineage":
         if not file_id:
@@ -836,7 +867,7 @@ async def history(
         if review_id is None:
             raise ValueError("resolve needs a review_id")
         return await db.review_resolve(int(review_id), resolution_file_id, note)
-    raise ValueError("action: lineage | inbox | request | resolve")
+    raise ValueError("action: lineage | inbox | request | resolve | branches | branch | compare | merge")
 
 
 @mcp.tool()
@@ -1317,7 +1348,55 @@ async def edit_with_instruction(
 
 @mcp.tool()
 @linked
-async def validate_document(file_id: str, pages: Optional[list[int]] = None, view: str = "word") -> dict:
+async def facts(
+    action: str = "check",
+    file_id: Optional[str] = None,
+    quote: Optional[str] = None,
+    source: Optional[dict[str, str]] = None,
+) -> dict:
+    """
+    A Word document's FACTS against sources, and numbers kept up to date.
+      action="check" + file_id → every checkable claim (numbers, dates, who did what) with a verdict:
+            contradicted | outdated | unverified | supported, the source it rests on (title + url, or the statistics
+            office and period), the right value and — when it is wrong — a corrected `replacement` for the `quote`.
+            Statistics are checked against StatData (Eurostat, KSH, ECB, FRED…), forint rates against the MNB, other
+            facts against a web search: short search queries built from the claims leave the server. "unverified" means
+            no source settled it — never say it is false. Costs 1 credit per 10 newly checked facts (repeats are free).
+      action="bind" + file_id, quote (exact text with the number), source → links that number to its source;
+            source = {"kind": "indicator", "country": "HU", "indicator": "cpi"} (cpi, core_cpi, policy_rate,
+            unemployment, gdp_growth, gov_debt, bond_yield_10y, …) or {"kind": "fx", "currency": "EUR"} (MNB rate).
+            Every `stat`/`fx` claim from check already carries the source to use. → a new version.
+      action="list" + file_id → the linked numbers: text in the document, newest figure, period, source, up_to_date.
+      action="refresh" + file_id → every linked number set to its newest figure in the document's own number format,
+            and only the words around it adjusted (period, direction, endings), all as tracked changes, with a comment
+            where a conclusion may no longer hold → a new version (or "all up to date", no new file).
+    """
+    from app.routes.checks import _charge_claims
+    from app.tools import content_check as cc
+    from app.tools import live_data
+    from app.tools.crafts import existing
+    if not file_id:
+        raise ValueError(f"{action} needs a file_id")
+    if action == "check":
+        r = await cc.facts(existing(file_id), charge=_charge_claims)
+        return {"claims": [{k: c.get(k) for k in ("id", "verdict", "claim", "quote", "paragraph", "explanation", "correct",
+                                                   "replacement", "source", "stat", "fx")} for c in r["claims"]],
+                "counts": r["counts"], "checked": r["checked"], "new_checks": r["new_checks"]}
+    if action == "bind":
+        if not quote or not isinstance(source, dict):
+            raise ValueError("bind needs the quote (exact text with the number) and a source")
+        return _links(await live_data.bind(file_id, quote, source))
+    if action == "list":
+        return await live_data.listing(file_id)
+    if action == "refresh":
+        return _links(await live_data.refresh(file_id))
+    raise ValueError("action: check | bind | list | refresh")
+
+
+@mcp.tool()
+@linked
+async def validate_document(file_id: str, pages: Optional[list[int]] = None, view: str = "word",
+                            content: bool = False) -> dict:
     """CHECK a Word document, a deck or a PDF before telling the person it's done. The page pictures come back IN this
     result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
 
@@ -1337,11 +1416,28 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
       file_id: the .docx (or .odt/.rtf/.md), .pptx or .pdf to check.
       pages: page numbers to see in full (default: the pages with errors).
       view: "word" (default — the downloaded file) | "editor" (the built-in editor) | "both" (side by side).
+      content: true → also read a Word document's TEXT for contradictions between two places, sudden changes of tone and
+        the same thing named or spelled two ways (`content.findings`: kind, places [{paragraph, quote}], note, fix
+        {quote, replacement} or null). Each quote is exact text of the document — put a finding in with
+        wordcraft (select.text + review.newComment, or a tracked change). For facts against sources use facts(action="check").
     """
     import json
     from mcp.types import CallToolResult, ImageContent, TextContent
     from app.tools import validate as v
     info, images = await v.validate(file_id, pages=pages, view=view)
+    if content and file_id.lower().endswith(".docx"):
+        from app.tools import content_check as cc
+        from app.tools.crafts import existing
+        try:
+            c = await cc.consistency(existing(file_id))
+            info["content"] = {"findings": [{k: x[k] for k in ("id", "kind", "places", "note", "fix")} for x in c["findings"]],
+                               "checked": c["checked"], "truncated": c["truncated"]}
+            for x in info["content"]["findings"]:
+                x["places"] = [{"paragraph": pl["paragraph"], "quote": pl["quote"]} for pl in x["places"]]
+                if x["fix"]:
+                    x["fix"] = {"quote": x["fix"]["quote"], "replacement": x["fix"]["replacement"]}
+        except Exception as e:
+            info["content"] = {"error": f"the content check didn't run: {e}"}
     info = _links(info)
     content = [TextContent(type="text", text=json.dumps(info, ensure_ascii=False))]
     for caption, jpg in images:
@@ -1706,7 +1802,7 @@ async def chart_redraw(
 # openWorld=true CSAK ott, ahol az eszköz tényleg a nyilvános netre nyúl (URL letöltése, stockkép-/Lottie-/térkép-
 # keresés, cikk-URL) — az OpenAI definíciója szerint egy privát fiók nem „open world” attól, hogy külső szerveren fut.
 _READ_ONLY = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document"}
-_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit"}
+_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit", "facts"}
 
 
 def _annotate_tools() -> None:

@@ -36,13 +36,13 @@ WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 # havi keretek: deck · revise · document · photo_edit (fotó/hó) · scan_pages · form_pages · batch (fotó/kérés)
 PLANS: dict[str, dict[str, Any]] = {
     "free": {"name": "Free", "monthly_credits": 10,
-             "quota": {"deck": 3, "revise": 20, "document": 10, "photo_edit": 10, "scan_pages": 100, "form_pages": 20},
+             "quota": {"deck": 3, "revise": 20, "document": 10, "photo_edit": 10, "scan_pages": 100, "form_pages": 20, "check": 40},
              "batch": 10, "retention_days": 30},
     "plus": {"name": "Plus", "month": 9, "year": 90, "monthly_credits": 150,
-             "quota": {"deck": 300, "revise": 3000, "document": 1000, "photo_edit": 1500, "scan_pages": 1000, "form_pages": 500},
+             "quota": {"deck": 300, "revise": 3000, "document": 1000, "photo_edit": 1500, "scan_pages": 1000, "form_pages": 500, "check": 3000},
              "batch": 50, "retention_days": 90},
     "pro": {"name": "Pro", "month": 19, "year": 190, "monthly_credits": 400,
-            "quota": {"deck": 1500, "revise": 15000, "document": 5000, "photo_edit": 8000, "scan_pages": 5000, "form_pages": 2500},
+            "quota": {"deck": 1500, "revise": 15000, "document": 5000, "photo_edit": 8000, "scan_pages": 5000, "form_pages": 2500, "check": 15000},
             "batch": 200, "retention_days": 365},
 }
 PACKS = {"pack100": {"credits": 100, "price": 10}, "pack300": {"credits": 300, "price": 25}}
@@ -80,7 +80,8 @@ async def use(kind: str, n: int = 1) -> None:
     used = await db.usage_add(uid, month_key(), kind, n, limit)
     if used is None:
         nice = {"deck": "presentations", "revise": "changes", "document": "AI documents", "photo_edit": "photo edits",
-                "form_pages": "form pages", "scan_pages": "scanned pages"}.get(kind, kind)
+                "form_pages": "form pages", "scan_pages": "scanned pages",
+                "check": "document checks"}.get(kind, kind)
         raise HTTPException(402, f"You've used this month's {limit} {nice} on the {PLANS[plan]['name']} plan. "
                                  "Upgrade for more — see Plans.")
 

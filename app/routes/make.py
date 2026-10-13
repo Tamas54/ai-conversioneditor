@@ -809,6 +809,10 @@ async def make_revise(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             res = await revise.revise(pool, fid, instruction, body.get("style_file_id"))
         except Exception as e:
             raise _fail(e)
+        if str(body.get("branch") or "").strip():          # új ág: a változat ág-nevet kap (a fa és az összefésülés ezt mutatja)
+            from app.tools import branches
+            branches.set_branch(res["file_id"], str(body["branch"]))
+            res["branch"] = str(body["branch"]).strip()[:60]
         events.emit("tool_done", tool="make_revise", result={"file_id": res["file_id"]})
         return res
     return jobs.start("revise", work)
