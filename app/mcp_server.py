@@ -35,9 +35,7 @@ from app.tools import (
     replace_heading as t_replace_heading,
     insert_image as t_insert_image,
 )
-from app.tools import pptx_builder
 from app.tools import vision_ops, chart_image, chart_redraw as chart_redraw_mod
-from app.tools.visual_feedback import docx_render_pages as t_docx_render_pages
 
 log = logging.getLogger("aice.mcp")
 
@@ -55,7 +53,10 @@ log = logging.getLogger("aice.mcp")
 mcp = FastMCP(
     "ai-conversioneditor",
     instructions=(
-        "Make and edit real files (Word, PowerPoint, PDF, images/PSD, designs). Every file in a result carries "
+        "Make and edit real files (Word, PowerPoint, PDF, images/PSD, designs). This is the person's own Studio "
+        "workspace, which they connected: files sent here are stored privately in their account (kept "
+        f"{settings.FILE_RETENTION_DAYS} days, links signed), never published or shared, and every edit makes a new "
+        "version — the original stays. Every file in a result carries "
         "`edit_url`: give it to the person — it opens that file in the matching built-in editor (Word-like, "
         "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
         "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
@@ -67,7 +68,10 @@ mcp = FastMCP(
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
         "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
         "generate_image(stock_search=…) to show the person candidates. "
-        "CHECK YOUR WORK: to SEE a result call files(action=\"preview\", file_id, page) — the picture comes back in the "
+        "CHECK YOUR WORK: a Word document, deck or PDF → validate_document(file_id): the pages come back as pictures "
+        "with a machine-checked list of problems (\"3 errors, 2 warnings\", page, object, a cut-out of each) — fix every "
+        "error and validate again before saying it's done; describe_image is not a check. "
+        "To SEE any other result call files(action=\"preview\", file_id, page) — the picture comes back in the "
         "tool result (pages of a document, slides, a video's frames: page 1–3); every file result also has `preview_url` "
         "(the same PNG as a link, for the person) and `check` = {status: ok | needs_check | failed, "
         "findings, verified}. A file existing is not the task done: if status is needs_check, look at the preview; "
@@ -387,7 +391,8 @@ async def files(
     action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id (a video: scene =
       "s3" | its number | "title" | "end" — that scene at its end, when the animation has played; + frames=6 for a
       filmstrip of the scene's motion — or scene="all" for every scene on one sheet, or at=seconds), so you can
-      check your own result (text overflow, a missing object, a wrong crop) before calling it done.
+      check your own result (text overflow, a missing object, a wrong crop) before calling it done. A Word document,
+      deck or PDF: validate_document checks it for you (pictures + a machine-checked list of problems).
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
       changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
     """
@@ -775,7 +780,7 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).
     Images are cropped to their frame; FLUX images generate in parallel.
-    Preview a slide with pptx_render_slide.
+    Check the result with validate_document (slides as pictures + overflow and off-slide problems).
     """
     if from_document:
         from app.routes.make import make_deck
@@ -1305,17 +1310,38 @@ async def edit_with_instruction(
 
 @mcp.tool()
 @linked
-async def docx_render_pages(
-    file_id: str, page_indices: Optional[list[int]] = None, dpi: int = 110,
-) -> dict:
-    """Render DOCX pages to PNG via LO+PyMuPDF for visual verification.
-    page_indices=[0,1,2] for specific pages, or omit for all. Returns
-    {pages: [{page_index, image_file_id, ...}]} — pass image_file_ids
-    to describe_image / ocr_image. Use after building to catch overflow,
-    layout breaks, or wrong styling before declaring done."""
-    return await t_docx_render_pages(
-        _pool(), file_id=file_id, page_indices=page_indices, dpi=dpi,
-    )
+async def validate_document(file_id: str, pages: Optional[list[int]] = None, view: str = "word") -> dict:
+    """CHECK a Word document, a deck or a PDF before telling the person it's done. The page pictures come back IN this
+    result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
+
+    Returns status (ok | needs_check | failed), summary ("3 errors, 2 warnings"), issues [{id (E1…, W1…), severity,
+    kind, page, object, block, message, fix}], and pictures: every page small (problem pages framed red/orange), a
+    cut-out of each problem with it marked, and the pages with errors in full. A Word document is laid out twice — in
+    the built-in editor and the way the downloaded file looks in Word — and the two are compared.
+    It finds: empty list items; odd numbering (repeated, skipped, restarting, continuing under a new heading, typed
+    numbers, heading numbers); table rows split across pages and tables continuing without their header row; headings
+    left as the last line of a page; captions apart from their picture; text, tables or pictures off the page or into
+    the margin; empty pages. Decks: text overflowing its box (as rendered), things off the slide, empty placeholders.
+    block = the paragraph number in wordcraft(read="inspect"); edit.goto {"paragraph": block + 1} puts the caret there,
+    and each issue's `fix` says what to do. Fix every error, then call validate_document again — a file that saved is
+    not proof that the layout is right.
+
+    Args:
+      file_id: the .docx (or .odt/.rtf/.md), .pptx or .pdf to check.
+      pages: page numbers to see in full (default: the pages with errors).
+      view: "word" (default — the downloaded file) | "editor" (the built-in editor) | "both" (side by side).
+    """
+    import json
+    from mcp.types import CallToolResult, ImageContent, TextContent
+    from app.tools import validate as v
+    info, images = await v.validate(file_id, pages=pages, view=view)
+    info = _links(info)
+    content = [TextContent(type="text", text=json.dumps(info, ensure_ascii=False))]
+    for caption, jpg in images:
+        content.append(TextContent(type="text", text=caption))
+        content.append(ImageContent(type="image", data=base64.b64encode(jpg).decode(), mimeType="image/jpeg"))
+    log.info("validate_document %s: %s (%d pictures)", file_id, info["summary"], len(images))
+    return CallToolResult(content=content, structuredContent=info)
 
 
 @mcp.tool()
@@ -1365,19 +1391,6 @@ async def insert_image(
 # ============================================================
 
 
-@mcp.tool()
-@linked
-async def pptx_render_slide(
-    file_id: str, slide_index: Optional[int] = None, dpi: int = 110,
-) -> dict:
-    """Render PPTX slide(s) to PNG so you can VISUALLY verify via
-    describe_image. slide_index=N for one slide; omit for all. Returns
-    image_file_id(s)."""
-    return await pptx_builder.pptx_render_slide(
-        _pool(), file_id=file_id, slide_index=slide_index, dpi=dpi,
-    )
-
-
 # ============================================================
 # Vision (Kimi K2.6 multimodal — read images)
 # ============================================================
@@ -1395,8 +1408,10 @@ async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> 
 @linked
 async def describe_image(image_file_id: str, question: Optional[str] = None) -> dict:
     """Free-form Q&A on an image (AI vision). Default: detailed
-    description. Pass `question` for targeted queries: 'is there overlap?',
-    'what colors dominate?', 'count the people', etc."""
+    description. Pass `question` for targeted queries: 'what colors dominate?',
+    'count the people', etc. NOT for checking your own document, deck or PDF:
+    a description is not a check — use validate_document (you see the pages
+    yourself, plus a machine-checked list of problems)."""
     return await vision_ops.describe_image(image_file_id, question=question)
 
 

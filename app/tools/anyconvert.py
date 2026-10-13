@@ -87,6 +87,21 @@ def _zip_dir(files: list[Path], dst: Path, stem: str) -> None:
             z.write(f, f"{stem}-{i:03d}{f.suffix}")
 
 
+async def lo_convert(src: Path, dst: Path) -> None:
+    """LibreOffice-konverzió (saját profillal, így párhuzamosan is fut) — a cél formátuma a `dst` kiterjesztése.
+    A validate_document is ezt hívja: a LibreOffice-tördelés ≈ ahogy a letöltött fájlt a Word mutatja."""
+    work = temp_path(new_file_id("lo")); work.mkdir(parents=True)
+    try:
+        await _run("soffice", f"-env:UserInstallation=file://{work}/profile", "--headless", "--convert-to",
+                   dst.suffix.lstrip("."), "--outdir", str(work), str(src))
+        out = work / (src.stem + dst.suffix)
+        if not out.exists():
+            raise RuntimeError("LibreOffice produced nothing")
+        shutil.move(str(out), dst)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 async def to_pdf(src: Path, dst: Path) -> None:
     """Nyomtatáshoz: bármelyik támogatott fájl → PDF a `dst`-be, CSENDBEN (nincs meta, nincs verzió-sor)."""
     from app.tools import crafts, wordcraft
@@ -99,17 +114,8 @@ async def to_pdf(src: Path, dst: Path) -> None:
         await asyncio.to_thread(_image_to_pdf, src, dst)
     elif ext in VECTORS:
         await crafts.convert_file("vectorcraft", src, dst)
-    elif ext in DOCS | SLIDES | SHEETS:           # doc, ppt, odp, táblázatok: LibreOffice (saját profillal, párhuzamosan is)
-        work = temp_path(new_file_id("lo")); work.mkdir(parents=True)
-        try:
-            await _run("soffice", f"-env:UserInstallation=file://{work}/profile", "--headless", "--convert-to", "pdf",
-                       "--outdir", str(work), str(src))
-            out = work / (src.stem + ".pdf")
-            if not out.exists():
-                raise RuntimeError("LibreOffice produced nothing")
-            shutil.move(str(out), dst)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+    elif ext in DOCS | SLIDES | SHEETS:           # doc, ppt, odp, táblázatok: LibreOffice
+        await lo_convert(src, dst)
     else:
         raise ValueError(f"Printing .{ext} files isn't supported — download it instead.")
     if not dst.exists() or dst.stat().st_size == 0:

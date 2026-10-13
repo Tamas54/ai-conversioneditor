@@ -396,6 +396,30 @@ def check_docx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) 
     return make("ok" if specific else "needs_check", [] if specific else [LOOK], verified)
 
 
+async def with_layout(check: dict[str, Any], out: Path) -> dict[str, Any]:
+    """A mentett Word-fájl tördelése is (a szerkesztő motorján, kép nélkül): a sikeres mentés nem igazolja a jó
+    tördelést (ChatGPT-teszt 10-13). Hiba vagy figyelmeztetés → needs_check, a validate_document mutatja meg képpel."""
+    from app.tools import validate
+    try:
+        lay = await asyncio.wait_for(validate.quick_layout(out), timeout=25)
+    except Exception as e:
+        log.info("tördelés-ellenőrzés kimaradt: %s", e)
+        lay = None
+    if not lay:
+        return make(check["status"], check["findings"] + ["Layout not checked — call validate_document."], check["verified"])
+    found = lay["errors"] + lay["warnings"]
+    if not found:
+        return make(check["status"], check["findings"], check["verified"] + [
+            f"Layout checked in the editor's engine ({_plural(lay['pages'], 'page')}): no empty list items, broken numbering, "
+            "split table rows, headings left at a page bottom or overflow. validate_document also checks Word's layout "
+            "and shows the pages."])
+    lines = [f"Page {i['page']}: {i['message']}" if i.get("page") else i["message"] for i in found[:6]]
+    more = f" (+{len(found) - 6} more)" if len(found) > 6 else ""
+    return make("failed" if check["status"] == "failed" else "needs_check",
+                check["findings"] + [f"Layout: {validate.counts(found)}{more} — call validate_document(file_id) to see them "
+                                     "marked on the pages, fix the errors, then validate again."] + lines, check["verified"])
+
+
 # ---------- képek ----------
 
 def image_change(src: Path, out: Path) -> Optional[float]:
@@ -533,7 +557,7 @@ def check_video(p: Path, want_s: Optional[float] = None, want_wh: Optional[tuple
 # ---------- belépési pont ----------
 
 _NO_CHECK = {"files", "history", "extract", "ocr_image", "describe_image", "extract_table_from_image", "generate_image",
-             "upload_from_url", "upload_file", "upload_chunk", "docx_render_pages", "pptx_render_slide", "chart_redraw",
+             "upload_from_url", "upload_file", "upload_chunk", "validate_document", "chart_redraw",
              "generate_chart_image", "image_to_xlsx"}
 
 
@@ -620,7 +644,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
     if ext == "pptx":
         return await asyncio.to_thread(check_pptx, out, src, tool, args)
     if ext == "docx":
-        return await asyncio.to_thread(check_docx, out, src, tool, args), None
+        return await with_layout(await asyncio.to_thread(check_docx, out, src, tool, args), out), None
     if tool in ("photocraft", "photo_edit") or (ext in ("psd", "png", "jpg", "jpeg", "webp") and tool not in ("design", "vectorcraft")):
         return await asyncio.to_thread(check_photo, out, src, res), None
     return await generic(out), None
