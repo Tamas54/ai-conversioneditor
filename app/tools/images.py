@@ -206,6 +206,14 @@ async def _openverse_candidates(query: str, n: int) -> list[dict[str, Any]]:
     return out[:n]
 
 
+def _cand_key(c: dict[str, Any]) -> str:
+    """Ugyanaz a kép két forrásból (Commons + Openverse) más URL-lel jön: a Commons-fájlnév egyedi → az a kulcs."""
+    url = c.get("url") or ""
+    if "wikimedia.org/" in url:
+        return "commons:" + re.sub(r"^\d+px-", "", url.rstrip("/").rsplit("/", 1)[-1]).lower()
+    return url
+
+
 async def search(query: str, n: int = 12) -> list[dict[str, Any]]:
     """Stock-jelöltek a választóhoz, letöltés nélkül: [{thumb_url, url, credit, title, width, height, source}].
     Commons + Openverse; kevés találatnál a rövidített keresés (a fő szó a végén, ld. _stock_progressive) tölti fel."""
@@ -225,8 +233,8 @@ async def search(query: str, n: int = 12) -> list[dict[str, Any]]:
                 log.info("képjelöltek (%s, %s): %s", fn.__name__, q, e)
                 continue
             for c in found:
-                if c["url"] not in seen:
-                    seen.add(c["url"]); out.append(c)
+                if _cand_key(c) not in seen:
+                    seen.add(_cand_key(c)); out.append(c)
             if len(out) >= n:
                 return out[:n]
         if len(out) >= max(4, n // 2):
@@ -386,8 +394,8 @@ async def choose_stock(jobs: list[tuple], medium: str = "video") -> dict[Any, di
                     seen, cands = set(), []
                     for row in zip(*[pl + [None] * (PICK_N + 2 - len(pl)) for pl in pools]):
                         for c in row:
-                            if c and c["url"] not in seen:
-                                seen.add(c["url"]); cands.append(c)
+                            if c and _cand_key(c) not in seen:
+                                seen.add(_cand_key(c)); cands.append(c)
                 else:
                     cands = await search(q, n=PICK_N + 4)
                 cands = ([c for c in cands if _fits_frame(c, aspect)] or cands)[:PICK_N]
@@ -418,7 +426,18 @@ async def candidate_sheet(cands: list[dict[str, Any]]) -> Optional[bytes]:
     if not cands:
         return None
     async def thumb(c: dict[str, Any]):
-        return await _get(c["thumb_url"]) if c.get("thumb_url") else None
+        # Az Openverse thumb néha 424 (nem éri el a forrást) → az eredeti kép; Wikimedia-nál kis szabványméret
+        url = c.get("url") or ""
+        for u in (c.get("thumb_url"), re.sub(r"/\d+px-", "/330px-", url) if "/thumb/" in url else url):
+            if not u:
+                continue
+            try:
+                r = await asyncio.wait_for(_get(u), 20)
+                Image.open(io.BytesIO(r.content)).verify()
+                return r
+            except Exception:
+                continue
+        return None
     got = await asyncio.gather(*(thumb(c) for c in cands), return_exceptions=True)
     try:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", 15)
@@ -428,12 +447,17 @@ async def candidate_sheet(cands: list[dict[str, Any]]) -> Optional[bytes]:
     tiles = []
     for k, (c, r) in enumerate(zip(cands, got), 1):          # k = a lista sorszáma (1 = az első jelölt)
         tile = Image.new("RGB", (tw, th + 26), "white")
+        shown = False
         if r is not None and not isinstance(r, Exception):
             try:
                 tile.paste(ImageOps.contain(Image.open(io.BytesIO(r.content)).convert("RGB"), (tw - 6, th - 6)), (3, 3))
+                shown = True
             except Exception:
                 pass
         dr = ImageDraw.Draw(tile)
+        if not shown:                                           # üres csempe ne tűnjön fehér képnek
+            dr.rectangle([3, 3, tw - 4, th - 4], fill=(245, 245, 245), outline=(190, 190, 190))
+            dr.text((tw // 2 - 70, th // 2 - 8), "no preview — open url", fill=(110, 110, 110), font=font)
         dr.rectangle([3, 3, 34, 28], fill="black")
         dr.text((10, 6), str(k), fill="white", font=font)
         dr.text((5, th + 4), _candidate_tile_label(k, c)[:42], fill=(40, 40, 40), font=font)

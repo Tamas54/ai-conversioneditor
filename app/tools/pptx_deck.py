@@ -34,6 +34,15 @@ _FULL = W_IN / H_IN
 
 def _theme(spec: dict[str, Any]) -> dict[str, str]:
     t = dict(DEFAULT_THEME)
+    theme = spec.get("theme")
+    if isinstance(theme, str):                       # „theme": "executive" — név, nem színek: brandként próbáljuk
+        from app.brands import get_brand
+        if get_brand(theme) is None or spec.get("brand"):
+            raise ValueError(f'"theme" is an object of colors, e.g. {{"primary": "#1F3A5F", "accent": "#D9822B"}} '
+                             f'(keys: {", ".join(DEFAULT_THEME)}); for a saved brand use "brand": "<name>"')
+        spec = {**spec, "brand": theme, "theme": None}
+    elif theme is not None and not isinstance(theme, dict):
+        raise ValueError('"theme" must be an object of colors, e.g. {"primary": "#1F3A5F", "accent": "#D9822B"}')
     if spec.get("brand"):
         from app.brands import get_brand
         b = get_brand(spec["brand"])
