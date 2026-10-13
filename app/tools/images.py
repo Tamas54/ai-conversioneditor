@@ -208,7 +208,7 @@ async def _openverse_candidates(query: str, n: int) -> list[dict[str, Any]]:
 
 def _cand_key(c: dict[str, Any]) -> str:
     """Ugyanaz a kép két forrásból (Commons + Openverse) más URL-lel jön: a Commons-fájlnév egyedi → az a kulcs."""
-    url = c.get("url") or ""
+    url = (c.get("url") or "").split("?", 1)[0]
     if "wikimedia.org/" in url:
         return "commons:" + re.sub(r"^\d+px-", "", url.rstrip("/").rsplit("/", 1)[-1]).lower()
     return url
