@@ -110,14 +110,33 @@ class Layout:
             self._doc = None
 
 
+def _page_words(pg) -> list[tuple]:
+    """Az oldal szavai dobozzal. A DeckCraft-PDF-en a PyMuPDF „words” bontása szavakat VESZÍT (10-13: a 3. dián
+    „Az éves beszámoló kötelező …” sorból csak „Az” maradt, a „dict” span-szövege viszont teljes) → ha a szavak
+    kevesebb betűt adnak, mint az oldal szövege, a span-okból bontunk (a sor y-ja pontos, az x arányos)."""
+    ws = [(w[0], w[1], w[2], w[3], w[4]) for w in pg.get_text("words")]
+    full = len(re.sub(r"\s+", "", pg.get_text("text")))
+    if not full or sum(len(w[4]) for w in ws) >= 0.95 * full:
+        return ws
+    out = []
+    for b in pg.get_text("dict").get("blocks", []):
+        for line in b.get("lines", []):
+            for sp in line.get("spans", []):
+                txt, (x0, y0, x1, y1) = sp.get("text") or "", sp["bbox"]
+                n = len(txt) or 1
+                for m in re.finditer(r"\S+", txt):
+                    out.append((x0 + (x1 - x0) * m.start() / n, y0, x0 + (x1 - x0) * m.end() / n, y1, m.group(0)))
+    return out if sum(len(w[4]) for w in out) > sum(len(w[4]) for w in ws) else ws
+
+
 def read_pdf(pdf: Path, view: str, unit: str = "page") -> Layout:
     import fitz
     L = Layout(view, pdf, unit)
     with fitz.open(str(pdf)) as d:
         for n, pg in enumerate(d, 1):
             L.sizes.append((pg.rect.width, pg.rect.height))
-            ws = pg.get_text("words")
-            L.words.append([(w[0], w[1], w[2], w[3], w[4]) for w in ws])
+            ws = _page_words(pg)
+            L.words.append(ws)
             for w in ws:
                 for t in _toks(w[4]):
                     L.toks.append(Tok(t, n, (w[0], w[1], w[2], w[3])))
@@ -1055,6 +1074,10 @@ def _pptx_shapes(path: Path) -> tuple[list[list[dict]], float, float]:
     return slides, sw, sh
 
 
+def _overlap(a: list[float], b: list[float], pad: float = 2) -> bool:
+    return a[0] < b[2] - pad and b[0] < a[2] - pad and a[1] < b[3] - pad and b[1] < a[3] - pad
+
+
 def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
     slides, sw, sh = _pptx_shapes(path)
     issues = []
@@ -1087,9 +1110,17 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
                 sp = align([("s", T)], sub).get("s")
                 if not sp:
                     continue
+                own, span = set(T), sub[sp[0]:sp[1] + 1]
+                hit = sum(1 for t in span if t.t in own)
+                if hit < 0.7 * len(T):          # kevés saját szó a tartományban: nincs bizonyíték, nincs ítélet
+                    continue
                 tb = None
-                for t in sub[sp[0]:sp[1] + 1]:
+                for t in span:
+                    if t.t not in own:          # a közbeeső lábléc/cím szavai ne nyújtsák meg a dobozt
+                        continue
                     tb = list(t.box) if tb is None else [min(tb[0], t.box[0]), min(tb[1], t.box[1]), max(tb[2], t.box[2]), max(tb[3], t.box[3])]
+                if tb is None:
+                    continue
                 box = [v * sc for v in it["box"]]
                 w, h = L.sizes[n - 1]
                 reg = [(n, (max(0, min(box[0], tb[0]) - 30), max(0, min(box[1], tb[1]) - 30),
@@ -1099,8 +1130,14 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
                                             L.view, n, regions=reg, marks=[(n, box), (n, tb)]),
                                    "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
                 elif tb[3] > box[3] + 6 or tb[2] > box[2] + 6:
-                    issues.append({**_issue("text_overflow", ERROR,
-                                            f"Slide {n}: the text of “{it['name']}” overflows its box by {max(tb[3] - box[3], tb[2] - box[2]):.0f} pt.",
+                    by = max(tb[3] - box[3], tb[2] - box[2])
+                    # más szövegre rálóg → hiba; csak a saját dobozán nyúlik túl (pl. a kártyán belül) → figyelmeztetés
+                    hits = [o["name"] for o in items if o is not it and o["text"].strip() and _overlap(tb, [v * sc for v in o["box"]])]
+                    big = by > max(24, 0.25 * (box[3] - box[1]))
+                    issues.append({**_issue("text_overflow", ERROR if (hits or big) else WARNING,
+                                            f"Slide {n}: the text of “{it['name']}” runs {by:.0f} pt past its box"
+                                            + (f" and over “{hits[0]}”." if hits else "." if big else
+                                               " (it stays on the slide and covers nothing)."),
                                             L.view, n, regions=reg, marks=[(n, box), (n, tb)]),
                                    "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"]),
                                    "fix": "shorten the text, make the box bigger, or a smaller font size"})
@@ -1288,6 +1325,80 @@ def contact_sheet(L: Layout, issues: list[dict], limit: int = 30) -> tuple[bytes
                          else f"{len(pages)} of {L.pages} {L.unit}s (those with problems first)"), q=74), pages
 
 
+def _source(credit: Optional[str]) -> str:
+    """„Photo: X (Wikimedia Commons), CC BY-SA — …/File:Név.jpg” → „Wikimedia Commons: Név.jpg”."""
+    if not credit:
+        return ""
+    m = re.search(r"\(([^)]+)\).*?File:([^\s]+)", credit)
+    if m:
+        from urllib.parse import unquote
+        return f"{m.group(1)}: {unquote(m.group(2)).replace('_', ' ')}"
+    return _short(credit, 70)
+
+
+def _notes_credits(file_id: str) -> dict[int, list[str]]:
+    """Diánként a jegyzetekbe írt képforrások („Photo: …”, a pptx_build és az insert_image teszi oda)."""
+    from app.tools.crafts import existing
+    src = existing(file_id)
+    if src.suffix.lower() != ".pptx":
+        return {}
+    from pptx import Presentation
+    out = {}
+    for i, sl in enumerate(Presentation(str(src)).slides, 1):
+        if sl.has_notes_slide:
+            got = [ln.strip() for ln in sl.notes_slide.notes_text_frame.text.splitlines() if ln.strip().startswith("Photo:")]
+            if got:
+                out[i] = got
+    return out
+
+
+def picture_sheet(file_id: str, limit: int = 24) -> tuple[Optional[bytes], list[dict[str, Any]]]:
+    """A fájl MINDEN képe egy lapon, a helyével (dia/oldal, slot), a keresőszóval és a forrással. Az ügynök maga nézi meg
+    és ítél (10-13, Kommandant: „tudja utólag is ellenőrizni az agent minden diát — képet, stb.”: a Deutsche Post-bélyeg
+    és a „Lorem Ipsum” mockup átment, mert a tördelés-ellenőrző a képek tartalmát nem nézi). Gépi ítélet NINCS benne."""
+    from PIL import Image, ImageDraw, ImageOps
+    from app.tools import pictures
+    try:
+        items = pictures._list_sync(file_id)
+    except Exception as e:
+        log.info("képlista kimaradt (%s): %s", file_id, e)
+        return None, []
+    rows, tiles = [], []
+    f, fb = _font(15), _font(17)
+    notes = _notes_credits(file_id) if any(not it.get("credit") for it in items) else {}
+    for it in items[:limit]:
+        if not it.get("credit"):
+            m = re.match(r"Slide (\d+)", it.get("where") or "")
+            got = notes.get(int(m.group(1))) if m else None
+            if got:
+                it = {**it, "credit": got[0] if len(got) == 1 else " · ".join(got)}
+        try:
+            im = Image.open(io.BytesIO(pictures._image_sync(file_id, it["slot"]))).convert("RGB")
+        except Exception:
+            continue
+        info = {"slot": it["slot"], "where": it.get("where"), "query": it.get("query") or None,
+                "source": _source(it.get("credit")) or None, "slide_title": it.get("hint") or None}
+        rows.append({k: v for k, v in info.items() if v})
+        tile = Image.new("RGB", (430, 400), "white")
+        tile.paste(ImageOps.contain(im, (420, 290)), (5, 5))
+        dr = ImageDraw.Draw(tile)
+        dr.text((8, 300), f"{it.get('where') or ''} · slot {it['slot']}", fill=(20, 20, 20), font=fb)
+        y = 324
+        for label, val in (("slide", it.get("hint")), ("searched", it.get("query")), ("source", _source(it.get("credit")))):
+            if val:
+                dr.text((8, y), _short(f"{label}: {val}", 54), fill=(80, 80, 80), font=f)
+                y += 22
+        tiles.append(tile)
+    if not tiles:
+        return None, rows
+    cols = 3 if len(tiles) > 4 else 2 if len(tiles) > 1 else 1
+    sheet = Image.new("RGB", (cols * 440 + 10, ((len(tiles) + cols - 1) // cols) * 410 + 10), (230, 230, 230))
+    for k, t in enumerate(tiles):
+        sheet.paste(t, (10 + (k % cols) * 440, 10 + (k // cols) * 410))
+    more = f" (first {limit} of {len(items)})" if len(items) > limit else ""
+    return _jpeg(_header(sheet, f"Every picture in the file{more} — where it is, what was searched, where it comes from"), q=76), rows
+
+
 # ---------- belépési pontok ----------
 
 async def _cached(src: Path, tag: str, make) -> Path:
@@ -1411,6 +1522,13 @@ def _assemble(file_id: str, name: str, kind: str, layouts: list[Layout], issues:
     what = (f"the {main.unit}" if main.pages == 1 else f"all {main.pages} {main.unit}s" if len(on_sheet) == main.pages
             else f"{len(on_sheet)} of {main.pages} {main.unit}s (those with problems first)")
     images.append((f"Overview: {what} as {view_name(main)} — red frame = error, orange = warning.", sheet))
+    pic_sheet, pic_rows = picture_sheet(file_id) if kind in ("deck", "document") else (None, [])
+    if pic_sheet:
+        images.append(("Pictures: every picture in the file, with where it is, what was searched and its source. LOOK AT "
+                       "EACH ONE — the layout check above does not judge pictures: does it fit its slide or page? Watch for "
+                       "placeholder text (“lorem ipsum”), watermarks (“designed by …”), stamps, logos or institutions from "
+                       "elsewhere, and unrelated subjects. Swap one with insert_image(file_id, slot=…, image_url | "
+                       "image_file_id | ai_prompt), or show the person candidates with generate_image(stock_search=…).", pic_sheet))
     shown = 0
     for it in issues:
         if shown >= max(0, int(max_crops)):
@@ -1456,15 +1574,18 @@ def _assemble(file_id: str, name: str, kind: str, layouts: list[Layout], issues:
         "views": {L.view: view_name(L) for L in layouts},
         **({"page_breaks": agree} if agree else {}),
         "issues": [public(i) for i in issues],
-        "checked": CHECKED[kind],
+        **({"pictures": pic_rows} if pic_rows else {}),
+        "checked": CHECKED[kind] + (["pictures: all shown on one sheet for YOU to judge — not judged by the machine"]
+                                    if pic_rows else []),
         "images": [c for c, _ in images],
         "check": {"status": status, "findings": [f"{i['id']} page {i['page']}: {i['message']}" if i.get("page")
                                                  else f"{i['id']}: {i['message']}" for i in issues][:30],
                   "verified": verified},
-        "note": ("Fix every error, then call validate_document again. A file that saved is not proof the layout is right — "
-                 "these results are. Word itself was not run: LibreOffice lays the file out like Word in almost every case, "
-                 "but fonts and spacing can shift a line or two." if kind == "document" else
-                 "Fix every error, then call validate_document again."),
+        "note": ("Look at the picture sheet as well — pictures are yours to judge. " if pic_rows else "")
+                + ("Fix every error, then call validate_document again. A file that saved is not proof the layout is right — "
+                   "these results are. Word itself was not run: LibreOffice lays the file out like Word in almost every case, "
+                   "but fonts and spacing can shift a line or two." if kind == "document" else
+                   "Fix every error, then call validate_document again."),
     }
     if notes:
         out["warnings_about_the_check"] = notes

@@ -1501,7 +1501,8 @@ async def video(
       — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo), "stat"?
       {value, label}, "chart"? (see below), "duration"? seconds, "id"? }] + title, kicker?, title_image?, end_title?,
       end_subtitle?, format, duration (total; scenes without one share the rest). It is made exactly as given (no
-      re-planning). Put the source in text too: chart numbers are checked against it (without it, against your scenes).
+      re-planning). A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
+      title shows the headline) — put what should be on screen into the chart title. Put the source in text too: chart numbers are checked against it (without it, against your scenes).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
       (text + keep_wording=true ONLY when they want their own sentences word for word as the captions; for an

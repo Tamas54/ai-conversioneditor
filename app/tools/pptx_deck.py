@@ -70,6 +70,19 @@ def _requests(slides: list[dict[str, Any]]) -> list[tuple[tuple[int, int], Any, 
     return reqs
 
 
+async def _pick_stock(reqs: list[tuple[tuple[int, int], Any, Optional[float]]],
+                      slides: list[dict[str, Any]]) -> list[tuple[tuple[int, int], Any, Optional[float]]]:
+    """Stockkép a látómodell rangsorával, a dia címe a kontextus (10-13: a kereső első találata egy Deutsche Post-bélyeg
+    és egy „Lorem Ipsum” mockup volt). Sorrend, nem szűrés; két dia nem kapja ugyanazt; ami nem sikerül, a régi úton megy."""
+    jobs = [(slot, spec["stock"], str(slides[slot[0]].get("title") or ""), aspect) for slot, spec, aspect in reqs
+            if isinstance(spec, dict) and isinstance(spec.get("stock"), str) and spec["stock"].strip()]
+    if not jobs:
+        return reqs
+    chosen = await images.choose_stock(jobs, medium="slide")
+    return [(slot, {**spec, "url": chosen[slot]["url"], "credit": chosen[slot]["credit"]} if slot in chosen else spec, aspect)
+            for slot, spec, aspect in reqs]
+
+
 # ---------- rajzoló segédek (python-pptx) ----------
 
 def _rgb(hexstr: str):
@@ -166,10 +179,12 @@ def _cover(slide, s, t, img):
         _rect(slide, 0, 0, W_IN, H_IN, t["primary"])
     _rect(slide, M_IN + 0.05, 4.05, 1.2, 0.09, t["accent"])
     title = s.get("title") or ""
-    _text(slide, M_IN, 1.6, W_IN - 2 * M_IN, 2.35, title, size=_title_size(title, 54), font=t["font_heading"],
+    text_w = (W_IN * 0.62 - M_IN - 0.35) if img else (W_IN - 2 * M_IN)      # képes címdián a sötét panel szélessége
+    _text(slide, M_IN, 1.6, text_w, 2.35, title, size=_title_size(title, 54), font=t["font_heading"],
           color="#FFFFFF", bold=True, anchor="bottom", spacing=1.0)
     if s.get("subtitle"):
-        _text(slide, M_IN, 4.35, W_IN - 2.5 * M_IN, 1.4, s["subtitle"], size=22, font=t["font_body"], color="#F1F1F1")
+        _text(slide, M_IN, 4.35, text_w if img else W_IN - 2.5 * M_IN, 1.4, s["subtitle"], size=22, font=t["font_body"],
+              color="#F1F1F1")
     if s.get("kicker"):
         _text(slide, M_IN, 1.6, 7, 0.5, s["kicker"].upper(), size=14, font=t["font_body"], color=t["accent"], bold=True)
 
@@ -346,12 +361,39 @@ def _gallery(slide, s, t, imgs):
             _text(slide, x, 2.3 + h, w, 0.7, caps[k], size=14, font=t["font_body"], color=t["muted"])
 
 
-def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float = M_IN):
+def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float = M_IN, right: float = W_IN - M_IN):
+    """left–right: a lábléc sávja a dia szabad részén (10-13: image_left-nél a 8" széles szöveg lelógott a diáról,
+    jobb oldali képnél az oldalszám a fotóra került)."""
     color = "#D0D4DA" if dark else t["muted"]
-    _text(slide, W_IN - M_IN - 1.5, H_IN - 0.45, 1.5, 0.3, f"{n} / {total}", size=11, font=t["font_body"],
+    _text(slide, right - 1.5, H_IN - 0.45, 1.5, 0.3, f"{n} / {total}", size=11, font=t["font_body"],
           color=color, align="right")
     if footer:
-        _text(slide, left, H_IN - 0.45, 8, 0.3, footer, size=11, font=t["font_body"], color=color)
+        _text(slide, left, H_IN - 0.45, max(1.5, min(8, right - left - 1.7)), 0.3, footer, size=11, font=t["font_body"],
+              color=color)
+
+
+_PAGE_NO = None
+
+
+def renumber_footers(prs) -> int:
+    """Diát beszúró/törlő műveletek után (pl. video to_pptx) a pakli „n / N” oldalszámai a valós sorrendet kövessék
+    (10-13: az elejére tett videós dia után „2 / 10” maradt egy 11 diás paklin). → hány számot írt át."""
+    import re
+    global _PAGE_NO
+    _PAGE_NO = _PAGE_NO or re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
+    total, changed = len(prs.slides), 0
+    for i, slide in enumerate(prs.slides, 1):
+        for shp in slide.shapes:
+            if not shp.has_text_frame or not _PAGE_NO.match(shp.text_frame.text or ""):
+                continue
+            want = f"{i} / {total}"
+            runs = [r for para in shp.text_frame.paragraphs for r in para.runs]
+            if runs and shp.text_frame.text.strip() != want:
+                runs[0].text = want
+                for r in runs[1:]:
+                    r.text = ""
+                changed += 1
+    return changed
 
 
 # ---------- belépési pont ----------
@@ -399,7 +441,7 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Unknown layout: {bad} (choose from {', '.join(sorted(LAYOUTS))})")
     t = _theme(spec)
 
-    reqs = _requests(slides)
+    reqs = await _pick_stock(_requests(slides), slides)
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
     by_slot = {r[0]: img for r, img in zip(reqs, resolved)}
     try:
@@ -436,7 +478,9 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
             if lay not in ("cover",):
                 # bal oldali képnél a lábléc a kép mellé kerül (ne a fotóra)
                 left = (W_IN / 2 if lay == "image_left" else 4.6 if lay == "quote" and img else 0) + M_IN
-                _footer(slide, i + 1, total, t, spec.get("footer"), dark=lay in ("section", "closing", "full_image"), left=left)
+                right = (W_IN / 2 if lay == "image_right" and img else W_IN - 5.2 if lay == "bullets" and img else W_IN) - M_IN
+                _footer(slide, i + 1, total, t, spec.get("footer"), dark=lay in ("section", "closing", "full_image"),
+                        left=left, right=right)
             credits = [x.attribution for (si, _), x in by_slot.items() if si == i and x.attribution]
             notes = "\n".join(filter(None, [s.get("notes"), *credits]))
             if notes:
@@ -453,7 +497,7 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
     return {
         "file_id": fid, "url": public_url(fid), "slides": len(slides),
         "size_kb": output_path(fid).stat().st_size // 1024,
-        "images": [{"slot": f"{i + 1}" + (f".{j + 1}" if j >= 0 else ""), "file_id": x.source_file_id,
+        "images": [{"slot": f"s{i + 1}" + (f".{j + 1}" if j >= 0 else ""), "file_id": x.source_file_id,
                     "credit": x.attribution} for ((i, j), x) in by_slot.items()],
         "ms_elapsed": int((time.time() - t0) * 1000),
     }

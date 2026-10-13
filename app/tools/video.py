@@ -1440,7 +1440,9 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         chart = s.get("chart")
         if chart:
             stat = None
-            chart = {"title": chart.get("title") if chart["type"] in ("graphic", "script") else (chart.get("title") or head),
+            # cím nélküli graphic/script is a jelenet címét kapja (10-13: a headline nyomtalanul elveszett — az ábrás
+            # jelenet a headline-t nem rajzolja, csak az ábra címét)
+            chart = {"title": chart.get("title") or head,
                      "elements": chart_elements(chart, W, H, lang, _rgb(accent)),
                      **({"backdrop": chart["backdrop"]} if chart.get("backdrop") is not None else {}),
                      **({"code": chart["code"], "id": s.get("id") or f"s{i + 1}"} if chart["type"] == "script" else {})}
@@ -1535,98 +1537,13 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
     return names, credits, per
 
 
-_PICK_N = 6
-
-
-def _contact_sheet(thumbs: list[bytes]) -> str:
-    """A jelöltek bélyegképei számozott rácsban (3×2) — egy képen, egy látómodell-hívásnak."""
-    import base64
-    import io
-    from PIL import Image, ImageDraw, ImageFont, ImageOps
-    cw, ch, cols = 360, 240, 3
-    rows = math.ceil(len(thumbs) / cols)
-    sheet = Image.new("RGB", (cols * cw, rows * ch), "white")
-    draw = ImageDraw.Draw(sheet)
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
-    except Exception:
-        font = ImageFont.load_default()
-    for k, data in enumerate(thumbs):
-        x, y = (k % cols) * cw, (k // cols) * ch
-        try:
-            im = ImageOps.fit(Image.open(io.BytesIO(data)).convert("RGB"), (cw - 6, ch - 6))
-            sheet.paste(im, (x + 3, y + 3))
-        except Exception:
-            pass
-        draw.rectangle([x + 3, y + 3, x + 50, y + 46], fill="black")
-        draw.text((x + 14, y + 6), str(k + 1), fill="white", font=font)
-    buf = io.BytesIO()
-    sheet.save(buf, "JPEG", quality=80)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
-async def _rank(query: str, headline: str, cands: list[dict[str, Any]], prompt: Optional[str] = None) -> list[int]:
-    """A látómodell sorrendje a jelöltekre (0-tól), a legjobban illő elöl; hiba esetén a kereső sorrendje.
-    Nem tartalmi szűrés (semmit nem dob ki): a kereső a FÁJLNÉVBEN keres, és absztrakt témánál mellé nyúl —
-    10-12, gazdasági videó: „oil barrels" → vasúti fordítókorong, „bond" → múzeumi kötvénypapír."""
-    from app.llm import vision as v
-    from app.tools import images as imgs
-    thumbs = await asyncio.gather(*(imgs._get(c["thumb_url"]) for c in cands), return_exceptions=True)
-    ok = [(i, t.content) for i, t in enumerate(thumbs) if not isinstance(t, Exception) and t.status_code == 200]
-    if len(ok) < 2:
-        return list(range(len(cands)))
-    prompt = prompt or (f'A scene of a short news video: "{headline}". Its full-screen background picture should show: "{query}". '
-              "Rank the numbered pictures by how well they fit: a clear, real photo of that subject first; old documents, "
-              "maps, diagrams, logos or unrelated places last. Return JSON only: {\"ranking\": [numbers, best first]}")
-    msgs = [{"role": "user", "content": [{"type": "text", "text": prompt},
-                                         {"type": "image_url", "image_url": {"url": _contact_sheet([b for _, b in ok])}}]}]
-    for model, tmo in ((settings.LLM_MODEL_VISION, 40), (settings.LLM_MODEL_VISION_FALLBACK, 60)):
-        try:
-            raw = await asyncio.wait_for(v._call(msgs, max_tokens=200, model=model), tmo)
-            m = re.search(r"\{.*\}", v._strip_json_fences(raw), re.S)
-            order = [ok[int(n) - 1][0] for n in (json.loads(m.group(0)).get("ranking") or []) if 1 <= int(n) <= len(ok)]
-            if order:
-                return list(dict.fromkeys(order + [i for i, _ in ok]))
-        except Exception as e:
-            log.info("képrangsor (%s, %s): %s", model, query, e)
-    return [i for i, _ in ok]
+# a stock-jelöltek látómodell-rangsora közös (videó, pakli, Lottie): app/tools/images.py
+from app.tools.images import PICK_N as _PICK_N, contact_sheet as _contact_sheet, rank as _rank  # noqa: E402
 
 
 async def _choose_stock(jobs: list[tuple[int, str, str]]) -> dict[int, dict[str, Any]]:
-    """Jelenetenként: stock-jelöltek → a látómodell rangsorolja → a legjobb, ami még nem szerepelt másik jelenetben.
-    jobs = [(spec-index, keresőszó, a jelenet címe)] → {spec-index: {"url", "credit"}}; ami nem sikerült, kimarad."""
     from app.tools import images as imgs
-    sem = asyncio.Semaphore(4)
-
-    async def one(q: str, head: str) -> tuple[list[dict[str, Any]], list[int]]:
-        async with sem:
-            try:
-                # „gold bars and oil barrels": a Commons a fájlnévben keres, az összetett kifejezésre rossz jelölteket ad →
-                # a részek külön keresve, a jelöltek felváltva összefésülve (a látómodell választ közülük)
-                parts = [x.strip() for x in re.split(r"\s+(?:and|&|with)\s+|,", q) if len(x.strip()) > 2]
-                if len(parts) > 1:
-                    pools = await asyncio.gather(*(imgs.search(x, n=_PICK_N) for x in parts[:3]))
-                    seen, cands = set(), []
-                    for row in zip(*[pl + [None] * (_PICK_N - len(pl)) for pl in pools]):
-                        for c in row:
-                            if c and c["url"] not in seen:
-                                seen.add(c["url"]); cands.append(c)
-                    cands = cands[:_PICK_N]
-                else:
-                    cands = (await imgs.search(q, n=_PICK_N + 2))[:_PICK_N]
-                return cands, (await _rank(q, head, cands) if len(cands) > 1 else list(range(len(cands))))
-            except Exception as e:
-                log.info("képjelöltek (%s): %s", q, e)
-                return [], []
-    got = await asyncio.gather(*(one(q, h) for _, q, h in jobs))
-    out, used = {}, set()
-    for (i, _, _), (cands, order) in zip(jobs, got):
-        for k in order:
-            if cands[k]["url"] not in used:
-                used.add(cands[k]["url"])
-                out[i] = {"url": cands[k]["url"], "credit": cands[k]["credit"]}
-                break
-    return out
+    return await imgs.choose_stock(jobs, medium="video")
 
 
 def _title_stem(title: str) -> str:
@@ -2508,7 +2425,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
         for i, chosen in (await _choose_stock(stock_jobs)).items():
             specs[i] = chosen
     from app.storage.naming import result_stem
-    res = await _assemble(story, specs, opts, chart_notes=list(spec.get("chart_notes") or []) + notes, source_text=source,
+    res = await _assemble(story, specs, opts, chart_notes=_kept_chart_notes(spec, story) + notes, source_text=source,
                           source_file_id=pid, step=step, parent=pid, label_stem=result_stem(pid, "edited"),
                           operation="video edit")
     res["notes"] = notes + (["Rebuilt from the video's script: changes made by hand in the video editor are not in this "
@@ -2633,6 +2550,9 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
         el = lst[-1]
         lst.remove(el)
         lst.insert(pos, el)
+    if deck_file_id:                                         # a pakli „n / N” oldalszámai az új sorrend szerint
+        from app.tools.pptx_deck import renumber_footers
+        renumber_footers(prs)
     out = new_file_id("pptx")
     await asyncio.to_thread(prs.save, str(output_path(out)))
     poster.unlink(missing_ok=True)
@@ -2673,8 +2593,27 @@ def frame_time(file_id: str, scene: Any = None, at: Optional[float] = None) -> t
     hit = next((x for x in tl if str(x.get("id")).lower() == key), None)
     if not hit:
         raise ValueError(f"No scene {scene!r} — scenes: {', '.join(str(x['id']) for x in tl)}")
-    t = hit["end"] - 0.4 if hit["id"] != "title" else min(hit["end"] - 0.4, 2.0)
-    return vid, max(0.0, t), f"{hit['id']} ({hit['start']:.1f}–{hit['end']:.1f} s)"
+    return vid, scene_still(tl, tl.index(hit)), f"{hit['id']} ({hit['start']:.1f}–{hit['end']:.1f} s)"
+
+
+def _kept_chart_notes(spec: dict[str, Any], story: dict[str, Any]) -> list[str]:
+    """A mentett ábra-jegyzetek közül csak a VÁLTOZATLAN ábráké öröklődik (10-13: a cím javítása után a check a régi
+    „Counter “fős kockázati lista …”” és az új címet is felsorolta)."""
+    old = {sc.get("id"): sc.get("chart") for sc in (spec.get("story") or {}).get("scenes") or [] if isinstance(sc, dict)}
+    new = {sc.get("id"): sc.get("chart") for sc in story.get("scenes") or [] if isinstance(sc, dict)}
+    gone = {(c or {}).get("title") for sid, c in old.items() if c and new.get(sid) != c} - {None, ""}
+    return [n for n in dict.fromkeys(spec.get("chart_notes") or []) if not any(f"“{t}”" in n for t in gone)]
+
+
+def scene_still(tl: list[dict[str, Any]], k: int) -> float:
+    """A jelenet „kész” pillanata: az animációk lefutottak, de a KÖVETKEZŐ jelenet áttűnése még nem kezdődött
+    (10-13: a jelenet vége előtt 0,4 s a 0,5 s-os áttűnésbe esett — a cím és a felirat a kontaktlapon már elhalványult)."""
+    x = tl[k]
+    t = x["end"] - 0.4 if x["id"] != "title" else min(x["end"] - 0.4, 2.0)
+    nxt = tl[k + 1]["start"] if k + 1 < len(tl) else None
+    if nxt is not None and nxt < x["end"]:
+        t = min(t, nxt - 0.15)
+    return max(x["start"] + 0.1, t, 0.0)
 
 
 def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str, Any]]]:
@@ -2693,8 +2632,8 @@ def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str
     tiles, info_ = [], []
     cols = 4 if len(tl) > 6 else 3
     tw = width // cols
-    for x in tl:
-        t = x["end"] - 0.4 if x["id"] != "title" else min(x["end"] - 0.4, 2.0)
+    for k, x in enumerate(tl):
+        t = scene_still(tl, k)
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(0, t) * fps))
         ok, f = cap.read()
         if not ok:

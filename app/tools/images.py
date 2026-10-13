@@ -12,8 +12,12 @@ Kimenet: a célkeret arányára középre vágott, max. ~1920 px-es JPEG ideigle
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
+import json
 import logging
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -275,3 +279,128 @@ async def resolve_many(items: list[tuple[ImageSpec, Optional[float]]], concurren
         async with sem:
             return await resolve(spec, aspect=aspect)
     return await asyncio.gather(*(one(s, a) for s, a in items))
+
+
+# ---------- a stock-jelöltek látómodell-rangsora (videó, pakli, Lottie) ----------
+# A kereső a FÁJLNÉVBEN keres, és elvont témánál mellé nyúl (10-12: „oil barrels” → vasúti fordítókorong; 10-13, pakli:
+# „data analysis transparency” → genomikai ábra, „magnifying glass documents” → Deutsche Post-bélyeg, „report dashboard”
+# → „Lorem Ipsum … designed by freepik” mockup). A látómodell SORRENDET ad, semmit nem dob ki (a felhasználó bármelyik
+# jelöltet választhatja a képválasztóban) — csak az automatikus alapválasztás lesz a legjobban illő.
+
+PICK_N = 6
+
+
+def judge_prompt(query: str, context: str, medium: str = "video") -> str:
+    """Képenkénti, külön kérdések (10-13, mérve: egyetlen összesített sorrendben a modell a „Lorem Ipsum” mockupot és egy
+    Zabbix-képernyőt tette előre; képenként kérdezve a szöveget és a mockupot jól jelöli) — a sorrendet mi számoljuk."""
+    head = (f'A slide of a presentation, titled "{context}". Its picture should show: "{query}". ' if medium == "slide" else
+            f'A scene of a short news video: "{context}". Its full-screen background picture should show: "{query}". ')
+    return (head + 'For EACH numbered picture answer: "text": does it show readable words, numbers, labels, a stamp, a logo '
+            'or a watermark? (true/false); "mockup": is it a software screenshot, a template, a mock-up, a diagram, a map or '
+            'an old document? (true/false); "fit": 0-10, how well it is a clear, real photo of that subject. '
+            'Return JSON only: {"pictures": [{"n": 1, "text": false, "mockup": false, "fit": 7}, ...]}')
+
+
+def contact_sheet(thumbs: list[bytes]) -> str:
+    """A jelöltek bélyegképei számozott rácsban (3×2) — egy képen, egy látómodell-hívásnak."""
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    cw, ch, cols = 360, 240, 3
+    rows = math.ceil(len(thumbs) / cols)
+    sheet = Image.new("RGB", (cols * cw, rows * ch), "white")
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+    except Exception:
+        font = ImageFont.load_default()
+    for k, data in enumerate(thumbs):
+        x, y = (k % cols) * cw, (k // cols) * ch
+        try:
+            im = ImageOps.fit(Image.open(io.BytesIO(data)).convert("RGB"), (cw - 6, ch - 6))
+            sheet.paste(im, (x + 3, y + 3))
+        except Exception:
+            pass
+        draw.rectangle([x + 3, y + 3, x + 50, y + 46], fill="black")
+        draw.text((x + 14, y + 6), str(k + 1), fill="white", font=font)
+    buf = io.BytesIO()
+    sheet.save(buf, "JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+async def rank(query: str, context: str, cands: list[dict[str, Any]], prompt: Optional[str] = None,
+               medium: str = "video") -> list[int]:
+    """A látómodell sorrendje a jelöltekre (0-tól), a legjobban illő elöl; hiba esetén a kereső sorrendje."""
+    from app.config import settings
+    from app.llm import vision as v
+    thumbs = await asyncio.gather(*(_get(c["thumb_url"]) for c in cands), return_exceptions=True)
+    ok = [(i, t.content) for i, t in enumerate(thumbs) if not isinstance(t, Exception) and t.status_code == 200]
+    if len(ok) < 2:
+        return list(range(len(cands)))
+    judged = prompt is None                      # saját prompt (Lottie): a régi {"ranking": […]} alak
+    prompt = prompt or judge_prompt(query, context or query, medium)
+    msgs = [{"role": "user", "content": [{"type": "text", "text": prompt},
+                                         {"type": "image_url", "image_url": {"url": contact_sheet([b for _, b in ok])}}]}]
+    for model, tmo in ((settings.LLM_MODEL_VISION, 40), (settings.LLM_MODEL_VISION_FALLBACK, 60)):
+        try:
+            raw = await asyncio.wait_for(v._call(msgs, max_tokens=600 if judged else 200, model=model), tmo)
+            m = re.search(r"\{.*\}", v._strip_json_fences(raw), re.S)
+            js = json.loads(m.group(0))
+            if judged:          # pontszám: illeszkedés, a szöveges kép és a mockup erősen hátrébb (semmi nem esik ki)
+                scored = []
+                for pic in js.get("pictures") or []:
+                    n = int(pic.get("n") or 0)
+                    if 1 <= n <= len(ok):
+                        fit = float(pic.get("fit") or 0)
+                        scored.append((fit - 4 * bool(pic.get("text")) - 3 * bool(pic.get("mockup")), fit, ok[n - 1][0]))
+                order = [i for _, _, i in sorted(scored, key=lambda x: (-x[0], -x[1]))]
+            else:
+                order = [ok[int(n) - 1][0] for n in (js.get("ranking") or []) if 1 <= int(n) <= len(ok)]
+            if order:
+                return list(dict.fromkeys(order + [i for i, _ in ok]))
+        except Exception as e:
+            log.info("képrangsor (%s, %s): %s", model, query, e)
+    return [i for i, _ in ok]
+
+
+def _fits_frame(c: dict[str, Any], aspect: Optional[float]) -> bool:
+    """Technikai feltétel (nem tartalmi): elég nagy, és fekvő keretbe nem álló kép."""
+    w, h = c.get("width") or 0, c.get("height") or 0
+    if w and w < 1000:
+        return False
+    return not (aspect and aspect > 1.18 and w and h and w / h < 1.1)
+
+
+async def choose_stock(jobs: list[tuple], medium: str = "video") -> dict[Any, dict[str, Any]]:
+    """Helyenként: stock-jelöltek → a látómodell rangsorolja → a legjobb, ami még nem szerepelt másik helyen.
+    jobs = [(kulcs, keresőszó, kontextus (jelenet / dia címe)[, keret-arány])] → {kulcs: {"url", "credit"}};
+    ami nem sikerült, kimarad (a hívó a régi úton keres)."""
+    sem = asyncio.Semaphore(4)
+
+    async def one(q: str, ctx: str, aspect: Optional[float]) -> tuple[list[dict[str, Any]], list[int]]:
+        async with sem:
+            try:
+                # „gold bars and oil barrels”: a Commons a fájlnévben keres, az összetett kifejezésre rossz jelölteket ad →
+                # a részek külön keresve, a jelöltek felváltva összefésülve (a látómodell választ közülük)
+                parts = [x.strip() for x in re.split(r"\s+(?:and|&|with)\s+|,", q) if len(x.strip()) > 2]
+                if len(parts) > 1:
+                    pools = await asyncio.gather(*(search(x, n=PICK_N + 2) for x in parts[:3]))
+                    seen, cands = set(), []
+                    for row in zip(*[pl + [None] * (PICK_N + 2 - len(pl)) for pl in pools]):
+                        for c in row:
+                            if c and c["url"] not in seen:
+                                seen.add(c["url"]); cands.append(c)
+                else:
+                    cands = await search(q, n=PICK_N + 4)
+                cands = ([c for c in cands if _fits_frame(c, aspect)] or cands)[:PICK_N]
+                return cands, (await rank(q, ctx, cands, medium=medium) if len(cands) > 1 else list(range(len(cands))))
+            except Exception as e:
+                log.info("képjelöltek (%s): %s", q, e)
+                return [], []
+    got = await asyncio.gather(*(one(j[1], j[2], j[3] if len(j) > 3 else None) for j in jobs))
+    out, used = {}, set()
+    for j, (cands, order) in zip(jobs, got):
+        for k in order:
+            if cands[k]["url"] not in used:
+                used.add(cands[k]["url"])
+                out[j[0]] = {"url": cands[k]["url"], "credit": cands[k]["credit"]}
+                break
+    return out

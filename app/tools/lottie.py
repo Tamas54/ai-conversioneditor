@@ -78,7 +78,7 @@ async def fetch(url: str) -> dict[str, Any]:
 
 async def pick(query: str, context: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
     """→ (a Lottie JSON, a választott jelölt). A látómodell az előnézetekből rangsorol (nem szűr), az első betölthető nyer."""
-    from app.tools.video import _rank
+    from app.tools.images import rank as _rank
     cands = (await search(query, n=8))[:6]
     if not cands:
         raise ValueError(f"no animation found for “{query}”")
