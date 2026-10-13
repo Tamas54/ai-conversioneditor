@@ -322,8 +322,9 @@ const size = kb => kb < 1 ? "<1 kB" : kb < 1024 ? `${kb} kB` : `${(kb / 1024).to
 const ICON_DL = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>`;
 const ICON_PRINT = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/></svg>`;
 function fileCard(f) {
-  return `<div class="file-card"><button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
-    <span class="name" title="${esc(f.label)}">${esc(cardName(f))}</span><span class="meta">${f._n > 1 ? `${f._n} files · ` : `${size(f.size_kb)} · `}${ago(f.mtime)}</span></button>
+  const older = f.older_versions && !f._older ? `<button type="button" class="older-toggle" data-chain="${esc(f.chain)}" aria-expanded="${openChains.has(f.chain)}">${openChains.has(f.chain) ? "Hide older versions" : `+${f.older_versions} older version${f.older_versions > 1 ? "s" : ""}`}</button>` : "";
+  return `<div class="file-card${f._older ? " is-older" : ""}"><button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
+    <span class="name" title="${esc(f.label)}">${esc(cardName(f))}</span><span class="meta">${f._older ? "Older version · " : ""}${f._n > 1 ? `${f._n} files · ` : `${size(f.size_kb)} · `}${ago(f.mtime)}</span></button>${older}
     <span class="file-acts"><a class="fa" href="${esc(f.url)}" download title="Download" aria-label="Download ${esc(f.label)}">${ICON_DL}</a><button class="fa" data-print="${esc(f.file_id)}" title="Print" aria-label="Print ${esc(f.label)}">${ICON_PRINT}</button></span></div>`;
 }
 // nyomtatás: a szerver PDF-et ad (Word, pptx, táblázat, kép, PSD… → PDF), a böngésző azt nyomtatja
@@ -372,11 +373,23 @@ const WS_KINDS = { doc: ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm"
   video: ["ecproj", "fcproj", "mp4", "mov", "webm", "m4v", "mkv"] };
 const WS_LABELS = { doc: "Documents", deck: "Presentations", pdf: "PDFs", image: "Images", design: "Designs", sheet: "Spreadsheets", video: "Videos", other: "Other" };
 const normName = t => (t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim();
+// ugyanannak a fájlnak a változatai (szerver: chain / older_versions / superseded_by): alapból csak a legfrissebb
+// látszik, a „+N older versions” helyben lenyitja a többit (10-13: öt „… diasor (vN)” egymás mellett összezavart)
+const openChains = new Set();
+function collapseVersions(list) {
+  const ids = new Set(list.map(f => f.file_id));
+  return list.filter(f => !f.superseded_by || !ids.has(f.superseded_by) || openChains.has(f.chain))
+             .map(f => f.superseded_by && ids.has(f.superseded_by) ? { ...f, _older: true } : f);
+}
 function renderFiles(el, list) {
-  list = groupFiles(list);
+  const all = list;
+  list = groupFiles(collapseVersions(list));
   el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — make something above, or upload a file.</div>`;
   el.querySelectorAll(".file").forEach(b => b.addEventListener("click", () => nav("/app/file/" + encodeURIComponent(b.dataset.id))));
   el.querySelectorAll("[data-print]").forEach(b => b.addEventListener("click", () => printFile(b.dataset.print)));
+  el.querySelectorAll(".older-toggle").forEach(b => b.addEventListener("click", () => {
+    const c = b.dataset.chain; openChains.has(c) ? openChains.delete(c) : openChains.add(c); renderFiles(el, all);
+  }));
   // nincs bélyegkép (ismeretlen típus, render-hiba) → típus-ikon
   el.querySelectorAll(".thumb img").forEach(img => img.addEventListener("error", () => { const t = img.parentElement; t.innerHTML = glyph(t.dataset.ext); }, { once: true }));
 }
@@ -551,11 +564,11 @@ const views = {
     // keresés (ékezet és _/- nélkül, minden szó számít) + típus-szűrő; a választás a fülön marad (sessionStorage)
     const kindOf = f => Object.keys(WS_KINDS).find(k => WS_KINDS[k].includes(f.ext)) || "other";
     const counts = {};                                    // a gombon annyi, ahány KÁRTYA lesz (egy készítés testvérei egy kártya)
-    for (const k of [...Object.keys(WS_LABELS)]) counts[k] = groupFiles(files.filter(f => kindOf(f) === k)).length;
+    for (const k of [...Object.keys(WS_LABELS)]) counts[k] = groupFiles(collapseVersions(files.filter(f => kindOf(f) === k))).length;
     let st = { q: "", kind: "all" };
     try { st = { ...st, ...JSON.parse(sessionStorage.getItem("ws") || "{}") }; } catch {}
     if (st.kind !== "all" && !counts[st.kind]) st.kind = "all";
-    const kinds = [["all", "All", groupFiles(files).length], ...Object.keys(WS_LABELS).filter(k => counts[k]).map(k => [k, WS_LABELS[k], counts[k]])];
+    const kinds = [["all", "All", groupFiles(collapseVersions(files)).length], ...Object.keys(WS_LABELS).filter(k => counts[k]).map(k => [k, WS_LABELS[k], counts[k]])];
     $("#ws-kinds").innerHTML = kinds.map(([k, t, n]) => `<button type="button" data-k="${k}" aria-pressed="${k === st.kind}">${t} <span class="muted">${n}</span></button>`).join("");
     const q = $("#ws-q"); q.value = st.q;
     const draw = () => {

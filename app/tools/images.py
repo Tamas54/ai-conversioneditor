@@ -404,3 +404,46 @@ async def choose_stock(jobs: list[tuple], medium: str = "video") -> dict[Any, di
                 out[j[0]] = {"url": cands[k]["url"], "credit": cands[k]["credit"]}
                 break
     return out
+
+
+def _candidate_tile_label(k: int, c: dict[str, Any]) -> str:
+    w, h = c.get("width"), c.get("height")
+    return f"{k} · {(c.get('title') or '')[:34]}" + (f" · {w}×{h}" if w and h else "")
+
+
+async def candidate_sheet(cands: list[dict[str, Any]]) -> Optional[bytes]:
+    """A stock-jelöltek bélyegképei számozva, EGY képen — a szerver tölti le (a saját UA-jával), így a hívó AI
+    a válaszban maga látja őket (10-13: a thumb_url-ek egyszerű klienssel nem töltődtek le, a Wikimedia UA-t kér)."""
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    if not cands:
+        return None
+    async def thumb(c: dict[str, Any]):
+        return await _get(c["thumb_url"]) if c.get("thumb_url") else None
+    got = await asyncio.gather(*(thumb(c) for c in cands), return_exceptions=True)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 15)
+    except Exception:
+        font = ImageFont.load_default()
+    cols, tw, th = 4, 300, 200
+    tiles = []
+    for k, (c, r) in enumerate(zip(cands, got), 1):          # k = a lista sorszáma (1 = az első jelölt)
+        tile = Image.new("RGB", (tw, th + 26), "white")
+        if r is not None and not isinstance(r, Exception):
+            try:
+                tile.paste(ImageOps.contain(Image.open(io.BytesIO(r.content)).convert("RGB"), (tw - 6, th - 6)), (3, 3))
+            except Exception:
+                pass
+        dr = ImageDraw.Draw(tile)
+        dr.rectangle([3, 3, 34, 28], fill="black")
+        dr.text((10, 6), str(k), fill="white", font=font)
+        dr.text((5, th + 4), _candidate_tile_label(k, c)[:42], fill=(40, 40, 40), font=font)
+        tiles.append(tile)
+    if not tiles:
+        return None
+    rows = (len(tiles) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * (tw + 8) + 8, rows * (th + 34) + 8), (225, 225, 225))
+    for k, t in enumerate(tiles):
+        sheet.paste(t, (8 + (k % cols) * (tw + 8), 8 + (k // cols) * (th + 34)))
+    buf = io.BytesIO()
+    sheet.save(buf, "JPEG", quality=78)
+    return buf.getvalue()

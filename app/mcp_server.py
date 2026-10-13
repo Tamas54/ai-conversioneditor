@@ -374,6 +374,7 @@ async def files(
     scene: Optional[str] = None,
     at: Optional[float] = None,
     frames: Optional[int] = None,
+    versions: bool = False,
 ) -> dict:
     """The person's files, and empty new ones; see a file; compare two versions.
 
@@ -382,6 +383,8 @@ async def files(
       its name — the person's own words first, names are often in their language (accents and _/- don't matter;
       best matches first). Narrow with kind = image |
       document | presentation | pdf | spreadsheet | design | video, or ext (e.g. "pptx"). More: offset.
+      Versions of the same file come as ONE entry — the newest, with older_versions = how many older ones there are;
+      versions=true lists every version.
     action="new": an EMPTY file, ready in the editor — kind = document | presentation | design (social post:
       size square|portrait|story|landscape) | print (size A4|A3|A5|Letter, orientation portrait|landscape) |
       photo (size 1920x1080|1080x1080|1080x1350|3000x2000, background white|transparent) | book (size A5|A4|6x9) |
@@ -401,6 +404,9 @@ async def files(
         from app.routes.dashboard import api_files
         d = await api_files()
         items = sorted([*d.get("inputs", []), *d.get("outputs", [])], key=lambda f: f.get("mtime", 0), reverse=True)
+        if not versions:          # változatok: csak a legfrissebb (10-13: öt „… diasor (vN)” közül nem látszott, melyik a kész)
+            ids = {f["file_id"] for f in items}
+            items = [f for f in items if not (f.get("superseded_by") and f["superseded_by"] in ids)]
         if ext:
             items = [f for f in items if f.get("ext") == ext.lower().lstrip(".")]
         kinds = _LIST_KINDS.get((kind or "").lower().rstrip("s")) if kind else None
@@ -421,7 +427,8 @@ async def files(
         return {**hint, "total": len(items), "offset": o, "more": o + n < len(items), "files": [{
             "file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
             "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-            "made_from": f.get("source_label")} for f in page]}
+            "made_from": f.get("source_label"),
+            **({"older_versions": f["older_versions"]} if f.get("older_versions") and not versions else {})} for f in page]}
     if action == "preview":
         return await _preview_content(file_id, page or 1, scene, at, frames)
     if action == "compare":
@@ -1447,11 +1454,23 @@ async def generate_image(
     Returns image_file_id usable in insert_image.
 
     stock_search="words" instead: free stock photo CANDIDATES (Wikimedia Commons + Openverse, unfiltered) —
-    [{thumb_url, url, credit, title, width, height, source}]; nothing is generated. Show them to the person
-    and let them pick; then insert_image(file_id, slot, image_url=…, credit=…)."""
+    [{thumb_url, url, credit, title, width, height, source}] AND a numbered picture of them in the result, so you
+    see them yourself; nothing is generated. Show them to the person and let them pick; then
+    insert_image(file_id, slot, image_url=…, credit=…)."""
     if stock_search:
+        import json
+        from mcp.types import CallToolResult, ImageContent, TextContent
         from app.tools import images
-        return {"candidates": await images.search(stock_search, max(1, min(30, n)))}
+        cands = await images.search(stock_search, max(1, min(30, n)))
+        info = {"candidates": cands}
+        sheet = await images.candidate_sheet(cands[:16]) if cands else None
+        if not sheet:
+            return info
+        info["note"] = ("The picture below shows the candidates numbered in the order of this list (1 = the first). "
+                        "Look at them before choosing — the search matches file names, so some will be off-topic.")
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(info, ensure_ascii=False)),
+                                       ImageContent(type="image", data=base64.b64encode(sheet).decode(), mimeType="image/jpeg")],
+                              structuredContent=info)
     if not prompt:
         raise ValueError("Give a prompt (or stock_search words for free stock candidates).")
     return await vision_ops.generate_image(prompt, model=model, size=size)

@@ -398,6 +398,12 @@ label:has(> .ai-badge) > :not(.ai-badge) { grid-column: 1 / -1; }
 
 /* letöltés + nyomtatás minden fájlkártyán (asztalin rámutatásra, érintőképernyőn mindig látszik) */
 .file-card { position: relative; display: grid; }
+.older-toggle { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; padding: 2px 0 10px;
+  font-size: .78rem; font-weight: 600; color: var(--signal); }
+.older-toggle:hover { text-decoration: underline; }
+.older-toggle:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; border-radius: 6px; }
+.file-card.is-older { opacity: .72; }
+.file-card.is-older:hover, .file-card.is-older:focus-within { opacity: 1; }
 .file-acts { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
 .file-card:hover .file-acts, .file-card:focus-within .file-acts { opacity: 1; }
 @media (hover: none) { .file-acts { opacity: 1; } }

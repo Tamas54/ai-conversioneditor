@@ -7,6 +7,8 @@ just wrapped in plain HTTP.
 """
 from __future__ import annotations
 
+import re
+
 import asyncio
 import json
 import logging
@@ -115,9 +117,47 @@ def _list_dir(d: Path, kind: str, include_ephemeral: bool = False) -> list[dict[
     return items
 
 
+_VER_PAREN = re.compile(r"\s*\(v\d+\)(?=\.[^.]+$|$)")      # „… (v3).pptx” → „….pptx”
+_VER_SUFFIX = re.compile(r"\s+v\d+$", re.I)                       # „… – edited v2” → „… – edited”
+
+
+def _mark_versions(items: list[dict[str, Any]]) -> None:
+    """Ugyanannak a fájlnak a változatai egy csoportba (10-13: a My workspace-ben öt „Ki őrzi az őrzőt – diasor (vN)”
+    állt egymás mellett, nem lehetett tudni, melyik a kész). A lánc a változatlépéseken megy vissza (revise._version_step:
+    kérés, kézi szerkesztés, képcsere, PDF-munka…); az azonos nevű gyökerek (ugyanaz a fájl többször feltöltve) is egy
+    csoport. A csoport legfrissebbje kapja az `older_versions` számot, a többi `superseded_by`-t — elrejteni a felület dönt."""
+    from app.tools.revise import _version_step
+    by_id = {it["file_id"]: it for it in items}
+
+    def chain_root(it: dict[str, Any]) -> dict[str, Any]:
+        cur, seen = it, set()
+        while cur["file_id"] not in seen:
+            seen.add(cur["file_id"])
+            par = by_id.get(cur.get("source_file_id") or "")
+            if par is None or not _version_step(cur.get("operation") or ""):
+                return cur
+            cur = par
+        return cur
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for it in items:
+        r = chain_root(it)
+        stem = Path(_VER_PAREN.sub("", r.get("label") or "")).stem      # csak a változatszám esik le, a „ – mi” marad
+        key = it["ext"] + ":" + " ".join(_VER_SUFFIX.sub("", stem).lower().split())
+        it["chain"] = key
+        groups.setdefault(key, []).append(it)
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        g.sort(key=lambda x: x["mtime"], reverse=True)
+        g[0]["older_versions"] = len(g) - 1
+        for x in g[1:]:
+            x["superseded_by"] = g[0]["file_id"]
+
+
 @router.get("/api/files")
 async def api_files(include_ephemeral: bool = False) -> dict[str, Any]:
-    return {
+    out = {
         "inputs": _list_dir(
             tenancy.user_root() / "inputs", "input", include_ephemeral=include_ephemeral,
         ),
@@ -125,6 +165,8 @@ async def api_files(include_ephemeral: bool = False) -> dict[str, Any]:
             tenancy.user_root() / "outputs", "output", include_ephemeral=include_ephemeral,
         ),
     }
+    _mark_versions(out["inputs"] + out["outputs"])
+    return out
 
 
 @router.delete("/api/files/{file_id}")

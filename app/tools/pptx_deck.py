@@ -276,6 +276,21 @@ def _stats(slide, s, t):
         _text(slide, x + 0.35, 4.55, col - 0.8, 1.4, st.get("label", ""), size=17, font=t["font_body"], color=t["muted"])
 
 
+def _wrap_categories(cats: list[Any], kind) -> list[str]:
+    """Hosszú kategórianév sortöréssel (10-13: a DeckCraft a sávdiagram feliratainak fix, ~94 pt-os sávot hagy, a kézi
+    rajzterületet nem veszi figyelembe → a hosszú név a dia bal szélén levágódott; sortöréssel mindkét motor jól rajzol)."""
+    import textwrap
+    from pptx.enum.chart import XL_CHART_TYPE
+    out = [str(c) for c in cats]
+    if kind == XL_CHART_TYPE.BAR_CLUSTERED:
+        width = 16
+    elif kind in (XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.AREA) and out:
+        width = max(10, int((W_IN - 2 * M_IN) * 72 / len(out) / (14 * 0.56)))      # egy oszlopnyi hely, 14 pt-os betűvel
+    else:
+        return out
+    return ["\n".join(textwrap.wrap(c, width)) if len(c) > width else c for c in out]
+
+
 def _chart(slide, s, t):
     from pptx.chart.data import CategoryChartData, XyChartData
     from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
@@ -293,12 +308,20 @@ def _chart(slide, s, t):
                 ser.add_data_point(float(x), float(y))
     else:
         data = CategoryChartData()
-        data.categories = s.get("categories") or []
+        data.categories = _wrap_categories(s.get("categories") or [], kind)
         for se in series:
             data.add_series(se.get("name", "Sorozat"), se.get("values", []))
     gf = slide.shapes.add_chart(kind, Inches(M_IN), Inches(2.0), Inches(W_IN - 2 * M_IN), Inches(5.0), data)
     ch = gf.chart
     ch.font.size, ch.font.name = Pt(14), t["font_body"]
+    if kind == XL_CHART_TYPE.BAR_CLUSTERED:
+        # PowerPoint alulról felfelé rajzolja a sávokat, a DeckCraft (szerkesztő, PDF) felülről lefelé (10-13) → a
+        # kategóriatengely fordítva, az értéktengely a maximumnál keresztez (lent marad): mindkettőben az első van felül
+        from pptx.oxml.ns import qn
+        ch.category_axis.reverse_order = True
+        vcr = ch._chartSpace.chart.plotArea.find(qn("c:valAx")).find(qn("c:crosses"))
+        if vcr is not None:
+            vcr.set("val", "max")
     ch.has_title = False  # a dia címe a cím; a sorozatnévből gyártott diagramcím zavaró
     ch.has_legend = len(series) > 1 or kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT)
     if ch.has_legend:
