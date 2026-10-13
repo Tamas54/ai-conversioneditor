@@ -1678,6 +1678,27 @@ async def chart_redraw(
     )
 
 
+# --- Tool-annotációk (MCP ToolAnnotations) ---
+# A ChatGPT (Apps SDK) mindhármat KÖTELEZŐNEK veszi; ha hiányzik, a szabvány alapértéke él: openWorld=true,
+# destructive=true — vagyis „nyilvános külső világba ír, felülír”. 10-13: a ChatGPT jóváhagyó-ellenőrzése ezért
+# nem engedte a tanulmányt a Studióba küldeni („külső szolgáltatásnak továbbítás”). A valóság: a fájlok a
+# felhasználó SAJÁT, privát munkaterületére mennek, minden módosítás ÚJ változat (az eredeti megmarad).
+# openWorld=true CSAK ott, ahol az eszköz tényleg a nyilvános netre nyúl (URL letöltése, stockkép-/Lottie-/térkép-
+# keresés, cikk-URL) — az OpenAI definíciója szerint egy privát fiók nem „open world” attól, hogy külső szerveren fut.
+_READ_ONLY = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document"}
+_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit"}
+
+
+def _annotate_tools() -> None:
+    from mcp.types import ToolAnnotations
+    for t in mcp._tool_manager.list_tools():
+        t.annotations = ToolAnnotations(readOnlyHint=t.name in _READ_ONLY, destructiveHint=False,
+                                        openWorldHint=t.name in _OPEN_WORLD)
+
+
+_annotate_tools()
+
+
 # --- Plumbing ---
 
 
