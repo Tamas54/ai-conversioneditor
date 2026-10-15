@@ -169,14 +169,25 @@ def _edges() -> list[Edge]:
     # táblázat, prezentáció, rajz
     add(LO_CALC_IN, LO_CALC_OUT, "libreoffice", 1.0)
     add({"csv"}, {"tsv"}, "python", 0.1)
+    # Rust-motoraink (Craft-CLI-k), ahol a mérés szerint jobbak (2026-10, a production képben):
+    #   DeckCraft  pptx→pdf 0,08 s (LibreOffice 1,6 s), pptx→png diánként — a /app konvertere is ezt használja
+    #   GridCraft  xlsx/csv/tsv ↔ xlsx/csv/tsv/html 4–6 ms; a pontosvesszős CSV-t is felismeri (xlsx→json: a saját
+    #              belső formátumát írja, ezért oda a python marad)
+    add({"pptx"}, {"pdf"}, "deckcraft", 0.3)
+    add({"pptx"}, {"png"}, "deckcraft", 0.35)
+    add({"xlsx", "csv", "tsv"}, {"xlsx", "csv", "tsv", "html"}, "gridcraft", 0.15)
     add(LO_IMPRESS_IN, LO_IMPRESS_OUT, "libreoffice", 1.0)
-    add(LO_IMPRESS_IN, {"mp4", "webm", "mov", "gif"}, "slideshow", 2.0)
+    add(LO_IMPRESS_IN, {"mp4", "webm", "mov", "gif"}, "slideshow", 1.5)        # diasor → videó/animált GIF (nem diánkénti képek)
     add(LO_DRAW_IN, LO_DRAW_OUT, "libreoffice", 1.2)
     # e-könyv
     add(CALIBRE_IN, CALIBRE_OUT, "calibre", 1.5)
     add({"cbz", "cbr", "cb7"}, {"pdf"}, "python", 0.6)
     add({"pdf"}, {"cbz"}, "python", 0.8)
     # kép
+    # PhotoCraft (Rust): WebP 0,09 s és GIF 0,13 s (ImageMagick 0,15 / 0,44 s), PSD rétegesen; JPG/TIFF/BMP-re az
+    # ImageMagick gyorsabb, oda nem (animált gif/webp forrás sem: a PhotoCraft az első kockát venné)
+    add({"png", "jpg", "tiff", "bmp", "psd", "tga", "exr"}, {"webp", "gif"}, "photocraft", 0.4)
+    add({"psd", "psb"}, {"png", "jpg", "tiff", "webp"}, "photocraft", 0.45)
     add(PILLOW_IN, PILLOW_OUT, "pillow", 0.5)
     add(IM_IN, IM_OUT, "imagemagick", 0.7)
     add(HEIF_IN, {"jpg", "png", "tiff", "webp"}, "heif", 0.5)
@@ -189,6 +200,9 @@ def _edges() -> list[Edge]:
     add({"png", "jpg", "tiff", "bmp", "webp", "tga", "hdr"}, {"exr"}, "ffmpeg", 0.6)       # OpenEXR: az FFmpeg ír és olvas
     add({"exr"}, {"png", "tiff", "jpg", "hdr"}, "ffmpeg", 0.6)
     # vektor
+    # VectorCraft (Rust): svg→png 16 ms (rsvg 33 ms, Inkscape 300 ms), pdf/eps/dxf 11 ms; a képe az rsvg-ével egyezik.
+    # DXF-et nem olvastatunk vele: a mm-egységeiből óriás (283 465 px széles) rajz lesz — az ezdxf marad
+    add({"svg", "svgz"}, {"svg", "pdf", "png", "jpg", "webp", "eps", "dxf", "tiff"}, "vectorcraft", 0.3)
     add(INKSCAPE_IN, INKSCAPE_OUT, "inkscape", 1.0)
     add({"svg"}, {"png", "pdf", "ps", "eps"}, "rsvg", 0.4)
     add({"svgz"}, {"svg"}, "python", 0.05)
@@ -273,7 +287,8 @@ def _allowed(src: str, dst: str) -> bool:
 MAX_STEPS = 3
 
 
-def _search(src: str, static: bool, prefer: Optional[str] = None, dst: Optional[str] = None) -> dict[str, tuple[Edge, ...]]:
+def _search(src: str, static: bool, prefer: Optional[str] = None, dst: Optional[str] = None,
+            avoid: frozenset = frozenset()) -> dict[str, tuple[Edge, ...]]:
     """Dijkstra (csúcs, lépésszám) állapotokon: src-ből minden elérhető csúcs legolcsóbb útja (≤ MAX_STEPS)."""
     adj = _adjacency(static)
     best: dict[tuple[str, int], float] = {(src, 0): 0.0}
@@ -288,7 +303,7 @@ def _search(src: str, static: bool, prefer: Optional[str] = None, dst: Optional[
         if n >= MAX_STEPS:
             continue
         for e in adj.get(node, ()):
-            if e.dst == src or any(p.src == e.dst for p in path):
+            if e.dst == src or e.engine in avoid or any(p.src == e.dst for p in path):
                 continue
             c = cost + (e.cost * 0.5 if prefer and e.engine == prefer else e.cost) + 0.05
             k = (e.dst, n + 1)
@@ -304,12 +319,15 @@ def _reach(src: str, static: bool) -> dict[str, tuple[Edge, ...]]:
     return _search(src, static)
 
 
-def plan(src: str, dst: str, static: bool = False, prefer: Optional[str] = None) -> Optional[list[Edge]]:
-    """Legolcsóbb út src → dst (legfeljebb MAX_STEPS él). `prefer`: egy motor élei olcsóbbak."""
+def plan(src: str, dst: str, static: bool = False, prefer: Optional[str] = None,
+         avoid: Iterable[str] = ()) -> Optional[list[Edge]]:
+    """Legolcsóbb út src → dst (legfeljebb MAX_STEPS él). `prefer`: egy motor élei olcsóbbak; `avoid`: ezek kimaradnak
+    (pl. a Rust-motor, ha a kért opciót — méret, minőség, munkalap… — nem tudja)."""
     src, dst = normalize(src), normalize(dst)
     if src not in FORMATS or dst not in FORMATS or src == dst or not _allowed(src, dst):
         return None
-    path = (_search(src, static, prefer, dst) if prefer else _reach(src, static)).get(dst)
+    avoid = frozenset(avoid)
+    path = (_search(src, static, prefer, dst, avoid) if prefer or avoid else _reach(src, static)).get(dst)
     return list(path) if path else None
 
 

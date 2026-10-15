@@ -18,6 +18,10 @@ from typing import Optional
 # motor → (leírás, ellenőrzés). Az ellenőrzés egy futtatható neve vagy "py:<modul>".
 ENGINES: dict[str, tuple[str, tuple[str, ...]]] = {
     "wordcraft": ("WordCraft (Rust Word engine)", ()),
+    "deckcraft": ("DeckCraft (Rust PowerPoint engine)", ()),
+    "gridcraft": ("GridCraft (Rust spreadsheet engine)", ()),
+    "photocraft": ("PhotoCraft (Rust image engine)", ()),
+    "vectorcraft": ("VectorCraft (Rust vector engine)", ()),
     "libreoffice": ("LibreOffice (Writer, Calc, Impress, Draw)", ("soffice",)),
     "pandoc": ("Pandoc", ("pandoc",)),
     "calibre": ("Calibre ebook-convert", ("ebook-convert",)),
@@ -61,6 +65,9 @@ ENGINES: dict[str, tuple[str, tuple[str, ...]]] = {
 _APT_PYTHON = {"ebook-convert", "inkscape", "fontforge"}
 
 
+RUST_CRAFTS = ("deckcraft", "gridcraft", "photocraft", "vectorcraft")
+
+
 @functools.lru_cache(maxsize=None)
 def available(engine: str) -> bool:
     if os.getenv("AICE_DISABLE_ENGINES") and engine in os.environ["AICE_DISABLE_ENGINES"].split(","):
@@ -68,6 +75,11 @@ def available(engine: str) -> bool:
     if engine == "wordcraft":                       # Rust-motor: a meglévő WordCraft-CLI (settings.WORDCRAFT_CLI)
         from app.tools import wordcraft
         return wordcraft.available()
+    if engine in RUST_CRAFTS:                       # a többi Rust-motor: a meglévő Craft-CLI-k (/opt/<x>craft/bin)
+        from app.tools import crafts
+        cli = {"deckcraft": lambda: crafts.office_cli("deck"), "gridcraft": lambda: crafts.office_cli("sheet"),
+               "photocraft": crafts.photo_cli, "vectorcraft": crafts.vector_cli}[engine]()
+        return bool(cli)
     checks = ENGINES.get(engine, ("", ()))[1]
     for c in checks:
         if c.startswith("py:"):

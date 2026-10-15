@@ -61,7 +61,8 @@ _AV = ("video", "audio")
 OPTIONS: dict[str, Opt] = {o.key: o for o in [
     # közös / dokumentum
     Opt("engine", "enum", "auto", ("auto", "libreoffice", "pandoc", "calibre", "wordcraft", "pillow", "imagemagick",
-                                   "vips", "inkscape", "rsvg", "ffmpeg", "ghostscript", "mupdf", "poppler")),
+                                   "vips", "inkscape", "rsvg", "ffmpeg", "ghostscript", "mupdf", "poppler",
+                                   "deckcraft", "gridcraft", "photocraft", "vectorcraft")),
     Opt("page_range", "str", None, pattern=_PAGES, categories=_DOC + ("image",)),
     Opt("ocr", "enum", "auto", ("auto", "on", "off"), categories=("document",)),
     Opt("ocr_language", "str", "eng", pattern=_LANGS, categories=_DOC + ("image",)),

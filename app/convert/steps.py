@@ -143,6 +143,58 @@ async def wordcraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     return [dst]
 
 
+async def _craft(app: str, *args: str) -> None:
+    from app.tools import crafts
+    cli = {"deck": lambda: crafts.office_cli("deck"), "sheet": lambda: crafts.office_cli("sheet"),
+           "photo": crafts.photo_cli, "vector": crafts.vector_cli}[app]()
+    try:
+        await crafts.run_cli(cli, f"{app}craft-cli", *args)
+    except Exception as e:                       # CliError / RuntimeError → a gráf motorhibája
+        raise EngineError(str(e)[:500])
+
+
+async def deckcraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
+    """DeckCraft (Rust PowerPoint-motor): pptx → pdf (convert) | png diánként (render --all)."""
+    if fmt == "pdf":
+        dst = ctx.out(src, "pdf")
+        await _craft("deck", "convert", str(src), str(dst))
+        return _ok([dst])
+    work = ctx.sub("deck")
+    scale = max(0.5, min(4.0, float(ctx.opts.get("dpi") or 144) / 96))
+    await _craft("deck", "render", str(src), "--all", "--scale", f"{scale:.2f}", str(work / "slides.png"))
+    pages = sorted(p for p in work.rglob("*.png") if p.is_file())       # a kimenet egy „slides.png” mappa
+    if not pages:
+        raise EngineError("DeckCraft rendered no slides")
+    stem = re.sub(r"[^\w\-]+", "_", _stem(src))[:60] or "slide"
+    out = []
+    for i, p in enumerate(pages, 1):
+        dst = ctx.out(src, "png", suffix=f"-{i:03d}" if len(pages) > 1 else "")
+        shutil.move(str(p), dst)
+        out.append(dst)
+    return _ok(out)
+
+
+async def gridcraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
+    """GridCraft (Rust táblázatmotor): xlsx/csv/tsv → xlsx/csv/tsv/html (a CSV elválasztóját maga ismeri fel)."""
+    dst = ctx.out(src, fmt)
+    await _craft("sheet", "convert", str(src), str(dst))
+    return _ok([dst])
+
+
+async def photocraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
+    """PhotoCraft (Rust képmotor): webp/gif cél, rétegzett PSD."""
+    dst = ctx.out(src, fmt)
+    await _craft("photo", "convert", str(src), str(dst))
+    return _ok([dst])
+
+
+async def vectorcraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
+    """VectorCraft (Rust vektormotor): svg/svgz/dxf → svg/pdf/png/jpg/webp/eps/dxf/tiff."""
+    dst = ctx.out(src, fmt)
+    await _craft("vector", "convert", str(src), str(dst))
+    return _ok([dst])
+
+
 async def libreoffice(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     sfmt = _fmt_of(src)
     cls = _lo_class(sfmt)
@@ -898,8 +950,12 @@ async def _audio_to_video(src: Path, fmt: str, ctx: Ctx, dst: Path) -> list[Path
 async def slideshow(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     """Prezentáció → videó/GIF: diák PDF-be (LibreOffice), képpé (pdftoppm), majd diánként N másodperc."""
     sub = Ctx(ctx.sub("slides"), {}, final=False, source_fmt=ctx.source_fmt)
-    pdf = (await libreoffice(src, "pdf", sub))[0]
-    pages = await poppler(pdf, "png", Ctx(sub.work, {"dpi": 110}, final=False))
+    from app.convert.engines import available
+    if _fmt_of(src) == "pptx" and available("deckcraft"):     # Rust: diánként közvetlenül, LibreOffice nélkül
+        pages = await deckcraft(src, "png", Ctx(sub.work, {"dpi": 144}, final=False))
+    else:
+        pdf = (await libreoffice(src, "pdf", sub))[0]
+        pages = await poppler(pdf, "png", Ctx(sub.work, {"dpi": 110}, final=False))
     secs = float(ctx.opts.get("seconds_per_slide") or 3.0)
     lst = sub.work / "list.txt"
     lines = []
@@ -1675,7 +1731,8 @@ def _write_data(data: Any, dst: Path, fmt: str, title: str) -> None:
 
 
 STEPS: dict[str, Callable[[Path, str, Ctx], Awaitable[list[Path]]]] = {
-    "wordcraft": wordcraft, "libreoffice": libreoffice, "pandoc": pandoc, "weasyprint": weasyprint, "pdf2docx": pdf2docx, "poppler": poppler,
+    "wordcraft": wordcraft, "deckcraft": deckcraft, "gridcraft": gridcraft, "photocraft": photocraft,
+    "vectorcraft": vectorcraft, "libreoffice": libreoffice, "pandoc": pandoc, "weasyprint": weasyprint, "pdf2docx": pdf2docx, "poppler": poppler,
     "mupdf": mupdf, "ghostscript": ghostscript, "djvulibre": djvulibre, "calibre": calibre, "pillow": pillow,
     "imagemagick": imagemagick, "heif": heif, "jxl": jxl, "libraw": libraw, "potrace": potrace, "inkscape": inkscape,
     "rsvg": rsvg, "ffmpeg": ffmpeg, "slideshow": slideshow, "archive": archive, "fonttools": fonttools,

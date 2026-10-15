@@ -14,7 +14,7 @@ import logging
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from app.catalog.formats import FORMATS, from_filename, normalize
 from app.convert import graph
@@ -68,12 +68,29 @@ def ocr_languages() -> set[str]:
     return {l.strip() for l in out.splitlines()[1:] if l.strip() and l.strip() != "osd"}
 
 
-def plan_or_raise(sfmt: str, tfmt: str, prefer: Optional[str] = None) -> list:
+# a Rust-motorok (Craft-CLI-k) csak a sima átalakítást tudják: ha a felhasználó olyan opciót kért, amit nem
+# kezelnek (méret, minőség, munkalap, elválasztó…), a gráf a következő legjobb motort választja
+_CRAFT_OPTS = {"deckcraft": {"page_range", "dpi"}, "gridcraft": set(), "photocraft": set(), "vectorcraft": set()}
+_NEUTRAL = {"engine", "ocr", "ocr_language", "output", "filename"}
+
+
+def craft_avoid(opts: dict[str, Any], tfmt: str) -> set[str]:
+    active = set(opts) - _NEUTRAL
+    out = {eng for eng, ok in _CRAFT_OPTS.items() if active - ok}
+    if "page_range" in active and tfmt != "pdf":
+        out.add("deckcraft")                 # diánkénti képnél az oldaltartományt a pdf-es út tudja
+    from app.catalog.formats import FORMATS
+    if tfmt == "gif" or (FORMATS.get(tfmt) and FORMATS[tfmt].category == "video"):
+        out.add("deckcraft")                 # diából videó/GIF: a slideshow lépés (az maga is a DeckCraftot használja)
+    return out
+
+
+def plan_or_raise(sfmt: str, tfmt: str, prefer: Optional[str] = None, avoid: Iterable[str] = ()) -> list:
     if sfmt not in FORMATS:
         raise ConversionError(f"Unknown source format: .{sfmt}")
     if tfmt not in FORMATS:
         raise ConversionError(f"Unknown target format: .{tfmt}")
-    p = graph.plan(sfmt, tfmt, prefer=prefer)
+    p = graph.plan(sfmt, tfmt, prefer=prefer, avoid=avoid)
     if not p:
         static = graph.plan(sfmt, tfmt, static=True)
         if static:
@@ -92,7 +109,7 @@ async def convert_path(src: Path, target: str, options: Optional[dict[str, Any]]
     sfmt = normalize(source_format) if source_format else from_filename(src.name)
     tfmt = normalize(target)
     prefer = opts.get("engine") if opts.get("engine") not in (None, "auto") else None
-    path = plan_or_raise(sfmt, tfmt, prefer)
+    path = plan_or_raise(sfmt, tfmt, prefer, craft_avoid(opts, tfmt) - ({prefer} if prefer else set()))
     work.mkdir(parents=True, exist_ok=True)
     current = [src]
     used: list[str] = []
