@@ -227,3 +227,14 @@ def test_units_and_timezones_api(client):
     assert client.get("/api/units/convert", params={"value": 1, "from": "kg", "to": "km"}).status_code == 400
     z = client.get("/api/timezones/convert", params={"from": "Europe/Budapest", "to": "UTC,Asia/Tokyo", "time": "2026-01-15 12:00"}).json()
     assert z["to"][0]["time"].startswith("2026-01-15T11:00") and z["to"][1]["time"].startswith("2026-01-15T20:00")
+
+
+def test_pages_are_gzipped_but_downloads_are_not(client, samples, put_file):
+    r = client.get("/app", headers={"Accept-Encoding": "gzip"})
+    assert r.headers.get("content-encoding") == "gzip" and "What are we making?" in r.text
+    assert client.get("/convert/docx-to-pdf", headers={"Accept-Encoding": "gzip"}).headers.get("content-encoding") == "gzip"
+    from app.storage import public_url
+    fid = put_file(samples.pdf())
+    url = public_url(fid).replace("http://testserver", "")
+    r = client.get(url, headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.content[:4] == b"%PDF" and r.headers.get("content-encoding") is None

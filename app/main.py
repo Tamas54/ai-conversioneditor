@@ -141,6 +141,29 @@ class _McpNoSlashRedirect:
 app.add_middleware(_McpNoSlashRedirect)
 
 
+class _PageGZip:
+    """Gzip csak a lapokra és a statikus CSS/JS-re (Core Web Vitals: az /app ~225 KB → ~50 KB). Letöltés, MCP, API,
+    SSE és szerkesztő-erőforrás NEM megy át rajta: ott a Range-kérés, a folyam és a CPU fontosabb."""
+
+    _SKIP = ("/files/", "/mcp", "/api/", "/v1/", "/editor/", "/preview/", "/dashboard")
+
+    def __init__(self, inner):
+        from starlette.middleware.gzip import GZipMiddleware
+        self.inner = inner
+        self.gz = GZipMiddleware(inner, minimum_size=1024)
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope.get("type") == "http" else ""
+        if path and scope.get("method") == "GET" and not path.startswith(self._SKIP) \
+                and (not path.startswith("/static/") or path.endswith((".css", ".js", ".svg", ".json", ".html"))):
+            await self.gz(scope, receive, send)
+        else:
+            await self.inner(scope, receive, send)
+
+
+app.add_middleware(_PageGZip)
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
