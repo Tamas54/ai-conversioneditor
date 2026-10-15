@@ -120,11 +120,20 @@ teljes konverziós söprés: `python scripts/sweep_conversions.py`.
 
 `weasy/cr` = WeasyPrint default; `use_browser=True` → Chromium (JS-rendering).
 
-**Apple Keynote**: minden PowerPoint-kimenet (pptx_build, sablon, ügynök, videós dia, DeckCraft, konverzió)
-átmegy az `app/tools/keynote_safe.py`-n — a python-pptx kihagyott/ellentmondó részeit javítja (jegyzetmester
-regisztrálása, jegyzetdia-színleképezés, 16:9 sldSz, nyomtató-csonk, negatív diagramtengely-id), így a fájl
-a Keynote-ban is megnyílik és az Open XML SDK validátorán is hibátlan. A letöltés mindig a valódi kiterjesztéssel
-és MIME-típussal megy (különben a Safari `.txt`-t fűz a `.pptx` után).
+**iPhone (és minden Apple-eszköz)**: minden kimenet átmegy az `app/tools/ios_safe.py` kapun —
+a konverziók, az eszközök, a Craft-motorok (DeckCraft, GridCraft, WordCraft), a videógenerátor és a „videó diára”:
+- PowerPoint → `keynote_safe.py`: jegyzetmester regisztrálva, jegyzetdia-színleképezés, 16:9 sldSz, nyomtató-csonk ki,
+  negatív diagramtengely-id javítva (a python-pptx minden mentése is, horoggal);
+- Word/Excel → `ooxml_safe.py`: sémasorrend (pPr, rPr, stílus, beállítások, táblázat, szegély, számozás, betűtípus),
+  „#szín” és „16.0” értékek, w:shd típus, w:nsid — a tartalom bájtra ugyanaz (a python-docx/openpyxl mentése is);
+- MP4/MOV/M4A → faststart (moov elöl), HEVC `hvc1` címke, H.264 4:2:0 8 bites (a 4:4:4 / 10 bites nem megy iPhone-on),
+  AAC hang (Opus/Vorbis helyett) — ami jó, csak átcsomagolva, ami rendben van, ahhoz nem nyúl; a kifejezetten kért
+  kodeket nem kódolja újra;
+- EPUB → az Apple Books-nak a `mimetype` elöl, tömörítetlenül.
+
+Az Open XML SDK validátorán minden PPTX/DOCX/XLSX-gyártónk 0 hibás. A letöltés a valódi kiterjesztéssel és
+MIME-típussal megy (különben a Safari `.txt`-t fűz a `.pptx` után), HEAD-et és byte-range-et is kezel
+(az iPhone videólejátszója range-kérésekkel olvas).
 
 ## Railway deployment
 

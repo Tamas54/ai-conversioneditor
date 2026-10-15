@@ -2138,6 +2138,8 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
         await _run(*args, cwd=project_path.parent)
     if not out.exists():
         raise RuntimeError("The render produced no file")
+    from app.tools import ios_safe
+    await ios_safe.finalize(out)                        # iPhone/Safari: a moov elöl (a renderer a végére írja)
     vid = new_file_id(ext)
     shutil.move(str(out), output_path(vid))
     meta = read_meta(project_id) or {}
@@ -2540,7 +2542,13 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     k = min(box_w / vw, box_h / vh)
     w, h = int(vw * k), int(vh * k)
     left, top = (SW - w) // 2, top_room + pad + (box_h - h) // 2
-    movie = slide.shapes.add_movie(str(vpath), left, top, w, h, poster_frame_image=str(poster), mime_type="video/mp4")
+    # a dián lévő videó iPhone-on (Keynote) is játszódjon: ha kell, iPhone-biztos másolat kerül be
+    from app.tools import ios_safe
+    embed = temp_path(new_file_id(vpath.suffix.lstrip(".").lower()))
+    shutil.copy(vpath, embed)
+    await ios_safe.finalize(embed)
+    movie = slide.shapes.add_movie(str(embed), left, top, w, h, poster_frame_image=str(poster),
+                                   mime_type="video/quicktime" if embed.suffix.lower() == ".mov" else "video/mp4")
     movie.name = "Video"
     n = len(prs.slides)
     pos = n - 1
@@ -2556,6 +2564,7 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     out = new_file_id("pptx")
     await asyncio.to_thread(prs.save, str(output_path(out)))
     poster.unlink(missing_ok=True)
+    embed.unlink(missing_ok=True)
     label = (result_stem(deck_file_id, "with video") if deck_file_id else root_name(display_label(vid), "Video")) + ".pptx"
     write_meta(out, source_file_id=deck_file_id or vid, operation="video on a slide", label=label)
     # ellenőrzés (közös check-szerződés): a mentett fájlban tényleg ott a videó, a megadott dián
@@ -2728,6 +2737,8 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
         out = work / "scene.mp4"
         if not out.exists():
             raise RuntimeError("The scene render produced no file")
+        from app.tools import ios_safe
+        await ios_safe.finalize(out)
         vid = new_file_id("mp4")
         shutil.move(str(out), output_path(vid))
         stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(display_label(pid)).stem)

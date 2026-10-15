@@ -127,6 +127,8 @@ async def run(
             raise ValueError(run_report.failure("wordcraft", str(e), "", parsed, ids)) from None
         raise
     from app.storage.naming import result_stem
+    from app.tools import ios_safe
+    await ios_safe.finalize(output_path(out_id))          # iPhone (Pages, Quick Look): sémahelyes docx
     ids_used = " ".join(c for c, _ in parsed)
     what = "reviewed" if ("review." in ids_used or "comment" in ids_used) else "edited" if file_id else ""
     stem = result_stem(file_id, what, template or "document")

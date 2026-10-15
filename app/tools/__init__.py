@@ -1,6 +1,8 @@
 from app.tools import keynote_safe as _keynote_safe
+from app.tools import ooxml_safe as _ooxml_safe
 
 _keynote_safe.install()   # minden python-pptx mentés Keynote-biztos (a modulok lent már pptx-et mentenek)
+_ooxml_safe.install()     # …és minden python-docx / openpyxl mentés sémahelyes (iPhone Pages/Numbers, Quick Look)
 
 from app.tools.convert import convert
 from app.tools.edits import (

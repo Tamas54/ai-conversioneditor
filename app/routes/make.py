@@ -887,6 +887,8 @@ def _doc_reference() -> Path:
         for a in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
             el.attrib.pop(qn(a), None)
     doc.save(str(path))
+    from app.tools import ooxml_safe
+    ooxml_safe.fix(path)            # a pandoc-sablon stílusai sémasorrendben → minden belőle szedett docx is
     _DOC_REF = path
     return path
 
@@ -950,6 +952,8 @@ async def make_document(body: dict[str, Any]) -> dict[str, Any]:
             ref = await asyncio.to_thread(_doc_reference)
         await asyncio.to_thread(pypandoc.convert_file, str(src), "docx", outputfile=str(output_path(fid)),
                                 extra_args=["--wrap=none", f"--reference-doc={ref}"])
+        from app.tools import ooxml_safe
+        await asyncio.to_thread(ooxml_safe.fix, output_path(fid))     # iPhone/Pages: sémahelyes docx
         src.unlink(missing_ok=True)
     except HTTPException:
         raise

@@ -132,7 +132,7 @@ async def convert_any(pool, file_id: str, target: str) -> dict[str, Any]:
         raise ValueError(f"Can't convert .{ext} to .{target}. Options: {', '.join(targets_for(ext)) or 'none'}.")
     if ext == "pptx" and target == "docx":
         from app.tools import deck_handout
-        return await deck_handout.build(file_id)
+        return await deck_handout.build(file_id)       # maga is iPhone-biztos (ooxml_safe)
     stem = Path(display_label(file_id)).stem
     work: Optional[Path] = None
     out_ext = target
@@ -184,8 +184,8 @@ async def convert_any(pool, file_id: str, target: str) -> dict[str, Any]:
             fid = res["file_id"]
         if not output_path(fid).exists() or output_path(fid).stat().st_size == 0:
             raise RuntimeError("The conversion produced an empty file.")
-        from app.tools import keynote_safe
-        await asyncio.to_thread(keynote_safe.fix_if_slides, output_path(fid))
+        from app.tools import ios_safe
+        await ios_safe.finalize(output_path(fid))
     finally:
         if work:
             shutil.rmtree(work, ignore_errors=True)

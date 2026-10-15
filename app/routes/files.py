@@ -12,7 +12,7 @@ from app.storage import (
 router = APIRouter()
 
 
-@router.get("/files/{file_id}")
+@router.api_route("/files/{file_id}", methods=["GET", "HEAD"])     # HEAD: iOS/Quick Look és letöltéskezelők előre kérdeznek
 async def get_file(file_id: str, t: str = Query(..., description="signed token"),
                    u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)")):
     if not verify_file_token(file_id, t, uid=u):

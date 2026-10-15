@@ -70,6 +70,7 @@ async def run_tool(key: str, file_ids: list[str], options: Optional[dict[str, An
     """Vissza: {"files": [{file_id, url, label, size_kb}], "data": {...}?, "tool": key}."""
     from app.storage import display_label, output_path, public_url, temp_path, write_meta
     from app.storage.files import new_file_id
+    from app.tools import ios_safe
     tool = T.get(key)
     if tool is None or not T.available(key):
         raise ValueError(f"no such tool: {key}")
@@ -93,6 +94,7 @@ async def run_tool(key: str, file_ids: list[str], options: Optional[dict[str, An
         for i, p in enumerate(paths, 1):
             ext = from_filename(p.name) or p.suffix.lstrip(".") or "bin"
             fid = new_file_id(ext)
+            await ios_safe.finalize(p, opts)         # iPhone: faststart, hvc1, H.264 4:2:0, AAC, Keynote-biztos pptx
             shutil.move(str(p), output_path(fid))
             nice = i18n_tag(key)
             arc = names[i - 1] if i - 1 < len(names) else None      # a kezelő saját neve (pl. archívumbeli útvonal)
