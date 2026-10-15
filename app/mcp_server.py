@@ -641,10 +641,22 @@ async def convert(
     engine: Optional[str] = None,
 ) -> dict:
     """
-    Convert a document between formats.
+    Convert a file between formats — 264 formats, 8800+ directions: documents (docx, doc, odt, rtf, md, html,
+    tex, pages, wpd, hwp, xps, djvu, eml, pdf, pdfa…), spreadsheets, slides (pptx → pdf, images or mp4), e-books
+    (epub, mobi, azw3, fb2, cbz…), images (heic, webp, avif, jxl, psd, camera RAW…), vectors (svg, eps, ai, emf,
+    cdr), video (mp4, mov, mkv, webm, avi, gif…), audio (mp3, wav, flac, m4a, ogg, opus…), archives (zip, rar,
+    7z, tar.gz… 43 kinds), CAD (dwg, dxf → pdf/svg/png) and fonts (ttf, otf, woff, woff2, eot).
+    catalog(kind="conversions", source_format=…) lists the targets of a format.
 
-    Pass either `file_id` (already uploaded) or `source_url`. Specify
-    `target_format` (pdf|docx|md|html|odt|pptx|xlsx|txt|rtf).
+    Pass either `file_id` (already uploaded) or `source_url`, and `target_format`.
+
+    options (validated): page_range "1-3,5"; ocr / ocr_language ("hun+eng"); images: width, height, fit,
+    quality 1–100, strip_metadata, dpi, background, grayscale, rotate, flip; video: video_codec (h264, h265,
+    vp9, av1…), audio_codec, resolution ("1080p", "1280x720"), aspect ("9:16") + aspect_mode, fps, crf, preset,
+    video_bitrate, start/end (trim), subtitles (file_id) + subtitles_mode, volume, remove_audio; audio:
+    audio_bitrate, sample_rate, channels, bit_depth; e-books: title, author, cover, output_profile; archives:
+    password, level; advanced: allow-listed ffmpeg/ImageMagick flags (["-tune", "film"]). Several output files
+    (e.g. one JPG per PDF page) come back as one .zip, or separately with options.output = "files".
 
     Set `use_browser=True` for HTML→PDF when JS-rendering or modern CSS
     (flexbox/grid/recharts/d3) is needed. Defaults to WeasyPrint (faster,
@@ -661,6 +673,10 @@ async def convert(
     if file_id and file_id.lower().endswith(".pptx") and target_format.lower().lstrip(".") == "docx":
         from app.tools import deck_handout            # pptx → docx = Word-kiosztmány
         return await deck_handout.build(file_id)
+    if _universal(file_id, source_url, source_format, target_format, options, engine, use_browser):
+        from app.convert import service
+        fid = file_id or await _fetch_source(source_url, source_format)
+        return await service.convert_file(fid, target_format, options or {}, _pool_or_none())
     return await t_convert(
         _pool(),
         file_id=file_id,
@@ -671,6 +687,39 @@ async def convert(
         options=options,
         engine=engine,
     )
+
+
+# a régi (LibreOffice/pandoc/WeasyPrint) út formátumai — ami ezen kívül esik, vagy új opciót kér, az univerzális gráfra megy
+_LEGACY_FMTS = {"pdf", "docx", "doc", "html", "htm", "md", "odt", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "rtf", "txt"}
+_LEGACY_OPTS = {"page_size", "margin", "pandoc_args"}
+
+
+def _universal(file_id, source_url, source_format, target_format, options, engine, use_browser) -> bool:
+    if engine or use_browser:
+        return False
+    tgt = target_format.lower().lstrip(".")
+    src = (source_format or (file_id or source_url or "").split("?", 1)[0].rsplit(".", 1)[-1]).lower()
+    new_opts = bool(options) and not set(options) <= _LEGACY_OPTS
+    return new_opts or tgt not in _LEGACY_FMTS or src not in _LEGACY_FMTS
+
+
+async def _fetch_source(url: Optional[str], fmt: Optional[str]) -> str:
+    if not url:
+        raise ValueError("Either file_id or source_url is required")
+    from app import net
+    from app.api_v1 import operations as O
+    tmp = O._tmpdir() / "src"
+    name, _, _ = await net.download(url, tmp, O.max_bytes(False))
+    if fmt and not name.lower().endswith("." + fmt.lower().lstrip(".")):
+        name = f"{name}.{fmt.lower().lstrip('.')}"
+    return O._save_named(tmp, name)
+
+
+def _pool_or_none():
+    try:
+        return _pool()
+    except RuntimeError:
+        return None
 
 
 @mcp.tool()
@@ -1801,8 +1850,12 @@ async def chart_redraw(
 # felhasználó SAJÁT, privát munkaterületére mennek, minden módosítás ÚJ változat (az eredeti megmarad).
 # openWorld=true CSAK ott, ahol az eszköz tényleg a nyilvános netre nyúl (URL letöltése, stockkép-/Lottie-/térkép-
 # keresés, cikk-URL) — az OpenAI definíciója szerint egy privát fiók nem „open world” attól, hogy külső szerveren fut.
-_READ_ONLY = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document"}
-_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit", "facts"}
+_READ_ONLY = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document", "catalog", "units"}
+_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit", "facts",
+               "transfer", "jobs", "convert"}
+
+
+from app import mcp_ext  # noqa: E402,F401  (csoportosított bővítő eszközök: file_tools, transfer, jobs, catalog, units)
 
 
 def _annotate_tools() -> None:
