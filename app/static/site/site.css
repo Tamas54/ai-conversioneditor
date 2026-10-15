@@ -5,6 +5,7 @@
 body.site{font-size:16px;line-height:1.6}
 .site a{color:var(--acc);text-underline-offset:2px}.site a:hover{color:var(--brand)}
 .site .topbar a,.site .btn,.site .chip{color:var(--ink)}.site .btn.primary,.site .chip-cta{color:#fff}
+.site .topbar nav a{color:var(--graphite)}.site .topbar nav a[aria-current="page"],.site .topbar nav a:hover{color:var(--ink)}
 .site img{max-width:100%;height:auto}
 .wrap{max-width:1120px;margin:0 auto;padding:0 16px}
 .skip{position:absolute;left:-9999px}.skip:focus{left:16px;top:8px;background:var(--card);padding:8px;z-index:9}
