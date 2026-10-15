@@ -83,7 +83,8 @@
   "fill_now": "Fill the form",
   "questions_hint": "A few details are missing:",
   "continue": "Continue",
-  "delete": "Delete"
+  "delete": "Delete",
+  "details": "Details"
  },
  "footer": {
   "all_tools": "All tools",

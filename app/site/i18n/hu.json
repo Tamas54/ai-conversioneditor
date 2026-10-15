@@ -88,7 +88,8 @@
   "fill_now": "Kitöltés",
   "questions_hint": "Néhány adat hiányzik:",
   "continue": "Tovább",
-  "delete": "Törlés"
+  "delete": "Törlés",
+  "details": "Részletek"
  },
  "footer": {
   "all_tools": "Minden eszköz",

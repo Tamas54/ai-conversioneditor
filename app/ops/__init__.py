@@ -96,6 +96,8 @@ async def run_tool(key: str, file_ids: list[str], options: Optional[dict[str, An
             shutil.move(str(p), output_path(fid))
             nice = i18n_tag(key)
             arc = names[i - 1] if i - 1 < len(names) else None      # a kezelő saját neve (pl. archívumbeli útvonal)
+            if not arc and not src_id and not filename:            # bemenő fájl nélkül (aláírás, weboldal): a kezelő adta név
+                arc = p.name
             label = arc.rsplit("/", 1)[-1] if arc else f"{stem}{f' ({nice})' if nice else ''}{f'-{i:03d}' if len(paths) > 1 else ''}.{ext}"
             write_meta(fid, source_file_id=src_id, operation=f"tool {key}", label=label)
             files.append({"file_id": fid, "url": public_url(fid), "label": label, "size_kb": output_path(fid).stat().st_size // 1024,

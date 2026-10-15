@@ -1926,7 +1926,7 @@ const MAKERS = {
     },
   },
   convert: {
-    cta: form => { const o = form.querySelector("[name=target]")?.selectedOptions[0]; return o?.value ? `Convert to ${o.textContent.replace(/\s*\(.*$/, "")}` : "Convert"; },
+    cta: form => { const o = form.querySelector("[name=target]")?.selectedOptions[0]; return o?.value ? `Convert to ${o.textContent.replace(/\s*[(—].*$/, "")}` : "Convert"; },
     title: "Convert", sub: "Pick a file and the format you need — the result opens in the matching editor. The original stays as it was.",
     fields: () => `${blankDocLink}${fileSlot("file", { label: "File" })}
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,

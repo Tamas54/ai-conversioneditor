@@ -57,7 +57,14 @@
     out.innerHTML = "";
     const files = res.files && res.files.length ? res.files : [res];
     files.forEach((f) => out.append(el("a", { href: f.url, download: f.label || "", class: "btn primary small", text: tr("download", "Download") + " " + (f.label || "") })));
-    if (res.data) out.append(el("pre", {}, el("code", { text: JSON.stringify(res.data, null, 2) })));
+    if (res.data && res.data.values && res.data.provenance) {      // ügynöki kitöltés: mező · érték · forrás
+      const tb = el("tbody");
+      Object.entries(res.data.values).forEach(([k, v]) => tb.append(el("tr", {}, el("th", { scope: "row", text: k }),
+        el("td", { text: String(v) }), el("td", { class: "small muted", text: res.data.provenance[k] || "" }))));
+      out.append(el("table", { class: "facts review" }, tb));
+    }
+    if (res.data) out.append(el("details", { class: "data" }, el("summary", { text: tr("details", "Details") }),
+      el("pre", {}, el("code", { text: JSON.stringify(res.data, null, 2) }))));
     const first = files[0];
     if (first && first.file_id) out.append(el("a", { href: "/app/file/" + first.file_id + "/edit", class: "small", text: tr("open_editor", "Open in the editor") }));
     saveButtons(out, files.filter((f) => f.file_id));
