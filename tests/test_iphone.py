@@ -96,6 +96,30 @@ def test_video_on_a_slide_plays_on_iphone(put_file, tmp_path):
     assert next(s for s in _streams(emb) if s["codec_type"] == "video")["pix_fmt"] == "yuv420p"
     pres = z.read("ppt/presentation.xml")
     assert b'cx="12192000" cy="6858000"' in pres and b"screen4x3" not in pres
+    sld = z.read("ppt/slides/slide1.xml").decode()
+    # a videó magától indul a dia megjelenésekor, koppintásra szünet (a PowerPoint saját időzítése)
+    assert "playFrom(0.0)" in sld and "togglePause" in sld and 'nodeType="mainSeq"' in sld and 'nodeType="interactiveSeq"' in sld
+    assert sld.count("<p:timing>") == 1
+
+
+@needs_ffmpeg
+def test_keynote_pass_makes_python_pptx_videos_play(tmp_path):
+    """Egy python-pptx-szel (horog nélkül) beszúrt videó csak „várakozó” médiacsomópontot kap — a javító a
+    PowerPoint időzítésére cseréli, a videó valódi hosszával."""
+    from pptx import Presentation
+    from pptx.util import Inches
+    from app.tools import keynote_safe
+    clip = _video(tmp_path / "c.mp4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac")
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    s.shapes.add_movie(str(clip), 0, 0, Inches(4), Inches(3), mime_type="video/mp4")
+    p = tmp_path / "v.pptx"
+    prs.part.package.save(str(p))
+    assert "mediacall" not in zipfile.ZipFile(p).read("ppt/slides/slide1.xml").decode()
+    assert any("video autoplay" in x for x in keynote_safe.fix(p))
+    sld = zipfile.ZipFile(p).read("ppt/slides/slide1.xml").decode()
+    assert "playFrom(0.0)" in sld and 'dur="1000"' in sld
+    assert keynote_safe.fix(p) == []
 
 
 def _assert_ordered(root):

@@ -13,6 +13,8 @@ Javítások (csak ami tényleg kell, minden más bájtra ugyanaz marad):
   5. diagram-tengely    a python-pptx diagramsablonjai negatív c:axId-t írnak (a séma 0…2^31-1) → pozitív,
                         diagramonként ütközésmentesen, a crossAx-hivatkozásokkal együtt.
   6. image/jpg          nem létező MIME-típus → image/jpeg.
+  7. videós dia         a python-pptx videója nem indul (csak „várakozó” médiacsomópont) → a PowerPoint saját
+                        időzítése: magától indul a dia megjelenésekor, koppintásra szünet/folytatás.
 
 A ZIP-et sorrendtartóan írjuk újra ([Content_Types].xml elöl), a médiát adatfolyamként másolva. Ha nincs mit
 javítani, a fájlhoz nem nyúlunk. Hiba esetén sem bukik a mentés: a fájl marad, ahogy volt.
@@ -43,6 +45,7 @@ _PR = "http://schemas.openxmlformats.org/package/2006/relationships"
 _CT = "http://schemas.openxmlformats.org/package/2006/content-types"
 _OFFICE_DOC = _R + "/officeDocument"
 _NOTES_SLIDE_CT = "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"
+_SLIDE_CT = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml"
 _CHART_CT = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
 _PRINTER_CT = "application/vnd.openxmlformats-officedocument.presentationml.printerSettings"
 # a presentation.xml gyerekeinek sémasorrendje (CT_Presentation) — az új listák a helyükre kerülnek
@@ -78,6 +81,51 @@ def _resolve(part: str, target: str) -> str:
     if target.startswith("/"):
         return target.lstrip("/")
     return posixpath.normpath(posixpath.join(posixpath.dirname(part), target))
+
+
+def _mp4_ms(data: bytes) -> int:
+    """MP4/MOV hossza ezredmásodpercben a moov/mvhd-ből (0, ha nem olvasható)."""
+    import struct
+    i = data.find(b"mvhd")
+    if i < 4:
+        return 0
+    try:
+        ver = data[i + 4]
+        if ver == 1:
+            scale, dur = struct.unpack(">IQ", data[i + 24:i + 36])
+        else:
+            scale, dur = struct.unpack(">II", data[i + 16:i + 24])
+        return int(dur * 1000 / scale) if scale else 0
+    except struct.error:
+        return 0
+
+
+def _video_autoplay(zf: zipfile.ZipFile, part: str, root) -> bool:
+    """7. A python-pptx videós diája csak „várakozó” médiacsomópontot kap — semmi nem indítja el (iPhone-on a
+    Keynote a borítóképet mutatja, lejátszó nélkül). Egyetlen videónál a PowerPoint saját időzítése kerül
+    a helyére: magától indul, koppintásra szünet (app/tools/pptx_media.py)."""
+    from app.tools import pptx_media
+    nodes = list(root.iter(_q(_P, "cMediaNode")))
+    if len(nodes) != 1 or nodes[0].getparent() is None or etree.QName(nodes[0].getparent()).localname != "video":
+        return False
+    tgt = nodes[0].find(f"{_q(_P, 'tgtEl')}/{_q(_P, 'spTgt')}")
+    spid = tgt.get("spid") if tgt is not None else None
+    if not spid or not spid.isdigit():
+        return False
+    pic = next((c for c in root.iter(_q(_P, "cNvPr")) if c.get("id") == spid), None)
+    vf = pic.getparent().find(f"{_q(_P, 'nvPr')}/{_q(_A, 'videoFile')}") if pic is not None else None
+    rid = vf.get(_q(_R, "link")) or vf.get(_q(_R, "embed")) if vf is not None else None
+    ms = 0
+    rels_name = _rels_name(part)
+    if rid and rels_name in zf.namelist():
+        rel = next((r for r in etree.fromstring(zf.read(rels_name)).iter(_q(_PR, "Relationship")) if r.get("Id") == rid), None)
+        if rel is not None and rel.get("TargetMode") != "External":
+            media = _resolve(part, rel.get("Target", ""))
+            if media in zf.namelist():
+                ms = _mp4_ms(zf.read(media))
+    vol = nodes[0].get("vol") or "80000"
+    pptx_media.autoplay(root, int(spid), ms or 1, int(vol) if vol.isdigit() else 80000)
+    return True
 
 
 def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str]]:
@@ -178,13 +226,20 @@ def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str]]:
     if prels_changed:
         new[prels_name] = _xml(prels)
 
-    # 2. + 5. jegyzetdiák és diagramok
-    notes_fixed = charts_fixed = 0
+    # 2. + 5. + 7. jegyzetdiák, diagramok, videós diák
+    notes_fixed = charts_fixed = videos_fixed = 0
     for n in sorted(names - drop):
         if not n.endswith(".xml") or not n.startswith(posixpath.dirname(pres)):
             continue
         typ = ctype(n)
-        if typ == _NOTES_SLIDE_CT:
+        if typ == _SLIDE_CT:
+            raw = zf.read(n)
+            if b"cMediaNode" in raw and b"mediacall" not in raw:
+                root = etree.fromstring(raw)
+                if _video_autoplay(zf, n, root):
+                    new[n] = _xml(root)
+                    videos_fixed += 1
+        elif typ == _NOTES_SLIDE_CT:
             root = etree.fromstring(zf.read(n))
             if root.find(_q(_P, "clrMapOvr")) is None:
                 cmo = etree.Element(_q(_P, "clrMapOvr"))
@@ -222,6 +277,8 @@ def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str]]:
         done.append(f"color map on {notes_fixed} notes slide(s)")
     if charts_fixed:
         done.append(f"axis ids in {charts_fixed} chart(s)")
+    if videos_fixed:
+        done.append(f"video autoplay on {videos_fixed} slide(s)")
     if ct_changed:
         new["[Content_Types].xml"] = _xml(ct)
     return new, drop, done

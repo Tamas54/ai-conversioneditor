@@ -2550,6 +2550,8 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     movie = slide.shapes.add_movie(str(embed), left, top, w, h, poster_frame_image=str(poster),
                                    mime_type="video/quicktime" if embed.suffix.lower() == ".mov" else "video/mp4")
     movie.name = "Video"
+    from app.tools import pptx_media              # a PowerPoint saját időzítése: magától indul, koppintásra szünet
+    pptx_media.autoplay(slide._element, movie.shape_id, int(secs * 1000))
     n = len(prs.slides)
     pos = n - 1
     if deck_file_id and after_slide is not None:            # a dia helye: after_slide után
@@ -2574,8 +2576,8 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
                                                           "with the title card as its poster."]}
              if media else {"status": "failed", "findings": ["The video didn't end up on the slide."], "verified": []})
     return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid, "check": check,
-            "note": "The video plays in PowerPoint and Keynote (it is embedded in the file); the browser's slide editor "
-                    "shows its first frame."}
+            "note": "The video is embedded and starts by itself when the slide shows (tap or click pauses it) in "
+                    "PowerPoint and Keynote, iPhone included; the browser's slide editor shows its first frame."}
 
 
 # ---------- előnézet jelenetenként ----------
