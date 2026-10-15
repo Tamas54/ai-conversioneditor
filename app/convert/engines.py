@@ -101,7 +101,13 @@ class EngineError(RuntimeError):
 
 def _env_for(exe: str) -> dict[str, str]:
     env = {**os.environ, "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8"}
-    if Path(exe).name in _APT_PYTHON and Path("/usr/lib/python3/dist-packages").is_dir():
+    name = Path(exe).name
+    if name == "ebook-convert":            # Calibre fej nélkül (Qt): nincs kijelző
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    real = os.path.realpath(shutil.which(exe) or exe)
+    # a rendszer (apt) Pythonját használó motorok a rendszer csomagjait lássák; a saját Pythonnal érkező hivatalos
+    # Calibre-build (/opt/calibre) nem kap PYTHONPATH-t
+    if name in _APT_PYTHON and not real.startswith("/opt/") and Path("/usr/lib/python3/dist-packages").is_dir():
         env["PYTHONPATH"] = "/usr/lib/python3/dist-packages"
         env.pop("VIRTUAL_ENV", None)
     return env

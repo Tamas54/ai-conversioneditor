@@ -48,8 +48,7 @@ PANDOC_OUT = {"md", "rst", "tex", "html", "docx", "odt", "epub", "fb2", "org", "
 CALIBRE_IN = {"epub", "mobi", "azw", "azw3", "azw4", "fb2", "fbz", "lit", "lrf", "pdb", "pml", "prc", "rb", "snb",
               "tcr", "txtz", "htmlz", "cbz", "cbr", "cb7", "cbc", "chm", "docx", "odt", "rtf", "txt", "html", "md",
               "pdf", "oeb", "djvu"}
-# LIT (Microsoft Reader) csak bemenet: a Debian/Ubuntu Calibre 5.x LIT-írója üres fájlt ad
-CALIBRE_OUT = {"epub", "mobi", "azw3", "azw", "prc", "fb2", "lrf", "pdb", "rb", "snb", "tcr", "txtz",
+CALIBRE_OUT = {"epub", "mobi", "azw3", "azw", "prc", "fb2", "lit", "lrf", "pdb", "rb", "snb", "tcr", "txtz",
                "htmlz", "oeb", "pdf", "docx", "rtf", "txt"}
 
 _CAMERA_RAW = {f.key for f in FORMATS.values() if "camera-raw" in f.tags}

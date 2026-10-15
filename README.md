@@ -92,7 +92,7 @@ app **ügynökénél**. A forrás egy helyen van: `app/catalog` (formátumok, es
 **Új nyelv**: másold le az `app/site/i18n/en.json`-t `xx.json` néven, fordítsd le (a `_meta` adja a beszédes
 URL-mintákat és a nyelvtani szabályokat) — az oldalak, a sitemap és a hreflang automatikusan bővül.
 
-**Motorok** (a Dockerfile telepíti, mind nyílt forrású): LibreOffice, Pandoc, Calibre, FFmpeg, ImageMagick, libvips,
+**Motorok** (a Dockerfile telepíti, mind nyílt forrású): LibreOffice, Pandoc, Calibre (hivatalos, rögzített build), FFmpeg, ImageMagick, libvips,
 libheif, LibRaw, Inkscape, librsvg, Potrace, 7-Zip, unar, bsdtar, zstd/lzip/lzop, DjVuLibre, MuPDF, QPDF,
 Ghostscript, Tesseract (12 nyelv), OCRmyPDF, ExifTool, FontForge, fontTools, LibreDWG, ezdxf, WeasyPrint,
 pdf2docx, Chromium. Ami egy gépen hiányzik, azt a gráf kikerüli (`/v1/catalog` és a weboldal a teljes készletet mutatja).

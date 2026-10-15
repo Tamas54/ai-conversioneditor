@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- Konverziós motorok (bővítés 10-15, mind nyílt forrású; app/convert/engines.py futásidőben ellenőrzi őket) ---
 # videó/hang: ffmpeg · képek: ImageMagick, libvips, libheif, LibRaw (dcraw_emu) · vektor: Inkscape, librsvg, Potrace
-# e-könyv: Calibre · archívum: 7-Zip, The Unarchiver, libarchive, zstd, lzip, lzop · PDF/DjVu/XPS: MuPDF, QPDF, DjVuLibre
+# e-könyv: Calibre (hivatalos build, lent) · archívum: 7-Zip, The Unarchiver, libarchive, zstd, lzip, lzop · PDF/DjVu/XPS: MuPDF, QPDF, DjVuLibre
 # OCR-réteg: Tesseract (+ nyelvek; az ocrmypdf a pip-ből) · metaadat: ExifTool · betűk: FontForge
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -55,7 +55,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     inkscape \
     librsvg2-bin \
     potrace \
-    calibre \
     p7zip-full \
     unar \
     libarchive-tools \
@@ -74,6 +73,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontforge \
     libreoffice-draw \
     && rm -rf /var/lib/apt/lists/*
+
+# Calibre — a hivatalos, önálló build (saját Python és Qt): újabb, mint a jammy 5.37-e, ír LIT-et is, és nem ütközik a
+# pip-es lxml-lel. Rögzített verzió + SHA256 (a calibre-ebook.com/signatures SHA512-jével is egyezik).
+ARG CALIBRE_VERSION=9.14.0
+ARG CALIBRE_SHA256=7f53a0863ed6d32407bc72053b966e39d5b64813f2592bd9c741504c01c0e7f3
+RUN set -eux; \
+    apt-get update; apt-get install -y --no-install-recommends xz-utils libegl1 libopengl0 libxcb-cursor0 libxkbcommon0 \
+        libfontconfig1 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/calibre.txz \
+        "https://download.calibre-ebook.com/${CALIBRE_VERSION}/calibre-${CALIBRE_VERSION}-x86_64.txz"; \
+    echo "${CALIBRE_SHA256}  /tmp/calibre.txz" | sha256sum -c -; \
+    mkdir -p /opt/calibre; tar xJf /tmp/calibre.txz -C /opt/calibre; rm /tmp/calibre.txz; \
+    ln -sf /opt/calibre/ebook-convert /usr/local/bin/ebook-convert; \
+    rm -rf /var/lib/apt/lists/*; \
+    QT_QPA_PLATFORM=offscreen ebook-convert --version
 
 # LibreDWG (GPLv3, GNU): DWG ⇄ DXF (dwg2dxf, dxf2dwg) — a jammy-ben nincs csomag, ezért forrásból, SHA256-tal
 ARG LIBREDWG_VERSION=0.13.3
