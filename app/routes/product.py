@@ -57,7 +57,7 @@ async def app_page(rest: str = "") -> HTMLResponse:
             .replace("{{CANONICAL}}", e(meta["canonical"])).replace("{{SEO_HEAD}}", seo.head_html(meta))
             .replace("{{ABOUT}}", meta["about"]).replace("{{SITE_FOOT}}", _site_foot())
             .replace("{{AGENTS_URL}}", _u("agents")).replace("{{CONVERT_URL}}", _u("convert_hub"))
-            .replace("{{TOOLS_URL}}", _u("tools_hub")).replace("{{API_URL}}", _u("developers"))
+            .replace("{{TOOLS_URL}}", _u("tools_hub")).replace("{{API_URL}}", _u("developers")).replace("{{DOCS_URL}}", _u("docs"))
             .replace("{{N_FORMATS}}", str(_counts()["formats"])).replace("{{N_TOOLS}}", str(_counts()["tools"]))
             .replace("{{PRODUCT}}", e(settings.PRODUCT_NAME)).replace("{{BASE}}", e(settings.PUBLIC_BASE_URL.rstrip("/")))
             .replace('href="/static/product.css"', f'href="{static_v("product.css")}"'))

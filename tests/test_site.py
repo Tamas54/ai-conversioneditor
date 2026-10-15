@@ -187,6 +187,8 @@ def test_root_still_goes_to_the_existing_site(client):
     assert {urls.agents("en"), urls.convert_hub("en"), urls.tools_hub("en"), urls.developers("en"), "/llms.txt"} <= hrefs
     assert s.select_one("#nav-back") is not None and s.select_one("#site-foot") is not None
     assert "{{" not in str(s.select_one("#site-foot"))
+    html = client.get("/app").text                      # a fiókban: teszt (sandbox) API-kulcs, link a dokumentációra
+    assert 'id="key-sandbox"' in html and urls.docs("en") in html and "{{DOCS_URL}}" not in html
 
 
 def test_back_button_goes_to_the_parent_page(client):

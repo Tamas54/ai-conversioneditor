@@ -168,12 +168,16 @@
     <h3 class="sub">Connected apps and keys</h3>
     <p class="muted small" id="keys-empty" style="margin:4px 0 0">Nothing connected yet.</p>
     <ul class="keys" id="keys"></ul>
-    <details class="advanced"><summary>Advanced: use a key instead</summary>
-      <p class="muted small" style="margin:0 0 12px">For scripts and apps that can't sign in. The address then carries the key — keep it private.</p>
+    <details class="advanced"><summary>Advanced: use a key instead (MCP and REST API)</summary>
+      <p class="muted small" style="margin:0 0 12px">For scripts and apps that can't sign in, and for the <a href="{{DOCS_URL}}">REST API</a>. The key works like a password — keep it private.</p>
       <label>Key name<input type="text" id="key-name" placeholder="e.g. Claude on my laptop" maxlength="60"></label>
+      <label class="check-line" style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="key-sandbox" style="width:auto"> Test key (sandbox) — free, files up to 10 MB, results kept for an hour; for building against the API</label>
       <button class="btn" id="key-create" type="button">Create key</button>
       <div id="key-new" hidden style="margin-top:16px">
         <p class="small"><strong>Copy it now</strong> — the key is shown only once.</p>
+        <p class="small" style="margin:0 0 4px">REST API key (<span class="mono">Authorization: Bearer …</span>):</p>
+        <div class="keybox" id="key-raw"></div>
+        <p class="small" style="margin:12px 0 4px">MCP address with the key:</p>
         <div class="keybox" id="key-url"></div>
         <p class="small muted" style="margin-top:10px">Claude Code: <span class="mono" id="key-cc"></span></p>
       </div>
@@ -631,8 +635,8 @@ const views = {
       await api(`/api/account/keys/${id}`, { method: "DELETE" }); toast("Disconnected"); await loadAccount(); drawKeys();
     });
     $("#key-create").addEventListener("click", async () => {
-      const k = await api("/api/account/keys", { method: "POST", body: JSON.stringify({ name: $("#key-name").value }) });
-      $("#key-new").hidden = false; $("#key-url").textContent = k.mcp_url;
+      const k = await api("/api/account/keys", { method: "POST", body: JSON.stringify({ name: $("#key-name").value, sandbox: $("#key-sandbox").checked }) });
+      $("#key-new").hidden = false; $("#key-url").textContent = k.mcp_url; $("#key-raw").textContent = k.key;
       $("#key-cc").textContent = `claude mcp add --transport http ${slug} "${k.mcp_url}"`;
       await loadAccount(); drawKeys();
     });
