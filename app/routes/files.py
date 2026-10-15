@@ -25,8 +25,26 @@ async def get_file(file_id: str, t: str = Query(..., description="signed token")
         raise HTTPException(404, "file not found")
     # Use the human label as the download filename so the user gets
     # `page28.docx` instead of `f09de87…docx`. Falls back to file_id.
-    download_name = display_label(file_id) or file_id
-    return FileResponse(p, filename=download_name)
+    download_name, media_type = download_meta(file_id, display_label(file_id) or file_id)
+    return FileResponse(p, filename=download_name, media_type=media_type)
+
+
+def download_meta(file_id: str, label: str) -> tuple[str, str]:
+    """A letöltött fájl neve mindig a valódi kiterjesztésre végződik, a típusa pedig a valódi MIME — különben
+    a Starlette a címkéből találgat, kiterjesztés nélkül „text/plain”-t küld, és a Safari „.txt”-t fűz a
+    .pptx után (a Keynote/PowerPoint meg sem kapja)."""
+    import mimetypes
+    from pathlib import PurePosixPath
+    from app.catalog import formats
+    ext = formats.from_filename(file_id) or (file_id.rsplit(".", 1)[-1].lower() if "." in file_id else "")
+    name = label.replace("/", "-").replace("\\", "-").strip() or file_id
+    if ext and formats.from_filename(name) != ext:
+        suffix = PurePosixPath(name).suffix.lower().lstrip(".")
+        stem = name[: -len(suffix) - 1] if suffix and formats.get(suffix) else name
+        name = f"{stem}.{ext}"
+    fmt = formats.get(ext) if ext else None
+    media = (fmt.mime if fmt and fmt.mime else None) or mimetypes.guess_type(f"x.{ext}")[0] or "application/octet-stream"
+    return name, media
 
 
 @router.get("/files/{file_id}/preview.png")

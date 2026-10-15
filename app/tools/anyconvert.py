@@ -184,6 +184,8 @@ async def convert_any(pool, file_id: str, target: str) -> dict[str, Any]:
             fid = res["file_id"]
         if not output_path(fid).exists() or output_path(fid).stat().st_size == 0:
             raise RuntimeError("The conversion produced an empty file.")
+        from app.tools import keynote_safe
+        await asyncio.to_thread(keynote_safe.fix_if_slides, output_path(fid))
     finally:
         if work:
             shutil.rmtree(work, ignore_errors=True)

@@ -116,6 +116,9 @@ async def convert_path(src: Path, target: str, options: Optional[dict[str, Any]]
         used.append(edge.engine)
         if edge.dst == "pdf" and rng and sfmt != "pdf" and len(current) == 1:
             current = [await asyncio.to_thread(_subset_pdf, current[0], rng, work / f"range{i}.pdf")]
+    from app.tools import keynote_safe
+    for p in current:
+        await asyncio.to_thread(keynote_safe.fix_if_slides, p)
     return current, used
 
 

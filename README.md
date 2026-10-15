@@ -120,6 +120,12 @@ teljes konverziós söprés: `python scripts/sweep_conversions.py`.
 
 `weasy/cr` = WeasyPrint default; `use_browser=True` → Chromium (JS-rendering).
 
+**Apple Keynote**: minden PowerPoint-kimenet (pptx_build, sablon, ügynök, videós dia, DeckCraft, konverzió)
+átmegy az `app/tools/keynote_safe.py`-n — a python-pptx kihagyott/ellentmondó részeit javítja (jegyzetmester
+regisztrálása, jegyzetdia-színleképezés, 16:9 sldSz, nyomtató-csonk, negatív diagramtengely-id), így a fájl
+a Keynote-ban is megnyílik és az Open XML SDK validátorán is hibátlan. A letöltés mindig a valódi kiterjesztéssel
+és MIME-típussal megy (különben a Safari `.txt`-t fűz a `.pptx` után).
+
 ## Railway deployment
 
 ### 1. Init

@@ -440,6 +440,9 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
             raise ValueError(await _explain(e, app, parsed)) from None
     if not out.exists():
         raise RuntimeError(f"{name}: no output was produced ({log_lines[-300:]})")
+    if app == "deck" and fmt == "pptx":
+        from app.tools import keynote_safe
+        await asyncio.to_thread(keynote_safe.fix, out)    # pl. a megnyitott python-pptx pakli negatív tengely-id-i
     res = _finish(fid, file_id, app, _stem(file_id, _office_what(app, commands), _OFFICE_NEW[app]))
     res.update({"steps_run": len(commands or []), "ms_elapsed": int((time.time() - t0) * 1000)})
     try:

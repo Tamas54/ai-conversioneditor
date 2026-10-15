@@ -1,3 +1,7 @@
+from app.tools import keynote_safe as _keynote_safe
+
+_keynote_safe.install()   # minden python-pptx mentés Keynote-biztos (a modulok lent már pptx-et mentenek)
+
 from app.tools.convert import convert
 from app.tools.edits import (
     find_replace,
