@@ -120,6 +120,14 @@ teljes konverziós söprés: `python scripts/sweep_conversions.py`.
 
 `weasy/cr` = WeasyPrint default; `use_browser=True` → Chromium (JS-rendering).
 
+**Rust-motorok elöl**: a konverziós gráf a saját Rust-motorjainkat választja, ahol a mérés szerint jobbak
+(production kép, 2026-10): WordCraft (dokumentumok), DeckCraft (pptx→pdf 0,08 s a LibreOffice 1,6 s-a helyett,
+pptx→png diánként, a diasor→videó is ebből), GridCraft (xlsx/csv/tsv ↔ xlsx/csv/tsv/html, 4–6 ms), PhotoCraft
+(webp/gif cél, PSD), VectorCraft (svg→png/pdf/eps/dxf… 11–19 ms, Inkscape 300 ms). Ahol nem jobbak, ott nem
+(png→jpg: ImageMagick/Pillow; xlsx→json: a GridCraft saját formátumot ír; DXF: az ezdxf skáláz jól), és ha a
+felhasználó olyan opciót kér, amit a Rust-motor nem tud (méret, minőség, munkalap…), a gráf a következő legjobbat
+választja (`service.craft_avoid`). A söprésben a Rust-utak száma 86-ról 144-re nőtt (524-ből).
+
 **AI-narráció a videókban**: a videókészítő alapból felolvastatja a címet és a jelenetek szövegét
 (`app/tools/narration.py`, offline Piper-hangok — 58 nyelv, magyarul Anna/Berta/Imre; a nyelv a szövegből vagy a
 `language`-ből; `narration_voice`: female | male | hang-id; `narration: "none"` = hang nélkül). A jelenet a
@@ -130,6 +138,11 @@ hangmodell (~63 MB) első használatkor töltődik le a Hugging Face-ről a `DAT
 **Videó a dián**: a „videó diára” és minden python-pptx-szel beszúrt videó a PowerPoint saját időzítését kapja
 (`app/tools/pptx_media.py`): a dia megjelenésekor magától indul, koppintásra/kattintásra megáll és folytatódik —
 Keynote-ban (iPhone is) és PowerPointban.
+
+**WebMCP**: a `/app` és minden nyilvános oldal regisztrálja az eszközeit a böngészős AI-ügynököknek
+(`app/static/webmcp.js`, `document.modelContext` — a régebbi `navigator.modelContext` is): list_formats, list_tools,
+list_my_files, import_file, convert_file, run_tool, open_page. A látogató saját munkamenetével hívják a meglévő
+végpontokat; a gépi katalógus a `/api/catalog`.
 
 **iPhone (és minden Apple-eszköz)**: minden kimenet átmegy az `app/tools/ios_safe.py` kapun —
 a konverziók, az eszközök, a Craft-motorok (DeckCraft, GridCraft, WordCraft), a videógenerátor és a „videó diára”:

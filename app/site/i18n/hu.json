@@ -2457,6 +2457,21 @@
     ]
    },
    {
+    "h": "Ügynökök a böngészőben (WebMCP)",
+    "p": "Az oldal minden lapja WebMCP-n kínálja az eszközeit a böngészőben futó AI-ügynököknek (a W3C-javaslat, a Chrome-ban előzetesként már elérhető): formátumok és eszközök listája, fájl behozása linkről, átalakítás, bármelyik eszköz futtatása, oldal megnyitása. Az ügynök a látogató nevében dolgozik — az ő fájljaival és fiókjával, semmi többel.",
+    "examples": [
+     "Alakítsd Worddé az imént feltöltött PDF-et",
+     "Tömörítsd ezt a videólinket 25 MB alá",
+     "Mivé alakítható egy .heic?"
+    ],
+    "links": [
+     [
+      "Gépi katalógus",
+      "/api/catalog"
+     ]
+    ]
+   },
+   {
     "h": "Ügynökök a saját szoftveredben",
     "p": "Ugyanez REST API-ként: feladatokból álló jobok, élő státusz, aláírt webhookok, sandbox-kulcsok, Python- és Node-SDK, Zapier, Make, n8n.",
     "examples": [

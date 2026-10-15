@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import functools
+
 import logging
 from typing import Any, Optional
 
@@ -34,6 +36,37 @@ async def _preset_options(preset_id: Optional[int], options: Optional[dict]) -> 
             raise HTTPException(404, "No such preset.")
         opts = {**row["options"], **opts}
     return opts
+
+
+@router.get("/api/catalog")
+async def catalog() -> dict[str, Any]:
+    """Az eszközök és formátumok gépi leírása (a WebMCP-eszközök és a böngészős ügynökök ebből dolgoznak)."""
+    return _catalog()
+
+
+@functools.lru_cache(maxsize=1)
+def _catalog() -> dict[str, Any]:
+    from app.catalog import formats as F
+    from app.catalog import tools as T
+    from app.convert.options import OPTIONS, TOOL_OPTIONS
+    from app.site import i18n
+    tools = []
+    for key, tool in T.TOOLS.items():
+        if not T.available(key, static=True):
+            continue
+        opts = {}
+        for k in tool.options:
+            o = TOOL_OPTIONS.get(k) or OPTIONS.get(k)
+            if o is not None:
+                opts[k] = {**o.schema(), **({"default": o.default} if o.default is not None else {})}
+        tools.append({"key": key, "name": i18n.raw("en", f"tool.{key}.name", key.replace("-", " ").capitalize()),
+                      "description": i18n.raw("en", f"tool.{key}.desc", ""), "group": tool.group,
+                      "accepts": list(tool.accepts), "min_files": tool.min_files, "max_files": tool.max_files,
+                      "output": tool.output or "same as input", "ai": tool.ai, "options": opts})
+    cats: dict[str, int] = {}
+    for f in F.FORMATS.values():
+        cats[f.category] = cats.get(f.category, 0) + 1
+    return {"formats": len(F.FORMATS), "categories": cats, "tools": tools}
 
 
 @router.post("/api/convert/run")

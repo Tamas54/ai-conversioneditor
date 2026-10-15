@@ -305,6 +305,8 @@ def _llms_more(base: str) -> str:
 agent chains {n['agent']} tools (Word via WordCraft — a Rust Word engine —, PowerPoint, Excel, PDF, photo, design,
 conversion, forms), checks its own result by rendering pages, and keeps every change as a version. Your own AI
 (Claude, ChatGPT, Cursor) can drive {n['mcp']} MCP tools instead, including the form fill assistant with elicitation.
+In the browser, every page also registers WebMCP tools (`document.modelContext`): list_formats, list_tools,
+list_my_files, import_file, convert_file, run_tool, open_page — acting as the visitor. Catalog: `{base}/api/catalog`.
 
 ## Conversions
 

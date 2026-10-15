@@ -2549,6 +2549,21 @@
     ]
    },
    {
+    "h": "Agents in the browser (WebMCP)",
+    "p": "Every page of this site offers its tools to AI agents that run in the browser, through WebMCP (the W3C proposal now in preview in Chrome): list formats and tools, import a file from a link, convert it, run any tool, open a page. The agent acts as the visitor — with their files and their account, nothing more.",
+    "examples": [
+     "Convert the PDF I just uploaded to Word",
+     "Compress this video link to under 25 MB",
+     "Which formats can a .heic become?"
+    ],
+    "links": [
+     [
+      "Machine-readable catalog",
+      "/api/catalog"
+     ]
+    ]
+   },
+   {
     "h": "Agents in your own software",
     "p": "The same work as a REST API: jobs made of tasks (import, convert, tool, export), live status, signed webhooks, sandbox keys, Python and Node SDKs, Zapier, Make and n8n.",
     "examples": [
