@@ -1,0 +1,17 @@
+{
+  "name": "aice",
+  "label": "AICE file converter",
+  "description": "Convert, edit and process files: documents, images, video, audio, e-books, archives, CAD and fonts.",
+  "version": "1.0.0",
+  "language": "en",
+  "theme": "#1E4436",
+  "base": {
+    "baseUrl": "{{connection.baseUrl}}/v1",
+    "headers": {"Authorization": "Bearer {{connection.apiKey}}"},
+    "response": {"error": {"message": "[{{statusCode}}] {{body.error.code}}: {{body.error.message}}"}}
+  },
+  "connections": ["connection.json"],
+  "webhooks": ["webhooks/jobs.json"],
+  "modules": ["modules/convertFile.json", "modules/runJob.json", "modules/getJob.json", "modules/watchJobs.json"],
+  "rpcs": ["rpcs/targets.json"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "n8n-nodes-aice",
+  "version": "1.0.0",
+  "description": "n8n nodes: convert and process files (documents, images, video, audio, e-books, archives, CAD, fonts)",
+  "keywords": ["n8n-community-node-package"],
+  "license": "MIT",
+  "main": "index.js",
+  "scripts": {"test": "node --test test/*.test.js"},
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": ["credentials/AiceApi.credentials.js"],
+    "nodes": ["nodes/Aice/Aice.node.js", "nodes/Aice/AiceTrigger.node.js"]
+  }
+}

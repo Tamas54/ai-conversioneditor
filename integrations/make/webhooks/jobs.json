@@ -1,0 +1,9 @@
+{
+  "name": "jobs",
+  "label": "Finished jobs",
+  "type": "dedicated",
+  "connection": "aice-key",
+  "attach": {"url": "/webhooks", "method": "POST", "body": {"url": "{{webhook.url}}", "events": ["job.finished", "job.failed"]}, "response": {"data": {"externalHookId": "{{body.id}}"}}},
+  "detach": {"url": "/webhooks/{{webhook.externalHookId}}", "method": "DELETE"},
+  "communication": {"output": "{{body}}"}
+}

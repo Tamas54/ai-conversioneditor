@@ -1,0 +1,17 @@
+{
+  "name": "runJob",
+  "label": "Run a job",
+  "description": "Runs a processing job built in the Job Builder (import → convert or tool → export).",
+  "typeOf": "action",
+  "connection": "aice-key",
+  "communication": [
+    {"url": "/jobs", "method": "POST", "body": {"tasks": "{{parameters.tasks}}", "tag": "{{parameters.tag}}"}, "response": {"temp": {"id": "{{body.id}}"}}},
+    {"url": "/jobs/{{temp.id}}", "method": "GET", "qs": {"wait": 60}, "response": {"output": "{{body}}", "error": {"message": "{{body.error.message}}"}}}
+  ],
+  "parameters": [
+    {"name": "tasks", "type": "any", "label": "Tasks (JSON)", "required": true},
+    {"name": "tag", "type": "text", "label": "Tag"}
+  ],
+  "interface": [{"name": "id", "type": "text", "label": "Job ID"}, {"name": "status", "type": "text", "label": "Status"},
+                {"name": "tasks", "type": "array", "label": "Tasks"}]
+}

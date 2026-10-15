@@ -1,0 +1,10 @@
+{
+  "name": "watchJobs",
+  "label": "Watch finished jobs",
+  "description": "Triggers when a job finishes or fails (instant, via webhook).",
+  "typeOf": "instant_trigger",
+  "connection": "aice-key",
+  "webhook": "jobs",
+  "communication": {"output": "{{body.job}}"},
+  "interface": [{"name": "id", "type": "text", "label": "Job ID"}, {"name": "status", "type": "text", "label": "Status"}, {"name": "tasks", "type": "array", "label": "Tasks"}]
+}

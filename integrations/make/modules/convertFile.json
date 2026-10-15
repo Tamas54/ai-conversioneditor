@@ -1,0 +1,30 @@
+{
+  "name": "convertFile",
+  "label": "Convert a file",
+  "description": "Converts a file (by URL) to another format and returns the download link.",
+  "typeOf": "action",
+  "connection": "aice-key",
+  "communication": {
+    "url": "/convert",
+    "method": "POST",
+    "body": {"url": "{{parameters.url}}", "output_format": "{{parameters.output_format}}", "options": "{{parameters.options}}", "wait": 300},
+    "response": {
+      "output": {
+        "job_id": "{{body.id}}",
+        "status": "{{body.status}}",
+        "file": "{{first(map(get(last(body.tasks), 'result').files; 'url'))}}",
+        "filename": "{{first(map(get(last(body.tasks), 'result').files; 'filename'))}}"
+      },
+      "error": {"message": "{{body.error.message}}"}
+    }
+  },
+  "parameters": [
+    {"name": "url", "type": "url", "label": "File URL", "required": true},
+    {"name": "output_format", "type": "select", "label": "Output format", "required": true, "options": "rpc://targets"},
+    {"name": "options", "type": "any", "label": "Options", "help": "e.g. {\"quality\": 85, \"page_range\": \"1-3\"}"}
+  ],
+  "interface": [
+    {"name": "job_id", "type": "text", "label": "Job ID"}, {"name": "status", "type": "text", "label": "Status"},
+    {"name": "file", "type": "url", "label": "Download URL"}, {"name": "filename", "type": "filename", "label": "File name"}
+  ]
+}
