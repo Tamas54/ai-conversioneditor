@@ -90,3 +90,20 @@ def test_app_converter_reaches_every_format(client, samples, put_file):
     r = client.post("/api/make/convert", json={"file_id": fid, "target": "avif"})
     assert r.status_code == 200, r.text
     assert r.json()["file_id"].endswith(".avif") and r.json()["engines"] == ["pillow"]
+
+
+def test_thumbnails_for_new_formats(client, samples, put_file, tmp_path):
+    """A fájlkártyák bélyegképe az új formátumokból is (eddig 404 → típusikon)."""
+    import subprocess
+    from PIL import Image
+    from app.convert.steps import _register_plugins
+    _register_plugins()
+    avif = tmp_path / "kep.avif"
+    if "AVIF" in Image.registered_extensions().values():
+        Image.open(samples.png()).save(avif, "AVIF")
+    mkv = tmp_path / "film.mkv"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(samples.mp4()), "-c", "copy", str(mkv)], check=True)
+    for f in [p for p in (avif, mkv) if p.exists()]:
+        r = client.get(f"/api/thumb/{put_file(f)}")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png", f.name
+    assert client.get(f"/api/thumb/{put_file(samples.zip())}").status_code == 404
