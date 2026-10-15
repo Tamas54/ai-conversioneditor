@@ -306,3 +306,29 @@ async def import_config() -> dict[str, Any]:
             "dropbox": {"app_key": os.getenv("DROPBOX_APP_KEY")} if os.getenv("DROPBOX_APP_KEY") else None,
             "onedrive": {"client_id": os.getenv("ONEDRIVE_CLIENT_ID")} if os.getenv("ONEDRIVE_CLIENT_ID") else None,
             "chunk_size": _CHUNK, "max_mb": _max_upload() // (1024 * 1024)}
+
+
+@router.post("/api/export")
+async def export_cloud(body: dict[str, Any]) -> dict[str, Any]:
+    """Eredmény mentése a felhőbe a böngészőben kapott hozzáférési tokennel (Google Drive, Dropbox, OneDrive).
+    A token csak erre a hívásra él; a fájlok a hívó saját munkaterületéről jönnek."""
+    from app import connectors
+    from app.tools import crafts
+    provider = str(body.get("provider") or "")
+    if provider not in ("google-drive", "dropbox", "onedrive"):
+        raise HTTPException(400, "provider: google-drive, dropbox or onedrive")
+    ids = [str(i) for i in (body.get("file_ids") or [])][:50]
+    if not ids:
+        raise HTTPException(400, "file_ids required")
+    for fid in ids:
+        try:
+            crafts.existing(fid)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(404, f"file not found: {fid}")
+    spec = {k: body[k] for k in ("access_token", "path", "folder_id") if body.get(k)}
+    if provider == "dropbox" and not spec.get("path"):
+        spec["path"] = "/"
+    try:
+        return {"saved": await connectors.push(provider, spec, ids)}
+    except ValueError as e:
+        raise HTTPException(400, f"{provider}: {e}")

@@ -65,7 +65,8 @@
   "timeout": "Túl sokáig tartott",
   "preset_name": "A beállítás neve",
   "or_drop": "vagy húzd ide őket",
-  "paste_url": "Illeszd be a fájl linkjét (https://…)"
+  "paste_url": "Illeszd be a fájl linkjét (https://…)",
+  "save_to": "Mentés ide:"
  },
  "footer": {
   "all_tools": "Minden eszköz",

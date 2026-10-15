@@ -60,7 +60,8 @@
   "timeout": "Took too long",
   "preset_name": "Name of the preset",
   "or_drop": "or drop them here",
-  "paste_url": "Paste a link to the file (https://…)"
+  "paste_url": "Paste a link to the file (https://…)",
+  "save_to": "Save to"
  },
  "footer": {
   "all_tools": "All tools",

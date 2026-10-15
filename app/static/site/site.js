@@ -60,6 +60,35 @@
     if (res.data) out.append(el("pre", {}, el("code", { text: JSON.stringify(res.data, null, 2) })));
     const first = files[0];
     if (first && first.file_id) out.append(el("a", { href: "/app/file/" + first.file_id + "/edit", class: "small", text: tr("open_editor", "Open in the editor") }));
+    saveButtons(out, files.filter((f) => f.file_id));
+  }
+
+  // ---------- mentés a felhőbe: Dropbox Saver, OneDrive, Google Drive (a böngésző tokenjével) ----------
+  function saveButtons(out, files) {
+    const c = importCfg;
+    if (!c || !files.length) return;
+    const add = (label, fn) => { const b = el("button", { type: "button", class: "btn ghost small", text: tr("save_to", "Save to") + " " + label }); b.addEventListener("click", () => fn(b)); out.append(b); };
+    if (c.dropbox) add("Dropbox", async () => {
+      await loadScript("https://www.dropbox.com/static/api/2/dropins.js", { id: "dropboxjs", "data-app-key": c.dropbox.app_key });
+      window.Dropbox.save({ files: files.map((f) => ({ url: f.url, filename: f.label })) });
+    });
+    if (c.onedrive) add("OneDrive", async () => {
+      await loadScript("https://js.live.net/v7.2/OneDrive.js");
+      files.forEach((f) => window.OneDrive.save({ clientId: c.onedrive.client_id, action: "save", sourceUri: f.url, fileName: f.label,
+        advanced: { redirectUri: location.origin + location.pathname } }));
+    });
+    if (c.google) add("Google Drive", async (b) => {
+      await loadScript("https://accounts.google.com/gsi/client");
+      window.google.accounts.oauth2.initTokenClient({ client_id: c.google.client_id, scope: "https://www.googleapis.com/auth/drive.file",
+        callback: async (tok) => {
+          if (!tok.access_token) return;
+          try {
+            await api("/api/export", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ provider: "google-drive", access_token: tok.access_token, file_ids: files.map((f) => f.file_id) }) });
+            b.textContent = "✓ Google Drive";
+          } catch (e) { b.after(el("span", { class: "err", text: " " + e.message })); }
+        } }).requestAccessToken();
+    });
   }
 
   const CHUNKED_FROM = 20 * 1024 * 1024;   // ennél nagyobb fájl darabokban megy (proxy-korlátok, megszakadás)

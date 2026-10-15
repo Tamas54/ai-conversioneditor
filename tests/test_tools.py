@@ -544,3 +544,18 @@ def test_web_import_url_and_chunked_upload(client, monkeypatch, samples):
 def _out_or_in(fid: str) -> Path:
     from app.tools import crafts
     return crafts.existing(fid)
+
+
+def test_web_export_validates(client, samples, put_file, monkeypatch):
+    assert client.post("/api/export", json={"provider": "ftp", "file_ids": ["a.pdf"]}).status_code == 400
+    assert client.post("/api/export", json={"provider": "dropbox", "file_ids": ["nincs.pdf"], "access_token": "x"}).status_code == 404
+    fid = put_file(samples.pdf())
+    seen = {}
+
+    async def fake_push(provider, spec, ids, transport=None):
+        seen.update(provider=provider, spec=spec, ids=ids)
+        return [{"file_id": ids[0], "location": "dropbox:///dok.pdf"}]
+    from app import connectors
+    monkeypatch.setattr(connectors, "push", fake_push)
+    r = client.post("/api/export", json={"provider": "dropbox", "file_ids": [fid], "access_token": "tok"})
+    assert r.status_code == 200 and seen["spec"] == {"access_token": "tok", "path": "/"} and seen["ids"] == [fid]
