@@ -12,6 +12,9 @@ export class Client {
   webhooks: { list(): Promise<any>; create(url: string, events?: string[]): Promise<any>; delete(id: number): Promise<any> };
   me(): Promise<any>; targets(fmt: string): Promise<string[]>;
   convert(o: { url?: string; path?: string; outputFormat: string; options?: Record<string, unknown>; wait?: boolean }): Promise<Job>;
+  tool(o: { tool: string; url?: string; path?: string; options?: Record<string, unknown>; wait?: boolean }): Promise<Job>;
+  signatures: { list(): Promise<any[]>; delete(id: string): Promise<any> };
+  profile: { get(): Promise<Record<string, string>>; update(data: Record<string, string>, o?: { merge?: boolean }): Promise<Record<string, string>>; delete(): Promise<any> };
   upload(job: Job, taskName: string, path: string): Promise<any>; download(url: string, dest: string): Promise<string>;
   static verifyWebhook(secret: string, body: string | Buffer, signature: string, timestamp: string | number, toleranceS?: number): boolean;
 }

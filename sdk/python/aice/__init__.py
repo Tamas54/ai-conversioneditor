@@ -86,6 +86,41 @@ class _Webhooks:
         return self._c._req("DELETE", f"/webhooks/{hook_id}")
 
 
+class _Signatures:
+    """Saved signatures (stored encrypted for your account)."""
+
+    def __init__(self, c: "Client"):
+        self._c = c
+
+    def list(self) -> list[dict]:
+        return self._c._req("GET", "/signatures")["data"]
+
+    def image(self, signature_id: str) -> bytes:
+        r = self._c.http.get(self._c._url(f"/signatures/{signature_id}/image"), headers={"Authorization": f"Bearer {self._c.api_key}"})
+        if r.status_code >= 400:
+            raise ApiError(r.status_code, "NOT_FOUND", r.text[:200])
+        return r.content
+
+    def delete(self, signature_id: str) -> dict:
+        return self._c._req("DELETE", f"/signatures/{signature_id}")
+
+
+class _Profile:
+    """Your data profile for agentic form filling (stored encrypted)."""
+
+    def __init__(self, c: "Client"):
+        self._c = c
+
+    def get(self) -> dict:
+        return self._c._req("GET", "/profile")["data"]
+
+    def update(self, data: dict, merge: bool = True) -> dict:
+        return self._c._req("PUT", "/profile", params={"merge": str(merge).lower()}, json=data)["data"]
+
+    def delete(self) -> dict:
+        return self._c._req("DELETE", "/profile")
+
+
 class Client:
     def __init__(self, base_url: str, api_key: Optional[str] = None, http: Optional[httpx.Client] = None, timeout: float = 120):
         self.base = base_url.rstrip("/") + "/v1"
@@ -94,6 +129,8 @@ class Client:
         self.http = http or httpx.Client(timeout=timeout)
         self.jobs = _Jobs(self)
         self.webhooks = _Webhooks(self)
+        self.signatures = _Signatures(self)
+        self.profile = _Profile(self)
 
     def _url(self, path: str) -> str:
         return path if path.startswith("http") else self.base + path
@@ -132,6 +169,19 @@ class Client:
         else:
             raise ValueError("give url or path")
         return self.jobs.wait(job["id"]) if wait and job["status"] not in ("finished", "error") else job
+
+    def tool(self, tool: str, path: Union[str, Path, None] = None, url: Optional[str] = None,
+             options: Optional[dict] = None, wait: bool = True) -> dict:
+        """Run one tool (e.g. "compress-pdf", "fill-form", "sign-document") on a local file or a URL."""
+        first = {"operation": "import/url", "url": url} if url else {"operation": "import/upload"} if path else None
+        tasks: dict[str, dict] = {"run": {"operation": f"tool/{tool}", "options": options or {}}}
+        if first:
+            tasks = {"in": first, "run": {**tasks["run"], "input": "in"}}
+        tasks["out"] = {"operation": "export/url", "input": "run"}
+        job = self.jobs.create(tasks)
+        if path and not url:
+            self.upload(job, "in", path)
+        return self.jobs.wait(job["id"]) if wait else job
 
     def upload(self, job: dict, task_name: str, path: Union[str, Path], timeout: float = 30) -> dict:
         """Upload a local file to an import/upload task (chunked above 50 MB)."""

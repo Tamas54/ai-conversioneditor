@@ -45,6 +45,15 @@ export class Client {
       create: (url, events = ["job.finished", "job.failed"]) => this.req("POST", "/webhooks", { url, events }),
       delete: (id) => this.req("DELETE", `/webhooks/${id}`),
     };
+    this.signatures = {
+      list: () => this.req("GET", "/signatures").then((r) => r.data),
+      delete: (id) => this.req("DELETE", `/signatures/${id}`),
+    };
+    this.profile = {
+      get: () => this.req("GET", "/profile").then((r) => r.data),
+      update: (data, { merge = true } = {}) => this.req("PUT", `/profile?merge=${merge}`, data).then((r) => r.data),
+      delete: () => this.req("DELETE", "/profile"),
+    };
   }
 
   url(p) { return p.startsWith("http") ? p : this.base + p; }
@@ -61,6 +70,18 @@ export class Client {
   }
 
   me() { return this.req("GET", "/me"); }
+
+  // Egy eszköz egy hívásban: { tool: "compress-pdf" | "fill-form" | "sign-document" | …, path | url, options }
+  async tool({ tool, path, url, options = {}, wait = true }) {
+    const tasks = {};
+    if (url) tasks.in = { operation: "import/url", url };
+    else if (path) tasks.in = { operation: "import/upload" };
+    tasks.run = { operation: `tool/${tool}`, options, ...(tasks.in && { input: "in" }) };
+    tasks.out = { operation: "export/url", input: "run" };
+    const job = await this.jobs.create(tasks);
+    if (path && !url) await this.upload(job, "in", path);
+    return wait ? this.jobs.wait(job.id) : job;
+  }
   targets(fmt) { return this.req("GET", `/catalog/conversions?from=${encodeURIComponent(fmt)}`).then((r) => r.targets); }
 
   async convert({ url, path, outputFormat, options = {}, wait = true }) {

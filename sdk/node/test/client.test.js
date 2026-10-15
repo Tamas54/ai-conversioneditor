@@ -40,3 +40,17 @@ test("webhook signature check", () => {
   assert.ok(Client.verifyWebhook("whsec_x", body, sig, ts));
   assert.ok(!Client.verifyWebhook("whsec_y", body, sig, ts));
 });
+
+test("tool runs one tool on a URL and the profile is read and written", async () => {
+  const done = { id: "j2", status: "finished", tasks: [{ name: "out", operation: "export/url", status: "finished", result: { files: [{ filename: "a-signed.pdf" }] } }] };
+  const f = fakeFetch({ "POST /jobs": () => [201, { id: "j2", status: "processing", tasks: [] }], "GET /jobs/j2": () => [200, done],
+    "PUT /profile": (init) => [200, { data: JSON.parse(init.body) }], "GET /profile": () => [200, { data: { full_name: "Ödön" } }] });
+  const c = new Client("https://x.test", { apiKey: "k", fetch: f });
+  const job = await c.tool({ tool: "sign-document", url: "https://e.com/a.pdf", options: { signature_id: "sig_x" } });
+  assert.deepEqual(c.jobs.files(job).map((x) => x.filename), ["a-signed.pdf"]);
+  const tasks = JSON.parse(f.calls[0].init.body).tasks;
+  assert.equal(tasks.run.operation, "tool/sign-document");
+  assert.equal(tasks.run.input, "in");
+  assert.equal((await c.profile.update({ full_name: "Ödön" })).full_name, "Ödön");
+  assert.equal((await c.profile.get()).full_name, "Ödön");
+});

@@ -29,6 +29,14 @@ def test_python_sdk_end_to_end(client, monkeypatch, samples, tmp_path):
     assert e.value.code == "UNKNOWN_OPERATION"
     with pytest.raises(ApiError):
         c.convert(output_format="mp4", path=samples.txt())
+    # bármely eszköz egy hívásban, és a profil
+    job = c.tool("fill-form", path=samples.form_xlsx(), options={"values": {"Név": "SDK Ödön", "IBAN": "HU42117730161111101800000000"}})
+    out = c.download(c.jobs.files(job)[0]["url"], tmp_path / "kitoltve.xlsx")
+    from openpyxl import load_workbook
+    assert load_workbook(str(out)).active["B1"].value == "SDK Ödön"
+    assert c.profile.update({"full_name": "SDK Ödön"})["full_name"] == "SDK Ödön"
+    assert c.profile.get()["full_name"] == "SDK Ödön" and c.profile.delete()["deleted"]
+    assert isinstance(c.signatures.list(), list)
 
 
 def test_python_sdk_webhook_verify():
