@@ -298,12 +298,12 @@ async def forms(action: str = "recognize", file_id: Optional[str] = None, values
     raise ValueError("action: recognize, fill, bulk_fill or make_fillable")
 
 
-@mcp.tool(meta=_ui_meta(UI_PAD, UI_PAD_SKY, "Opening the signature pad…"))
+@mcp.tool(meta=_ui_meta(UI_PAD, UI_PAD_SKY, "Opening the signature pad…"), structured_output=True)
 async def signature(action: str = "list", file_id: Optional[str] = None, image_base64: Optional[str] = None,
                     name: Optional[str] = None, kind: str = "signature", color: Optional[str] = None,
                     signature_id: Optional[str] = None, document_id: Optional[str] = None, placement: str = "auto",
                     page: Optional[int] = None, x: Optional[float] = None, y: Optional[float] = None,
-                    width: Optional[float] = None, field: Optional[str] = None) -> dict:
+                    width: Optional[float] = None, field: Optional[str] = None) -> dict[str, Any]:
     """
     Signatures and initials, stored encrypted for this user only.
     action="create": from a photo/scan/image (file_id) or a drawing (image_base64 PNG) → a clean transparent PNG
@@ -355,12 +355,12 @@ async def _elicit_answers(ctx, questions: list[dict]) -> Optional[dict]:
     return {back[k]: v for k, v in data.items() if v not in (None, "")}
 
 
-@mcp.tool(meta=_ui_meta(UI_REVIEW, UI_REVIEW_SKY, "Filling the form…"))
+@mcp.tool(meta=_ui_meta(UI_REVIEW, UI_REVIEW_SKY, "Filling the form…"), structured_output=True)
 async def fill_assistant(ctx: Context, action: str = "fill", file_id: Optional[str] = None,
                          source_file_ids: Optional[list[str]] = None, values: Optional[dict] = None,
                          answers: Optional[dict] = None, profile: Optional[dict] = None, save_profile: bool = False,
                          signature_id: Optional[str] = None, schema: Optional[dict] = None,
-                         flatten: bool = False) -> dict:
+                         flatten: bool = False) -> dict[str, Any]:
     """
     Agentic form filling. Fills file_id (any form: PDF, DOCX, XLSX, photo) from the user's saved profile, the
     documents in source_file_ids (ID card scan, earlier forms, contracts…) and values/answers you pass; validates

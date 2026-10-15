@@ -534,7 +534,8 @@ def test_mcp_forms_signature_assistant_and_ui(client, samples, put_file):
     data = json.loads(r["content"][0]["text"])
     assert [f["name"] for f in data["data"]["fields"]][:2] == ["nev", "lakcim"]
     r = _mcp(client, "tools/call", {"name": "fill_assistant", "arguments": {"file_id": fid, "profile": {"full_name": "Kőváry Ödön"}}})["result"]
-    out = r.get("structuredContent") or json.loads(r["content"][0]["text"])
+    out = r["structuredContent"]                    # a ChatGPT Apps / MCP Apps nézet ebből dolgozik
+    assert tools["fill_assistant"]["outputSchema"]["type"] == "object"
     assert out["status"] == "needs_input" and out["values"]["nev"] == "Kőváry Ödön" and out["form_file_id"] == fid
     assert {q["name"] for q in out["questions"]} == {"lakcim", "adoazonosito_jel"}
     r = _mcp(client, "tools/call", {"name": "fill_assistant", "arguments": {"file_id": fid, "profile": {"full_name": "Kőváry Ödön"},
