@@ -223,7 +223,9 @@
           const ids = [];
           for (const f of files) ids.push((await upload(f, $(".bar-p i", li))).file_id);
           const job = await api("/api/tools/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool, file_ids: ids, options: opts }) });
-          resultRow(li, await poll(job, $(".bar-p i", li)));
+          const res = await poll(job, $(".bar-p i", li));
+          resultRow(li, res);
+          afterResult(box, li, res, ids, opts);
         } catch (e) { li.append(el("span", { class: "err", text: e.message })); }
         return;
       }
@@ -235,7 +237,9 @@
           const body = tool ? { tool, file_ids: [up.file_id], options: applyAll || i === 0 ? opts : {} }
                             : { file_id: up.file_id, target, options: applyAll || i === 0 ? opts : {} };
           const job = await api(tool ? "/api/tools/run" : "/api/convert/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-          resultRow(li, await poll(job, $(".bar-p i", li)));
+          const res = await poll(job, $(".bar-p i", li));
+          resultRow(li, res);
+          if (tool) afterResult(box, li, res, [up.file_id], body.options);
         } catch (e) { li.append(el("span", { class: "err", text: e.message })); }
       }
       box._remote = [];
@@ -323,6 +327,113 @@
     }));
     add("import"); add("convert"); add("export");
   }
+
+
+  // ---------- űrlapok: mező-ellenőrzés, kérdések; aláírásrajzoló ----------
+  async function runTool(tool, file_ids, options) {
+    const job = await api("/api/tools/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool, file_ids, options }) });
+    return poll(job);
+  }
+  function fieldTable(fields, values, editable) {
+    const tb = el("tbody");
+    fields.filter((f) => f.type !== "signature").forEach((f) => {
+      const inp = el("input", { type: "text", "data-name": f.name, placeholder: f.type === "checkbox" ? tr("yes_no", "yes / no") : f.type === "date" ? "YYYY-MM-DD" : "" });
+      const v = values && values[f.name];
+      inp.value = v === true ? tr("yes", "yes") : v == null || v === false ? "" : v;
+      const lab = editable ? el("input", { type: "text", value: f.label || f.name, "data-label": f.name, "aria-label": tr("label", "Label") }) : el("span", { text: f.label || f.name });
+      tb.append(el("tr", {}, el("th", { scope: "row" }, lab), el("td", { class: "small muted", text: f.type }), el("td", {}, inp)));
+    });
+    return el("table", { class: "facts review" }, tb);
+  }
+  const collect = (root, sel, attr) => { const o = {}; $$(sel, root).forEach((i) => { if (i.value.trim()) o[i.getAttribute(attr)] = i.value.trim(); }); return o; };
+  function afterResult(box, li, res, ids, opts) {
+    const tool = box.dataset.tool, data = res && res.data;
+    if (!data) return;
+    if (tool === "form-recognize" && data.fields) {
+      const panel = el("div", { class: "review-panel" }, el("p", { class: "small", text: tr("review_hint", "Check the labels, type the values, then fill. Wrong field? Clear its value.") }));
+      panel.append(fieldTable(data.fields, null, true));
+      const btn = el("button", { type: "button", class: "btn primary small", text: tr("fill_now", "Fill the form") });
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        const labels = collect(panel, "input[data-label]", "data-label");
+        const schema = { ...data, fields: data.fields.map((f) => ({ ...f, label: labels[f.name] || f.label })) };
+        try { const r = await runTool("fill-form", ids, { values: collect(panel, "input[data-name]", "data-name"), schema }); resultRow(panel, r); }
+        catch (e) { panel.append(el("span", { class: "err", text: e.message })); btn.disabled = false; }
+      });
+      panel.append(btn);
+      li.append(panel);
+    }
+    if (tool === "ai-form-filler" && data.questions && data.questions.length) {
+      const panel = el("div", { class: "review-panel" }, el("p", { class: "small", text: tr("questions_hint", "A few details are missing:") }));
+      const tb = el("tbody");
+      data.questions.forEach((q) => tb.append(el("tr", {}, el("th", { scope: "row", text: q.label + (q.error ? " — " + q.error : "") }),
+        el("td", {}, el("input", { type: "text", "data-name": q.name, value: q.given || "" })))));
+      panel.append(el("table", { class: "facts review" }, tb));
+      const btn = el("button", { type: "button", class: "btn primary small", text: tr("continue", "Continue") });
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        const answers = { ...((opts && opts.answers) || {}), ...collect(panel, "input[data-name]", "data-name") };
+        const nopts = { ...(opts || {}), answers };
+        try { const r = await runTool("ai-form-filler", ids, nopts); panel.innerHTML = ""; resultRow(panel, r); afterResult(box, panel, r, ids, nopts); }
+        catch (e) { panel.append(el("span", { class: "err", text: e.message })); btn.disabled = false; }
+      });
+      panel.append(btn);
+      li.append(panel);
+    }
+    if (data.signature_id) loadSignatures();
+  }
+
+  function signaturePad(canvas) {
+    const ctx = canvas.getContext("2d");
+    const ratio = Math.max(1, window.devicePixelRatio || 1);
+    const r0 = canvas.getBoundingClientRect();
+    canvas.width = r0.width * ratio; canvas.height = r0.height * ratio; ctx.scale(ratio, ratio);
+    ctx.lineCap = ctx.lineJoin = "round"; ctx.strokeStyle = "#141a4a";
+    let drawing = false, last = null, empty = true;
+    const pt = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, p: e.pressure || 0.5 }; };
+    canvas.addEventListener("pointerdown", (e) => { drawing = true; last = pt(e); canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener("pointermove", (e) => {
+      if (!drawing) return;
+      const p = pt(e); ctx.lineWidth = 1.6 + 2.4 * p.p;
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; empty = false;
+    });
+    ["pointerup", "pointercancel"].forEach((t) => canvas.addEventListener(t, () => { drawing = false; }));
+    return { clear() { ctx.clearRect(0, 0, canvas.width, canvas.height); empty = true; }, isEmpty: () => empty, png: () => canvas.toDataURL("image/png") };
+  }
+  async function loadSignatures() {
+    const lists = $$(".sig-list"), dl = $("#sig-ids");
+    if (!lists.length && !dl) return;
+    let sigs = [];
+    try { sigs = (await api("/api/signatures")).signatures || []; } catch (e) { return; }
+    lists.forEach((ul) => {
+      ul.innerHTML = "";
+      sigs.forEach((s) => {
+        const del = el("button", { type: "button", class: "btn ghost small", text: tr("delete", "Delete") });
+        del.addEventListener("click", async () => { await api("/api/signatures/" + s.id, { method: "DELETE" }); loadSignatures(); });
+        ul.append(el("li", {}, el("img", { src: "/api/signatures/" + s.id + "/image", alt: s.name, height: "48" }),
+          el("span", { text: ` ${s.name} · ` }), el("code", { text: s.id }), del));
+      });
+    });
+    if (dl) { dl.innerHTML = ""; sigs.forEach((s) => dl.append(el("option", { value: s.id, text: s.name }))); }
+  }
+  function initSigPad(root) {
+    const pad = signaturePad($("canvas", root));
+    $("[data-act=clear]", root).addEventListener("click", () => pad.clear());
+    $("[data-act=save]", root).addEventListener("click", async (ev) => {
+      if (pad.isEmpty()) return;
+      ev.target.disabled = true;
+      const out = $(".sig-out", root);
+      try {
+        const r = await runTool("create-signature", [], { image_base64: pad.png(), name: $("[name=sig_name]", root).value || "Signature",
+          kind: $("[name=sig_kind]", root).value });
+        out.innerHTML = ""; resultRow(out, r); pad.clear(); loadSignatures();
+      } catch (e) { out.textContent = e.message; }
+      ev.target.disabled = false;
+    });
+  }
+  $$(".sigpad").forEach(initSigPad);
+  $$("input[name=signature_id]").forEach((i) => { i.setAttribute("list", "sig-ids"); if (!$("#sig-ids")) document.body.append(el("datalist", { id: "sig-ids" })); });
+  loadSignatures();
 
   $$(".cv").forEach(initWidget);
   $$(".uc").forEach(initUnits);

@@ -1,0 +1,17 @@
+{% if p.tool.key == 'create-signature' %}
+<section class="sigpad" aria-labelledby="sig-h">
+  <h2 id="sig-h">{{ t('ui.sig_draw') }}</h2>
+  <canvas width="600" height="180" aria-label="{{ t('ui.sig_draw') }}"></canvas>
+  <div class="row">
+    <label>{{ t('ui.sig_name') }} <input name="sig_name" value="{{ t('ui.sig_default') }}"></label>
+    <select name="sig_kind" aria-label="{{ t('ui.sig_kind') }}"><option value="signature">{{ t('ui.sig_signature') }}</option><option value="initials">{{ t('ui.sig_initials') }}</option></select>
+    <button type="button" class="btn ghost small" data-act="clear">{{ t('ui.sig_clear') }}</button>
+    <button type="button" class="btn primary small" data-act="save">{{ t('ui.sig_save') }}</button>
+  </div>
+  <div class="sig-out small"></div>
+  <p class="small muted">{{ t('ui.sig_or_upload') }}</p>
+</section>
+{% endif %}
+{% if p.tool.key in ('create-signature', 'sign-document', 'ai-form-filler') %}
+<section aria-labelledby="sigs-h"><h2 id="sigs-h">{{ t('ui.sig_saved') }}</h2><ul class="sig-list small"></ul></section>
+{% endif %}

@@ -181,6 +181,8 @@ TOOL_OPTIONS: dict[str, Opt] = {o.key: o for o in [
     Opt("x", "float", None, min=0, max=100000), Opt("y", "float", None, min=0, max=100000),
     Opt("field", "str", None, pattern=r"^[^\x00-\x1f]{1,200}$"),
     Opt("profile", "dict", None), Opt("source_files", "list", None), Opt("answers", "dict", None),
+    Opt("schema", "dict", None),
+    Opt("image_base64", "str", None, pattern=r"^(data:image/(png|jpeg|webp);base64,)?[A-Za-z0-9+/=\s]{16,3000000}$"),
     Opt("value", "float", None), Opt("from_unit", "str", None, pattern=r"^[A-Za-z0-9_°/\-.² ³µ]{1,30}$"),
     Opt("to_unit", "str", None, pattern=r"^[A-Za-z0-9_°/\-.² ³µ]{1,30}$"),
     Opt("time", "str", None, pattern=r"^[0-9T:\- .+Z]{1,40}$"),

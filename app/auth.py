@@ -50,6 +50,7 @@ _GUEST_OK = (
     ("POST", "/api/convert/run"), ("POST", "/api/tools/run"), ("GET", "/api/presets"),   # bővítés: konverter, eszközök
     ("POST", "/api/import"), ("GET", "/api/import/config"), ("POST", "/api/export"),            # URL / felhős import (SSRF-védett, vendégnek 25 MB)
     ("POST", "/api/upload/chunks"), ("PUT", "/api/upload/chunks/"),     # darabolt feltöltés nagy fájlokhoz
+    ("GET", "/api/signatures"), ("DELETE", "/api/signatures/"),         # a vendég saját (munkamenetes) aláírásai
     ("POST", "/api/make/deck"), ("POST", "/api/make/handout"),          # deck: vendégnek csak az üres pakli (AI nélkül)
     ("POST", "/api/make/blank"),                                        # „New”: üres fájl, AI nélkül
     ("POST", "/api/make/album"),                                        # fotóalbum: AI nélkül (az AI-képaláírás maga kér fiókot)

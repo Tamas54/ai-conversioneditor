@@ -51,7 +51,17 @@
   "privacy": "Files stay private in your workspace and are deleted automatically. No account needed for conversions.",
   "noscript": "The converter needs JavaScript. You can also use the full app:",
   "import_from": "Or import from:",
-  "from_url": "Link (URL)"
+  "from_url": "Link (URL)",
+  "sig_draw": "Draw your signature",
+  "sig_name": "Name",
+  "sig_default": "Signature",
+  "sig_kind": "Kind",
+  "sig_signature": "Signature",
+  "sig_initials": "Initials",
+  "sig_clear": "Clear",
+  "sig_save": "Save signature",
+  "sig_or_upload": "Or upload a photo or scan of it below — paper, shadow and noise are removed.",
+  "sig_saved": "Your saved signatures"
  },
  "js": {
   "download": "Download",
@@ -61,7 +71,15 @@
   "preset_name": "Name of the preset",
   "or_drop": "or drop them here",
   "paste_url": "Paste a link to the file (https://…)",
-  "save_to": "Save to"
+  "save_to": "Save to",
+  "yes_no": "yes / no",
+  "yes": "yes",
+  "label": "Label",
+  "review_hint": "Check the labels, type the values, then fill. Leave a value empty to skip the field.",
+  "fill_now": "Fill the form",
+  "questions_hint": "A few details are missing:",
+  "continue": "Continue",
+  "delete": "Delete"
  },
  "footer": {
   "all_tools": "All tools",

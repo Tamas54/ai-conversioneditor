@@ -11,7 +11,10 @@ A leírások a katalógusból készülnek, így mindig a ténylegesen elérhető
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, Optional
+
+from mcp.server.fastmcp import Context
 
 from app.mcp_server import linked, mcp
 
@@ -212,3 +215,184 @@ async def units(value: Optional[float] = None, from_unit: Optional[str] = None, 
     if value is None or not from_unit or not to_unit:
         raise ValueError("give value, from_unit and to_unit (or from_zone and to_zones)")
     return {"value": value, "from": from_unit, "to": to_unit, "result": U.convert(value, from_unit, to_unit)}
+
+
+# ---------------------------------------------------------------- űrlap, aláírás, ügynöki kitöltés
+
+_UI = Path(__file__).parent / "static" / "mcp"
+UI_REVIEW, UI_REVIEW_SKY = "ui://forms/form-review.html", "ui://forms/form-review.skybridge.html"
+UI_PAD, UI_PAD_SKY = "ui://forms/signature-pad.html", "ui://forms/signature-pad.skybridge.html"
+
+
+def _ui_html(name: str) -> str:
+    """Önálló HTML (a híd beágyazva): a beágyazott keret nem tölthet be külső fájlt."""
+    html = (_UI / name).read_text("utf-8")
+    return html.replace('<script src="bridge.js"></script>', "<script>\n" + (_UI / "bridge.js").read_text("utf-8") + "\n</script>")
+
+
+for _uri, _file, _mime in ((UI_REVIEW, "form-review.html", "text/html;profile=mcp-app"),
+                           (UI_REVIEW_SKY, "form-review.html", "text/html+skybridge"),
+                           (UI_PAD, "signature-pad.html", "text/html;profile=mcp-app"),
+                           (UI_PAD_SKY, "signature-pad.html", "text/html+skybridge")):
+    mcp.resource(_uri, mime_type=_mime, name=_file.rsplit(".", 1)[0],
+                 description="Interactive view for MCP Apps / ChatGPT Apps clients")((lambda f: (lambda: _ui_html(f)))(_file))
+
+
+def _ui_meta(uri: str, sky: str, invoking: str) -> dict:
+    return {"ui": {"resourceUri": uri}, "openai/outputTemplate": sky, "openai/widgetAccessible": True,
+            "openai/toolInvocation/invoking": invoking}
+
+
+async def _tool(key: str, file_ids: list[str], options: dict) -> dict:
+    from app import ops
+    from app.catalog import tools as T
+    ops.check_tool_call(T.TOOLS[key], file_ids, options)
+    return await _await_or_job(f"tool:{key}", lambda: ops.run_tool(key, file_ids, options))
+
+
+@mcp.tool()
+@linked
+async def forms(action: str = "recognize", file_id: Optional[str] = None, values: Optional[dict] = None,
+                schema: Optional[dict] = None, data_file_id: Optional[str] = None, flatten: bool = False,
+                keep_look: bool = True, language: Optional[str] = None) -> dict:
+    """
+    Forms from ANY file: fillable or flat PDF, DOCX, XLSX, photo or scan (also DOC/ODT/XLS/ODS).
+    action="recognize": returns one field schema {kind, fields:[{name, label, type, page, box, options, required}]}
+      (types: text, multiline, checkbox, date, signature, choice, number, email, phone, iban, hu_tax_id, taj,
+      hu_vat, hu_bank, postcode) and a preview PNG with the boxes. You may edit the schema (labels, types, boxes,
+      new fields with a box/cell/label, {"name": …, "remove": true}) and pass it back as schema.
+    action="fill": values {field name or label: value} → the form filled in its ORIGINAL format (PDF stays PDF,
+      DOCX stays DOCX, XLSX stays XLSX; a photo keeps its look unless keep_look=false → clean PDF). Values are
+      validated (dates, IBAN, Hungarian tax ID / TAJ / VAT / bank account check digits); errors come back per field.
+      flatten=true makes a PDF print-ready. Accents (ő, ű) are kept.
+    action="bulk_fill": data_file_id (CSV/XLSX, first row = field names) → one copy per row (PDF: combined; else ZIP).
+    action="make_fillable": a flat PDF, DOCX or photo → a PDF with real form fields on its blanks.
+    For filling from the user's saved profile and documents (asks for what's missing), use fill_assistant.
+    """
+    if not file_id:
+        raise ValueError("file_id is required (upload the form first)")
+    opts: dict[str, Any] = {}
+    if language:
+        opts["language"] = language
+    if schema:
+        opts["schema"] = schema
+    if action == "recognize":
+        return await _tool("form-recognize", [file_id], opts)
+    if action == "fill":
+        return await _tool("fill-form", [file_id], {**opts, "values": values or {}, "flatten": flatten, "keep_look": keep_look})
+    if action == "bulk_fill":
+        if not data_file_id:
+            raise ValueError("data_file_id (CSV or XLSX) is required for bulk_fill")
+        return await _tool("bulk-fill-form", [file_id], {**{k: v for k, v in opts.items() if k == "schema"},
+                                                         "data_file": data_file_id, "flatten": flatten})
+    if action == "make_fillable":
+        return await _tool("make-fillable", [file_id], {k: v for k, v in opts.items() if k == "language"})
+    raise ValueError("action: recognize, fill, bulk_fill or make_fillable")
+
+
+@mcp.tool(meta=_ui_meta(UI_PAD, UI_PAD_SKY, "Opening the signature pad…"))
+async def signature(action: str = "list", file_id: Optional[str] = None, image_base64: Optional[str] = None,
+                    name: Optional[str] = None, kind: str = "signature", color: Optional[str] = None,
+                    signature_id: Optional[str] = None, document_id: Optional[str] = None, placement: str = "auto",
+                    page: Optional[int] = None, x: Optional[float] = None, y: Optional[float] = None,
+                    width: Optional[float] = None, field: Optional[str] = None) -> dict:
+    """
+    Signatures and initials, stored encrypted for this user only.
+    action="create": from a photo/scan/image (file_id) or a drawing (image_base64 PNG) → a clean transparent PNG
+      (paper, shadows and noise removed) and a signature_id to reuse. Clients with interactive UI show a pad.
+    action="list" | "delete" (signature_id).
+    action="place": put signature_id into document_id (PDF or DOCX): placement "auto" (signature field, then a
+      "Signature:/Aláírás:" line or label), "field" (field = name/label), "anchor" (field = text to sign next to),
+      or "xy" (page, x, y in points from the top left, width). Returns the signed copy; the original stays.
+    """
+    from app import tenancy
+    from app.formkit import signature as G
+    uid = tenancy.current_user_id()
+    if action == "list":
+        return {"signatures": await G.list_(uid)}
+    if action == "delete":
+        if not signature_id or not await G.delete(uid, signature_id):
+            raise ValueError("no such signature")
+        return {"deleted": signature_id}
+    if action == "create":
+        opts = {k: v for k, v in (("name", name), ("kind", kind), ("color", color), ("image_base64", image_base64)) if v}
+        return await _tool("create-signature", [file_id] if file_id else [], opts)
+    if action == "place":
+        if not document_id:
+            raise ValueError("document_id (the PDF or DOCX to sign) is required")
+        opts = {k: v for k, v in (("signature_id", signature_id), ("image_file", file_id), ("placement", placement),
+                                  ("page", page), ("x", x), ("y", y), ("width", width), ("field", field)) if v is not None}
+        return await _tool("sign-document", [document_id], opts)
+    raise ValueError("action: create, list, delete or place")
+
+
+async def _elicit_answers(ctx, questions: list[dict]) -> Optional[dict]:
+    """Ha a kliens tud elicitationt, a hiányzó mezőket egy űrlapban kérdezzük meg."""
+    from pydantic import Field, create_model
+    caps = getattr(getattr(getattr(ctx, "session", None), "client_params", None), "capabilities", None)
+    if not caps or not getattr(caps, "elicitation", None):
+        return None
+    fields, back = {}, {}
+    for i, q in enumerate(questions[:20]):
+        key = q["name"] if q["name"].isidentifier() and not q["name"].startswith("_") else f"f{i}"
+        back[key] = q["name"]
+        desc = q["label"] + (f" — {q['error']}" if q.get("error") else "") + (f" ({' / '.join(q['options'])})" if q.get("options") else "")
+        typ = Optional[bool] if q["type"] == "checkbox" else Optional[str]
+        fields[key] = (typ, Field(default=None, title=q["label"], description=desc))
+    Model = create_model("MissingFields", **fields)
+    res = await ctx.elicit("A few details are missing for this form:", schema=Model)
+    if getattr(res, "action", "") != "accept" or not getattr(res, "data", None):
+        return None
+    data = res.data.model_dump() if hasattr(res.data, "model_dump") else dict(res.data)
+    return {back[k]: v for k, v in data.items() if v not in (None, "")}
+
+
+@mcp.tool(meta=_ui_meta(UI_REVIEW, UI_REVIEW_SKY, "Filling the form…"))
+async def fill_assistant(ctx: Context, action: str = "fill", file_id: Optional[str] = None,
+                         source_file_ids: Optional[list[str]] = None, values: Optional[dict] = None,
+                         answers: Optional[dict] = None, profile: Optional[dict] = None, save_profile: bool = False,
+                         signature_id: Optional[str] = None, schema: Optional[dict] = None,
+                         flatten: bool = False) -> dict:
+    """
+    Agentic form filling. Fills file_id (any form: PDF, DOCX, XLSX, photo) from the user's saved profile, the
+    documents in source_file_ids (ID card scan, earlier forms, contracts…) and values/answers you pass; validates
+    everything (dates, IBAN, Hungarian tax ID, TAJ, VAT number, bank account, email, phone) and returns a preview.
+    Missing or invalid fields: if this client supports elicitation the user is asked right here; otherwise the
+    result has status "needs_input" and questions — ask the user and call again with answers {field: value}.
+    signature_id (or the profile's) is placed into signature fields. Clients with interactive UI get a review view
+    with a signature pad. action="profile_get" | "profile_set" (profile {full_name, birth_date, birth_place,
+    mother_name, address, email, phone, tax_id, taj, iban, …}, merged; stored encrypted).
+    Never invent personal data: only use what the profile, the documents or the user gave.
+    """
+    from app.formkit import profile as P
+    from app import tenancy
+    uid = tenancy.current_user_id()
+    if action == "profile_get":
+        return {"profile": await P.load_profile(uid), "fields": list(P.PROFILE_KEYS)}
+    if action == "profile_set":
+        return {"profile": await P.save_profile(uid, profile or {})}
+    if action != "fill":
+        raise ValueError("action: fill, profile_get or profile_set")
+    if not file_id:
+        raise ValueError("file_id (the form) is required")
+    if profile and save_profile:
+        await P.save_profile(uid, profile)
+    opts: dict[str, Any] = {k: v for k, v in (("values", values), ("answers", answers), ("profile", profile),
+                                              ("source_files", source_file_ids), ("signature_id", signature_id),
+                                              ("schema", schema)) if v}
+    opts["flatten"] = flatten
+    res = await _tool("ai-form-filler", [file_id], opts)
+    if "data" not in res and res.get("status") in ("queued", "running"):
+        return res                                            # hosszú munka: job_id-vel kérdezhető (jobs eszköz)
+    data = res.get("data") or {}
+    if data.get("status") == "needs_input" and data.get("questions"):
+        try:
+            got = await _elicit_answers(ctx, data["questions"])
+        except Exception:
+            got = None
+        if got:
+            opts["answers"] = {**(answers or {}), **got}
+            res = await _tool("ai-form-filler", [file_id], opts)
+            data = res.get("data") or {}
+    return {**data, "files": res.get("files", []), "file_id": res.get("file_id"), "url": res.get("url"),
+            "form_file_id": file_id}

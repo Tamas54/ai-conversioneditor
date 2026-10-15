@@ -6,6 +6,7 @@
 {% if p.tool.group == 'utility' %}
 {% include "_utility.html" %}
 {% else %}
+{% include "_sigpad.html" %}
 {{ widget(p.widget, p.options, t, lang) }}
 {% endif %}
 {% if p.points %}<ul class="points">{% for x in p.points %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}

@@ -18,7 +18,7 @@ from typing import Any, Optional, Union
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import tenancy
@@ -511,6 +511,59 @@ async def presets_delete(request: Request, preset_id: int) -> dict[str, Any]:
     if not db.enabled() or not await db.preset_delete(c.uid, preset_id):
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such preset."})
     return {"deleted": preset_id}
+
+
+# ---------- aláírások, adatprofil (titkosítva tárolva) ----------
+
+@v1.get("/signatures", tags=["signatures"])
+async def signatures_list(request: Request) -> dict[str, Any]:
+    from app.formkit import signature as G
+    c = ctx(request)
+    return {"data": await G.list_(c.uid)}
+
+
+@v1.get("/signatures/{sid}/image", tags=["signatures"], response_class=Response)
+async def signatures_image(request: Request, sid: str) -> Response:
+    from app.formkit import signature as G
+    c = ctx(request)
+    try:
+        png = await G.load(c.uid, sid)
+    except KeyError:
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such signature."})
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+@v1.delete("/signatures/{sid}", tags=["signatures"])
+async def signatures_delete(request: Request, sid: str) -> dict[str, Any]:
+    from app.formkit import signature as G
+    c = ctx(request)
+    if not await G.delete(c.uid, sid):
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such signature."})
+    return {"deleted": sid}
+
+
+@v1.get("/profile", tags=["profile"])
+async def profile_get(request: Request) -> dict[str, Any]:
+    from app.formkit import profile as P
+    c = ctx(request)
+    return {"data": await P.load_profile(c.uid), "fields": list(P.PROFILE_KEYS)}
+
+
+@v1.put("/profile", tags=["profile"])
+async def profile_put(request: Request, body: dict[str, Any], merge: bool = True) -> dict[str, Any]:
+    from app.formkit import profile as P
+    c = ctx(request)
+    try:
+        return {"data": await P.save_profile(c.uid, body, merge=merge)}
+    except ValueError as e:
+        raise HTTPException(422, {"code": "INVALID_PROFILE", "message": str(e)})
+
+
+@v1.delete("/profile", tags=["profile"])
+async def profile_delete(request: Request) -> dict[str, Any]:
+    from app.formkit import profile as P
+    c = ctx(request)
+    return {"deleted": await P.delete_profile(c.uid)}
 
 
 # ---------- egylépéses rövidítés (Zapier, Make, n8n) ----------

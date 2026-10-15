@@ -56,7 +56,17 @@
   "privacy": "A fájlok a saját, privát munkaterületeden maradnak, és automatikusan törlődnek. Az átalakításhoz nem kell fiók.",
   "noscript": "Az átalakítóhoz JavaScript kell. A teljes appot is használhatod:",
   "import_from": "Vagy behozás innen:",
-  "from_url": "Link (URL)"
+  "from_url": "Link (URL)",
+  "sig_draw": "Rajzold meg az aláírásod",
+  "sig_name": "Név",
+  "sig_default": "Aláírás",
+  "sig_kind": "Fajta",
+  "sig_signature": "Aláírás",
+  "sig_initials": "Kézjegy",
+  "sig_clear": "Törlés",
+  "sig_save": "Aláírás mentése",
+  "sig_or_upload": "Vagy töltsd fel lent egy fotóját vagy szkennelt képét — a papírt, az árnyékot és a zajt eltávolítjuk.",
+  "sig_saved": "Mentett aláírásaid"
  },
  "js": {
   "download": "Letöltés",
@@ -66,7 +76,15 @@
   "preset_name": "A beállítás neve",
   "or_drop": "vagy húzd ide őket",
   "paste_url": "Illeszd be a fájl linkjét (https://…)",
-  "save_to": "Mentés ide:"
+  "save_to": "Mentés ide:",
+  "yes_no": "igen / nem",
+  "yes": "igen",
+  "label": "Felirat",
+  "review_hint": "Nézd át a feliratokat, írd be az értékeket, majd töltsd ki. Üresen hagyott érték: a mező kimarad.",
+  "fill_now": "Kitöltés",
+  "questions_hint": "Néhány adat hiányzik:",
+  "continue": "Tovább",
+  "delete": "Törlés"
  },
  "footer": {
   "all_tools": "Minden eszköz",

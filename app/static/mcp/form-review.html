@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Form review</title>
+<style>
+:root{--ink:#1b1f24;--muted:#5f6b7a;--line:#d9dee5;--bg:#fff;--soft:#f4f6f9;--acc:#1f5fbf;--warn:#b3261e;--ok:#1e7d4f}
+@media (prefers-color-scheme:dark){:root{--ink:#e8ebef;--muted:#9aa5b1;--line:#38404a;--bg:#16191d;--soft:#1f242a;--acc:#7fb0ff;--warn:#ff8a80;--ok:#7bd6a4}}
+*{box-sizing:border-box}body{margin:0;padding:12px;font:14px/1.45 system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+h1{font-size:16px;margin:0 0 8px}.muted{color:var(--muted)}table{width:100%;border-collapse:collapse}
+td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-weight:600;width:34%}
+input[type=text]{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+tr.ask th{color:var(--warn)}.src{font-size:11px;color:var(--muted)}.err{color:var(--warn);font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}button{padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font:inherit;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}canvas{width:100%;height:120px;border:1px dashed var(--line);border-radius:8px;background:var(--soft);touch-action:none}
+img.pv{max-width:100%;border:1px solid var(--line);border-radius:6px}.ok{color:var(--ok)}
+</style></head>
+<body>
+<h1 id="title">Check the form before it's filled</h1>
+<p class="muted" id="status">Waiting for the form…</p>
+<table><tbody id="fields"></tbody></table>
+<section id="sigbox" hidden>
+  <p><strong>Signature</strong> <span class="muted">— draw it, it's stored encrypted for you only</span></p>
+  <canvas id="pad"></canvas>
+  <div class="row"><button type="button" id="clear">Clear</button><label><input type="checkbox" id="flatten"> Print-ready (not editable)</label></div>
+</section>
+<div class="row"><button class="primary" id="fill" disabled>Fill the form</button><a id="dl" hidden target="_blank" rel="noopener">Download</a></div>
+<img class="pv" id="pv" alt="" hidden>
+<script src="bridge.js"></script>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  let state = null;
+  const pad = signaturePad($("#pad"));
+  $("#clear").onclick = () => pad.clear();
+  function render(r) {
+    if (!r || !r.schema) return;
+    state = r;
+    const q = new Set((r.questions || []).map((x) => x.name));
+    $("#status").textContent = r.status === "complete" ? "All fields have a value — check them, then fill." :
+      `${q.size} field(s) need an answer.`;
+    const tb = $("#fields"); tb.innerHTML = "";
+    r.schema.fields.forEach((f) => {
+      if (f.type === "signature") return;
+      const tr = document.createElement("tr"); if (q.has(f.name)) tr.className = "ask";
+      const v = r.values && r.values[f.name] != null ? r.values[f.name] : "";
+      const err = (r.errors || {})[f.name];
+      tr.innerHTML = `<th scope="row"></th><td><input type="text"><div class="src"></div>${err ? '<div class="err"></div>' : ""}</td>`;
+      tr.querySelector("th").textContent = f.label || f.name;
+      const inp = tr.querySelector("input"); inp.value = v === true ? "yes" : v === false ? "" : v; inp.dataset.name = f.name;
+      inp.placeholder = f.type === "checkbox" ? "yes / no" : f.type === "date" ? "YYYY-MM-DD" : "";
+      tr.querySelector(".src").textContent = (r.provenance || {})[f.name] ? "from " + r.provenance[f.name] : "";
+      if (err) tr.querySelector(".err").textContent = err;
+      tb.append(tr);
+    });
+    $("#sigbox").hidden = !r.schema.fields.some((f) => f.type === "signature");
+    const files = r.files || [];
+    const pv = files.find((f) => /\.png$/i.test(f.label || f.file_id || ""));
+    const doc = files.find((f) => !/\.png$/i.test(f.label || f.file_id || ""));
+    if (pv) { $("#pv").src = pv.url; $("#pv").hidden = false; }
+    if (doc) { $("#dl").href = doc.url; $("#dl").textContent = "Download " + (doc.label || ""); $("#dl").hidden = false; }
+    $("#fill").disabled = false;
+  }
+  $("#fill").onclick = async () => {
+    const values = {};
+    document.querySelectorAll("#fields input").forEach((i) => { if (i.value.trim()) values[i.dataset.name] = i.value.trim(); });
+    $("#fill").disabled = true; $("#status").textContent = "Filling…";
+    try {
+      const args = { action: "fill", file_id: state.form_file_id, values, flatten: $("#flatten").checked };
+      if (!$("#sigbox").hidden && !pad.isEmpty()) {
+        const s = await bridge.callTool("signature", { action: "create", image_base64: pad.png(), name: "Signature" });
+        args.signature_id = s.signature_id;
+      }
+      const r = await bridge.callTool("fill_assistant", args);
+      render(r);
+      $("#status").innerHTML = r.status === "complete" ? '<span class="ok">Filled.</span>' : $("#status").textContent;
+      bridge.say(`The form is filled (${r.status}).`);
+    } catch (e) { $("#status").textContent = "Error: " + e.message; $("#fill").disabled = false; }
+  };
+  bridge.onResult(render);
+  bridge.init();
+})();
+</script>
+</body></html>

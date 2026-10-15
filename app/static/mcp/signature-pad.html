@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signature pad</title>
+<style>
+:root{--ink:#1b1f24;--muted:#5f6b7a;--line:#d9dee5;--bg:#fff;--soft:#f4f6f9;--acc:#1f5fbf;--ok:#1e7d4f}
+@media (prefers-color-scheme:dark){:root{--ink:#e8ebef;--muted:#9aa5b1;--line:#38404a;--bg:#16191d;--soft:#1f242a;--acc:#7fb0ff;--ok:#7bd6a4}}
+*{box-sizing:border-box}body{margin:0;padding:12px;font:14px/1.45 system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+canvas{width:100%;height:160px;border:1px dashed var(--line);border-radius:8px;background:var(--soft);touch-action:none}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}button{padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font:inherit;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}input{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+.muted{color:var(--muted)}.ok{color:var(--ok)}
+</style></head>
+<body>
+<p><strong>Draw your signature</strong> <span class="muted">— stored encrypted, only for you</span></p>
+<canvas id="pad"></canvas>
+<div class="row">
+  <input id="name" value="Signature" aria-label="Name">
+  <select id="kind" aria-label="Kind"><option value="signature">Signature</option><option value="initials">Initials</option></select>
+  <button type="button" id="clear">Clear</button><button class="primary" id="save">Save</button>
+</div>
+<p id="status" class="muted"></p>
+<script src="bridge.js"></script>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const pad = signaturePad($("#pad"));
+  $("#clear").onclick = () => pad.clear();
+  $("#save").onclick = async () => {
+    if (pad.isEmpty()) { $("#status").textContent = "Draw first."; return; }
+    $("#save").disabled = true; $("#status").textContent = "Saving…";
+    try {
+      const r = await bridge.callTool("signature", { action: "create", image_base64: pad.png(), name: $("#name").value, kind: $("#kind").value });
+      $("#status").innerHTML = `<span class="ok">Saved.</span> ID: <code>${r.signature_id}</code>`;
+      bridge.say(`I saved my ${$("#kind").value}: ${r.signature_id}`);
+    } catch (e) { $("#status").textContent = "Error: " + e.message; }
+    $("#save").disabled = false;
+  };
+  bridge.init();
+})();
+</script>
+</body></html>

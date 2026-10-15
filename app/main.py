@@ -116,6 +116,8 @@ from app import seo  # noqa: E402
 app.include_router(seo.router)
 from app.routes import convert_web  # noqa: E402  (a weboldal konverter-widgetje, presetek, átváltók)
 app.include_router(convert_web.router)
+from app.routes import formkit_web  # noqa: E402  (aláírások, adatprofil — titkosítva)
+app.include_router(formkit_web.router)
 from app.site.routes import build_router as _site_router  # noqa: E402  (nyilvános, többnyelvű oldalak)
 app.include_router(_site_router())
 from app.api_v1.app import v1 as _api_v1  # noqa: E402  (nyilvános REST API, saját OpenAPI-val)
