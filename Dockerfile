@@ -248,12 +248,6 @@ WORKDIR /app
 # --- Python deps ---
 COPY requirements.txt constraints.txt /app/
 RUN pip install --no-cache-dir -r /app/requirements.txt -c /app/constraints.txt
-# A pip a rendszer lxml-jét (python3-lxml) letörli, miközben a dpkg telepítettnek hiszi; a Calibre html5-parsere
-# viszont a rendszer libxml2-jéhez kötött → újratelepítjük. Az app a /usr/local pip-lxml-jét használja (az van elöl a
-# sys.path-ban), a Calibre a rendszerét (engines._env_for: PYTHONPATH=/usr/lib/python3/dist-packages).
-RUN apt-get update && apt-get install -y --reinstall --no-install-recommends python3-lxml \
-    && rm -rf /var/lib/apt/lists/* \
-    && PYTHONPATH=/usr/lib/python3/dist-packages python3 -c "import html5_parser, lxml; assert lxml.__file__.startswith('/usr/lib')"
 
 # --- App code ---
 COPY app /app/app
