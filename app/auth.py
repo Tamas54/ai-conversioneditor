@@ -36,7 +36,7 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
                     "/.well-known/", "/oauth/",
                     "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
-                    "/api/units/", "/api/timezones/", "/indexnow-")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
+                    "/api/units/", "/api/timezones/", "/indexnow-", "/api/catalog")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
@@ -229,6 +229,7 @@ def _safe_next(nxt: str) -> str:
 
 _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{title} — {product}</title>
+<meta name="robots" content="noindex, follow"><meta name="description" content="{title} to {product}: convert, edit and make files by asking.">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png"><meta name="theme-color" content="#1E4436">
 <meta property="og:title" content="{product} — finished files, changed by asking"><meta property="og:image" content="/static/og.png">
@@ -236,6 +237,7 @@ _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/product.css"></head>
 <body class="auth"><main class="auth-card">
+  <a class="back" href="/" data-back>← Back</a>
   <a class="brand" href="/">{product}</a>
   <h1>{title}</h1>
   {error}

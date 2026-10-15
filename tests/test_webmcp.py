@@ -28,6 +28,28 @@ def test_every_page_loads_webmcp(client):
     assert "WebMCP" in client.get("/ai-agents").text and "WebMCP" in client.get("/llms.txt").text
 
 
+def test_webmcp_endpoints_work_for_an_anonymous_visitor_in_production(client, monkeypatch, samples):
+    """Élesben (jelszóvédelem be) a böngészős ügynök vendégként fut: minden végpont, amit a webmcp.js hív, nyitva."""
+    import re
+    from app.config import settings
+    monkeypatch.setattr(settings, "DASHBOARD_PASSWORD", "pw")
+    js = client.get("/static/webmcp.js").text
+    used = set(re.findall(r'["`](/api/[a-z/_-]+)', js))
+    assert used == {"/api/catalog", "/api/files", "/api/convert/targets", "/api/convert/run", "/api/tools/run",
+                    "/api/import", "/api/jobs/"}, used
+    client.cookies.clear()
+    assert client.get("/api/catalog").status_code == 200
+    assert client.get("/api/convert/targets", params={"ext": "md", "all": 1}).status_code == 200
+    up = client.post("/api/upload", files={"file": ("jegyzet.md", "# Ő ű".encode(), "text/markdown")}).json()
+    job = client.post("/api/convert/run", json={"file_id": up["file_id"], "target": "html"})
+    assert job.status_code in (200, 202), job.text
+    jid = job.json().get("id") or job.json().get("job_id")
+    assert client.get(f"/api/jobs/{jid}").status_code == 200
+    fl = client.get("/api/files").json()
+    assert up["file_id"] in [f.get("file_id") or f.get("id") for f in fl.get("inputs", []) + fl.get("outputs", [])], fl
+    assert client.post("/api/import", json={"url": "http://127.0.0.1/x"}).status_code in (400, 403)   # SSRF-őr
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

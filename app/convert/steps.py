@@ -101,7 +101,7 @@ _LO_FILTER = {
     "calc": {"xlsx": "Calc MS Excel 2007 XML", "xls": "MS Excel 97", "xltx": "Calc MS Excel 2007 XML Template",
              "xlt": "MS Excel 97 Vorlage/Template", "xlsm": "Calc MS Excel 2007 VBA XML", "ods": "calc8",
              "fods": "OpenDocument Spreadsheet Flat XML", "csv": "Text - txt - csv (StarCalc):44,34,76,1",
-             "pdf": "calc_pdf_Export", "html": "HTML (StarCalc)", "dif": "DIF", "slk": "SYLK"},
+             "pdf": "calc_pdf_Export", "html": "HTML (StarCalc)", "dif": "DIF:76", "slk": "SYLK"},
     "impress": {"pptx": "Impress MS PowerPoint 2007 XML", "ppt": "MS PowerPoint 97", "pptm": "Impress MS PowerPoint 2007 XML VBA",
                 "pps": "MS PowerPoint 97 AutoPlay", "ppsx": "Impress MS PowerPoint 2007 XML AutoPlay",
                 "pot": "MS PowerPoint 97 Vorlage", "potx": "Impress MS PowerPoint 2007 XML Template", "odp": "impress8",
@@ -212,6 +212,8 @@ async def libreoffice(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     if cls == "calc" and fmt == "csv" and ctx.opts.get("delimiter") not in (None, "auto"):
         d = {"tab": "\t"}.get(ctx.opts["delimiter"], ctx.opts["delimiter"])
         filt = f"Text - txt - csv (StarCalc):{ord(d)},34,76,1"
+    if sfmt in ("html", "htm", "xhtml") and fmt == "ott":
+        args.append("--infilter=HTML (StarWriter)")
     out_ext = fmt
     args += ["--convert-to", f"{out_ext}:{filt}", "--outdir", str(work / "out"), str(inp)]
     await run(*args, timeout=600)
@@ -608,7 +610,24 @@ async def imagemagick(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
         args += advanced.check(o["advanced"], "imagemagick")
     args.append(f"{ {'jpg': 'jpeg'}.get(fmt, fmt) }:{dst}")
     await run(*args, timeout=600)
+    if fmt == "cur":
+        _ico_as_cur(dst)
     return _ok([dst])
+
+
+def _ico_as_cur(p: Path) -> None:
+    """Az ImageMagick a .cur-t ikonként (ICO, típus 1) írja — a kurzorhoz típus 2 és forrópont kell (bal felső sarok);
+    a képadat ugyanaz."""
+    b = bytearray(p.read_bytes())
+    if len(b) < 6 or b[:4] != b"\0\0\1\0":
+        return
+    b[2] = 2
+    for k in range(int.from_bytes(b[4:6], "little")):
+        e = 6 + 16 * k
+        if e + 16 > len(b):
+            break
+        b[e + 4:e + 8] = b"\0\0\0\0"          # színsíkok/bitmélység helyén: forrópont x, y
+    p.write_bytes(bytes(b))
 
 
 async def heif(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
@@ -1380,6 +1399,8 @@ _FF_SCRIPT = ("import fontforge,sys\n"
               "    f.bitmapSizes=((16,),)\n"
               "    f.regenBitmaps((16,))\n"
               "    f.generate(o[:-4]+'.', bitmap_type='bdf')\n"
+              "elif o.endswith('.sfd'):\n"
+              "    f.save(o)\n"
               "else:\n"
               "    f.generate(o)\n")
 

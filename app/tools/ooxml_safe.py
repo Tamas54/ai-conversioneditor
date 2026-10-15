@@ -7,7 +7,9 @@ w:shd típus nélkül, rövid w:nsid. Itt csak ezeket javítjuk — a tartalomho
   sorrend   pPr, rPr, style, sectPr, settings, tblPr, tcPr, trPr, szegélyek, számozási szint — a séma
             sorrendje szerint (ugyanaz, amit a python-docx/Word használ); az ismeretlen (bővítmény) elemek
             az előttük álló ismert elem után maradnak
-  értékek   w:color/w:fill „#RRGGBB” → „RRGGBB”; „16.0” → „16”; w:shd val nélkül → clear; w:nsid/w:tmpl 8 jegyre
+  értékek   w:color/w:fill „#RRGGBB” → „RRGGBB”; „16.0” → „16”; w:shd val nélkül → clear; w:nsid/w:tmpl 8 jegyre;
+            w:rFonts-ban CSS-betűlista („Aptos;Calibri;Segoe UI;Arial;sans-serif” — a LibreOffice HTML-importja) →
+            az első család (a séma legfeljebb 31 karaktert enged)
   xlsx      a styles.xml betűtípus-elemei az Excel sorrendjében
 
 Ha nincs mit javítani, a fájlhoz nem nyúlunk; hiba esetén a kimenet marad, ahogy volt.
@@ -143,6 +145,12 @@ def _fix_word_part(root) -> int:
                 el.set(k, v[1:].upper()); n += 1
             elif _FLOAT_INT.fullmatch(v):
                 el.set(k, v.split(".")[0]); n += 1
+        if local == "rFonts":
+            for a in ("ascii", "hAnsi", "cs", "eastAsia"):
+                v = el.get(f"{wq}{a}")
+                if v and (len(v) > 31 or ";" in v or "," in v):
+                    first = re.split(r"[;,]", v)[0].strip().strip("'\"")[:31]
+                    el.set(f"{wq}{a}", first or "Calibri"); n += 1
         if local == "shd" and el.get(f"{wq}val") is None:
             el.set(f"{wq}val", "clear"); n += 1
         if local in ("nsid", "tmpl"):

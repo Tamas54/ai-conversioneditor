@@ -123,12 +123,14 @@ async def convert_path(src: Path, target: str, options: Optional[dict[str, Any]]
             if available("ocrmypdf"):
                 current = [await ocr_pdf(current[0], work / "ocr.pdf", opts.get("ocr_language", "eng"))]
                 used.append("ocrmypdf")
-    for i, edge in enumerate(path):
+    n = 0                                   # a lépésmappák számozása folytatódik: a 2. lépés kimenete nem írhatja
+    for i, edge in enumerate(path):         # felül az 1.-ét (md→pdf→PDF/A-nál a Ghostscript a saját bemenetére írt: üres lap)
         final = i == len(path) - 1
-        ctx = Ctx(work, opts, final=final, source_fmt=sfmt, resolve=resolve)
+        ctx = Ctx(work, opts, final=final, source_fmt=sfmt, resolve=resolve, _n=n)
         nxt: list[Path] = []
         for p in current:
             nxt += await STEPS[edge.engine](p, edge.dst, ctx)
+        n = ctx._n
         current = nxt
         used.append(edge.engine)
         if edge.dst == "pdf" and rng and sfmt != "pdf" and len(current) == 1:

@@ -182,7 +182,8 @@ def test_ooxml_fix_repairs_engine_quirks_and_is_idempotent(tmp_path):
     data = {i.filename: src.read(i.filename) for i in src.infolist()}
     doc = data["word/document.xml"].decode()
     doc = doc.replace("<w:body>", '<w:body><w:p><w:pPr><w:jc w:val="left"/><w:pStyle w:val="Normal"/></w:pPr>'
-                                  '<w:r><w:rPr><w:sz w:val="22.0"/><w:b/></w:rPr><w:t>ő</w:t></w:r></w:p>', 1)
+                                  '<w:r><w:rPr><w:rFonts w:ascii="Aptos;Calibri;Segoe UI;Arial;sans-serif" '
+                                  'w:hAnsi="\'Segoe UI\', Arial"/><w:sz w:val="22.0"/><w:b/></w:rPr><w:t>ő</w:t></w:r></w:p>', 1)
     data["word/document.xml"] = doc.encode()
     st = data["word/settings.xml"].decode()
     st = st.replace("</w:settings>", '<w:proofState w:spelling="clean"/><w:proofState w:grammar="clean"/>'
@@ -200,6 +201,8 @@ def test_ooxml_fix_repairs_engine_quirks_and_is_idempotent(tmp_path):
     root = etree.fromstring(z.read("word/document.xml"))
     _assert_ordered(root)
     assert next(root.iter(f"{W}sz")).get(f"{W}val") == "22"
+    rf = next(root.iter(f"{W}rFonts"))                       # LibreOffice HTML-import: CSS-betűlista → első család
+    assert (rf.get(f"{W}ascii"), rf.get(f"{W}hAnsi")) == ("Aptos", "Segoe UI")
     settings = etree.fromstring(z.read("word/settings.xml"))
     _assert_ordered(settings)
     names = [etree.QName(c).localname for c in settings]
@@ -245,3 +248,120 @@ def test_epub_mimetype_first_for_apple_books(tmp_path):
         subprocess.run(["pandoc", str(md), "-o", str(e), "--metadata", "title=T"], check=True)
         before = e.read_bytes()
         assert ios_safe.epub_ocf(e) == [] and e.read_bytes() == before
+
+
+APPLE_MIME = {"pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              "jpg": "image/jpeg", "png": "image/png", "heic": "image/heic", "gif": "image/gif", "webp": "image/webp",
+              "mp4": "video/mp4", "mov": "video/quicktime", "m4a": "audio/mp4", "mp3": "audio/mpeg",
+              "epub": "application/epub+zip", "zip": "application/zip", "csv": "text/csv", "txt": "text/plain",
+              "html": "text/html", "svg": "image/svg+xml", "key": "application/vnd.apple.keynote"}
+
+
+def test_every_format_downloads_with_its_real_extension_and_type():
+    """Mind a 264 formátum: a letöltött név a valódi kiterjesztésre végződik (Safari nem fűz hozzá „.txt”-t),
+    a típus nem „octet-stream”, és az Apple-appoknak fontosak a szabványos MIME-ot kapják."""
+    from app.catalog import formats
+    from app.routes.files import download_meta
+    assert len(formats.FORMATS) >= 264
+    for ext in formats.FORMATS:
+        name, media = download_meta(f"abc.{ext}", "Árvíztűrő jelentés")
+        assert name == f"Árvíztűrő jelentés.{ext}" and media != "application/octet-stream", (ext, name, media)
+        assert download_meta(f"abc.{ext}", "jelentés.txt")[0] == f"jelentés.{ext}" or ext == "txt", ext
+    for ext, mime in APPLE_MIME.items():
+        assert download_meta(f"abc.{ext}", "x")[1] == mime, ext
+
+
+def test_output_checker_catches_what_breaks_on_a_phone(tmp_path, samples):
+    """A sweep --verify ellenőrzője: jó fájlra csend, rosszra pontos hiba."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import output_check as oc
+    good = samples.docx()
+    assert oc.check(good, "docx", text=True) == []
+    fake = tmp_path / "fake.pdf"
+    fake.write_bytes(b"<html>not a pdf</html>")
+    assert "wrong signature" in oc.check(fake, "pdf")[0]
+    latin = tmp_path / "latin.txt"
+    latin.write_text("Árvíztûrõ tükörfúrógép", "utf-8")
+    assert oc.check(latin, "txt", text=True) == ["accent ő missing", "accent ű missing", "Latin-1 substitute õ/û found (ő/ű lost)"]
+    ep = tmp_path / "bad.epub"
+    with zipfile.ZipFile(ep, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("META-INF/container.xml", "<container/>")
+        z.writestr("mimetype", "application/epub+zip")
+    assert oc.check(ep, "epub")[0] == "'mimetype' is not the first zip entry"
+    bad_json = tmp_path / "x.json"
+    bad_json.write_text('{"a": ', "utf-8")
+    assert oc.check(bad_json, "json")[0].startswith("does not parse as json")
+
+
+def test_chain_step_never_writes_over_its_own_input(tmp_path, monkeypatch):
+    """md → pdf → PDF/A: a 2. lépés kimenete ugyanazt a nevet kapta, mint az 1.-é (s1/jegyzet.pdf), és a Ghostscript
+    a saját bemenetére írt — üres lap lett. A lépésmappák számozása most a láncon át folytatódik."""
+    from app.convert import graph, service, steps
+    seen: list[tuple[Path, Path]] = []
+
+    async def write(src, fmt, ctx):
+        dst = ctx.out(src, fmt)
+        seen.append((src, dst))
+        assert dst != src, "a lépés a saját bemenetére írna"
+        dst.write_bytes(src.read_bytes() + fmt.encode())
+        return [dst]
+    monkeypatch.setitem(steps.STEPS, "fake1", write)
+    monkeypatch.setitem(steps.STEPS, "fake2", write)
+    monkeypatch.setattr(service, "plan_or_raise", lambda *a, **k: [graph.Edge("md", "pdf", "fake1", 1),
+                                                                    graph.Edge("pdf", "pdfa", "fake2", 1)])
+    src = tmp_path / "jegyzet.md"
+    src.write_text("ő ű", "utf-8")
+    outs, used = asyncio.run(service.convert_path(src, "pdfa", {}, tmp_path / "w"))
+    assert used == ["fake1", "fake2"] and outs[0].read_bytes() == "ő ű".encode() + b"pdfpdfa"
+    assert len({d for _, d in seen}) == 2
+
+
+def test_office_package_content_types_first(tmp_path):
+    """A LibreOffice a [Content_Types].xml-t a csomag végére írja; a kapu előre teszi, a tartalom bájtra ugyanaz."""
+    from app.tools import ios_safe
+    from docx import Document
+    good = tmp_path / "a.docx"
+    d = Document()
+    d.add_paragraph("Árvíztűrő ő ű")
+    d.save(good)
+    bad = tmp_path / "b.docx"
+    with zipfile.ZipFile(good) as zi, zipfile.ZipFile(bad, "w", zipfile.ZIP_DEFLATED) as zo:
+        names = [n for n in zi.namelist() if n != "[Content_Types].xml"] + ["[Content_Types].xml"]
+        for n in names:
+            zo.writestr(n, zi.read(n))
+    assert asyncio.run(ios_safe.finalize(bad)) == ["[Content_Types].xml first"]
+    with zipfile.ZipFile(bad) as z, zipfile.ZipFile(good) as g:
+        assert z.namelist()[0] == "[Content_Types].xml" and z.testzip() is None
+        assert {n: z.read(n) for n in z.namelist()} == {n: g.read(n) for n in g.namelist()}
+    assert asyncio.run(ios_safe.finalize(bad)) == []
+
+
+def test_fb2_and_xml_lose_illegal_control_characters(tmp_path):
+    """A PDF-ből kinyert szöveg lapdobása (&#12;) tiltott XML 1.0-ban — a szigorú e-könyv-olvasó meg sem nyitja."""
+    from app.tools import ios_safe
+    p = tmp_path / "konyv.fb2"
+    p.write_bytes('<?xml version="1.0" encoding="utf-8"?><FictionBook><body><p>ő&#12;ű\x0c&#xB; &#10;&#9; Ő</p></body></FictionBook>'.encode())
+    assert asyncio.run(ios_safe.finalize(p)) == ["invalid XML characters removed"]
+    t = p.read_text("utf-8")
+    assert "<p>őű &#10;&#9; Ő</p>" in t
+    etree.fromstring(p.read_bytes())
+    assert asyncio.run(ios_safe.finalize(p)) == []
+    u16 = tmp_path / "x.xml"
+    u16.write_bytes("<a>\x0c</a>".encode("utf-16"))
+    assert ios_safe.xml_clean(u16) == []                           # UTF-16-hoz nem nyúl
+
+
+def test_cursor_is_a_cursor_not_an_icon(tmp_path):
+    from app.convert.steps import _ico_as_cur
+    from PIL import Image
+    p = tmp_path / "k.cur"
+    Image.new("RGBA", (32, 32), (200, 30, 30, 255)).save(p, format="ICO", sizes=[(32, 32)], bitmap_format="bmp")   # mint az ImageMagick: BMP-adat
+    assert p.read_bytes()[:4] == b"\0\0\1\0"
+    _ico_as_cur(p)
+    b = p.read_bytes()
+    assert b[:4] == b"\0\0\2\0" and b[10:14] == b"\0\0\0\0"        # típus 2, forrópont (0, 0)
+    with Image.open(p) as im:
+        assert im.format == "CUR" and im.size == (32, 32)

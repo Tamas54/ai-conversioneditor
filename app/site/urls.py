@@ -149,7 +149,7 @@ def first_segments() -> frozenset[str]:
     segs: set[str] = set()
     for lang in i18n.langs():
         if lang == i18n.DEFAULT:
-            for k in ("convert", "formats", "tools", "compare", "developers", "connect_ai", "units", "timezones"):
+            for k in ("convert", "formats", "tools", "compare", "developers", "connect_ai", "units", "timezones", "agents"):
                 segs.add(S(lang, k))
         else:
             segs.add(lang)

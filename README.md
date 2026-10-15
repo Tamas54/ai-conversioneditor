@@ -104,7 +104,12 @@ védve; az ffmpeg/ImageMagick-kapcsolók engedélyezőlistásak, fájlra/URL-re 
 aláírás és az adatprofil AES-256-GCM-mel, felhasználónként külön kulccsal titkosítva.
 
 **Tesztek**: `pytest` (a mintafájlokat a `tests/samples.py` generálja; ideiglenes Postgres a `scripts/pgtemp.py`-ból),
-teljes konverziós söprés: `python scripts/sweep_conversions.py`.
+teljes konverziós söprés: `python scripts/sweep_conversions.py --verify` — minden irány kimenetét formátumtudatosan
+ellenőrzi (`scripts/output_check.py`: aláírás-bájtok, a saját olvasójával megnyílik — Pillow, pypdf + qpdf, python-docx /
+openpyxl / python-pptx, ODF/EPUB-csomagszabály, ffprobe + iPhone-lejátszhatóság, fontTools, kibontás, JSON/YAML/XML —,
+szöveges forrásnál az ő/ű megléte, és a letöltés neve). A gyártási képben jelenleg 524/524 irány hibátlan, a Word/
+Excel/PowerPoint-kimenetek a Microsoft Open XML SDK validátorán is 0 hibával mennek át. Az oldal teljes, éles
+beállítású bejárása (jelszóvédelem be, süti nélküli robot, indexelés nyitva): `python scripts/site_crawl.py`.
 
 ## Konverziós mátrix
 

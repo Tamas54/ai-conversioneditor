@@ -4,6 +4,10 @@ Egy kapu, kiterjesztés szerint:
   pptx-család   → keynote_safe (jegyzetmester, sldSz, nyomtató-csonk, tengely-id…)
   docx/xlsx     → ooxml_safe (sémasorrend, „#szín”, „16.0”, w:shd típus, w:nsid)
   epub          → Apple Books: „mimetype” elöl, tömörítetlenül
+  minden OOXML  → [Content_Types].xml a csomag első bejegyzése (a Word így ír; a szigorú, folyamként olvasó
+                  nézegetők ezt várják)
+  fb2/xml/svg,  → az XML 1.0-ban tiltott vezérlőkarakterek (pl. a PDF-szöveg lapdobása, &#12;) ki — különben
+  fodt/fods…      a szigorú olvasók (Apple Books, e-könyv-olvasók) meg sem nyitják
   mp4/m4v/mov,  → csak ami kell, és amennyire kell:
   m4a/m4b/m4r,      • moov a fájl végén (az iPhone/Safari csak az egész letöltése után játszaná) → +faststart
   3gp/3g2           • HEVC „hev1” címkével (az Apple csak „hvc1”-et játszik) → -tag:v hvc1
@@ -19,7 +23,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import struct
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -167,15 +174,63 @@ def epub_ocf(path: Path) -> list[str]:
         return []
 
 
+XML_EXTS = {"fb2", "xml", "svg", "fodt", "fods", "fodp", "fodg", "opml", "xhtml", "kml", "gpx"}
+_BAD_REF = re.compile(rb"&#(?:[xX]0*(?:[0-8bBcCeEfF]|1[0-9a-fA-F])|0*(?:[0-8]|1[124-9]|2[0-9]|3[01]));")
+_BAD_CHR = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def xml_clean(path: Path) -> list[str]:
+    """Az XML 1.0-ban tiltott vezérlőkarakterek (nyersen vagy &#12;-ként) eltávolítva. UTF-16-hoz nem nyúl."""
+    try:
+        b = path.read_bytes()
+        if b[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in b[:256]:
+            return []
+        nb = _BAD_CHR.sub(b"", _BAD_REF.sub(b"", b))
+        if nb == b:
+            return []
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".xml-")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(nb)
+        os.replace(tmp, path)
+        return ["invalid XML characters removed"]
+    except Exception as e:
+        log.warning("XML pass skipped for %s: %s", path.name, e)
+        return []
+
+
+def ct_first(path: Path) -> list[str]:
+    """OOXML: a [Content_Types].xml legyen az első bejegyzés (a LibreOffice a végére teszi)."""
+    from app.tools.keynote_safe import _rewrite
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            if not names or names[0] == "[Content_Types].xml" or "[Content_Types].xml" not in names:
+                return []
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".ct-")
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    _rewrite(zf, fh, {}, set())
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+        os.replace(tmp, path)
+        return ["[Content_Types].xml first"]
+    except Exception as e:
+        log.warning("OOXML order pass skipped for %s: %s", path.name, e)
+        return []
+
+
 async def finalize(path: Path, opts: Optional[dict[str, Any]] = None) -> list[str]:
     """Bármely kimenetre hívható: a formátumának megfelelő iPhone-javítás, vagy semmi."""
     from app.tools import keynote_safe, ooxml_safe
     path = Path(path)
     fmt = _ext(path)
     if fmt in keynote_safe.EXTS:
-        return await asyncio.to_thread(keynote_safe.fix, path)
+        return await asyncio.to_thread(keynote_safe.fix, path) + await asyncio.to_thread(ct_first, path)
     if fmt in ooxml_safe.DOCX_EXTS | ooxml_safe.XLSX_EXTS:
-        return await asyncio.to_thread(ooxml_safe.fix, path)
+        return await asyncio.to_thread(ooxml_safe.fix, path) + await asyncio.to_thread(ct_first, path)
+    if fmt in XML_EXTS:
+        return await asyncio.to_thread(xml_clean, path)
     if fmt == "epub":
         return await asyncio.to_thread(epub_ocf, path)
     if fmt in MEDIA_EXTS:

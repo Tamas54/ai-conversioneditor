@@ -11,6 +11,9 @@
       <li><a href="/app">{{ t('nav.open_app') }}</a></li>
       <li><a href="/app/plans">{{ t('footer.plans') }}</a></li>
     </ul></section>
+    <section><h2>{{ t('nav.make') }}</h2><ul>
+      {% for href, name in makers() %}<li><a href="{{ href }}">{{ name }}</a></li>{% endfor %}
+    </ul></section>
     <section><h2>{{ t('nav.agents') }}</h2><ul>
       <li><a href="{{ urls.agents(lang) }}">{{ t('footer.agents') }}</a></li>
       <li><a href="{{ urls.connect_ai(lang) }}">{{ t('nav.connect_ai') }}</a></li>

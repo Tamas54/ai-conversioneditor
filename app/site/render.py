@@ -19,10 +19,21 @@ TEMPLATES = Path(__file__).parent / "templates"
 def env() -> Environment:
     e = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(["html"]),
                     trim_blocks=True, lstrip_blocks=True)
-    e.globals.update(urls=urls, i18n=i18n, settings=settings)
+    e.globals.update(urls=urls, i18n=i18n, settings=settings, makers=makers)
     e.filters["jsonld"] = lambda d: Markup(json.dumps(d, ensure_ascii=False).replace("</", "<\\/"))
     e.filters["tojson_attr"] = lambda d: json.dumps(d, ensure_ascii=False)
     return e
+
+
+@functools.lru_cache(maxsize=1)
+def makers() -> list[tuple[str, str]]:
+    """Az /app készítő-oldalai (seo.PAGES): (útvonal, rövid név) — a láblécben, hogy minden oldal linkkel elérhető legyen."""
+    from app import seo
+    out = []
+    for key, m in seo.PAGES.items():
+        name = (m.get("h1") or m.get("title") or key).split(" — ")[0].split(" – ")[0]
+        out.append((f"/app/make/{key}", name))
+    return out
 
 
 def static_v(name: str) -> str:
