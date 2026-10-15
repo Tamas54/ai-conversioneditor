@@ -296,3 +296,81 @@ def parse_pages(spec: Optional[str], n: int) -> list[int]:
     if not out:
         raise OptionError(f"page_range selects no pages (the document has {n})")
     return out
+
+
+_PAGED = {"pdf", "djvu", "xps", "ps", "pdfa"}
+
+
+def for_pair(src: str, dst: str) -> list[Opt]:
+    """A párhoz ténylegesen értelmes opciók (a weboldal widgetje és táblázata ezt mutatja)."""
+    fs, fd = FORMATS.get(src), FORMATS.get(dst)
+    if not fs or not fd:
+        return []
+    sc, dc = fs.category, fd.category
+    keys: list[str] = ["engine"]
+    paged = src in _PAGED or sc in ("document", "presentation", "ebook", "spreadsheet")
+    if paged and (dst in _PAGED or dc == "image"):
+        keys.append("page_range")
+    if src in ("pdf", "djvu") and dc in ("document", "ebook") and dst not in _PAGED:
+        keys += ["ocr", "ocr_language"]
+    if dc == "ebook" or (dc == "document" and dst in ("epub", "docx", "odt", "pdf") and sc == "ebook"):
+        keys += ["title", "author", "cover", "output_profile"]
+    if sc == "spreadsheet" or src in ("csv", "tsv", "xlsx"):
+        keys += ["delimiter", "sheet"] if dst in ("csv", "tsv", "json", "xml", "yaml", "md", "html", "xlsx", "ods") else []
+    if sc == "presentation" and dc == "video":
+        keys += ["seconds_per_slide", "width"]
+    if dc == "image":
+        keys += ["width", "height", "fit", "quality", "strip_metadata", "background", "grayscale", "rotate", "flip"]
+        if dst in ("webp", "jxl"):
+            keys.append("lossless")
+        if sc in ("document", "presentation", "vector", "cad", "ebook"):
+            keys.append("dpi")
+        if sc == "video" or src in ("gif", "webp", "apng"):
+            keys += ["start", "end", "fps", "loop"] if dst in ("gif", "webp", "apng") else ["at"]
+        if src in ("gif", "tiff", "ico", "icns", "psd") and dst not in ("gif", "webp", "apng"):
+            keys.append("frame")
+        if sc == "image":
+            keys.append("advanced")
+    if dc == "vector":
+        keys += ["text_to_path"] + (["threshold"] if sc == "image" else [])
+        keys += ["width", "height", "dpi", "background"] if dst in ("png",) else []
+    if dc == "video":
+        keys += ["video_codec", "audio_codec", "resolution", "aspect", "aspect_mode", "fps", "crf", "preset", "video_bitrate",
+                 "audio_bitrate", "start", "end", "rotate", "flip", "subtitles", "subtitles_mode", "volume", "remove_audio",
+                 "strip_metadata", "advanced"]
+        if sc == "audio":
+            keys = ["engine", "cover", "resolution", "audio_bitrate", "start", "end", "volume"]
+    if dc == "audio":
+        keys += ["audio_codec", "audio_bitrate", "sample_rate", "channels", "start", "end", "volume", "strip_metadata", "advanced"]
+        if dst in ("wav", "aiff", "flac"):
+            keys.append("bit_depth")
+    if dc == "archive":
+        keys += ["password", "level"]
+    if dc == "font":
+        keys += ["subset_text"] + (["font_index"] if src == "ttc" else [])
+    if dc == "cad" or sc == "cad":
+        keys += ["dpi", "background"] if dc != "cad" else []
+    if dc == "document" and dst == "pdf" and sc in ("document", "spreadsheet", "presentation"):
+        keys.append("page_range") if "page_range" not in keys else None
+    seen, out = set(), []
+    for k in keys:
+        if k in OPTIONS and k not in seen:
+            seen.add(k)
+            out.append(OPTIONS[k])
+    return out
+
+
+def engine_choices(src: str, dst: str) -> list[str]:
+    """Mely motorok jöhetnek szóba ennél a párnál (az `engine` opció választéka)."""
+    from app.convert import graph
+    base = graph.plan(src, dst, static=True)
+    if not base:
+        return []
+    found = {e.engine for e in base}
+    for eng in OPTIONS["engine"].choices:
+        if eng == "auto" or eng in found:
+            continue
+        p = graph.plan(src, dst, static=True, prefer=eng)
+        if p and any(e.engine == eng for e in p):
+            found.add(eng)
+    return ["auto"] + sorted(e for e in found if e in OPTIONS["engine"].choices)

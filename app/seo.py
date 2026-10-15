@@ -204,16 +204,16 @@ def robots_header(meta: Optional[dict[str, Any]] = None) -> dict[str, str]:
     return {}
 
 
+AI_BOTS = ("GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-SearchBot", "Claude-User", "anthropic-ai",
+           "PerplexityBot", "Perplexity-User", "Google-Extended", "Applebot-Extended", "CCBot", "meta-externalagent",
+           "Amazonbot", "DuckAssistBot", "cohere-ai", "MistralAI-User", "Bingbot", "Googlebot")
+
+
 @router.get("/robots.txt", include_in_schema=False)
 async def robots() -> PlainTextResponse:
     if not indexable():
         return PlainTextResponse("# Not open for indexing yet.\nUser-agent: *\nDisallow: /\n")
-    body = f"""User-agent: *
-Allow: /app$
-Allow: /app/make/
-Allow: /app/plans
-Allow: /llms.txt
-Disallow: /app/file/
+    private = """Disallow: /app/file/
 Disallow: /app/files
 Disallow: /app/connect
 Disallow: /api/
@@ -224,7 +224,22 @@ Disallow: /mcp
 Disallow: /dashboard
 Disallow: /login
 Disallow: /signup
-
+Disallow: /v1/
+Allow: /v1/openapi.json
+"""
+    bots = "".join(f"User-agent: {b}\n" for b in AI_BOTS)
+    body = f"""User-agent: *
+Allow: /
+Allow: /app$
+Allow: /app/make/
+Allow: /app/plans
+Allow: /llms.txt
+Allow: /llms-full.txt
+{private}
+# AI search and assistant crawlers are welcome (answers may quote these pages)
+{bots}Allow: /
+{private}
+Sitemap: {_base()}/sitemap-index.xml
 Sitemap: {_base()}/sitemap.xml
 """
     return PlainTextResponse(body)
@@ -268,5 +283,159 @@ async def llms() -> PlainTextResponse:
 ## Plans
 
 - [Plans & pricing]({base}/app/plans): free to try; monthly credits on Plus and Pro; credit packs without a subscription.
+
+{_llms_more(base)}
 """
     return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
+
+
+# ---------- bővítés: többnyelvű nyilvános oldalak, sitemap-index, llms-full.txt, IndexNow ----------
+
+def _llms_more(base: str) -> str:
+    from app.site import content, urls
+    from app.catalog.formats import CATEGORIES
+    from app.site import i18n
+    c = content.counts()
+    L = i18n.DEFAULT
+    cats = "\n".join(f"- [{i18n.t(L, f'cat.{k}.h1')}]({base}{urls.category(L, k)}): {i18n.t(L, f'cat.{k}.desc')}" for k in CATEGORIES)
+    return f"""## Conversions
+
+{c['formats']} file formats, {c['conversions']} conversion directions, open-source engines (LibreOffice, FFmpeg, Calibre,
+Inkscape, ImageMagick, 7-Zip, fontTools, LibreDWG…). Hub: [{base}{urls.convert_hub(L)}]({base}{urls.convert_hub(L)})
+
+{cats}
+
+## Tools and API
+
+- [All {c['tools']} tools]({base}{urls.tools_hub(L)}): compress, PDF suite, image, video, audio, watermark, web capture,
+  archives, metadata, form recognition, signatures, agentic form filling.
+- [REST API]({base}{urls.developers(L)}) — jobs/tasks, webhooks, sandbox keys; [docs]({base}{urls.docs(L)});
+  OpenAPI: {base}/v1/openapi.json
+- [Connect your AI (MCP)]({base}{urls.connect_ai(L)}) — Claude, ChatGPT and other MCP clients.
+- Full detail for AI agents: {base}/llms-full.txt
+"""
+
+
+@router.get("/llms-full.txt", include_in_schema=False)
+async def llms_full() -> PlainTextResponse:
+    from app.catalog import tools as T
+    from app.catalog.formats import CATEGORIES, by_category
+    from app.convert import graph
+    from app.site import content, i18n, urls
+    base, L = _base(), i18n.DEFAULT
+    parts = [f"# {settings.PRODUCT_NAME} — full reference for AI agents\n",
+             f"Formats: {content.counts()['formats']}; conversion directions: {content.counts()['conversions']}; "
+             f"tools: {content.counts()['tools']}. Files are private to the account, kept {settings.FILE_RETENTION_DAYS} days.\n"]
+    for cat in CATEGORIES:
+        parts.append(f"\n## {i18n.t(L, f'cat.{cat}.name')}\n")
+        for f in sorted(by_category(cat), key=lambda f: (f.tier, f.key)):
+            tg = graph.targets(f.key, static=True)
+            parts.append(f"- {f.label} ({f.name}; {f.mime}): converts to {', '.join(x.upper() for x in tg[:30])}"
+                         f"{' …' if len(tg) > 30 else ''} — {base}{urls.fmt(L, f.key)}")
+    parts.append("\n## Tools (REST operation `tool/<key>`, MCP tool `file_tools`)\n")
+    for t in T.live(static=True):
+        parts.append(f"- {t.key}: {i18n.raw(L, f'tool.{t.key}.desc', '')} Options: {', '.join(t.options) or 'none'}. "
+                     f"{base}{urls.tool(L, t.key)}")
+    parts.append(f"""
+## REST API
+
+Base: {base}/v1 — `Authorization: Bearer sk_…` (sandbox keys: `sk_test_…`, no credits used).
+POST /v1/jobs with named tasks: import/url, import/upload, import/base64, import/s3, import/azure, import/gcs,
+import/sftp, import/google-drive, import/dropbox, import/onedrive → convert (input, output_format, options) or
+tool/<key> → export/url, export/s3, export/azure, export/gcs, export/sftp, export/google-drive, export/dropbox,
+export/onedrive. Live status: GET /v1/jobs/{{id}}?wait=30 or SSE /v1/jobs/{{id}}/events. Webhooks: /v1/webhooks.
+OpenAPI: {base}/v1/openapi.json — docs: {base}{urls.docs(L)}
+
+## MCP
+
+Endpoint {base}/mcp (Streamable HTTP). Grouped tools: convert (any format), file_tools (all tools above),
+transfer (cloud import/export), jobs (multi-step pipelines), forms / signature / fill_assistant (forms, signatures,
+agentic filling), units (unit and time-zone conversion), plus the editing tools (wordcraft, office, photocraft,
+vectorcraft, design, video, digitize, pdf_form…). Setup: {base}{urls.connect_ai(L)}
+""")
+    return PlainTextResponse("\n".join(parts), media_type="text/plain; charset=utf-8")
+
+
+_CHUNK = 5000
+
+
+@router.get("/sitemap-index.xml", include_in_schema=False)
+async def sitemap_index() -> Response:
+    from app.site.routes import all_paths
+    base = _base()
+    names = ["/sitemap.xml"]
+    for lang, paths in all_paths().items():
+        for i in range(0, max(1, len(paths)), _CHUNK):
+            names.append(f"/sitemaps/{lang}-{i // _CHUNK + 1}.xml")
+    body = '<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + \
+        "".join(f"  <sitemap><loc>{html.escape(base + n)}</loc></sitemap>\n" for n in names) + "</sitemapindex>\n"
+    return Response(body, media_type="application/xml", headers=robots_header())
+
+
+@router.get("/sitemaps/{name}.xml", include_in_schema=False)
+async def sitemap_part(name: str) -> Response:
+    from fastapi import HTTPException
+    from app.site import i18n
+    from app.site.routes import all_paths
+    lang, _, n = name.rpartition("-")
+    paths = all_paths().get(lang)
+    if paths is None or not n.isdigit():
+        raise HTTPException(404, "Not found")
+    chunk = paths[(int(n) - 1) * _CHUNK: int(n) * _CHUNK]
+    if not chunk:
+        raise HTTPException(404, "Not found")
+    others = {L: all_paths()[L] for L in i18n.langs()}
+    idx = (int(n) - 1) * _CHUNK
+    base = _base()
+    rows = []
+    for i, pth in enumerate(chunk):
+        alts = "".join(f'<xhtml:link rel="alternate" hreflang="{i18n.raw(L, "_meta.html", L)}" href="{html.escape(base + others[L][idx + i])}"/>'
+                       for L in others if idx + i < len(others[L]))
+        rows.append(f"  <url><loc>{html.escape(base + pth)}</loc>{alts}</url>\n")
+    body = ('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+            'xmlns:xhtml="http://www.w3.org/1999/xhtml">\n' + "".join(rows) + "</urlset>\n")
+    return Response(body, media_type="application/xml", headers=robots_header())
+
+
+def indexnow_key() -> str:
+    import hashlib
+    import os
+    return os.getenv("INDEXNOW_KEY") or hashlib.sha256(("indexnow|" + settings.FILE_SIGNING_KEY).encode()).hexdigest()[:32]
+
+
+@router.get("/indexnow-{key}.txt", include_in_schema=False)
+async def indexnow_keyfile(key: str) -> PlainTextResponse:
+    from fastapi import HTTPException
+    if key != indexnow_key():
+        raise HTTPException(404, "Not found")
+    return PlainTextResponse(key)
+
+
+async def indexnow_submit(paths: Optional[list[str]] = None) -> dict[str, Any]:
+    """A nyilvános oldalak beküldése az IndexNow-nak (Bing, Yandex, Seznam, Naver…). Csak nyitott indexelésnél."""
+    import httpx
+    from urllib.parse import urlparse
+    if not indexable():
+        return {"sent": 0, "reason": "indexing closed (INDEXING_OPEN)"}
+    from app.site.routes import all_paths
+    base = _base()
+    urls_ = [base + p for p in (paths or [p for ps in all_paths().values() for p in ps])]
+    sent = 0
+    async with httpx.AsyncClient(timeout=30) as c:
+        for i in range(0, len(urls_), 10000):
+            r = await c.post("https://api.indexnow.org/indexnow", json={
+                "host": urlparse(base).hostname, "key": indexnow_key(),
+                "keyLocation": f"{base}/indexnow-{indexnow_key()}.txt", "urlList": urls_[i:i + 10000]})
+            if r.status_code >= 300:
+                return {"sent": sent, "status": r.status_code, "error": r.text[:200]}
+            sent += len(urls_[i:i + 10000])
+    return {"sent": sent}
+
+
+@router.post("/api/seo/indexnow", include_in_schema=False)
+async def indexnow_now(body: Optional[dict] = None) -> dict[str, Any]:
+    from fastapi import HTTPException
+    from app import tenancy
+    if tenancy.current_user_id() != tenancy.ADMIN_ID:
+        raise HTTPException(403, "admin only")
+    return await indexnow_submit((body or {}).get("paths"))

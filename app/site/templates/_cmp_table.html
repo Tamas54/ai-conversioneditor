@@ -1,0 +1,5 @@
+<div class="scroll"><table class="cmp"><thead><tr><th scope="col">{{ t('cmp.feature') }}</th><th scope="col">{{ product }}</th>
+{% for k in (p.rows[0].cells.keys()|list)[1:] %}<th scope="col">{{ t('cmp.' ~ k ~ '.name') }}</th>{% endfor %}</tr></thead><tbody>
+{% for r in p.rows %}<tr><th scope="row">{{ r.label }}</th>{% for k, v in r.cells.items() %}<td class="v-{{ v }}">{{ t('cmp.v_' ~ v) }}</td>{% endfor %}</tr>{% endfor %}
+</tbody></table></div>
+<p class="small muted">{{ t('cmp.checked', date=p.checked) }}</p>

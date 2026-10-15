@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links, faq, widget %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+{% if p.tool.group == 'utility' %}
+{% include "_utility.html" %}
+{% else %}
+{{ widget(p.widget, p.options, t, lang) }}
+{% endif %}
+{% if p.points %}<ul class="points">{% for x in p.points %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+<section><h2>{{ t('tool.how_h', name=p.crumbs[-1][0]) }}</h2><ol class="steps">{% for s in p.steps %}<li>{{ s }}</li>{% endfor %}</ol></section>
+{% if p.options %}<section><h2>{{ t('ui.options') }}</h2><table class="facts"><tbody>{% for o in p.options %}<tr><th scope="row">{{ o.label }}</th><td>{{ o.help }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if p.app_path %}<p><a class="btn" href="{{ p.app_path }}">{{ t('tool.open_editor') }}</a></p>{% endif %}
+<section><h2>{{ t('conv.api_h') }}</h2><p>{{ t('tool.api_p', op=p.api_op) }} <a href="{{ urls.docs(lang) }}">{{ t('docs.crumb') }}</a> · <a href="{{ urls.connect_ai(lang) }}">{{ t('nav.connect_ai') }}</a></p></section>
+{% if p.formats %}<section><h2>{{ t('tool.formats_h') }}</h2>{{ links(p.formats, 'chips small') }}</section>{% endif %}
+{% if p.related %}<section><h2>{{ t('ui.related_tools') }}</h2>{{ links(p.related) }}</section>{% endif %}
+{{ faq(p.faq, t) }}
+{% endblock %}

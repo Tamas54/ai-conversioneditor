@@ -141,7 +141,7 @@ _ALL: list[Format] = [
     _f("jpg", "image", "JPEG Image", "image/jpeg", "Joint Photographic Experts Group", 1992, "raster lossy", 1, ("jpeg", "jpe")),
     _f("png", "image", "Portable Network Graphics", "image/png", "W3C", 1996, "raster lossless open-standard", 1),
     _f("webp", "image", "WebP Image", "image/webp", "Google", 2010, "raster lossy lossless animated", 1),
-    _f("heic", "image", "High Efficiency Image (HEIC)", "image/heic", "MPEG / Apple", 2015, "raster lossy", 1),
+    _f("heic", "image", "High Efficiency Image Coding", "image/heic", "MPEG / Apple", 2015, "raster lossy", 1),
     _f("heif", "image", "High Efficiency Image File Format", "image/heif", "MPEG", 2015, "raster lossy", 2),
     _f("avif", "image", "AV1 Image File Format", "image/avif", "Alliance for Open Media", 2019, "raster lossy lossless", 1),
     _f("gif", "image", "Graphics Interchange Format", "image/gif", "CompuServe", 1987, "raster lossless animated", 1),

@@ -114,6 +114,10 @@ app.include_router(billing.router)
 app.include_router(product.router)
 from app import seo  # noqa: E402
 app.include_router(seo.router)
+from app.routes import convert_web  # noqa: E402  (a weboldal konverter-widgetje, presetek, átváltók)
+app.include_router(convert_web.router)
+from app.site.routes import build_router as _site_router  # noqa: E402  (nyilvános, többnyelvű oldalak)
+app.include_router(_site_router())
 mount_mcp(app)
 
 

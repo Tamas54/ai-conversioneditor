@@ -1,0 +1,5 @@
+{% if p.tool.key == 'unit-converter' %}
+<p><a class="btn primary" href="{{ urls.units(lang) }}">{{ t('nav.units') }}</a></p>
+{% else %}
+<p><a class="btn primary" href="{{ urls.timezones(lang) }}">{{ t('nav.timezones') }}</a></p>
+{% endif %}

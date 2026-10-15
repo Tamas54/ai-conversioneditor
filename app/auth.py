@@ -34,7 +34,9 @@ COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook",
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
-                    "/.well-known/", "/oauth/")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
+                    "/.well-known/", "/oauth/",
+                    "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog",
+                    "/api/units/", "/api/timezones/", "/indexnow-")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
@@ -45,6 +47,7 @@ _GUEST_OK = (
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
     ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),
+    ("POST", "/api/convert/run"), ("POST", "/api/tools/run"), ("GET", "/api/presets"),   # bővítés: konverter, eszközök
     ("POST", "/api/make/deck"), ("POST", "/api/make/handout"),          # deck: vendégnek csak az üres pakli (AI nélkül)
     ("POST", "/api/make/blank"),                                        # „New”: üres fájl, AI nélkül
     ("POST", "/api/make/album"),                                        # fotóalbum: AI nélkül (az AI-képaláírás maga kér fiókot)
@@ -156,6 +159,10 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)
+    if request.method in ("GET", "HEAD"):
+        from app.site.urls import is_public
+        if is_public(path) and not (path == "/" and request.cookies.get(COOKIE)):
+            return await call_next(request)          # nyilvános oldal: nincs munkaterület, nincs vendég-süti
     uid = await key_uid(request)
     if path.startswith("/mcp") and uid is None:
         if settings.MCP_AUTH_TOKEN:

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links, faq, facts, widget %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+{{ widget(p.widget, p.options, t, lang) }}
+<section><h2>{{ t('conv.how_h', src=p.src.label, dst=p.dst.label, src_from=p.src_from) }}</h2>
+<ol class="steps">{% for s in p.steps %}<li>{{ s }}</li>{% endfor %}</ol></section>
+<section><h2>{{ t('conv.what_h') }}</h2>
+{% if p.note %}<p>{{ p.note }}</p>{% endif %}
+<p class="chain">{{ t('conv.chain') }} {% for c in p.chain %}<span>{{ c.from }} → {{ c.to }} <small>({{ c.engine }})</small></span>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+</section>
+<section class="split">
+  <div><h2><a href="{{ p.src.url }}">{{ p.src.label }}</a></h2><p>{{ p.src.desc }}</p>{{ facts(p.src.facts) }}</div>
+  <div><h2><a href="{{ p.dst.url }}">{{ p.dst.label }}</a></h2><p>{{ p.dst.desc }}</p>{{ facts(p.dst.facts) }}</div>
+</section>
+{% if p.options %}<section><h2>{{ t('ui.options') }}</h2><table class="facts"><tbody>{% for o in p.options %}<tr><th scope="row">{{ o.label }}</th><td>{{ o.help }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+<section><h2>{{ t('conv.api_h') }}</h2><p>{{ t('conv.api_p', src=p.src.label, dst=p.dst.label) }} <a href="{{ p.api_url }}">{{ t('conv.api_link') }}</a> · <a href="{{ urls.connect_ai(lang) }}">{{ t('nav.connect_ai') }}</a></p></section>
+<section><h2>{{ t('ui.related') }}</h2>
+{% if p.reverse %}<p><a href="{{ p.reverse.url }}">{{ p.reverse.name }}</a></p>{% endif %}
+{% if p.others_out %}<h3>{{ t('conv.others_out', src=p.src.label) }}</h3>{{ links(p.others_out) }}{% endif %}
+{% if p.others_in %}<h3>{{ t('conv.others_in', dst=p.dst.label) }}</h3>{{ links(p.others_in) }}{% endif %}
+{% if p.tools %}<h3>{{ t('ui.related_tools') }}</h3>{{ links(p.tools) }}{% endif %}
+<p><a href="{{ p.cat_url }}">{{ t('conv.all_in_cat', cat=p.cat_name) }}</a></p>
+</section>
+{{ faq(p.faq, t) }}
+{% endblock %}

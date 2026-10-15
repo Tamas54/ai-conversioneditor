@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links, faq %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+{% include "_cmp_table.html" %}
+<section><h2>{{ t('cmp.adv_h', product=product) }}</h2><ul class="points">{% for a in p.advantages %}<li>{{ a }}</li>{% endfor %}</ul></section>
+{{ faq(p.faq, t) }}
+<section><h2>{{ t('cmp.others_h') }}</h2>{{ links(p.others) }}</section>
+{% endblock %}

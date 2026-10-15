@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+{% if p.cat %}
+<form class="uc" data-cat="{{ p.cat }}" onsubmit="return false">
+  <input type="number" step="any" name="value" value="1" aria-label="{{ t('units.value') }}">
+  <select name="from" aria-label="{{ t('units.from') }}">{% for u in p.units %}<option value="{{ u.key }}">{{ u.name }} ({{ u.symbol }})</option>{% endfor %}</select>
+  <span>→</span>
+  <select name="to" aria-label="{{ t('units.to') }}">{% for u in p.units %}<option value="{{ u.key }}"{% if loop.index == 2 %} selected{% endif %}>{{ u.name }} ({{ u.symbol }})</option>{% endfor %}</select>
+  <output name="result" aria-live="polite"></output>
+</form>
+{% if p.examples %}<section><h2>{{ t('units.examples_h') }}</h2><ul class="points">{% for e in p.examples %}<li>{{ e.text }}</li>{% endfor %}</ul></section>{% endif %}
+{% endif %}
+<section><h2>{{ t('units.cats_h') }}</h2>{{ links(p.cats) }}</section>
+{% endblock %}

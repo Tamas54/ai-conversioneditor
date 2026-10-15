@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+<section><h2>{{ t('home.popular') }}</h2>{{ links(p.popular) }}</section>
+{% for c in p.cats %}
+<section class="cat"><h2><a href="{{ c.url }}">{{ c.name }}</a></h2><p>{{ c.desc }}</p>
+<ul class="chips">{% for f in c.formats %}<li><a href="{{ f.url }}">{{ f.label }}</a></li>{% endfor %}</ul></section>
+{% endfor %}
+{% endblock %}

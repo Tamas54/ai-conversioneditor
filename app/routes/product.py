@@ -6,7 +6,7 @@ import hashlib
 import html
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.config import settings
@@ -33,8 +33,16 @@ def _digest(path: str, mtime_ns: int, size: int) -> str:
 
 
 @router.get("/", include_in_schema=False)
-async def root():
-    return RedirectResponse("/app", status_code=301)
+async def root(request: Request):
+    """Belépett felhasználó → az app; mindenki más (és a keresők) → a nyilvános kezdőlap."""
+    from app.auth import COOKIE, session_uid
+    from app import tenancy
+    uid = session_uid(request.cookies.get(COOKIE))
+    if uid and not tenancy.is_guest(uid):
+        return RedirectResponse("/app", status_code=302)
+    from app.site import i18n
+    from app.site.routes import page_for_home
+    return page_for_home(i18n.DEFAULT)
 
 
 @router.get("/favicon.ico", include_in_schema=False)

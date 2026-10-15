@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+<section class="jb" data-base="{{ p.base }}">
+  <div class="jb-tasks"></div>
+  <p><button type="button" class="btn" data-jb="add-import">+ {{ t('jb.add_import') }}</button>
+     <button type="button" class="btn" data-jb="add-convert">+ {{ t('jb.add_convert') }}</button>
+     <button type="button" class="btn" data-jb="add-tool">+ {{ t('jb.add_tool') }}</button>
+     <button type="button" class="btn" data-jb="add-export">+ {{ t('jb.add_export') }}</button></p>
+  <h2>JSON</h2><pre><code class="jb-json">{}</code></pre>
+  <h2>curl</h2><pre><code class="jb-curl"></code></pre>
+  <p><label>API key <input type="password" class="jb-key" placeholder="sk_test_…" autocomplete="off"></label>
+     <button type="button" class="btn primary" data-jb="run">{{ t('jb.run') }}</button></p>
+  <pre><code class="jb-result"></code></pre>
+</section>
+<noscript><p>{{ t('ui.noscript') }}</p></noscript>
+{% endblock %}

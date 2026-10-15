@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+<nav class="toc"><ol><li><a href="#auth">{{ t('docs.auth_h') }}</a></li><li><a href="#jobs">{{ t('docs.jobs_h') }}</a></li><li><a href="#upload">{{ t('docs.upload_h') }}</a></li><li><a href="#status">{{ t('docs.status_h') }}</a></li><li><a href="#webhooks">{{ t('docs.webhooks_h') }}</a></li><li><a href="#sandbox">{{ t('docs.sandbox_h') }}</a></li><li><a href="#limits">{{ t('docs.limits_h') }}</a></li><li><a href="#ops">{{ t('docs.ops_h') }}</a></li></ol></nav>
+<section id="auth"><h2>{{ t('docs.auth_h') }}</h2><p>{{ t('docs.auth_p') }}</p>
+<pre><code>Authorization: Bearer sk_live_or_test_key</code></pre></section>
+<section id="jobs"><h2>{{ t('docs.jobs_h') }}</h2><p>{{ t('docs.jobs_p') }}</p>
+<div class="tabs" role="tablist">
+<details open><summary>curl</summary><pre><code>curl -X POST {{ p.base }}/v1/jobs \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"tag": "invoice-42", "tasks": {
+    "in":   {"operation": "import/url", "url": "https://example.com/invoice.docx"},
+    "pdf":  {"operation": "convert", "input": "in", "output_format": "pdf", "options": {"page_range": "1-2"}},
+    "out":  {"operation": "export/url", "input": "pdf"}}}'</code></pre></details>
+<details><summary>Python</summary><pre><code>from aice import Client          # pip install ./sdk/python
+c = Client("{{ p.base }}", api_key="sk_…")
+job = c.jobs.create({
+    "in":  {"operation": "import/url", "url": "https://example.com/invoice.docx"},
+    "pdf": {"operation": "convert", "input": "in", "output_format": "pdf"},
+    "out": {"operation": "export/url", "input": "pdf"},
+})
+job = c.jobs.wait(job["id"])
+for f in c.jobs.files(job):
+    c.download(f["url"], f["filename"])</code></pre></details>
+<details><summary>JavaScript</summary><pre><code>import { Client } from "@aice/sdk";   // npm install ./sdk/node
+const c = new Client("{{ p.base }}", { apiKey: process.env.KEY });
+let job = await c.jobs.create({
+  in:  { operation: "import/url", url: "https://example.com/invoice.docx" },
+  pdf: { operation: "convert", input: "in", output_format: "pdf" },
+  out: { operation: "export/url", input: "pdf" },
+});
+job = await c.jobs.wait(job.id);
+console.log(c.jobs.files(job));</code></pre></details>
+</div></section>
+<section id="upload"><h2>{{ t('docs.upload_h') }}</h2><p>{{ t('docs.upload_p') }}</p>
+<pre><code>curl -X POST {{ p.base }}/v1/jobs -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"tasks": {"up": {"operation": "import/upload"}, "jpg": {"operation": "convert", "input": "up", "output_format": "jpg"}}}'
+# → tasks.up.result.form = {"url": "…/v1/upload/…", "fields": {…}}
+curl -X POST "$UPLOAD_URL" -F "file=@photo.heic"
+
+# large files: chunked upload
+curl -X PUT "$UPLOAD_URL/chunks/0" --data-binary @part0
+curl -X PUT "$UPLOAD_URL/chunks/1" --data-binary @part1
+curl -X POST "$UPLOAD_URL/complete" -d '{"filename": "film.mov", "chunks": 2}'</code></pre></section>
+<section id="status"><h2>{{ t('docs.status_h') }}</h2><p>{{ t('docs.status_p') }}</p>
+<pre><code>GET {{ p.base }}/v1/jobs/{id}?wait=30        # long-poll, up to 60 s
+GET {{ p.base }}/v1/jobs/{id}/events         # Server-Sent Events: task.updated, job.finished, job.failed</code></pre></section>
+<section id="webhooks"><h2>{{ t('docs.webhooks_h') }}</h2><p>{{ t('docs.webhooks_p') }}</p>
+<pre><code>POST {{ p.base }}/v1/webhooks  {"url": "https://example.com/hook", "events": ["job.finished", "job.failed"]}
+# delivery: X-Signature: sha256=HMAC_SHA256(secret, timestamp + "." + body), X-Webhook-Timestamp
+import hmac, hashlib
+ok = hmac.compare_digest(sig, "sha256=" + hmac.new(secret.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest())</code></pre></section>
+<section id="sandbox"><h2>{{ t('docs.sandbox_h') }}</h2><p>{{ t('docs.sandbox_p') }}</p></section>
+<section id="limits"><h2>{{ t('docs.limits_h') }}</h2><p>{{ t('docs.limits_p', rate=p.rate) }}</p></section>
+<section id="ops"><h2>{{ t('docs.ops_h') }}</h2>
+<div class="scroll"><table class="facts"><thead><tr><th>{{ t('docs.op') }}</th><th>{{ t('docs.op_desc') }}</th></tr></thead><tbody>
+{% for op, desc in p.ops %}<tr><th scope="row"><code>{{ op }}</code></th><td>{{ desc }}</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

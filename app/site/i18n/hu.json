@@ -1,0 +1,2295 @@
+{
+ "_meta": {
+  "native": "Magyar",
+  "html": "hu",
+  "locale": "hu_HU",
+  "dir": "ltr",
+  "pair": "{src}-bol-{dst}",
+  "suffix_from": {
+   "front": "-ből",
+   "back": "-ból",
+   "back_endings": "AKHOU0368"
+  }
+ },
+ "slug": {
+  "convert": "atalakitas",
+  "formats": "formatumok",
+  "tools": "eszkozok",
+  "compare": "osszehasonlitas",
+  "developers": "fejlesztoknek",
+  "docs": "dokumentacio",
+  "job_builder": "feladat-szerkeszto",
+  "connect_ai": "ai-csatlakoztatas",
+  "units": "mertekegyseg-valto",
+  "timezones": "idozona-valto"
+ },
+ "nav": {
+  "home": "Kezdőlap",
+  "convert": "Átalakítás",
+  "tools": "Eszközök",
+  "developers": "API",
+  "connect_ai": "AI csatlakoztatása",
+  "compare": "Összehasonlítás",
+  "open_app": "Az app megnyitása",
+  "units": "Mértékegység-váltó",
+  "timezones": "Időzóna-váltó"
+ },
+ "ui": {
+  "skip": "Ugrás a tartalomra",
+  "main_nav": "Fő menü",
+  "language": "Nyelv",
+  "breadcrumbs": "Morzsamenü",
+  "faq": "Kérdések és válaszok",
+  "default": "alapértelmezett",
+  "list_hint": "vesszővel elválasztva",
+  "choose": "Fájlok kiválasztása",
+  "or_drop": "vagy húzd ide őket",
+  "convert_to": "Erre:",
+  "options": "Beállítások",
+  "apply_all": "Minden fájlra",
+  "save_preset": "Mentés beállításként",
+  "presets": "Mentett beállítások",
+  "convert": "Átalakítás",
+  "run": "Indítás",
+  "related": "Kapcsolódó",
+  "related_tools": "Kapcsolódó eszközök",
+  "privacy": "A fájlok a saját, privát munkaterületeden maradnak, és automatikusan törlődnek. Az átalakításhoz nem kell fiók.",
+  "noscript": "Az átalakítóhoz JavaScript kell. A teljes appot is használhatod:"
+ },
+ "js": {
+  "download": "Letöltés",
+  "open_editor": "Megnyitás a szerkesztőben",
+  "failed": "Nem sikerült",
+  "timeout": "Túl sokáig tartott",
+  "preset_name": "A beállítás neve",
+  "or_drop": "vagy húzd ide őket"
+ },
+ "footer": {
+  "all_tools": "Minden eszköz",
+  "api": "REST API",
+  "compare_all": "Minden összehasonlítás",
+  "note": "{product} — fájlok átalakítása, szerkesztése és kitöltése nyílt forrású motorokkal és AI-jal. Alapból privát."
+ },
+ "home": {
+  "title": "{product} — bármilyen fájl átalakítása: {formats} formátum, AI-szerkesztés, űrlapok, aláírás",
+  "desc": "Dokumentumok, képek, videók, hangok, e-könyvek, archívumok, CAD-rajzok és betűtípusok átalakítása: {formats} formátum, {conversions} átalakítási irány, {tools} eszköz — ingyen a böngészőben, API-n vagy az AI-asszisztensedből.",
+  "h1": "Fájlok átalakítása, szerkesztése és kitöltése",
+  "lead": "{formats} fájlformátum és {conversions} átalakítási irány egy helyen, nyílt forrású motorokkal (LibreOffice, FFmpeg, Calibre, Inkscape, ImageMagick, 7-Zip). Fiók nélkül fájlonként {guest_mb} MB-ig; a fájlok privátok, és {retention} nap után törlődnek. Az átalakításon túl: AI-szerkesztés, űrlapfelismerés bármilyen fájlból, aláírás és ügynöki űrlapkitöltés.",
+  "stat_formats": "formátum",
+  "stat_conversions": "átalakítási irány",
+  "stat_tools": "eszköz",
+  "categories": "Mit szeretnél átalakítani?",
+  "formats_word": "formátum",
+  "popular": "Népszerű átalakítások",
+  "tools": "Eszközök",
+  "ai_h": "Az AI-asszisztensedből is",
+  "ai_p": "A Claude, a ChatGPT és más asszisztensek MCP-n hívják a {product} minden átalakítóját és eszközét — a fájlt letöltési és szerkesztő-linkkel kapják vissza.",
+  "api_h": "REST API fejlesztőknek",
+  "api_p": "Feladatok (jobs/tasks), webhookok, sandbox-kulcsok, OpenAPI, Python- és Node-SDK, Zapier, Make és n8n.",
+  "faq": [
+   [
+    "Ingyenes?",
+    "Igen. Az átalakítás és a fájleszközök ingyenesek a böngészőben, fiók nélkül fájlonként {guest_mb} MB-ig. Az AI-funkciókhoz (szerkesztés utasításra, szkennelt oldalak kiolvasása, ügynöki kitöltés) ingyenes fiók kell, és a havi keretéből fogynak."
+   ],
+   [
+    "Hány formátumot ismer?",
+    "{formats} formátumot 11 kategóriában és {conversions} átalakítási irányt, a DOCX-től, a PDF-től és a HEIC-től a DWG-ig, az EPUB-ig, az MKV-ig és a WOFF2-ig."
+   ],
+   [
+    "Biztonságban vannak a fájljaim?",
+    "A fájlok a saját munkaterületedre kerülnek, senkivel nem osztjuk meg őket, és tanításra sem használjuk; a letöltési linkek aláírtak, a fájlok {retention} nap után automatikusan törlődnek."
+   ],
+   [
+    "Használhatja az AI-asszisztensem?",
+    "Igen. A {product} MCP-szerver: egyszer csatlakoztatod a Claude-hoz vagy a ChatGPT-hez, és köznapi nyelven kérsz — „ezt a HEIC-et alakítsd JPG-vé”, „töltsd ki ezt az űrlapot a profilomból, és írd alá”."
+   ]
+  ]
+ },
+ "chub": {
+  "title": "Fájlátalakító — {formats} formátum, ingyen, online",
+  "desc": "Átalakítás {formats} fájlformátum között ({conversions} irány): dokumentumok, táblázatok, diák, e-könyvek, képek, vektorok, videó, hang, archívumok, CAD és betűtípusok.",
+  "h1": "Fájlátalakító",
+  "lead": "Válassz kategóriát vagy formátumot. Minden átalakítás nyílt forrású motorral fut, és megtartja a szöveget, az ékezeteket (ő, ű) és az elrendezést. {formats} formátum, {conversions} irány."
+ },
+ "catone": {
+  "document": "dokumentumformátum",
+  "spreadsheet": "táblázatformátum",
+  "presentation": "prezentációs formátum",
+  "ebook": "e-könyv-formátum",
+  "image": "képformátum",
+  "vector": "vektorgrafikus formátum",
+  "video": "videóformátum",
+  "audio": "hangformátum",
+  "archive": "archívumformátum",
+  "cad": "CAD-rajzformátum",
+  "font": "betűtípus-formátum"
+ },
+ "cat": {
+  "lead": "{n} formátum és {pairs} átalakítási irány: {name}.",
+  "formats_h": "Formátumok",
+  "pairs_h": "Minden átalakítás",
+  "document": {
+   "slug": "dokumentumok",
+   "name": "Dokumentumok",
+   "h1": "Dokumentum-átalakító",
+   "title": "Dokumentum-átalakító — Word, PDF, ODT, Pages és {n} formátum",
+   "desc": "Word, PDF, ODT, RTF, Markdown, LaTeX, Pages, WordPerfect, HWP, XPS, DjVu és más dokumentumok átalakítása — az elrendezés, a táblázatok és az ékezetek megmaradnak.",
+   "intro": "Az irodai formátumokat a LibreOffice, a szöveges jelölőnyelveket (Markdown, reStructuredText, LaTeX) a Pandoc, a PDF-, PostScript- és XPS-fájlokat a Ghostscript és a MuPDF kezeli."
+  },
+  "spreadsheet": {
+   "slug": "tablazatok",
+   "name": "Táblázatok",
+   "h1": "Táblázat-átalakító",
+   "title": "Táblázat-átalakító — Excel, CSV, ODS, Numbers és {n} formátum",
+   "desc": "XLSX, XLS, CSV, ODS, Numbers és más táblázatok átalakítása; exportálás PDF-be, JSON-ba, XML-be vagy Markdown-táblázatba.",
+   "intro": "Az Excel és az OpenDocument között a képletek és a munkalapok megmaradnak; a CSV elválasztóját (vessző, pontosvessző, tabulátor) magától felismeri."
+  },
+  "presentation": {
+   "slug": "prezentaciok",
+   "name": "Prezentációk",
+   "h1": "Prezentáció-átalakító",
+   "title": "Prezentáció-átalakító — PowerPoint, Keynote, ODP és {n} formátum",
+   "desc": "PPTX, PPT, Keynote és ODP diasorok átalakítása egymásba, PDF-be, képekbe vagy MP4-videóba.",
+   "intro": "A diák elrendezése és a jegyzetek megmaradnak; egy diasorból videó is lehet, diánként beállítható másodperccel."
+  },
+  "ebook": {
+   "slug": "e-konyvek",
+   "name": "E-könyvek",
+   "h1": "E-könyv-átalakító",
+   "title": "E-könyv-átalakító — EPUB, MOBI, AZW3, FB2 és {n} formátum",
+   "desc": "EPUB, MOBI, AZW3 (Kindle), FB2, LIT, képregények (CBZ, CBR) és más e-könyvek átalakítása címmel, szerzővel és borítóval.",
+   "intro": "A munkát a Calibre átalakítómotorja végzi, Kindle-, Kobo- és táblagép-profilokkal."
+  },
+  "image": {
+   "slug": "kepek",
+   "name": "Képek",
+   "h1": "Képátalakító",
+   "title": "Képátalakító — HEIC, WebP, AVIF, RAW és {n} formátum",
+   "desc": "HEIC, JPG, PNG, WebP, AVIF, JPEG XL, TIFF, PSD, RAW-fotók és más képek átalakítása; átméretezés, minőség, metaadat-törlés.",
+   "intro": "A formátumokat a Pillow, az ImageMagick, a libheif és a LibRaw fedi le; a minőség, a méret és a metaadatok fájlonként vagy egyszerre az összesre állíthatók."
+  },
+  "vector": {
+   "slug": "vektorok",
+   "name": "Vektorgrafika",
+   "h1": "Vektor-átalakító",
+   "title": "Vektor-átalakító — SVG, EPS, AI, EMF, CDR és {n} formátum",
+   "desc": "SVG, EPS, AI, EMF, WMF, CorelDRAW és más vektoros fájlok átalakítása; bittérképből SVG vektorizálással.",
+   "intro": "A vektorokat az Inkscape és a librsvg rajzolja ki; a Potrace egy bittérképes logóból tiszta SVG-t készít."
+  },
+  "video": {
+   "slug": "videok",
+   "name": "Videó",
+   "h1": "Videó-átalakító",
+   "title": "Videó-átalakító — MP4, MOV, MKV, WebM, AVI és {n} formátum",
+   "desc": "MP4, MOV, MKV, WebM, AVI és más videók átalakítása; kodek, felbontás, képkocka-sebesség, minőség, vágás, forgatás, felirat.",
+   "intro": "Az FFmpeg H.264, H.265, VP9 vagy AV1 kodekkel kódol; minden beállítás (kodek, CRF, bitráta, képarány, vágás) elérhető."
+  },
+  "audio": {
+   "slug": "hang",
+   "name": "Hang",
+   "h1": "Hang-átalakító",
+   "title": "Hang-átalakító — MP3, WAV, FLAC, M4A, OGG és {n} formátum",
+   "desc": "MP3, WAV, FLAC, AAC, M4A, OGG, Opus és más hangfájlok átalakítása; bitráta, mintavétel, csatornák, hangerő, vágás.",
+   "intro": "Az FFmpeg LAME-mel kódol MP3-at, valamint AAC-t, Opust, Vorbist és veszteségmentes FLAC-ot vagy ALAC-ot."
+  },
+  "archive": {
+   "slug": "archivumok",
+   "name": "Archívumok",
+   "h1": "Archívum-átalakító",
+   "title": "Archívum-átalakító — ZIP, RAR, 7Z, TAR.GZ és {n} formátum",
+   "desc": "RAR, 7Z, TAR.GZ, ISO és 40+ archívumformátum átalakítása ZIP-pé vagy 7Z-vé; jelszavas archívumok is.",
+   "intro": "Az archívumokat a 7-Zip, a The Unarchiver és a libarchive bontja ki; az útvonalakat ellenőrizzük, így semmi nem kerülhet a mappán kívülre."
+  },
+  "cad": {
+   "slug": "cad",
+   "name": "CAD",
+   "h1": "CAD-átalakító",
+   "title": "CAD-átalakító — DWG és DXF PDF-be, SVG-be, PNG-be",
+   "desc": "AutoCAD DWG- és DXF-rajzok átalakítása DXF-be, PDF-be, SVG-be, PNG-be vagy JPG-be AutoCAD nélkül.",
+   "intro": "A DWG-t a LibreDWG olvassa, a rajzot az ezdxf rajzolja ki a rétegeivel és vonaltípusaival."
+  },
+  "font": {
+   "slug": "betutipusok",
+   "name": "Betűtípusok",
+   "h1": "Betűtípus-átalakító",
+   "title": "Betűtípus-átalakító — TTF, OTF, WOFF, WOFF2, EOT és {n} formátum",
+   "desc": "TTF, OTF, WOFF, WOFF2, EOT és PostScript Type 1 betűk átalakítása; a betű szűkítése a szükséges karakterekre.",
+   "intro": "A webbetűket és a körvonalakat (TrueType ↔ CFF) a fontTools, a régebbi formátumokat a FontForge alakítja át."
+  }
+ },
+ "tag": {
+  "lossy": "veszteséges tömörítés",
+  "lossless": "veszteségmentes",
+  "raster": "raszteres (pixeles)",
+  "vector": "vektoros",
+  "text": "szöveges alapú",
+  "binary": "bináris",
+  "zip-xml": "ZIP-csomag XML-lel",
+  "container": "konténer",
+  "layered": "rétegek",
+  "animated": "animáció",
+  "macro": "makrók",
+  "template": "sablon",
+  "compressed": "tömörített",
+  "fixed-layout": "rögzített elrendezés",
+  "reflowable": "újratördelhető szöveg",
+  "legacy": "régi formátum",
+  "camera-raw": "nyers szenzoradat",
+  "single-file": "egyetlen fájl",
+  "open-standard": "nyílt szabvány"
+ },
+ "facts": {
+  "name": "Teljes név",
+  "ext": "Kiterjesztések",
+  "mime": "MIME-típus",
+  "category": "Kategória",
+  "developer": "Fejlesztő",
+  "year": "Megjelenés",
+  "type": "Tulajdonságok"
+ },
+ "fmtp": {
+  "title": "{label} fájl ({name}) — mi ez, és hogyan alakítható át",
+  "desc": "{name}: mi a .{label} fájl, mivel nyitható meg, és hogyan alakítható át {n} formátumba (és {m} formátumból).",
+  "h1": "{label} — {name}",
+  "facts_h": "Tények",
+  "outs_h": "{label} átalakítása erre",
+  "ins_h": "Átalakítás {label} formátumba"
+ },
+ "conv": {
+  "title": "{src_from} {dst} online — ingyenes, privát átalakítás telepítés nélkül",
+  "desc": "{src} ({srcname}) átalakítása {dst} ({dstname}) formátumba a böngészőben, API-n vagy az AI-asszisztensedből. Ingyenes, pontos, a fájlok automatikusan törlődnek.",
+  "h1": "{src} átalakítása {dst} formátumba",
+  "crumb": "{src} → {dst}",
+  "link": "{src} → {dst}",
+  "answer": "{src_from} úgy lesz {dst}, hogy feltöltöd a fájlt, ellenőrzöd, hogy a {dst} van kiválasztva, és megnyomod az Átalakítás gombot — az átalakítást a(z) {engines} végzi {steps}, és a {dst} fájl általában néhány másodperc alatt letölthető. Fiók nélkül fájlonként {guest_mb} MB-ig ingyenes, és a fájl {retention} nap után törlődik.",
+  "steps_1": "egy lépésben",
+  "steps_n": "{n} lépésben",
+  "fact_by": "– fejlesztő: {dev}",
+  "fact_year": "– megjelent: {year}",
+  "fact_sentence": "A {label} ({name}) egy {kind} {by} {year}.",
+  "step1": "Válaszd ki vagy húzd ide a {src} fájlt (egyszerre többet is lehet).",
+  "step2": "Ellenőrizd, hogy a cél a {dst}; a Beállításokban állíthatod a minőséget, a méretet vagy az oldaltartományt.",
+  "step3": "Nyomd meg az Átalakítás gombot — a folyamatjelző fájlonként mutatja, hol tart.",
+  "step4": "Töltsd le a {dst} fájlt, vagy nyisd meg a beépített szerkesztőben.",
+  "how_h": "Így lesz {src_from} {dst}",
+  "what_h": "Mi történik a fájllal",
+  "chain": "Motorlánc:",
+  "api_h": "API és AI-asszisztensek",
+  "api_p": "Ugyanez a {src} → {dst} átalakítás a REST API-ban egyetlen feladat, MCP-n egyetlen hívás.",
+  "api_link": "API-példa",
+  "others_out": "{src} átalakítása más formátumokba",
+  "others_in": "Más formátumokból {dst}",
+  "all_in_cat": "Minden átalakítás: {cat}",
+  "note_generic": "A fájl tartalma és szerkezete átkerül a {dst} fájlba; amit a célformátum nem tud tárolni, az egyszerűsödik.",
+  "faq": [
+   [
+    "Ingyenes a {src} → {dst} átalakítás?",
+    "Igen — a böngészőben fiók nélkül fájlonként {guest_mb} MB-ig ingyenes; ingyenes fiókkal egyszerre legfeljebb {batch_free} fájl, a Pro csomagban {batch_pro}."
+   ],
+   [
+    "Ugyanúgy fog kinézni a {src} fájlom {dst} formátumban?",
+    "{note}"
+   ],
+   [
+    "Melyik motor alakítja át a {src} fájlt {dst} formátumba?",
+    "A(z) {engines} — nyílt forrású, ugyanazok a motorok, amelyeket a profi eszközök is használnak."
+   ],
+   [
+    "Biztonságban vannak a fájljaim?",
+    "A saját, privát munkaterületeden maradnak, a letöltési linkek aláírtak, és {retention} nap után törlődnek."
+   ],
+   [
+    "Átalakíthatom a {src} fájlt {dst} formátumba API-n vagy a ChatGPT-ből, Claude-ból?",
+    "Igen: egyetlen REST-feladattal ({api}) vagy egyetlen MCP-hívással az AI-asszisztensedből — lásd: {mcp}."
+   ]
+  ]
+ },
+ "default": {
+  "quality": "A {dst} alapminősége {q} a 100-ból (1 és 100 között állítható).",
+  "lossless": "A {dst} veszteségmentes: a pixelek pontosan megmaradnak.",
+  "lzw": "A {dst} veszteségmentes LZW-tömörítéssel készül.",
+  "palette": "A {dst} adaptív, 256 színű palettát használ.",
+  "bitrate": "A {dst} alapértéke {br} (állítható).",
+  "lossless_audio": "A {dst} veszteségmentes: a hang bitre pontos.",
+  "pcm": "A {dst} tömörítetlen, {bits} bites PCM (24 és 32 bit is választható).",
+  "video": "A {dst} alapból {codec} kodekkel, CRF {crf} minőséggel és {audio} hanggal készül (a kodek, a CRF és a bitráta állítható).",
+  "video_q": "A {dst} {codec} videóval és {audio} hanggal készül.",
+  "pdf": "A {dst} beágyazza a betűket, így az eredmény mindenhol ugyanúgy néz ki.",
+  "pdfa": "PDF/A-2b készül beágyazott sRGB színprofillal, hosszú távú archiváláshoz.",
+  "docx": "A {dst} megnyílik a Microsoft Wordben, a LibreOffice-ban és a Google Dokumentumokban.",
+  "epub": "A {dst} EPUB 3, olvasható az Apple Booksban, a Kobón, a Google Play Könyvekben és a legtöbb olvasón.",
+  "zip": "A {dst} Deflate-tömörítést használ ({level}. szint a 9-ből).",
+  "7z": "A {dst} LZMA2-tömörítést használ; jelszóval a fájlnevek is titkosítva vannak.",
+  "woff2": "A {dst} Brotli-tömörítésű, jellemzően 30%-kal kisebb a WOFF-nál."
+ },
+ "pairnote": {
+  "document>document": "A szöveg, a címsorok, a listák, a táblázatok és a képek átkerülnek; ahol a cél újratördelhető (Markdown, HTML, EPUB), ott az oldaltördelés újraszámolódik.",
+  "document>ebook": "A fejezetek a címsorokból lesznek, és tartalomjegyzék is készül; a betűtípust az olvasóeszköz választja.",
+  "document>image": "Minden oldalból egy kép lesz (többoldalas dokumentumnál oldalanként egy, ZIP-be csomagolva); az alapfelbontás 150 dpi.",
+  "document>vector": "Az oldalak vektorgrafikává válnak: a szöveg és a vonalak bármekkora nagyításnál élesek maradnak.",
+  "document>spreadsheet": "Minden rekordból egy sor, minden mezőből egy oszlop lesz; a beágyazott értékek oszlopnevekké lapulnak, például cim.varos.",
+  "spreadsheet>spreadsheet": "Az Excel és az OpenDocument között a munkalapok, a képletek, a számformátumok és az egyesített cellák megmaradnak; a CSV csak az aktív munkalap értékeit tartja meg.",
+  "spreadsheet>document": "A munkalap táblázatként kerül az oldalra; a képletek aktuális értékükkel.",
+  "spreadsheet>image": "A munkalap nyomtatható része képpé válik.",
+  "presentation>presentation": "A diák, az elrendezések, az előadói jegyzetek és a képek megmaradnak; az áttűnések és animációk ott, ahol a cél is ismeri őket.",
+  "presentation>document": "Minden diából egy oldal lesz; Wordbe kiosztmány készül a dia képével, szövegével és a jegyzetekkel.",
+  "presentation>image": "Minden diából egy kép lesz (több diánál ZIP-ben).",
+  "presentation>video": "Minden dia alapból 3 másodpercig látszik (állítható) egy Full HD videóban.",
+  "ebook>ebook": "A szöveg, a fejezetek, a tartalomjegyzék, a borító és a metaadatok megmaradnak; az elrendezés a céleszköz profiljához igazodik.",
+  "ebook>document": "A könyv szövege és fejezetei átkerülnek; DRM-mel védett könyv nem alakítható át.",
+  "image>image": "A pixelek, az átlátszóság (ahol a cél ismeri), a színprofil és az EXIF-adatok megmaradnak, hacsak nem kéred a metaadatok törlését.",
+  "image>document": "A kép a saját méretében és felbontásában kerül egy oldalra.",
+  "image>vector": "A képet vektoros útvonalakká rajzoljuk át (Potrace): logókhoz, ikonokhoz, vonalrajzokhoz ideális, fotókhoz nem.",
+  "image>video": "Az animáció képkockáiból videó lesz az eredeti időzítéssel.",
+  "vector>vector": "Az útvonalak, a szöveg és a színek vektorosak maradnak; amit a cél nem tud tárolni, az raszterizálódik.",
+  "vector>image": "A rajz alapból 150 dpi-vel renderelődik; szélesség megadásával élesebb vagy kisebb kép kérhető.",
+  "vector>document": "A rajz vektoros PDF-oldal lesz: nyomtatásban is éles marad.",
+  "video>video": "A kép és a hang újrakódolódik a célkonténerhez; a felbontás és a képkocka-sebesség marad, hacsak nem változtatod meg.",
+  "video>audio": "A hangsáv kinyerés után kódolódik; a kép elmarad.",
+  "video>image": "GIF, WebP vagy APNG animáció készül alapból 12 kép/s-mal és 480 pixel szélességgel; a JPG vagy PNG egyetlen képkockát ad.",
+  "audio>audio": "A mintavétel és a csatornák maradnak, hacsak nem változtatod meg; a veszteséges célok az alábbi alap-bitrátát használják.",
+  "audio>video": "A hang mellé állókép kerül (alapból fekete, vagy egy választott borító), így videómegosztóra is feltölthető.",
+  "archive>archive": "A fájlok és mappák kibontás után újracsomagolódnak; jelszó megadható a forráshoz és az új archívumhoz is.",
+  "cad>cad": "Az entitások, a rétegek és a blokkok átkerülnek; a DWG-írás a LibreDWG-ben kísérleti, ezért az eredményt nézd meg a CAD-programodban.",
+  "cad>vector": "A modelltér a rétegszínekkel és vonaltípusokkal vektorosan rajzolódik ki.",
+  "cad>image": "A modelltér alapból fehér háttéren, 200 dpi-vel renderelődik.",
+  "cad>document": "A modelltérből vektoros PDF-oldal lesz.",
+  "font>font": "A jelek, a metrikák, az alávágások és a nevek megmaradnak; a TrueType- és CFF-körvonalak átalakulnak, ha a cél a másik fajtát kéri."
+ },
+ "fmt": {
+  "pdf": "A PDF rögzíti a dokumentum kinézetét — a betűk, a képek és az oldalak minden eszközön és nyomtatón ugyanolyanok.",
+  "docx": "A DOCX az Office 2007 óta a Word alapformátuma: XML-részek ZIP-csomagja, amelyet a legtöbb irodai program megnyit.",
+  "doc": "A DOC az Office 97–2003 bináris Word-formátuma, a régebbi irattárakban ma is gyakori.",
+  "docm": "A DOCM VBA-makrókat tartalmazhat; átalakításkor a makrók elmaradnak, hacsak a cél nem DOCM.",
+  "dot": "A DOT Word 97–2003-sablon, amelyből új dokumentumok indulnak.",
+  "dotx": "A DOTX Word-sablon (Open XML) stílusokkal és mintaszöveggel.",
+  "odt": "Az ODT a LibreOffice OpenDocument szövegformátuma, ISO-szabvány (ISO/IEC 26300).",
+  "ott": "Az OTT OpenDocument szövegsablon.",
+  "fodt": "Az FODT egyetlen tömörítetlen XML-fájlba mentett OpenDocument szöveg — verziókövetéshez kényelmes.",
+  "rtf": "Az RTF szöveges alapú formázott szövegformátum, amelyet szinte minden szövegszerkesztő olvas.",
+  "txt": "A TXT formázás nélküli egyszerű szöveg; nálunk mindig UTF-8, így az ékezetek megmaradnak.",
+  "md": "A Markdown egyszerű jelölőnyelv címsorokhoz, listákhoz és linkekhez; a GitHubon és a dokumentációkban elterjedt.",
+  "html": "A HTML a weboldalak nyelve; átalakításkor a címsorok, a listák, a táblázatok és a képek megmaradnak.",
+  "rst": "A reStructuredText a Python-dokumentáció és a Sphinx jelölőnyelve.",
+  "tex": "A LaTeX-forrás a képleteket tartalmazó tudományos cikkek szabványa.",
+  "pages": "A Pages az Apple iWork szövegszerkesztőjének formátuma.",
+  "wpd": "A WPD a Corel WordPerfect szövegszerkesztőjének dokumentuma.",
+  "wps": "A WPS Microsoft Works- vagy Kingsoft WPS Writer-dokumentum.",
+  "lwp": "Az LWP az IBM SmartSuite Lotus Word Pro dokumentuma.",
+  "abw": "Az ABW AbiWord-dokumentum (XML).",
+  "zabw": "A ZABW gzip-pel tömörített AbiWord-dokumentum.",
+  "sdw": "Az SDW régi StarOffice Writer-dokumentum, az OpenOffice elődjéé.",
+  "hwp": "A HWP a Koreában elterjedt Hangul szövegszerkesztő formátuma.",
+  "hwpx": "A HWPX a Hangul újabb, XML-alapú (OWPML) dokumentumformátuma.",
+  "djvu": "A DjVu nagyon tömören tárolja a szkennelt könyveket és dokumentumokat, külön szöveg- és képréteggel.",
+  "xps": "Az XPS (és az OpenXPS) a Microsoft rögzített elrendezésű oldalformátuma, a PDF alternatívája.",
+  "ps": "A PostScript a nyomtatók oldalleíró nyelve, a PDF elődje.",
+  "eml": "Az EML mentett e-mail (MIME) fejlécekkel, törzzsel és mellékletekkel.",
+  "xml": "Az XML strukturált szöveges formátum adatcseréhez.",
+  "pub": "A PUB Microsoft Publisher-kiadvány szórólapokhoz, hírlevelekhez.",
+  "vsd": "A VSD Microsoft Visio-rajz (2003–2010-es bináris formátum).",
+  "vsdx": "A VSDX Open XML formátumú Microsoft Visio-rajz.",
+  "json": "A JSON a webes API-k leggyakoribb adatformátuma.",
+  "yaml": "A YAML ember által jól olvasható adatformátum, főleg beállításokhoz.",
+  "pdfa": "A PDF/A hosszú távú archiválásra szánt ISO-szabványos PDF: beágyazott betűk, külső függőség nélkül.",
+  "org": "Az Org az Emacs Org-mode vázlat- és jegyzetformátuma.",
+  "adoc": "Az AsciiDoc műszaki dokumentációk és könyvek jelölőnyelve.",
+  "ipynb": "Az IPYNB Jupyter-jegyzetfüzet kóddal, eredményekkel és szöveggel.",
+  "textile": "A Textile egyszerű webes jelölőnyelv.",
+  "wiki": "A MediaWiki-jelölés a Wikipédia-szócikkek forrásformátuma.",
+  "xlsx": "Az XLSX az Office 2007 óta az Excel alapformátuma.",
+  "xls": "Az XLS az Excel 97–2003 bináris munkafüzete.",
+  "xlsm": "Az XLSM VBA-makrókat tartalmazó Excel-munkafüzet.",
+  "xlsb": "Az XLSB az Excel bináris munkafüzete, nagyon nagy táblázatokhoz gyors.",
+  "xlt": "Az XLT Excel 97–2003-sablon.",
+  "xltx": "Az XLTX Open XML formátumú Excel-sablon.",
+  "ods": "Az ODS a LibreOffice Calc OpenDocument-táblázata.",
+  "fods": "Az FODS egyetlen XML-fájlba mentett OpenDocument-táblázat.",
+  "csv": "A CSV vesszővel (vagy pontosvesszővel) elválasztott értékekként tárolja a táblázatot — az egyetemes adatcsere-formátum.",
+  "tsv": "A TSV tabulátorral elválasztott szöveges táblázat.",
+  "numbers": "A Numbers az Apple iWork táblázatkezelőjének formátuma.",
+  "dif": "A DIF régi táblázatos adatcsere-formátum.",
+  "slk": "A SYLK régi Microsoft táblázatos csereformátum.",
+  "pptx": "A PPTX az Office 2007 óta a PowerPoint alapformátuma.",
+  "ppt": "A PPT a PowerPoint 97–2003 bináris prezentációja.",
+  "pptm": "A PPTM VBA-makrókat tartalmazó PowerPoint-prezentáció.",
+  "pps": "A PPS PowerPoint 97–2003-vetítés, amely rögtön vetítési módban nyílik.",
+  "ppsx": "A PPSX PowerPoint-vetítés, amely rögtön vetítési módban nyílik.",
+  "ppsm": "A PPSM makrókat tartalmazó PowerPoint-vetítés.",
+  "pot": "A POT PowerPoint 97–2003-sablon.",
+  "potx": "A POTX Open XML formátumú PowerPoint-sablon.",
+  "potm": "A POTM makrókat tartalmazó PowerPoint-sablon.",
+  "odp": "Az ODP a LibreOffice Impress OpenDocument-prezentációja.",
+  "fodp": "Az FODP egyetlen XML-fájlba mentett OpenDocument-prezentáció.",
+  "key": "A Key az Apple Keynote prezentációs formátuma.",
+  "epub": "Az EPUB nyílt e-könyv-szabvány; az Apple Books, a Kobo és a legtöbb e-olvasó ismeri.",
+  "mobi": "A MOBI a régebbi Kindle- és Mobipocket-e-könyvformátum.",
+  "azw3": "Az AZW3 (KF8) a jelenlegi Kindle-formátum gazdagabb elrendezéssel.",
+  "azw": "Az AZW az Amazon Kindle e-könyv-formátuma (MOBI-alapú).",
+  "azw4": "Az AZW4 a Kindle Print Replica, PDF-alapú rögzített elrendezésű könyv.",
+  "fb2": "Az FB2 (FictionBook) Kelet-Európában népszerű XML-alapú e-könyv-formátum.",
+  "fbz": "Az FBZ ZIP-be csomagolt FictionBook.",
+  "lit": "A LIT a megszűnt Microsoft Reader e-könyv-formátuma.",
+  "lrf": "Az LRF a régi Sony Reader eszközök e-könyv-formátuma.",
+  "pdb": "A PDB eReader / Palm-adatbázis e-könyv.",
+  "pml": "A PML az eReader-könyvek Palm Markup Language jelölőnyelve.",
+  "prc": "A PRC Palm-erőforrás / Mobipocket e-könyv.",
+  "rb": "Az RB a Rocket eBook formátuma.",
+  "snb": "Az SNB a Shanda Bambook olvasók e-könyv-formátuma.",
+  "tcr": "A TCR a Psion-eszközök tömörített e-könyv-formátuma.",
+  "txtz": "A TXTZ képekkel együtt ZIP-be csomagolt Markdown/szöveg e-könyv (calibre).",
+  "htmlz": "A HTMLZ ZIP-be csomagolt HTML e-könyv (calibre).",
+  "oeb": "Az OEB az Open eBook csomag, az EPUB elődje.",
+  "cbz": "A CBZ képregény: számozott képek ZIP-archívumban.",
+  "cbr": "A CBR képregény: számozott képek RAR-archívumban.",
+  "cb7": "A CB7 képregény: számozott képek 7z-archívumban.",
+  "cbc": "A CBC több képregény egyetlen fájlban.",
+  "chm": "A CHM a Microsoft lefordított HTML-súgója, e-könyvekhez is használják.",
+  "jpg": "A JPG (JPEG) a leggyakoribb fotóformátum: a veszteséges tömörítésnek köszönhetően kis fájlokat ad.",
+  "png": "A PNG veszteségmentes, átlátszóságot is kezelő képformátum — képernyőképekhez, logókhoz, grafikákhoz ideális.",
+  "webp": "A WebP a Google webes képformátuma: kisebb a JPG-nél és a PNG-nél, átlátszóságot és animációt is tud.",
+  "heic": "A HEIC az iOS 11 óta az iPhone-ok alapértelmezett fotóformátuma: azonos minőségnél fele akkora, mint a JPG.",
+  "heif": "A HEIF a HEIC-fotók mögötti konténerformátum.",
+  "avif": "Az AVIF az AV1-alapú képformátum: a WebP-nél is kisebb, a modern böngészők ismerik.",
+  "gif": "A GIF a klasszikus 256 színű képformátum egyszerű animációkhoz.",
+  "bmp": "A BMP tömörítetlen Windows-bittérkép.",
+  "tiff": "A TIFF a nyomdai és szkennelési munka veszteségmentes formátuma, rétegekkel és több oldallal.",
+  "ico": "Az ICO a Windows-ikonok és a weboldal-faviconok formátuma, több mérettel egy fájlban.",
+  "icns": "Az ICNS a macOS-alkalmazásikonok formátuma.",
+  "cur": "A CUR Windows-egérkurzor.",
+  "psd": "A PSD rétegeket tartalmazó Adobe Photoshop-dokumentum.",
+  "xcf": "Az XCF a GIMP saját, rétegeket tartalmazó képformátuma.",
+  "tga": "A TGA (Targa) játékokban és videógyártásban használt képformátum.",
+  "jxl": "A JPEG XL a legújabb JPEG-szabvány: kisebb fájlok, és a JPG-k veszteségmentes újratömörítése.",
+  "jp2": "A JPEG 2000 hullámtranszformációs formátum az orvoslásban, a filmgyártásban és az archívumokban.",
+  "jfif": "A JFIF .jfif kiterjesztésű JPEG-fájl, gyakran a böngészők mentik így.",
+  "exr": "Az OpenEXR a vizuális effekt-stúdiók nagy dinamikatartományú formátuma.",
+  "hdr": "A HDR (Radiance RGBE) nagy dinamikatartományú képeket tárol.",
+  "dds": "A DDS (DirectDraw Surface) játékok textúráit tárolja.",
+  "pcx": "A PCX régi PC Paintbrush-kép.",
+  "ppm": "A PPM egyszerű Netpbm színes kép.",
+  "pgm": "A PGM egyszerű Netpbm szürkeárnyalatos kép.",
+  "pbm": "A PBM egyszerű Netpbm fekete-fehér kép.",
+  "pnm": "A PNM a Netpbm képformátumok gyűjtőneve.",
+  "sgi": "Az SGI a Silicon Graphics képformátuma.",
+  "xbm": "Az XBM C-forráskódként tárolt egyszínű bittérkép.",
+  "xpm": "Az XPM C-forráskódként tárolt színes kép.",
+  "wbmp": "A WBMP a korai mobiltelefonok egybites képformátuma.",
+  "fits": "A FITS a csillagászat szabványos képformátuma.",
+  "apng": "Az APNG teljes színű, átlátszóságot is tudó animált PNG.",
+  "dng": "A DNG az Adobe nyílt RAW-formátuma.",
+  "cr2": "A CR2 a régebbi Canon fényképezőgépek RAW-fotója.",
+  "cr3": "A CR3 a mai Canon fényképezőgépek RAW-fotója.",
+  "crw": "A CRW a korai Canon digitális gépek RAW-fotója.",
+  "nef": "A NEF a Nikon fényképezőgépek RAW-fotója.",
+  "nrw": "Az NRW a Nikon Coolpix gépek RAW-fotója.",
+  "arw": "Az ARW a Sony Alpha gépek RAW-fotója.",
+  "srf": "Az SRF a korai Sony gépek RAW-fotója.",
+  "sr2": "Az SR2 egyes Sony gépek RAW-fotója.",
+  "orf": "Az ORF az Olympus és az OM System gépek RAW-fotója.",
+  "rw2": "Az RW2 a Panasonic Lumix gépek RAW-fotója.",
+  "raf": "A RAF a Fujifilm gépek RAW-fotója.",
+  "pef": "A PEF a Pentax gépek RAW-fotója.",
+  "srw": "Az SRW a Samsung gépek RAW-fotója.",
+  "x3f": "Az X3F a Sigma Foveon gépek RAW-fotója.",
+  "erf": "Az ERF az Epson gépek RAW-fotója.",
+  "kdc": "A KDC a Kodak gépek RAW-fotója.",
+  "dcr": "A DCR a Kodak profi gépek RAW-fotója.",
+  "mrw": "Az MRW a Minolta gépek RAW-fotója.",
+  "3fr": "A 3FR a Hasselblad gépek RAW-fotója.",
+  "mos": "A MOS a Leaf digitális hátfalak RAW-fotója.",
+  "raw": "A RAW általános nyers fotófájl (Panasonic, Leica).",
+  "svg": "Az SVG a web vektoros képformátuma: bármekkora méretben éles, szövegként szerkeszthető.",
+  "svgz": "Az SVGZ gzip-pel tömörített SVG.",
+  "eps": "Az EPS a nyomdai munka és a logók klasszikus vektoros csereformátuma.",
+  "ai": "Az AI Adobe Illustrator-grafika (PDF-kompatibilis).",
+  "emf": "Az EMF az Office-dokumentumokban használt Windows-vektorfájl.",
+  "emz": "Az EMZ tömörített EMF.",
+  "wmf": "A WMF a régebbi, 16 bites Windows-vektorfájl.",
+  "wmz": "A WMZ tömörített WMF.",
+  "cdr": "A CDR CorelDRAW-rajz.",
+  "odg": "Az ODG a LibreOffice Draw OpenDocument-rajza.",
+  "fodg": "Az FODG egyetlen XML-fájlba mentett OpenDocument-rajz.",
+  "cgm": "A CGM a műszaki illusztrációk ISO-szabványos vektorformátuma.",
+  "plt": "A PLT (HP-GL) plotter- és vágóplotter-fájl.",
+  "mp4": "Az MP4 a legszélesebb körben támogatott videóformátum: a H.264-videó AAC-hanggal mindenhol lejátszható.",
+  "mov": "A MOV az Apple QuickTime-videója, az iPhone-ok és a Macek alapformátuma.",
+  "avi": "Az AVI a Microsoft régebbi videókonténere.",
+  "mkv": "Az MKV (Matroska) nyílt konténer, tetszőleges számú hang- és feliratsávval.",
+  "webm": "A WebM nyílt webes videóformátum VP9- vagy AV1-videóval és Opus-hanggal.",
+  "wmv": "A WMV a Windows Media Video.",
+  "flv": "Az FLV a korai webes videók Flash Video formátuma.",
+  "f4v": "Az F4V MP4-alapú Flash-videó.",
+  "m4v": "Az M4V az iTunes MP4-videója.",
+  "mpeg": "Az MPEG MPEG-1/2 videó, mint a VCD-ken és a DVD-ken.",
+  "mpg": "Az MPG MPEG-1/2 videó.",
+  "m2ts": "Az M2TS a Blu-ray transzportfolyama.",
+  "mts": "Az MTS a kamerák AVCHD-videója.",
+  "ts": "A TS a televíziós adások MPEG-transzportfolyama.",
+  "vob": "A VOB a DVD-lemezek videóobjektuma.",
+  "3gp": "A 3GP a régebbi mobiltelefonok videóformátuma.",
+  "3g2": "A 3G2 a 3GPP2 mobilvideó-formátum.",
+  "ogv": "Az OGV Ogg Theora-videó.",
+  "asf": "Az ASF a Windows Media streamelő konténere.",
+  "mxf": "Az MXF a profi televíziós és filmes csereformátum.",
+  "dv": "A DV a MiniDV-kamerák digitális videója.",
+  "divx": "A DivX MPEG-4-videó AVI-ban.",
+  "hevc": "A HEVC (H.265) nyers H.265-videófolyam.",
+  "rm": "Az RM RealMedia-videó.",
+  "rmvb": "Az RMVB változó bitrátájú RealMedia-videó.",
+  "swf": "Az SWF Adobe Flash-animáció.",
+  "wtv": "A WTV a Windows Media Center tévéfelvétele.",
+  "mjpeg": "Az MJPEG JPEG-képkockákból álló videó.",
+  "mp3": "Az MP3 a legszélesebb körben támogatott hangformátum.",
+  "wav": "A WAV tömörítetlen, stúdióminőségű hang.",
+  "aac": "Az AAC az MP3 utódja: azonos méretnél jobb minőség.",
+  "m4a": "Az M4A MP4-konténerben tárolt AAC-hang, az Apple-eszközök alapformátuma.",
+  "ogg": "Az OGG (Vorbis) nyílt, szabadalommentes hangformátum.",
+  "flac": "A FLAC veszteségmentes hang: körülbelül fele akkora, mint a WAV, pontosan ugyanazzal a hanggal.",
+  "opus": "Az Opus modern, nyílt hangkodek beszédhez és zenéhez.",
+  "wma": "A WMA a Windows Media Audio.",
+  "aiff": "Az AIFF az Apple tömörítetlen hangformátuma.",
+  "alac": "Az ALAC (Apple Lossless) veszteségmentes hang M4A-fájlban.",
+  "m4b": "Az M4B fejezetekre bontott hangoskönyv.",
+  "m4r": "Az M4R iPhone-csengőhang (legfeljebb 40 másodperc).",
+  "amr": "Az AMR a mobilos hangfelvételek beszédkodekje.",
+  "ac3": "Az AC3 Dolby Digital térhang.",
+  "dts": "A DTS a mozik és a Blu-ray térhangformátuma.",
+  "ape": "Az APE (Monkey's Audio) veszteségmentes hang.",
+  "wv": "A WavPack veszteségmentes (vagy hibrid) hang.",
+  "mka": "Az MKA Matroska-konténerben tárolt hang.",
+  "au": "Az AU a Sun / NeXT hangformátuma.",
+  "caf": "A CAF az Apple Core Audio formátuma.",
+  "mp2": "Az MP2 az MPEG II. rétegű hangja, a műsorszórásban használják.",
+  "weba": "A WEBA WebM-hang (Opus).",
+  "gsm": "A GSM a mobilhálózatok beszédkodekje.",
+  "voc": "A VOC a Creative Sound Blaster hangformátuma.",
+  "ra": "Az RA RealAudio.",
+  "zip": "A ZIP a legszélesebb körben támogatott archívum: a Windows, a macOS és a Linux külön program nélkül megnyitja.",
+  "rar": "A RAR erős tömörítésű, helyreállító adatokat is tároló népszerű archívum.",
+  "7z": "A 7Z a nyílt 7-Zip archívum a legerősebb tömörítéssel (LZMA2) és AES-256 titkosítással.",
+  "tar": "A TAR tömörítés nélkül fűzi egybe a fájlokat, ahogy a Unix-rendszereken szokás.",
+  "tar.gz": "A TAR.GZ gzip-pel tömörített tar-archívum — a linuxos szoftverek szabványa.",
+  "tgz": "A TGZ a gzip-pel tömörített tar-archívum rövid neve.",
+  "tar.bz2": "A TAR.BZ2 bzip2-vel tömörített tar-archívum.",
+  "tbz2": "A TBZ2 a bzip2-vel tömörített tar-archívum rövid neve.",
+  "tbz": "A TBZ bzip2-vel tömörített tar-archívum.",
+  "tar.bz": "A TAR.BZ bzip-pel tömörített tar-archívum.",
+  "tar.xz": "A TAR.XZ xz-vel (LZMA2) tömörített tar-archívum.",
+  "txz": "A TXZ az xz-vel tömörített tar-archívum rövid neve.",
+  "tar.zst": "A TAR.ZST Zstandarddal tömörített tar-archívum: gyors és tömör.",
+  "tar.7z": "A TAR.7Z 7z-archívumba tett tar-archívum.",
+  "tar.lzo": "A TAR.LZO a nagyon gyors LZO-val tömörített tar-archívum.",
+  "tar.z": "A TAR.Z a régi Unix compress-szel tömörített tar-archívum.",
+  "tz": "A TZ compress-szel tömörített tar-archívum.",
+  "tzo": "A TZO LZO-val tömörített tar-archívum.",
+  "gz": "A GZ egyetlen, gzip-pel tömörített fájl.",
+  "bz2": "A BZ2 egyetlen, bzip2-vel tömörített fájl.",
+  "bz": "A BZ egyetlen, bzip-pel tömörített fájl.",
+  "xz": "Az XZ egyetlen, LZMA2-vel tömörített fájl.",
+  "zst": "A ZST egyetlen, Zstandarddal tömörített fájl.",
+  "lz": "Az LZ egyetlen, lzip-pel tömörített fájl.",
+  "lzma": "Az LZMA egyetlen, LZMA-val tömörített fájl.",
+  "lzo": "Az LZO egyetlen, lzop-pal tömörített fájl.",
+  "z": "A Z egyetlen, Unix compress-szel tömörített fájl.",
+  "cab": "A CAB a Windows-telepítők Microsoft Cabinet-archívuma.",
+  "iso": "Az ISO CD/DVD-lemezkép.",
+  "img": "Az IMG nyers lemezkép.",
+  "dmg": "A DMG macOS-lemezkép.",
+  "jar": "A JAR Java-archívum (ZIP).",
+  "war": "A WAR Java-webalkalmazás-archívum.",
+  "apk": "Az APK Android-alkalmazáscsomag.",
+  "deb": "A DEB Debian / Ubuntu szoftvercsomag.",
+  "rpm": "Az RPM Red Hat / Fedora szoftvercsomag.",
+  "cpio": "A CPIO régi Unix-archívum, a Linux initramfs-ében használják.",
+  "arj": "Az ARJ DOS-korabeli archívum.",
+  "lha": "Az LHA (LZH) japán archívumformátum, az Amigán volt népszerű.",
+  "ace": "Az ACE régi windowsos archívumformátum.",
+  "alz": "Az ALZ a koreai ALZip archívuma.",
+  "arc": "Az ARC az egyik első PC-s archívumformátum.",
+  "wim": "A WIM a Windows-telepítők lemezkép-formátuma.",
+  "dwg": "A DWG az AutoCAD saját rajzformátuma, a leggyakoribb CAD-fájl.",
+  "dxf": "A DXF az Autodesk nyílt rajzcsere-formátuma, a legtöbb CAD-program olvassa.",
+  "ttf": "A TTF (TrueType) a legszélesebb körben támogatott asztali betűformátum.",
+  "otf": "Az OTF (OpenType) fejlett tipográfiájú betű (ligatúrák, kiskapitális).",
+  "woff": "A WOFF tömörített webbetű.",
+  "woff2": "A WOFF2 a legtömörebb webbetű, minden modern böngésző ismeri.",
+  "eot": "Az EOT a régi Internet Explorer-verziók webbetűje.",
+  "ttc": "A TTC TrueType-gyűjtemény, több betűvel egy fájlban.",
+  "pfb": "A PFB PostScript Type 1 betű (bináris).",
+  "pfa": "A PFA PostScript Type 1 betű (szöveges).",
+  "sfd": "Az SFD a FontForge szerkeszthető betűforrása.",
+  "dfont": "A DFONT régi macOS-betűcsomag.",
+  "bdf": "A BDF az X Window System bittérképes betűje."
+ },
+ "opt": {
+  "engine": {
+   "label": "Motor",
+   "help": "Automatikusan a párhoz legjobb motor fut; kényszerítheted a LibreOffice-t, a Pandocot, a Calibre-t, az ImageMagicket és a többit."
+  },
+  "page_range": {
+   "label": "Oldalak",
+   "help": "Csak ezek az oldalak, pl. 1-3,5,8- (a 8. oldaltól a végéig)."
+  },
+  "ocr": {
+   "label": "Szövegfelismerés",
+   "help": "A szkennelt PDF szövegének felismerése (auto: csak ha nincs szövegréteg)."
+  },
+  "ocr_language": {
+   "label": "Felismerés nyelve",
+   "help": "Tesseract-nyelvkódok, pl. hun, eng vagy hun+eng."
+  },
+  "title": {
+   "label": "Cím",
+   "help": "A metaadatokba írt könyv- vagy dokumentumcím."
+  },
+  "author": {
+   "label": "Szerző",
+   "help": "A metaadatokba írt szerző."
+  },
+  "cover": {
+   "label": "Borító",
+   "help": "Egy feltöltött kép (file_id) borítónak vagy állóképnek."
+  },
+  "output_profile": {
+   "label": "Eszköz",
+   "help": "E-könyv-eszközprofil: Kindle, Kobo, táblagép…"
+  },
+  "delimiter": {
+   "label": "CSV-elválasztó",
+   "help": "Auto: felismeri a vesszőt, a pontosvesszőt vagy a tabulátort."
+  },
+  "sheet": {
+   "label": "Munkalap",
+   "help": "Melyik munkalap (alapból az aktív)."
+  },
+  "seconds_per_slide": {
+   "label": "Másodperc diánként",
+   "help": "Mennyi ideig látszik egy dia a videóban (0,5–60)."
+  },
+  "width": {
+   "label": "Szélesség (px)",
+   "help": "Új szélesség; ha csak ezt adod meg, a magasság arányosan követi."
+  },
+  "height": {
+   "label": "Magasság (px)",
+   "help": "Új magasság; ha csak ezt adod meg, a szélesség arányosan követi."
+  },
+  "fit": {
+   "label": "Illesztés",
+   "help": "inside: dobozba · cover: kitölt és vág · contain: kitöltő sávval · fill: nyújt."
+  },
+  "quality": {
+   "label": "Minőség",
+   "help": "1–100; a kisebb kisebb fájlt ad. JPG alapból 88, WebP 85, AVIF 70."
+  },
+  "strip_metadata": {
+   "label": "Metaadatok törlése",
+   "help": "Az EXIF (fényképezőgép, GPS-hely, dátum) és más metaadatok elhagyása."
+  },
+  "dpi": {
+   "label": "Felbontás (dpi)",
+   "help": "Oldalak és vektorok rendereléséhez (alapból 150)."
+  },
+  "background": {
+   "label": "Háttér",
+   "help": "Szín az átlátszó részek mögé, pl. #ffffff vagy white."
+  },
+  "grayscale": {
+   "label": "Szürkeárnyalat",
+   "help": "Szürke árnyalatokká alakítás."
+  },
+  "lossless": {
+   "label": "Veszteségmentes",
+   "help": "WebP / JPEG XL minőségvesztés nélkül."
+  },
+  "video_codec": {
+   "label": "Videókodek",
+   "help": "auto, H.264, H.265, VP9, AV1, MPEG-4, MPEG-2, ProRes, copy (újrakódolás nélkül)."
+  },
+  "audio_codec": {
+   "label": "Hangkodek",
+   "help": "auto, AAC, MP3, Opus, Vorbis, FLAC, PCM, AC3, copy, none."
+  },
+  "resolution": {
+   "label": "Felbontás",
+   "help": "pl. 1920x1080, 1080p, 720p, 4k."
+  },
+  "aspect": {
+   "label": "Képarány",
+   "help": "pl. 16:9, 9:16, 1:1, 4:3."
+  },
+  "aspect_mode": {
+   "label": "Képarány-mód",
+   "help": "fekete sávokkal (pad), vágással (crop) vagy nyújtással (stretch)."
+  },
+  "fps": {
+   "label": "Képkocka/s",
+   "help": "Képkocka másodpercenként, pl. 24, 30, 60."
+  },
+  "crf": {
+   "label": "Minőség (CRF)",
+   "help": "0–51, a kisebb jobb; H.264-nél alapból 23."
+  },
+  "preset": {
+   "label": "Kódolási sebesség",
+   "help": "A lassabb beállítás azonos minőségnél kisebb fájlt ad."
+  },
+  "video_bitrate": {
+   "label": "Videó-bitráta",
+   "help": "pl. 2500k vagy 5M (a CRF helyett)."
+  },
+  "audio_bitrate": {
+   "label": "Hang-bitráta",
+   "help": "pl. 128k, 192k, 320k."
+  },
+  "sample_rate": {
+   "label": "Mintavétel",
+   "help": "pl. 44100 vagy 48000 Hz."
+  },
+  "channels": {
+   "label": "Csatornák",
+   "help": "1 = mono, 2 = sztereó."
+  },
+  "bit_depth": {
+   "label": "Bitmélység",
+   "help": "16, 24 vagy 32 bit (WAV, AIFF, FLAC)."
+  },
+  "start": {
+   "label": "Kezdet",
+   "help": "Innen vág: másodperc vagy óó:pp:mm."
+  },
+  "end": {
+   "label": "Vég",
+   "help": "Eddig vág: másodperc vagy óó:pp:mm."
+  },
+  "rotate": {
+   "label": "Forgatás",
+   "help": "90, 180 vagy 270 fok az óramutató járásával."
+  },
+  "flip": {
+   "label": "Tükrözés",
+   "help": "Vízszintes vagy függőleges tükrözés."
+  },
+  "subtitles": {
+   "label": "Felirat",
+   "help": "Egy feltöltött SRT-, VTT- vagy ASS-fájl (file_id)."
+  },
+  "subtitles_mode": {
+   "label": "Felirat módja",
+   "help": "beégetve a képbe, vagy kapcsolható sávként."
+  },
+  "volume": {
+   "label": "Hangerő",
+   "help": "Szorzó (1,5) vagy decibel (+3dB, -6dB)."
+  },
+  "remove_audio": {
+   "label": "Hang eltávolítása",
+   "help": "Néma videó készül."
+  },
+  "at": {
+   "label": "Képkocka ideje",
+   "help": "Videóból JPG/PNG-hez: melyik másodperc képkockája."
+  },
+  "password": {
+   "label": "Jelszó",
+   "help": "Védett forrás megnyitásához, vagy az eredmény titkosításához (ZIP, 7Z)."
+  },
+  "level": {
+   "label": "Tömörítési szint",
+   "help": "0 (tárolás) és 9 (legkisebb) között."
+  },
+  "font_index": {
+   "label": "Betű sorszáma",
+   "help": "Melyik betű a gyűjteményből (TTC), 0-tól."
+  },
+  "subset_text": {
+   "label": "Csak ezek a karakterek",
+   "help": "Csak ennek a szövegnek a jelei maradnak meg (kisebb webbetű)."
+  },
+  "threshold": {
+   "label": "Küszöb",
+   "help": "Világossági határ a vektorizáláshoz (1–254)."
+  },
+  "text_to_path": {
+   "label": "Szöveg görbévé",
+   "help": "A szöveg körvonallá alakítása (megnyitáshoz nem kell betű)."
+  },
+  "advanced": {
+   "label": "Haladó paraméterek",
+   "help": "Engedélyezett FFmpeg- vagy ImageMagick-kapcsolók, pl. -tune film vagy -sharpen 0x1."
+  },
+  "frame": {
+   "label": "Képkocka / réteg",
+   "help": "Animáció vagy többoldalas kép hányadik képe, 0-tól."
+  },
+  "loop": {
+   "label": "Ismétlés",
+   "help": "Az animáció végtelenítése."
+  },
+  "compression": {
+   "label": "Tömörítés",
+   "help": "low (legjobb minőség), recommended (ajánlott), extreme (legkisebb)."
+  },
+  "max_width": {
+   "label": "Legnagyobb szélesség",
+   "help": "A szélesebb képek erre kicsinyítve."
+  },
+  "colors": {
+   "label": "Színek",
+   "help": "A paletta színeinek száma (2–256)."
+  },
+  "target_size_mb": {
+   "label": "Célméret (MB)",
+   "help": "Ekkora fájlra törekszik; a bitrátát a hosszból számolja."
+  },
+  "page_ranges": {
+   "label": "Oldaltartományok",
+   "help": "Fájlonként egy tartomány, pl. 1-3, all, 2."
+  },
+  "mode": {
+   "label": "Bontás módja",
+   "help": "tartományok (ranges), N oldalanként (every), vagy oldalanként külön (each)."
+  },
+  "every": {
+   "label": "N oldalanként",
+   "help": "Egyenlő bontásnál ennyi oldal egy rész."
+  },
+  "angle": {
+   "label": "Szög",
+   "help": "90, 180, 270 (vagy -90)."
+  },
+  "expand": {
+   "label": "Vászon növelése",
+   "help": "A vászon nő, hogy semmi ne vágódjon le."
+  },
+  "order": {
+   "label": "Új oldalsorrend",
+   "help": "pl. 3,1,2,4-"
+  },
+  "margins_mm": {
+   "label": "Margók (mm)",
+   "help": "Levágandó felső, jobb, alsó, bal margó."
+  },
+  "page_size": {
+   "label": "Oldalméret",
+   "help": "A3, A4, A5, B5, Letter, Legal, Tabloid."
+  },
+  "fit_page": {
+   "label": "Illesztés",
+   "help": "fit (arányos), fill (kitölt, vág), stretch (nyújt)."
+  },
+  "pdfa_level": {
+   "label": "PDF/A-szint",
+   "help": "1b, 2b (alap) vagy 3b."
+  },
+  "deskew": {
+   "label": "Kiegyenesítés",
+   "help": "A ferde szkennek kiegyenesítése a felismerés előtt."
+  },
+  "owner_password": {
+   "label": "Jogosultsági jelszó",
+   "help": "Ezzel lehet a jogosultságokat módosítani."
+  },
+  "allow_print": {
+   "label": "Nyomtatás engedélyezése",
+   "help": ""
+  },
+  "allow_copy": {
+   "label": "Szövegmásolás engedélyezése",
+   "help": ""
+  },
+  "allow_edit": {
+   "label": "Szerkesztés engedélyezése",
+   "help": ""
+  },
+  "allow_annotate": {
+   "label": "Megjegyzések engedélyezése",
+   "help": ""
+  },
+  "what": {
+   "label": "Lapítás",
+   "help": "minden, csak az űrlapmezők, vagy csak a jegyzetek."
+  },
+  "min_size": {
+   "label": "Legkisebb méret (px)",
+   "help": "Az ennél kisebb képek kimaradnak."
+  },
+  "words": {
+   "label": "Szavak",
+   "help": "Kitakarandó szavak vagy kifejezések."
+  },
+  "patterns": {
+   "label": "Minták",
+   "help": "email, phone, credit-card, ssn, date."
+  },
+  "position": {
+   "label": "Helyzet",
+   "help": "Hová kerüljön az oldalon vagy a képen."
+  },
+  "start_number": {
+   "label": "Első szám",
+   "help": "Az első oldal száma."
+  },
+  "text_format": {
+   "label": "Formátum",
+   "help": "pl. {n} vagy {n}/{total}. oldal."
+  },
+  "percent": {
+   "label": "Százalék",
+   "help": "Méretezés százalékban, pixel helyett."
+  },
+  "box": {
+   "label": "Terület",
+   "help": "x, y, szélesség, magasság pixelben."
+  },
+  "scale": {
+   "label": "Nagyítás",
+   "help": "2×, 3× vagy 4×."
+  },
+  "columns": {
+   "label": "Oszlopok",
+   "help": "Az oszlopok száma (alapból automatikus)."
+  },
+  "gap": {
+   "label": "Térköz (px)",
+   "help": "A képek közötti hely."
+  },
+  "text": {
+   "label": "Szöveg",
+   "help": "A vízjel szövege."
+  },
+  "image_file": {
+   "label": "Logókép",
+   "help": "Vízjelnek használt, feltöltött kép (file_id)."
+  },
+  "opacity": {
+   "label": "Átlátszatlanság",
+   "help": "0,02–1; a 0,3 visszafogott vízjel."
+  },
+  "rotation": {
+   "label": "Elforgatás",
+   "help": "Fokban, pl. 45 az átlós vízjelhez."
+  },
+  "font_size": {
+   "label": "Betűméret",
+   "help": "Pontban (alapból automatikus)."
+  },
+  "audio_format": {
+   "label": "Hangformátum",
+   "help": "mp3, m4a, wav, flac, ogg, opus, aac."
+  },
+  "loops": {
+   "label": "Ismétlések",
+   "help": "Hányszor fusson le az animáció a videóban."
+  },
+  "burn": {
+   "label": "Beégetés",
+   "help": "A felirat beégetése a képbe (különben kapcsolható sáv)."
+  },
+  "language": {
+   "label": "Nyelv",
+   "help": "A tartalom nyelve, pl. magyar."
+  },
+  "fade_in": {
+   "label": "Beúsztatás (mp)",
+   "help": ""
+  },
+  "fade_out": {
+   "label": "Kiúsztatás (mp)",
+   "help": ""
+  },
+  "normalize": {
+   "label": "Hangosság kiegyenlítése",
+   "help": "EBU R128 szerinti hangosság-normalizálás."
+  },
+  "url": {
+   "label": "Webcím",
+   "help": "A rögzítendő oldal (https://…)."
+  },
+  "full_page": {
+   "label": "Teljes oldal",
+   "help": "A teljes görgethető oldal, nem csak az első képernyő."
+  },
+  "wait_ms": {
+   "label": "Várakozás (ms)",
+   "help": "Plusz idő, hogy az oldal betöltődjön."
+  },
+  "image_format": {
+   "label": "Képformátum",
+   "help": "png, jpg, webp vagy pdf."
+  },
+  "output_format": {
+   "label": "Kimeneti formátum",
+   "help": "Az eredmény formátuma."
+  },
+  "page": {
+   "label": "Oldal",
+   "help": "Melyik oldal vagy dia."
+  },
+  "archive_format": {
+   "label": "Archívumformátum",
+   "help": "zip, 7z, tar, tar.gz, tar.bz2, tar.xz, tar.zst."
+  },
+  "fields": {
+   "label": "Mezők",
+   "help": "Beírandó metaadatok, pl. {\"Title\": \"…\"}."
+  },
+  "args": {
+   "label": "Paraméterek",
+   "help": "Csak engedélyezett kapcsolók."
+  },
+  "keep_look": {
+   "label": "Eredeti kinézet",
+   "help": "Kitöltés az eredeti oldalon (fotónál, szkennél), tiszta újraszedés helyett."
+  },
+  "values": {
+   "label": "Értékek",
+   "help": "A mezők értékei, pl. {\"Név\": \"…\"}."
+  },
+  "flatten": {
+   "label": "Lapítás",
+   "help": "Az értékek beégetése nyomtatáshoz."
+  },
+  "data_file": {
+   "label": "Adattábla",
+   "help": "CSV vagy XLSX: soronként egy kitöltött példány."
+  },
+  "name": {
+   "label": "Név",
+   "help": "Az aláírás neve."
+  },
+  "kind": {
+   "label": "Típus",
+   "help": "aláírás (signature) vagy kézjegy (initials)."
+  },
+  "color": {
+   "label": "Tintaszín",
+   "help": "pl. #1a237e (kék) vagy black."
+  },
+  "signature_id": {
+   "label": "Aláírás",
+   "help": "Egy mentett aláírás."
+  },
+  "placement": {
+   "label": "Elhelyezés",
+   "help": "auto (aláírásmező vagy -vonal), field, xy, anchor."
+  },
+  "x": {
+   "label": "X (pt)",
+   "help": ""
+  },
+  "y": {
+   "label": "Y (pt)",
+   "help": ""
+  },
+  "field": {
+   "label": "Mező",
+   "help": "Az aláírásmező neve."
+  },
+  "profile": {
+   "label": "Profil",
+   "help": "A mentett adataid (név, cím, azonosítók)."
+  },
+  "source_files": {
+   "label": "Forrásdokumentumok",
+   "help": "Dokumentumok, amelyekből a válaszok jönnek (személyi, számla…)."
+  },
+  "answers": {
+   "label": "Válaszok",
+   "help": "Válaszok az asszisztens kérdéseire."
+  }
+ },
+ "thub": {
+  "title": "{n} ingyenes fájleszköz — tömörítés, PDF-szerkesztés, videóvágás, aláírás",
+  "desc": "{n} online eszköz: PDF- és képtömörítés, PDF-egyesítés, -bontás és -védelem, videóvágás és -tömörítés, vízjel, weboldal-mentés, archívumok, metaadatok, űrlapok és aláírás.",
+  "h1": "Fájleszközök",
+  "lead": "{n} eszköz a mindennapi fájlmunkához — ugyanúgy a böngészőben, az API-ban és az AI-asszisztensedben.",
+  "ai_h": "AI-eszközök az appban"
+ },
+ "tgroup": {
+  "compress": {
+   "name": "Tömörítés",
+   "desc": "PDF-ek, képek, videók és hangfájlok kicsinyítése."
+  },
+  "pdf": {
+   "name": "PDF",
+   "desc": "PDF-ek egyesítése, bontása, rendezése, védelme, archiválása és szerkesztése."
+  },
+  "image": {
+   "name": "Képek",
+   "desc": "Átméretezés, vágás, forgatás, nagyítás, kollázs, színválasztó."
+  },
+  "video": {
+   "name": "Videó",
+   "desc": "Vágás, kivágás, átméretezés, forgatás, GIF-ek és feliratok."
+  },
+  "audio": {
+   "name": "Hang",
+   "desc": "Vágás, hangerő, úsztatás."
+  },
+  "watermark": {
+   "name": "Vízjel",
+   "desc": "Szöveg vagy logó PDF-re, képre, videóra."
+  },
+  "web": {
+   "name": "Weboldal-mentés",
+   "desc": "Weboldalak mentése PDF-be vagy képbe."
+  },
+  "files": {
+   "name": "Fájlok és archívumok",
+   "desc": "Egyesítés, bélyegképek, ZIP és 7Z, kibontás."
+  },
+  "metadata": {
+   "name": "Metaadatok",
+   "desc": "EXIF- és dokumentumadatok olvasása, írása, törlése."
+  },
+  "forms": {
+   "name": "Űrlapok",
+   "desc": "Űrlapok felismerése, kitöltése és tömeges kitöltése bármilyen fájlból."
+  },
+  "signature": {
+   "name": "Aláírás",
+   "desc": "Egyszer elkészített aláírás PDF-re és Wordre."
+  },
+  "ai": {
+   "name": "AI",
+   "desc": ""
+  },
+  "utility": {
+   "name": "Váltók",
+   "desc": "Mértékegységek és időzónák."
+  }
+ },
+ "aitool": {
+  "document": {
+   "name": "AI-dokumentumíró",
+   "desc": "Word-dokumentumok írása és szerkesztése kéréssel."
+  },
+  "presentation": {
+   "name": "AI-prezentációkészítő",
+   "desc": "Megtervezett diasor egy rövid leírásból vagy dokumentumból."
+  },
+  "scan-to-text": {
+   "name": "Szkennelt oldalból szöveg",
+   "desc": "Régi könyvek és lefényképezett oldalak Wordbe, kereshető PDF-be vagy kitölthető űrlappá."
+  },
+  "photos/restore": {
+   "name": "Régi fotók felújítása",
+   "desc": "Szkennelt fotók javítása és színezése."
+  },
+  "print-design": {
+   "name": "Nyomdai tervezés",
+   "desc": "Plakátok és szórólapok rövid leírásból."
+  },
+  "infographic": {
+   "name": "Infografika-készítő",
+   "desc": "Diagramok és ábrák az adataidból."
+  },
+  "book": {
+   "name": "Könyvszedés",
+   "desc": "Kézirat könyvként szedve."
+  }
+ },
+ "toolstep": {
+  "1": "Válaszd ki a fájlokat (vagy húzd őket a mezőre).",
+  "2": "Ha kell, állítsd be a beállításokat — az alapértékek a legtöbb fájlhoz jók.",
+  "3": "Nyomd meg az Indítás gombot, és töltsd le az eredményt, vagy nyisd meg a szerkesztőben."
+ },
+ "toolfaq": [
+  [
+   "Ingyenes a(z) {name}?",
+   "Igen — a böngészőben fiók nélkül fájlonként {guest_mb} MB-ig ingyenes. Ingyenes fiókkal egyszerre legfeljebb {batch_free} fájl dolgozható fel (a Pro csomagban {batch_pro})."
+  ],
+  [
+   "Biztonságban vannak a fájljaim?",
+   "A fájlok a privát munkaterületeden maradnak, a letöltési linkek aláírtak, és {retention} nap után minden törlődik."
+  ]
+ ],
+ "tool": {
+  "how_h": "Így használd: {name}",
+  "open_editor": "A teljes szerkesztő megnyitása",
+  "formats_h": "Támogatott formátumok",
+  "api_p": "A REST API-ban ez a(z) {op} művelet, MCP-n a file_tools eszköz.",
+  "compress-pdf": {
+   "slug": "pdf-tomorites",
+   "name": "PDF tömörítése",
+   "title": "PDF tömörítése — PDF-fájlok kicsinyítése online, ingyen",
+   "desc": "PDF-fájlok kicsinyítése Ghostscripttel: három fokozat a nyomdai minőségtől a legkisebb méretig. A szöveg kijelölhető marad.",
+   "h1": "PDF tömörítése",
+   "intro": "A PDF-tömörítés a képeket és a betűket újratömöríti a Ghostscripttel: az „ajánlott” fokozat 150 dpi-re, az „extrém” 72 dpi-re mintázza újra a képeket, az „alacsony” a nyomdai 300 dpi-t tartja. A szöveg, a linkek és a könyvjelzők megmaradnak; fiók nélkül {guest_mb} MB-ig ingyenes.",
+   "points": [
+    "Három fokozat: alacsony (300 dpi), ajánlott (150 dpi), extrém (72 dpi)",
+    "A szöveg kijelölhető és kereshető marad",
+    "Egyszerre több PDF ugyanazzal a beállítással"
+   ],
+   "faq": [
+    [
+     "Mennyivel lesz kisebb a PDF-em?",
+     "A fotókat vagy szkenneket tartalmazó PDF-ek jellemzően 50–90%-kal kisebbek lesznek; a csak szöveges PDF-ek eleve kicsik, alig változnak."
+    ]
+   ]
+  },
+  "compress-image": {
+   "slug": "kep-tomorites",
+   "name": "Kép tömörítése",
+   "title": "Képtömörítés — JPG, PNG, WebP, HEIC kisebbre online",
+   "desc": "Képek fájlméretének csökkentése: minőség, legnagyobb szélesség, EXIF-törlés. Egyszerre {max_files} kép.",
+   "h1": "Képek tömörítése",
+   "intro": "A képtömörítés alacsonyabb, de még éles minőséggel kódolja újra a fotókat és grafikákat (JPG/WebP alapból 80), korlátozhatja a szélességet, és törli az EXIF-adatokat, például a GPS-helyet. Egyszerre {max_files} kép; a formátum nem változik.",
+   "points": [
+    "Minőség 1 és 100 között",
+    "Opcionális legnagyobb szélesség",
+    "Kérésre törli a fényképezőgép- és helyadatokat"
+   ],
+   "faq": []
+  },
+  "compress-jpeg": {
+   "slug": "jpg-tomorites",
+   "name": "JPG tömörítése",
+   "title": "JPG tömörítése — kisebb JPEG-fotók online",
+   "desc": "JPG-fotók kicsinyítése progresszív kódolással és állítható minőséggel.",
+   "h1": "JPG tömörítése",
+   "intro": "A JPG-tömörítés optimalizált, progresszív JPEG-ként kódolja újra a fotókat, alapból 80-as minőséggel — jellemzően 40–70%-kal kisebbek lesznek, látható különbség nélkül. A metaadatok törölhetők.",
+   "points": [],
+   "faq": []
+  },
+  "compress-png": {
+   "slug": "png-tomorites",
+   "name": "PNG tömörítése",
+   "title": "PNG tömörítése — kisebb PNG-képek online",
+   "desc": "PNG-képek kicsinyítése palettás kvantálással, az átlátszóság megtartásával.",
+   "h1": "PNG tömörítése",
+   "intro": "A PNG-tömörítés optimalizált palettára (alapból 256 szín) csökkenti a színeket, és újratömöríti a fájlt; az átlátszóság megmarad. A képernyőképek és grafikák jellemzően 50–80%-kal kisebbek lesznek.",
+   "points": [],
+   "faq": []
+  },
+  "compress-gif": {
+   "slug": "gif-tomorites",
+   "name": "GIF tömörítése",
+   "title": "GIF tömörítése — kisebb animált GIF-ek",
+   "desc": "Animált GIF-ek kicsinyítése: kevesebb szín, kisebb képkocka-sebesség, kisebb szélesség.",
+   "h1": "GIF tömörítése",
+   "intro": "A GIF-tömörítés optimalizált palettával építi újra az animációt, és csökkentheti a képkocka-sebességet és a szélességet — ezek a GIF-méret fő tényezői.",
+   "points": [],
+   "faq": []
+  },
+  "compress-video": {
+   "slug": "video-tomorites",
+   "name": "Videó tömörítése",
+   "title": "Videótömörítés — MP4, MOV, MKV kisebbre online",
+   "desc": "Videók kicsinyítése H.264-gyel vagy H.265-tel: minőség (CRF), felbontás vagy célméret MB-ban.",
+   "h1": "Videó tömörítése",
+   "intro": "A videótömörítés alapból H.264-gyel, CRF 28 minőséggel kódol újra (kérésre H.265-tel), szükség esetén kisebb felbontásra, vagy az általad megadott MB-méretre törekszik. A telefonos videók gyakran 60–80%-kal kisebbek lesznek.",
+   "points": [
+    "Minőség (CRF), felbontás vagy célméret",
+    "H.264 vagy H.265",
+    "A hangsáv megmarad"
+   ],
+   "faq": []
+  },
+  "compress-mp3": {
+   "slug": "mp3-tomorites",
+   "name": "MP3 tömörítése",
+   "title": "MP3 tömörítése — kisebb hangfájlok",
+   "desc": "MP3 és más hangfájlok bitrátájának csökkentése; beszédhez mono.",
+   "h1": "MP3 tömörítése",
+   "intro": "Az MP3-tömörítés alacsonyabb bitrátával (alapból 96 kbit/s) kódolja újra a hangot, és monóvá alakíthatja — beszédhez és podcasthoz elég, harmada egy 320 kbit/s-os fájlnak.",
+   "points": [],
+   "faq": []
+  },
+  "compress-wav": {
+   "slug": "wav-tomorites",
+   "name": "WAV tömörítése",
+   "title": "WAV tömörítése — kisebb tömörítetlen hang",
+   "desc": "WAV-fájlok kicsinyítése a mintavétel, a csatornák vagy a bitmélység csökkentésével.",
+   "h1": "WAV tömörítése",
+   "intro": "A WAV-tömörítés tömörítetlen, veszteségmentes formátumban hagyja a fájlt, de csökkenti a mintavételt (pl. 48 → 22,05 kHz), a csatornákat vagy a bitmélységet. A legkisebb veszteségmentes fájlhoz inkább FLAC-ká alakítsd.",
+   "points": [],
+   "faq": []
+  },
+  "merge-pdf": {
+   "slug": "pdf-egyesites",
+   "name": "PDF egyesítése",
+   "title": "PDF egyesítése — {max_files} fájl egy PDF-be",
+   "desc": "PDF-ek, Word-fájlok és képek egyesítése egy PDF-be a választott sorrendben; legfeljebb {max_files} fájl.",
+   "h1": "PDF egyesítése",
+   "intro": "A PDF-egyesítés legfeljebb {max_files} fájlt fűz egyetlen PDF-be a feltöltés sorrendjében. A Word-, PowerPoint- és képfájlok előbb PDF-be alakulnak, és fájlonként csak egyes oldalak is átvehetők (pl. 1-3).",
+   "points": [
+    "Legfeljebb {max_files} fájl",
+    "PDF-ek, Word-fájlok és képek vegyesen",
+    "Fájlonkénti oldaltartomány"
+   ],
+   "faq": []
+  },
+  "split-pdf": {
+   "slug": "pdf-bontas",
+   "name": "PDF szétbontása",
+   "title": "PDF szétbontása — tartományok, N oldalanként vagy oldalanként",
+   "desc": "Egy PDF szétbontása több fájlra: tartományok szerint, N oldalanként vagy oldalanként. ZIP-ben.",
+   "h1": "PDF szétbontása",
+   "intro": "A PDF-bontás részekre vágja a dokumentumot: a megadott tartományok szerint (1-3,4-10), egyenlő, N oldalas részekre, vagy egyes oldalakra. A részek ZIP-ben érkeznek.",
+   "points": [],
+   "faq": []
+  },
+  "extract-pages": {
+   "slug": "pdf-oldalak-kivonasa",
+   "name": "PDF-oldalak kivonása",
+   "title": "Oldalak kivonása PDF-ből",
+   "desc": "Egy PDF kiválasztott oldalainak mentése új PDF-be.",
+   "h1": "Oldalak kivonása PDF-ből",
+   "intro": "Az oldalkivonás a megadott oldalakból (pl. 2,5-7) új PDF-et készít ebben a sorrendben; az eredeti változatlan marad.",
+   "points": [],
+   "faq": []
+  },
+  "delete-pdf-pages": {
+   "slug": "pdf-oldalak-torlese",
+   "name": "PDF-oldalak törlése",
+   "title": "Oldalak törlése PDF-ből",
+   "desc": "Oldalak eltávolítása egy PDF-ből szám vagy tartomány szerint.",
+   "h1": "Oldalak törlése PDF-ből",
+   "intro": "Az oldaltörlés eltávolítja a megadott oldalakat (pl. 1,4-6), a többit új PDF-be menti.",
+   "points": [],
+   "faq": []
+  },
+  "rotate-pdf": {
+   "slug": "pdf-forgatas",
+   "name": "PDF forgatása",
+   "title": "PDF-oldalak forgatása — mind vagy kiválasztottak",
+   "desc": "Az összes vagy a kiválasztott PDF-oldalak elforgatása 90, 180 vagy 270 fokkal, véglegesen.",
+   "h1": "PDF forgatása",
+   "intro": "A PDF-forgatás az összes vagy csak a megadott oldalakat fordítja el 90, 180 vagy 270 fokkal, és a fájlba menti.",
+   "points": [],
+   "faq": []
+  },
+  "organize-pdf": {
+   "slug": "pdf-rendezes",
+   "name": "PDF rendezése",
+   "title": "PDF rendezése — oldalak átrendezése",
+   "desc": "PDF-oldalak új sorrendbe tétele, megkettőzése vagy elhagyása.",
+   "h1": "PDF-oldalak rendezése",
+   "intro": "A PDF-rendezés a megadott oldalsorrendben (pl. 3,1,2,4-) építi újra a dokumentumot; a kihagyott oldalak elmaradnak, a kétszer szereplők megkettőződnek.",
+   "points": [],
+   "faq": []
+  },
+  "crop-pdf": {
+   "slug": "pdf-vagas",
+   "name": "PDF vágása",
+   "title": "PDF-margók levágása",
+   "desc": "A PDF-oldalak margóinak levágása milliméterben.",
+   "h1": "PDF vágása",
+   "intro": "A PDF-vágás a megadott milliméteres margókat (felső, jobb, alsó, bal) vágja le az összes vagy a kiválasztott oldalról.",
+   "points": [],
+   "faq": []
+  },
+  "resize-pdf": {
+   "slug": "pdf-atmeretezes",
+   "name": "PDF átméretezése",
+   "title": "PDF-oldalak átméretezése — A4, Letter, A5 és más",
+   "desc": "Egy PDF oldalméretének módosítása A3, A4, A5, Letter vagy Legal méretre.",
+   "h1": "PDF-oldalak átméretezése",
+   "intro": "A PDF-átméretezés minden oldalt új papírméretre (alapból A4) tesz, arányosan illesztve, kitöltve vagy nyújtva.",
+   "points": [],
+   "faq": []
+  },
+  "pdf-to-pdfa": {
+   "slug": "pdf-bol-pdfa",
+   "name": "PDF-ből PDF/A",
+   "title": "PDF átalakítása PDF/A formátumba archiváláshoz",
+   "desc": "ISO-szabványos PDF/A-1b, -2b vagy -3b fájl Ghostscripttel: beágyazott betűk, sRGB-színprofil.",
+   "h1": "PDF-ből PDF/A",
+   "intro": "A PDF/A-átalakítás alapból PDF/A-2b archív PDF-et készít (1b és 3b is választható): minden betű beágyazódik, és sRGB kimeneti színprofil kerül bele, ahogy a bíróságok és a közlevéltárak kérik.",
+   "points": [],
+   "faq": []
+  },
+  "pdf-to-pdfx": {
+   "slug": "pdf-bol-pdfx",
+   "name": "PDF-ből PDF/X",
+   "title": "PDF átalakítása PDF/X formátumba nyomdához",
+   "desc": "Nyomdakész PDF/X-fájl előkészítése Ghostscripttel.",
+   "h1": "PDF-ből PDF/X",
+   "intro": "A PDF/X-átalakítás nyomdai célú PDF/X-3 fájlt készít beágyazott betűkkel és meghatározott kimeneti színprofillal.",
+   "points": [],
+   "faq": []
+  },
+  "ocr-pdf": {
+   "slug": "pdf-szovegfelismeres",
+   "name": "PDF szövegfelismerés",
+   "title": "PDF szövegfelismerés (OCR) — kereshető szkennelt PDF",
+   "desc": "Láthatatlan szövegréteg szkennelt PDF-ekre és fotókra Tesseract OCR-rel; magyarul és 100+ nyelven.",
+   "h1": "PDF szövegfelismerés",
+   "intro": "A szövegfelismerés a Tesseracttel kiolvassa a szkennelt oldalak szövegét, és láthatatlan rétegként hozzáadja, így a PDF kereshető és másolható lesz, miközben ugyanúgy néz ki. A ferde oldalakat előbb kiegyenesíti.",
+   "points": [],
+   "faq": []
+  },
+  "protect-pdf": {
+   "slug": "pdf-vedelem",
+   "name": "PDF védelme",
+   "title": "PDF védelme jelszóval és jogosultságokkal",
+   "desc": "PDF titkosítása AES-256-tal, megnyitási jelszó és jogosultságok a nyomtatásra, másolásra, szerkesztésre.",
+   "h1": "PDF védelme",
+   "intro": "A PDF-védelem AES-256-tal titkosítja a fájlt: az olvasáshoz megnyitási jelszó kell, egy külön jogosultsági jelszó pedig a nyomtatást, a másolást, a szerkesztést és a megjegyzéseket szabályozza.",
+   "points": [],
+   "faq": []
+  },
+  "unlock-pdf": {
+   "slug": "pdf-feloldas",
+   "name": "PDF feloldása",
+   "title": "PDF feloldása — ismert jelszó eltávolítása",
+   "desc": "A jelszó és a korlátozások eltávolítása egy PDF-ről, ha ismered a jelszót.",
+   "h1": "PDF feloldása",
+   "intro": "A PDF-feloldás eltávolítja a titkosítást és a jogosultsági korlátozásokat egy olyan PDF-ről, amelynek ismered a jelszavát; jelszó nélkül nem nyitható meg.",
+   "points": [],
+   "faq": []
+  },
+  "flatten-pdf": {
+   "slug": "pdf-lapitas",
+   "name": "PDF lapítása",
+   "title": "PDF lapítása — űrlapmezők és megjegyzések beégetése",
+   "desc": "A kitöltött űrlapmezők és megjegyzések az oldal részévé válnak, és nem módosíthatók.",
+   "h1": "PDF lapítása",
+   "intro": "A PDF-lapítás az űrlapmezők értékeit és a megjegyzéseket beégeti az oldal tartalmába: az eredmény mindenhol ugyanúgy nyomtatható és látszik, és nem szerkeszthető. Az ékezetes szöveg (ő, ű) helyes marad.",
+   "points": [],
+   "faq": []
+  },
+  "extract-pdf-images": {
+   "slug": "kepek-kinyerese-pdf-bol",
+   "name": "Képek kinyerése PDF-ből",
+   "title": "Képek kinyerése PDF-ből",
+   "desc": "Egy PDF minden beágyazott képének mentése eredeti minőségben, ZIP-ben.",
+   "h1": "Képek kinyerése PDF-ből",
+   "intro": "A képkinyerés a PDF-be ágyazott képeket eredeti felbontásukban és formátumukban (JPG, PNG…) menti ZIP-be; az apró díszítéseket kihagyja.",
+   "points": [],
+   "faq": []
+  },
+  "annotate-pdf": {
+   "slug": "pdf-jegyzetek",
+   "name": "PDF jegyzetelése",
+   "title": "PDF jegyzetelése — kiemelések, jegyzetek, alakzatok",
+   "desc": "Kiemelés, cetli, szövegdoboz, téglalap és vonal hozzáadása egy PDF-hez.",
+   "h1": "PDF jegyzetelése",
+   "intro": "A PDF-jegyzetelés szabványos PDF-megjegyzéseket ad hozzá — kiemelés, cetli, szövegdoboz, téglalap, vonal —, amelyeket minden PDF-olvasó mutat, és később be is lapíthatók.",
+   "points": [],
+   "faq": []
+  },
+  "edit-pdf": {
+   "slug": "pdf-szerkesztes",
+   "name": "PDF szerkesztése",
+   "title": "PDF szerkesztése — szöveg, kép és kitakarás",
+   "desc": "Szöveg és kép elhelyezése PDF-oldalakon, részek fehérrel takarása, vagy a teljes PDF-szerkesztő megnyitása.",
+   "h1": "PDF szerkesztése",
+   "intro": "A PDF-szerkesztés új szöveget (ékezetekkel) és képeket helyez az oldalakra, és fehérrel letakarhat területeket; a meglévő szöveg átírásához nyisd meg az app teljes PDF-szerkesztőjét.",
+   "points": [],
+   "faq": []
+  },
+  "redact-pdf": {
+   "slug": "pdf-kitakaras",
+   "name": "PDF kitakarása",
+   "title": "PDF kitakarása — szöveg végleges kifeketítése",
+   "desc": "Szavak és minták (e-mail-címek, telefonszámok, kártyaszámok) végleges kifeketítése.",
+   "h1": "PDF kitakarása",
+   "intro": "A PDF-kitakarás megkeresi a megadott szavakat és mintákat, a szöveget véglegesen eltávolítja alóluk, és fekete dobozt rajzol — nem csak egy fedőréteget, amely leemelhető.",
+   "points": [],
+   "faq": []
+  },
+  "page-numbers": {
+   "slug": "pdf-oldalszamozas",
+   "name": "Oldalszámok hozzáadása",
+   "title": "Oldalszámozás PDF-hez",
+   "desc": "PDF-oldalak számozása a választott helyen és formátumban.",
+   "h1": "Oldalszámok hozzáadása PDF-hez",
+   "intro": "Az oldalszámozás minden oldalra számot ír — alapból alul középre, vagy bármelyik sarokba —, például „{n}” vagy „{n}/{total}. oldal” formában.",
+   "points": [],
+   "faq": []
+  },
+  "compare-pdf": {
+   "slug": "pdf-osszehasonlitas",
+   "name": "PDF-ek összehasonlítása",
+   "title": "Két PDF összehasonlítása — mi változott",
+   "desc": "Egy PDF két változatának összevetése, jelentéssel a különbségekről.",
+   "h1": "PDF-ek összehasonlítása",
+   "intro": "A PDF-összehasonlítás egymás mellé teszi a két változatot, és oldalanként jelöli a beszúrt, törölt és módosított szöveget.",
+   "points": [],
+   "faq": []
+  },
+  "resize-image": {
+   "slug": "kep-atmeretezes",
+   "name": "Kép átméretezése",
+   "title": "Képek átméretezése — pixel vagy százalék, egyszerre {max_files}",
+   "desc": "JPG, PNG, WebP, HEIC és más képek átméretezése pixelben vagy százalékban; a képarány megtartásával vagy módosításával.",
+   "h1": "Képek átméretezése",
+   "intro": "A képátméretezés új szélességet, magasságot vagy százalékot állít be jó minőségű Lanczos-újramintázással; a beillesztés, a kitöltés (vágással) vagy a kitöltő sáv tartja az arányokat, ahogy választod. Egyszerre {max_files} kép.",
+   "points": [],
+   "faq": []
+  },
+  "crop-image": {
+   "slug": "kep-vagas",
+   "name": "Kép vágása",
+   "title": "Képek vágása — területre vagy képarányra",
+   "desc": "Képek kivágása pixelterületre vagy képarányra, például 1:1, 4:5 vagy 16:9.",
+   "h1": "Képek vágása",
+   "intro": "A képvágás egy pixelterületet (x, y, szélesség, magasság) vagy egy képarány legnagyobb, középre igazított területét vágja ki — pl. 1:1 profilképhez vagy 9:16 storyhoz.",
+   "points": [],
+   "faq": []
+  },
+  "rotate-image": {
+   "slug": "kep-forgatas",
+   "name": "Kép forgatása",
+   "title": "Képek forgatása 90, 180 vagy 270 fokkal",
+   "desc": "Képek végleges elforgatása, egyszerre többet is.",
+   "h1": "Képek forgatása",
+   "intro": "A képforgatás 90, 180 vagy 270 fokkal fordítja el a képeket, és a pixeleket forgatva menti (nem csak egy EXIF-jelzővel), így minden program jól mutatja.",
+   "points": [],
+   "faq": []
+  },
+  "flip-image": {
+   "slug": "kep-tukrozes",
+   "name": "Kép tükrözése",
+   "title": "Képek tükrözése vízszintesen vagy függőlegesen",
+   "desc": "Képek tükrözése balról jobbra vagy fejjel lefelé.",
+   "h1": "Képek tükrözése",
+   "intro": "A képtükrözés vízszintesen (balról jobbra) vagy függőlegesen (fejjel lefelé) tükrözi a képeket, egyszerre többet is.",
+   "points": [],
+   "faq": []
+  },
+  "upscale-image": {
+   "slug": "kep-nagyitas",
+   "name": "Kép nagyítása",
+   "title": "Képek nagyítása 2×, 3× vagy 4×",
+   "desc": "Képek 2–4-szeres nagyítása Lanczos-újramintázással és élesítéssel.",
+   "h1": "Képek nagyítása",
+   "intro": "A képnagyítás 2-, 3- vagy 4-szeresére nagyítja a képeket Lanczos-újramintázással és finom élesítéssel — kis logókhoz és képernyőképekhez jó.",
+   "points": [],
+   "faq": []
+  },
+  "collage-maker": {
+   "slug": "kollazs-keszito",
+   "name": "Kollázskészítő",
+   "title": "Kollázskészítő — fotók egy képbe",
+   "desc": "Legfeljebb {max_files} fotó rácsba rendezése térközzel és háttérszínnel.",
+   "h1": "Kollázskészítő",
+   "intro": "A kollázskészítő kiegyensúlyozott rácsba rendezi a fotóidat (az oszlopok száma automatikus vagy választható), a megadott térközzel és háttérszínnel, egyetlen JPG-be.",
+   "points": [],
+   "faq": []
+  },
+  "color-picker": {
+   "slug": "szinvalaszto",
+   "name": "Színválasztó",
+   "title": "Színválasztó képből — egy kép fő színei",
+   "desc": "Egy kép uralkodó színei HEX- és RGB-értékekkel.",
+   "h1": "Színválasztó képből",
+   "intro": "A színválasztó megkeresi egy kép uralkodó színeit (alapból 8-at), és HEX-, RGB-értékkel és a képen belüli arányukkal sorolja fel őket — arculati palettához hasznos.",
+   "points": [],
+   "faq": []
+  },
+  "trim-video": {
+   "slug": "video-vagas",
+   "name": "Videó vágása",
+   "title": "Videó vágása — az eleje és a vége levágása online",
+   "desc": "Egy videó vágása a szükséges részre kezdő- és végidő szerint.",
+   "h1": "Videó vágása",
+   "intro": "A videóvágás a megadott kezdet és vég (másodperc vagy óó:pp:mm) közötti részt tartja meg, és újrakódolja, hogy a vágás képkockapontos legyen.",
+   "points": [],
+   "faq": []
+  },
+  "crop-video": {
+   "slug": "video-kivagas",
+   "name": "Videó kivágása",
+   "title": "Videó kivágása — 9:16, 1:1, 16:9 vagy terület",
+   "desc": "Videó kivágása képarányra Reelshez, TikTokhoz, YouTube-hoz, vagy pixelterületre.",
+   "h1": "Videó kivágása",
+   "intro": "A videókivágás a képet egy képarányra vágja középre igazítva (9:16 Reelshez és TikTokhoz, 1:1, 4:5, 16:9), vagy pontos pixelterületre.",
+   "points": [],
+   "faq": []
+  },
+  "resize-video": {
+   "slug": "video-atmeretezes",
+   "name": "Videó átméretezése",
+   "title": "Videó átméretezése — 4K, 1080p, 720p és más",
+   "desc": "Egy videó felbontásának módosítása, új képaránynál sávokkal vagy vágással.",
+   "h1": "Videó átméretezése",
+   "intro": "A videóátméretezés a megadott felbontásra (1080p, 720p, egyéni) méretezi a videót, és eltérő képaránynál sávot ad hozzá vagy vág.",
+   "points": [],
+   "faq": []
+  },
+  "rotate-video": {
+   "slug": "video-forgatas",
+   "name": "Videó forgatása",
+   "title": "Videó forgatása vagy tükrözése",
+   "desc": "Oldalra fordult videó elforgatása 90, 180 vagy 270 fokkal, vagy tükrözése.",
+   "h1": "Videó forgatása",
+   "intro": "A videóforgatás 90, 180 vagy 270 fokkal elfordítva javítja meg az oldalra fordult telefonos videókat, és tükrözni is tud.",
+   "points": [],
+   "faq": []
+  },
+  "mute-video": {
+   "slug": "video-nemitas",
+   "name": "Videó némítása",
+   "title": "Hang eltávolítása videóból",
+   "desc": "Egy videó néma másolata a kép újrakódolása nélkül.",
+   "h1": "Videó némítása",
+   "intro": "A némítás eltávolítja a hangsávot; a kép változatlanul másolódik, így gyors és veszteségmentes.",
+   "points": [],
+   "faq": []
+  },
+  "video-to-gif": {
+   "slug": "videobol-gif",
+   "name": "Videóból GIF",
+   "title": "Videóból GIF — GIF készítése MP4-ből, MOV-ból, WebM-ből",
+   "desc": "Egy videórészlet animált GIF-fé alakítása optimalizált palettával.",
+   "h1": "Videóból GIF",
+   "intro": "A videó–GIF átalakítás a választott részt (kezdet, vég) alapból 12 kép/s-os, 480 pixel széles animált GIF-fé alakítja, a klipből számolt palettával, hogy a színek tiszták maradjanak.",
+   "points": [],
+   "faq": []
+  },
+  "gif-to-video": {
+   "slug": "gif-bol-mp4",
+   "name": "GIF-ből MP4",
+   "title": "GIF-ből MP4 — animált GIF videóvá",
+   "desc": "GIF-, WebP- vagy APNG-animációk kis MP4-videóvá alakítása.",
+   "h1": "GIF-ből MP4",
+   "intro": "A GIF–MP4 átalakítás az animációból H.264-videót készít, amely általában 5–10-szer kisebb, és mindenhol lejátszható; az ismétlést többször is lefuttathatja.",
+   "points": [],
+   "faq": []
+  },
+  "extract-audio": {
+   "slug": "hang-kinyerese",
+   "name": "Hang kinyerése",
+   "title": "Hang kinyerése videóból — MP3, M4A, WAV",
+   "desc": "Egy videó hangjának mentése MP3-ként, M4A-ként, WAV-ként, FLAC-ként vagy más formátumban.",
+   "h1": "Hang kinyerése videóból",
+   "intro": "A hangkinyerés a videó hangsávját MP3-ként (alapból 192 kbit/s) vagy M4A, WAV, FLAC, OGG, Opus formátumban menti.",
+   "points": [],
+   "faq": []
+  },
+  "add-subtitles": {
+   "slug": "felirat-hozzaadasa",
+   "name": "Felirat hozzáadása",
+   "title": "Felirat hozzáadása videóhoz — SRT, VTT, ASS",
+   "desc": "Felirat beégetése a videóba, vagy kapcsolható sávként.",
+   "h1": "Felirat hozzáadása videóhoz",
+   "intro": "A felirat-hozzáadás egy videóból és egy SRT-, VTT- vagy ASS-fájlból beégeti a szöveget a képbe (mindenhol látszik), vagy kapcsolható feliratsávot ad hozzá.",
+   "points": [],
+   "faq": []
+  },
+  "trim-audio": {
+   "slug": "hang-vagas",
+   "name": "Hang vágása",
+   "title": "Hang vágása — MP3, WAV, M4A online",
+   "desc": "Hangfájl vágása kezdő- és végidő szerint, be- és kiúsztatással.",
+   "h1": "Hang vágása",
+   "intro": "A hangvágás a megadott kezdet és vég közötti részt tartja meg, opcionális be- és kiúsztatással, ugyanabban a formátumban.",
+   "points": [],
+   "faq": []
+  },
+  "adjust-volume": {
+   "slug": "hangero-allitas",
+   "name": "Hangerő állítása",
+   "title": "Hang vagy videó hangerejének módosítása",
+   "desc": "Hang hangosítása vagy halkítása, vagy a hangosság EBU R128 szerinti kiegyenlítése.",
+   "h1": "Hangerő állítása",
+   "intro": "A hangerő-állítás megszorozza a szintet (pl. 1,5×), decibelt ad hozzá (+3 dB), vagy az EBU R128 műsorszórási szabvány szerint kiegyenlíti a hangosságot.",
+   "points": [],
+   "faq": []
+  },
+  "watermark-pdf": {
+   "slug": "pdf-vizjel",
+   "name": "PDF vízjelezése",
+   "title": "Vízjel PDF-re — szöveg vagy logó",
+   "desc": "Szöveges vagy logós vízjel minden PDF-oldalra: helyzet, átlátszóság, elforgatás.",
+   "h1": "PDF vízjelezése",
+   "intro": "A PDF-vízjel minden oldalra szöveget (ékezetekkel) vagy logót tesz, alapból középre, átlósan, 30%-os átlátszatlansággal.",
+   "points": [],
+   "faq": []
+  },
+  "watermark-image": {
+   "slug": "kep-vizjel",
+   "name": "Kép vízjelezése",
+   "title": "Vízjel képekre — szöveg vagy logó, egyszerre sokra",
+   "desc": "Szöveges vagy logós vízjel egyszerre {max_files} képre.",
+   "h1": "Képek vízjelezése",
+   "intro": "A képvízjel ugyanazt a szöveget vagy logót teszi legfeljebb {max_files} képre, a választott helyzetben és átlátszósággal.",
+   "points": [],
+   "faq": []
+  },
+  "watermark-video": {
+   "slug": "video-vizjel",
+   "name": "Videó vízjelezése",
+   "title": "Vízjel videóra — szöveg vagy logó",
+   "desc": "Szöveg vagy logó egy videó bármelyik sarkába.",
+   "h1": "Videó vízjelezése",
+   "intro": "A videóvízjel a teljes videóra szöveget vagy logót tesz, a választott sarokba és átlátszósággal.",
+   "points": [],
+   "faq": []
+  },
+  "website-to-pdf": {
+   "slug": "weboldal-pdf-be",
+   "name": "Weboldalból PDF",
+   "title": "Weboldal mentése PDF-be",
+   "desc": "Bármely nyilvános weboldal mentése PDF-be valódi böngészővel (Chromium).",
+   "h1": "Weboldalból PDF",
+   "intro": "A weboldal–PDF mentés Chromiumban nyitja meg az oldalt, megvárja a betöltést, és a választott papírméretre PDF-be nyomtatja.",
+   "points": [],
+   "faq": []
+  },
+  "website-to-image": {
+   "slug": "weboldal-kepernyokep",
+   "name": "Weboldal képernyőképe",
+   "title": "Weboldal képernyőképe — teljes oldal PNG-ben vagy JPG-ben",
+   "desc": "Egy weboldal rögzítése teljes hosszában PNG, JPG vagy WebP képként.",
+   "h1": "Weboldal képernyőképe",
+   "intro": "A képernyőkép Chromiumban rögzíti az oldalt a megadott szélességben (alapból 1280 px), a teljes görgethető oldalt vagy csak az első képernyőt.",
+   "points": [],
+   "faq": []
+  },
+  "merge-files": {
+   "slug": "fajlok-egyesitese",
+   "name": "Fájlok egyesítése",
+   "title": "Fájlok egyesítése — PDF-ek, képek, videók vagy hangok egybe",
+   "desc": "Legfeljebb {max_files} fájl egyesítése: dokumentumok és képek PDF-be, videók egy videóba, hangok egy sávba.",
+   "h1": "Fájlok egyesítése",
+   "intro": "A fájlegyesítés legfeljebb {max_files} azonos fajtájú fájlt fűz össze: dokumentumokat és képeket egy PDF-be, videóklipeket egy videóba, hangfájlokat egy sávba, a feltöltés sorrendjében.",
+   "points": [],
+   "faq": []
+  },
+  "thumbnail": {
+   "slug": "belyegkep-keszito",
+   "name": "Bélyegkép-készítő",
+   "title": "Bélyegkép-készítő — előnézeti kép dokumentumról, videóról, képről",
+   "desc": "Előnézeti kép egy dokumentum első oldaláról, egy videó képkockájáról vagy egy képről.",
+   "h1": "Bélyegkép-készítő",
+   "intro": "A bélyegkép-készítő egy dokumentum első (vagy választott) oldalát, egy videó képkockáját vagy egy képet PNG, JPG vagy WebP bélyegképpé renderel, alapból 400 pixel szélesen.",
+   "points": [],
+   "faq": []
+  },
+  "create-archive": {
+   "slug": "zip-keszites",
+   "name": "Archívum készítése",
+   "title": "ZIP vagy 7Z archívum készítése online — jelszóval",
+   "desc": "Legfeljebb {max_files} fájl ZIP-be, 7Z-be vagy TAR.GZ-be csomagolása, jelszavas titkosítással is.",
+   "h1": "Archívum készítése",
+   "intro": "Az archívumkészítés ZIP-be (alap), 7Z-be, TAR-ba, TAR.GZ-be, TAR.BZ2-be, TAR.XZ-be vagy TAR.ZST-be csomagolja a fájlokat; jelszóval a ZIP és a 7Z AES-256-tal titkosít.",
+   "points": [],
+   "faq": []
+  },
+  "extract-archive": {
+   "slug": "archivum-kibontasa",
+   "name": "Archívum kibontása",
+   "title": "RAR, 7Z, ZIP és 40+ archívum kibontása online",
+   "desc": "RAR, 7Z, TAR.GZ, ISO és más archívumok kibontása, jelszóval is.",
+   "h1": "Archívum kibontása",
+   "intro": "Az archívumkibontás 40+ formátumot (RAR, 7Z, ZIP, TAR.GZ, ISO, CAB, DMG…) bont ki a 7-Ziptel vagy a The Unarchiverrel, és visszaadja a fájlokat, több fájlnál ZIP-ben. A veszélyes útvonalakat elutasítja.",
+   "points": [],
+   "faq": []
+  },
+  "read-metadata": {
+   "slug": "metaadat-megjelenito",
+   "name": "Metaadat-megjelenítő",
+   "title": "Metaadat-megjelenítő — EXIF, GPS, dokumentum-tulajdonságok",
+   "desc": "Bármely fájl EXIF-, GPS-, fényképezőgép-, szerző- és dokumentum-metaadatainak kiolvasása ExifToollal.",
+   "h1": "Metaadat-megjelenítő",
+   "intro": "A metaadat-megjelenítő mindent mutat, amit az ExifTool egy fájlból ki tud olvasni: fényképezőgépet és objektívet, GPS-helyet, dátumokat, szerzőt, szoftvert, PDF- és Office-tulajdonságokat.",
+   "points": [],
+   "faq": []
+  },
+  "edit-metadata": {
+   "slug": "metaadat-szerkesztes",
+   "name": "Metaadatok szerkesztése",
+   "title": "Metaadatok szerkesztése — cím, szerző, dátum, szerzői jog",
+   "desc": "Cím, szerző, szerzői jog és más metaadatok írása képekbe, videókba, PDF-ekbe és Office-fájlokba.",
+   "h1": "Metaadatok szerkesztése",
+   "intro": "A metaadat-szerkesztés a megadott mezőket (Title, Author, Copyright, Description, Keywords…) írja a fájlba az ExifToollal.",
+   "points": [],
+   "faq": []
+  },
+  "remove-metadata": {
+   "slug": "metaadat-torles",
+   "name": "Metaadatok törlése",
+   "title": "Metaadatok törlése — EXIF és GPS-hely eltávolítása",
+   "desc": "EXIF, GPS-hely, szerző és szerkesztési előzmények eltávolítása képekből, videókból, PDF-ekből és Office-fájlokból.",
+   "h1": "Metaadatok törlése",
+   "intro": "A metaadat-törlés megosztás előtt eltávolítja a fényképezőgép-adatokat, a GPS-helyet, a szerzők nevét és a szerkesztési előzményeket az ExifToollal.",
+   "points": [],
+   "faq": []
+  },
+  "ffmpeg-advanced": {
+   "slug": "ffmpeg-online",
+   "name": "FFmpeg online (haladó)",
+   "title": "FFmpeg online — haladó videó- és hangparaméterek",
+   "desc": "Engedélyezett FFmpeg-kapcsolók (CRF, preset, tune, szűrők: scale, crop, eq) biztonságosan a felhőben.",
+   "h1": "FFmpeg online",
+   "intro": "Az FFmpeg online engedélyezőlistás FFmpeg-kapcsolókat és -szűrőket fogad (crf, preset, tune, pix_fmt, scale, crop, eq, loudnorm…) — minden értéket ellenőrzünk, fájl- és hálózati hozzáférés lehetetlen.",
+   "points": [],
+   "faq": []
+  },
+  "imagemagick-advanced": {
+   "slug": "imagemagick-online",
+   "name": "ImageMagick online (haladó)",
+   "title": "ImageMagick online — haladó képparaméterek",
+   "desc": "Engedélyezett ImageMagick-műveletek (resize, sharpen, modulate, colorspace…) biztonságosan.",
+   "h1": "ImageMagick online",
+   "intro": "Az ImageMagick online engedélyezőlistás műveleteket fogad (-resize, -sharpen, -modulate, -colorspace, -level…) ellenőrzött értékekkel.",
+   "points": [],
+   "faq": []
+  },
+  "form-recognize": {
+   "slug": "urlapmezo-felismeres",
+   "name": "Űrlapfelismerés",
+   "title": "Űrlapfelismerés — bármilyen űrlap mezőinek megtalálása",
+   "desc": "Kitölthető és lapos PDF-ek, Word- és Excel-űrlapok, valamint lefényképezett űrlapok mezőinek felismerése egységes listában.",
+   "h1": "Űrlapfelismerés bármilyen fájlból",
+   "intro": "Az űrlapfelismerés beolvas egy űrlapot — kitölthető vagy lapos PDF-et, Word- vagy Excel-fájlt, fotót vagy szkent —, és egységes mezőlistát ad (név, címke, típus, oldal, hely, kötelező-e). A mezők kitöltés előtt kézzel javíthatók és pótolhatók.",
+   "points": [],
+   "faq": []
+  },
+  "fill-form": {
+   "slug": "urlap-kitoltes",
+   "name": "Űrlap kitöltése",
+   "title": "Űrlap kitöltése online — PDF, Word, Excel, fotó",
+   "desc": "Bármilyen űrlap kitöltése, az eredeti formátumában visszaadva; az ékezetek (ő, ű) helyesek maradnak.",
+   "h1": "Űrlap kitöltése",
+   "intro": "Az űrlapkitöltés a felismert mezőkbe írja az értékeidet, és az eredeti formátumban adja vissza az űrlapot — a PDF PDF marad, a DOCX DOCX —, fotónál pedig az oldal eredeti kinézetén.",
+   "points": [],
+   "faq": []
+  },
+  "bulk-fill-form": {
+   "slug": "tomeges-urlapkitoltes",
+   "name": "Tömeges kitöltés",
+   "title": "Űrlapok tömeges kitöltése Excelből vagy CSV-ből",
+   "desc": "Egy táblázat minden sorából egy kitöltött példány, egy fájlba fűzve.",
+   "h1": "Űrlapok tömeges kitöltése",
+   "intro": "A tömeges kitöltés egy CSV- vagy XLSX-táblázat minden sorából (az első sor a mezőnevek) kitöltött példányt készít az űrlapból, legfeljebb 500 sorig.",
+   "points": [],
+   "faq": []
+  },
+  "make-fillable": {
+   "slug": "kitoltheto-pdf",
+   "name": "Kitölthető PDF készítése",
+   "title": "Kitölthető PDF készítése — valódi űrlapmezőkkel",
+   "desc": "Nyomtatott vagy szkennelt űrlapból kitölthető PDF valódi mezőkkel.",
+   "h1": "Kitölthető PDF készítése",
+   "intro": "A kitölthetővé tétel megkeresi egy nyomtatott űrlap vonalait, dobozait és jelölőnégyzeteit, és valódi PDF-űrlapmezőket tesz rájuk; a fotókat és szkenneket előbb újraépíti.",
+   "points": [],
+   "faq": []
+  },
+  "create-signature": {
+   "slug": "alairas-keszites",
+   "name": "Aláírás készítése",
+   "title": "Aláírás készítése — rajzolva, fotózva vagy feltöltve",
+   "desc": "Rajzold meg az aláírásod vagy kézjegyed, vagy fotózd le papírról; tiszta, átlátszó képet készítünk, és titkosítva őrizzük.",
+   "h1": "Aláírás készítése",
+   "intro": "Az aláíráskészítő a rajzolt, lefotózott vagy szkennelt aláírásodból tiszta, átlátszó PNG-t készít (a papír, az árnyék és a zaj eltűnik), és titkosítva, csak neked tárolja, hogy dokumentumokon újra felhasználd.",
+   "points": [],
+   "faq": []
+  },
+  "sign-document": {
+   "slug": "pdf-alairas",
+   "name": "Dokumentum aláírása",
+   "title": "PDF és Word dokumentumok aláírása a saját aláírásoddal",
+   "desc": "A mentett aláírásod elhelyezése egy PDF vagy DOCX aláírásmezőjébe vagy a megadott helyre.",
+   "h1": "Dokumentum aláírása",
+   "intro": "A dokumentumaláírás a mentett aláírásodat a dokumentum aláírásmezőjébe, a megtalált aláírásvonalra vagy pontosan a megadott helyre teszi — PDF- és Word-fájlokban.",
+   "points": [],
+   "faq": []
+  },
+  "ai-form-filler": {
+   "slug": "ai-urlapkitolto",
+   "name": "AI-űrlapkitöltő",
+   "title": "AI-űrlapkitöltő — az adataidból és dokumentumaidból tölt ki",
+   "desc": "Egy asszisztens a profilodból és a feltöltött dokumentumokból tölti ki az űrlapokat, rákérdez a hiányzóra, és ellenőrzi a dátumokat, az IBAN-t és a magyar azonosítókat.",
+   "h1": "AI-űrlapkitöltő",
+   "intro": "Az AI-űrlapkitöltő a mentett profilodból és a feltöltött dokumentumokból veszi a válaszokat, csak a hiányzókra kérdez rá, ellenőrzi az értékeket (dátum, IBAN, adóazonosító jel, TAJ-szám), és aláírás előtt előnézetet mutat.",
+   "points": [],
+   "faq": []
+  },
+  "unit-converter": {
+   "slug": "mertekegyseg-valto-eszkoz",
+   "name": "Mértékegység-váltó",
+   "title": "Mértékegység-váltó",
+   "desc": "Hossz, tömeg, hőmérséklet, térfogat és más mértékegységek átváltása.",
+   "h1": "Mértékegység-váltó",
+   "intro": "Átváltás 111 mértékegység között 14 kategóriában, pontos SI-tényezőkkel.",
+   "points": [],
+   "faq": []
+  },
+  "time-zone-converter": {
+   "slug": "idozona-valto-eszkoz",
+   "name": "Időzóna-váltó",
+   "title": "Időzóna-váltó",
+   "desc": "Időpont átváltása időzónák között, a nyári időszámítással együtt.",
+   "h1": "Időzóna-váltó",
+   "intro": "Dátum és időpont átváltása bármely IANA-időzóna között, a nyári időszámítással együtt.",
+   "points": [],
+   "faq": []
+  }
+ },
+ "cmphub": {
+  "title": "{product} vagy CloudConvert, FreeConvert, Smallpdf, iLovePDF?",
+  "desc": "Hogyan viszonyul a {product} a CloudConverthez, a FreeConverthez, a Smallpdf-hez és az iLovePDF-hez: formátumok, API, AI-szerkesztés, űrlapok, aláírás és MCP.",
+  "h1": "A {product} összehasonlítva",
+  "lead": "Tisztességes, funkcióról funkcióra haladó összevetés a legismertebb átalakítókkal. Ami a {product} szolgáltatást megkülönbözteti: AI-szerkesztés, űrlapfelismerés bármilyen fájlból, aláírás, ügynöki űrlapkitöltés és MCP-szerver az AI-asszisztenseknek."
+ },
+ "cmprow": {
+  "formats": "Formátumok és átalakítások (itt {formats} formátum)",
+  "api": "REST API",
+  "ai_edit": "Dokumentumszerkesztés utasításra (AI)",
+  "form_detect": "Űrlapfelismerés fotóból, Wordből és Excelből",
+  "agent_fill": "Ügynöki kitöltés profilból és dokumentumokból",
+  "esign": "Aláírás PDF-en és Wordön",
+  "mcp": "MCP-szerver a Claude-hoz és a ChatGPT-hez",
+  "editors": "Beépített szerkesztők (Word, dia, fotó, vektor, videó)",
+  "hu": "Magyar felület",
+  "open_engines": "Átalakításonként megnevezett nyílt forrású motorok"
+ },
+ "cmpadv": {
+  "ai_edit": "Szerkesztés kéréssel: „a harmadik után minden bekezdést húzz be”, „tegyél egy fotót a 22. oldalra” — a valódi Word-, PowerPoint- vagy PDF-fájlon.",
+  "form_detect": "Űrlapfelismerés bármilyen fájlból: kitölthető és lapos PDF, Word, Excel vagy fotó, egységes, javítható mezőlistába.",
+  "esign": "Egyszer megrajzolt vagy lefotózott aláírás, megtisztítva és titkosítva tárolva, PDF- és Word-fájlokba helyezve.",
+  "agent_fill": "Ügynöki kitöltés: az asszisztens a profilodból és dokumentumaidból tölti ki az űrlapot, rákérdez a hiányzóra, és ellenőrzi az IBAN-t és a magyar azonosítókat.",
+  "mcp": "MCP-szerver: a Claude, a ChatGPT és más asszisztensek közvetlenül hívják az összes átalakítót és eszközt."
+ },
+ "cmp": {
+  "title": "{product} vagy {name} — összehasonlítás és alternatíva",
+  "h1": "{product} vagy {name}",
+  "crumb": "{name} helyett",
+  "feature": "Funkció",
+  "v_y": "Igen",
+  "v_n": "Nem szerepel",
+  "v_p": "Részben",
+  "checked": "A versenytársak funkciói a nyilvános weboldalukon szereplők szerint, ellenőrizve: {date}. Szólj, ha valami változott.",
+  "adv_h": "Amit a {product} hozzátesz",
+  "others_h": "További összehasonlítások",
+  "cloudconvert": {
+   "slug": "cloudconvert-alternativa",
+   "name": "CloudConvert",
+   "desc": "Széles körű átalakító API; a {product} AI-szerkesztést, űrlapokat, aláírást és MCP-t ad hozzá.",
+   "intro": "A CloudConvert ismert átalakító szolgáltatás, feladatokra (jobs/tasks) épülő API-val, 200+ formátummal. A {product} ugyanazt a jobs/tasks modellt használja hasonló formátumlefedettséggel ({formats} formátum, {conversions} irány), és hozzáadja, amit egy tiszta átalakító nem tud: a fájl szerkesztését utasításra, az űrlapok felismerését és kitöltését, az aláírást, és egy MCP-szervert az AI-asszisztenseknek.",
+   "faq": [
+    [
+     "A {product} jó CloudConvert-alternatíva?",
+     "Igen: jobs/tasks REST API importáló, átalakító és exportáló feladatokkal, webhookokkal és sandbox-kulcsokkal, plusz böngészős átalakító — és mindezek felett AI-szerkesztés, űrlapok és aláírás."
+    ],
+    [
+     "Átvihetem a CloudConvert-feladataimat?",
+     "A feladat-JSON nagyon hasonló: nevesített feladatok operation, input és output_format mezővel. A legtöbbnél csak az alapcímet és a kulcsot kell cserélni."
+    ]
+   ]
+  },
+  "freeconvert": {
+   "slug": "freeconvert-alternativa",
+   "name": "FreeConvert",
+   "desc": "Sok böngészős átalakító; a {product} AI-szerkesztést, űrlapokat, aláírást és MCP-t ad hozzá.",
+   "intro": "A FreeConvert sok böngészős átalakítót és tömörítőt kínál haladó beállításokkal. A {product} hozza ugyanezt az átalakítási és beállítási kört ({formats} formátum, mentett beállítások, „minden fájlra”), és hozzáadja az AI-szerkesztést, az űrlapfelismerést, az aláírást és az MCP-t.",
+   "faq": [
+    [
+     "Ugyanazok a haladó videóbeállítások megvannak?",
+     "Igen: kodek, CRF, bitráta, felbontás, képarány, képkocka-sebesség, vágás, forgatás, tükrözés, felirat és hangerő — és engedélyezőlistás FFmpeg-paraméterek."
+    ]
+   ]
+  },
+  "smallpdf": {
+   "slug": "smallpdf-alternativa",
+   "name": "Smallpdf",
+   "desc": "PDF-eszközök e-aláírással; a {product} {formats} formátumot ismer, és utasításra szerkeszt.",
+   "intro": "A Smallpdf PDF-eszközökre és e-aláírásra koncentrál. A {product} szolgáltatásban megvan a PDF-csomag (egyesítés, bontás, tömörítés, védelem, OCR, PDF/A, aláírás), és a PDF-en túl is dolgozik: {formats} formátum, videó és hang, Word- és PowerPoint-fájlok AI-szerkesztése, űrlapfelismerés fotóból és MCP.",
+   "faq": [
+    [
+     "Aláírhatok PDF-et, mint a Smallpdf-fel?",
+     "Igen: egyszer megrajzolod vagy lefotózod az aláírásod, titkosítva tároljuk, és PDF- vagy Word-fájlba tesszük — akár az AI-asszisztensed is."
+    ]
+   ]
+  },
+  "ilovepdf": {
+   "slug": "ilovepdf-alternativa",
+   "name": "iLovePDF",
+   "desc": "PDF-eszközök API-val; a {product} minden más formátumot, AI-szerkesztést és MCP-t ad hozzá.",
+   "intro": "Az iLovePDF népszerű PDF-eszköztár API-val és e-aláírással. A {product} ugyanezeket a PDF-műveleteket és API-t kínálja, plusz {formats} formátumot a PDF-en túl, AI-szerkesztést, ügynöki űrlapkitöltést és MCP-szervert.",
+   "faq": [
+    [
+     "Van magyar felülete?",
+     "Igen, a {product} teljes egészében elérhető magyarul és angolul, és egy új nyelv egyetlen fordítási fájl."
+    ]
+   ]
+  }
+ },
+ "dev": {
+  "title": "{product} API — fájlátalakítás, eszközök, űrlapok és aláírás",
+  "desc": "REST API {formats} fájlformátumhoz: jobs/tasks, webhookok, sandbox-kulcsok, OpenAPI, Python- és Node-SDK, Zapier, Make és n8n.",
+  "h1": "Fájlátalakító API",
+  "lead": "Egyetlen REST API {formats} formátumhoz, {conversions} átalakítási irányhoz és {tools} eszközhöz. A feladatok (job) nevesített részfeladatokból (task) állnak — importálás → átalakítás vagy eszköz → exportálás —, amelyek ahol lehet, párhuzamosan futnak; élőben (long-poll vagy Server-Sent Events) vagy webhookkal követheted őket. Alapkorlát: kulcsonként percenként {rate} kérés.",
+  "docs_p": "Hitelesítés, feladatok, feltöltés, élő státusz, webhookok, sandbox, korlátok és minden művelet.",
+  "jb_p": "Feladat összeállítása vizuálisan, másolás JSON-ként vagy curl-ként.",
+  "mcp_p": "A Claude vagy a ChatGPT csatlakoztatása ugyanezekhez az eszközökhöz MCP-n.",
+  "openapi_p": "Géppel olvasható specifikáció kódgenerátorokhoz.",
+  "quick_h": "Gyors kezdés",
+  "sdk_h": "SDK-k és integrációk",
+  "sdk_p": "A Python- (sdk/python) és a Node-SDK (sdk/node), valamint a Zapier-, Make- és n8n-integráció a repóban van, csak az alapcím és egy kulcs kell hozzájuk.",
+  "top_h": "Átalakító API-példák"
+ },
+ "docs": {
+  "title": "{product} API-dokumentáció",
+  "desc": "A {product} REST API használata: kulcsok, jobs/tasks, feltöltés, státusz, webhookok, sandbox és korlátok, curl-, Python- és JavaScript-példákkal.",
+  "h1": "API-dokumentáció",
+  "lead": "Minden, ami egy délután alatti integrációhoz kell. Alapkorlát: kulcsonként percenként {rate} kérés.",
+  "crumb": "Dokumentáció",
+  "auth_h": "Hitelesítés",
+  "auth_p": "Kulcsot az appban hozol létre (AI csatlakoztatása → API-kulcsok), és Bearer-tokenként küldöd. Az sk_test_ kezdetű kulcsok sandbox-kulcsok: nem fogyasztanak kreditet.",
+  "jobs_h": "Feladatok (jobs) és részfeladatok (tasks)",
+  "jobs_p": "Egy feladat nevesített részfeladatok halmaza. Egy részfeladat bemenete egy korábbi részfeladat neve (vagy nevek listája). A függőség nélküli részfeladatok azonnal és párhuzamosan indulnak.",
+  "upload_h": "Fájlok feltöltése",
+  "upload_p": "Használj import/upload részfeladatot: az eredménye egyszer használatos feltöltési címet ad. A nagy fájlok legfeljebb 50 MB-os darabokban is küldhetők.",
+  "status_h": "Élő státusz",
+  "status_p": "Kérdezd le a feladatot ?wait=N paraméterrel (long-poll legfeljebb 60 mp-ig), vagy nyisd meg a Server-Sent Events folyamot a task.updated, job.finished és job.failed eseményekhez.",
+  "webhooks_h": "Webhookok",
+  "webhooks_p": "Regisztrálj címet a job.finished és job.failed eseményekre, vagy adj webhook_url-t feladatonként. Minden kézbesítés HMAC-SHA256-tal aláírt (időbélyeg + törzs); a sikertelen kézbesítést háromszor újrapróbáljuk.",
+  "sandbox_h": "Sandbox",
+  "sandbox_p": "A sandbox-kulcsok (sk_test_…) 10 MB-os fájlokig valódi átalakításokat futtatnak kreditfogyasztás nélkül; az eredmények egy óráig maradnak meg. Fejlesztéshez és CI-hoz valók.",
+  "limits_h": "Korlátok és számlázás",
+  "limits_p": "Alapból kulcsonként percenként {rate} kérés (felette HTTP 429 Retry-After fejléccel). A részfeladatok a csomagod havi feladatkeretéből fogynak; felette 20 részfeladatonként 1 kredit. Az AI-részfeladatok (látómodelles OCR, űrlapfelismerés fotóból, ügynöki kitöltés) a meglévő oldalkeretekből fogynak.",
+  "ops_h": "Műveletek",
+  "op": "Művelet",
+  "op_desc": "Mit csinál"
+ },
+ "jb": {
+  "title": "Feladatszerkesztő — {product} API-feladatok vizuálisan",
+  "desc": "Import-, átalakító-, eszköz- és exportrészfeladatok összeállítása, másolás JSON-ként vagy curl-ként, vagy futtatás sandbox-kulccsal.",
+  "h1": "Feladatszerkesztő",
+  "lead": "Adj hozzá részfeladatokat, töltsd ki a mezőiket, és másold a JSON-t vagy a curl-parancsot — vagy futtasd itt helyben egy sandbox-kulccsal.",
+  "crumb": "Feladatszerkesztő",
+  "add_import": "Importálás",
+  "add_convert": "Átalakítás",
+  "add_tool": "Eszköz",
+  "add_export": "Exportálás",
+  "run": "Futtatás"
+ },
+ "api": {
+  "title": "{src_from} {dst} API — {src} átalakítása {dst} formátumba REST-hívással",
+  "desc": "{src} átalakítása {dst} formátumba programból: egyetlen REST-feladat import-, átalakító- és exportrészfeladattal; curl-, Python- és JavaScript-példák.",
+  "h1": "{src_from} {dst}: átalakító API",
+  "lead": "Küldj egy {src} fájlt, és egyetlen feladattal {dst} fájlt kapsz vissza: importálás, átalakítás ({engines}), letöltési link. Webhookkal és élő státusszal; alapkorlát: percenként {rate} kérés.",
+  "crumb": "{src} → {dst} API",
+  "pairlink": "{src} → {dst} API",
+  "web_link": "{src} átalakítása {dst} formátumba a böngészőben"
+ },
+ "cai": {
+  "title": "AI csatlakoztatása: {product} — MCP a Claude-hoz és a ChatGPT-hez",
+  "desc": "A {product} minden átalakítója, eszköze, űrlap- és aláírás-funkciója a Claude, a ChatGPT és más AI-asszisztensek kezében, MCP-n.",
+  "h1": "Csatlakoztasd az AI-asszisztensed",
+  "lead": "A {product} MCP-szerver {n} csoportosított eszközzel. Egyszer csatlakoztatod, és az asszisztensed átalakít, szerkeszt, kitölt és aláír helyetted — minden eredmény letöltési és szerkesztő-linkkel érkezik vissza.",
+  "url_h": "Az MCP-cím",
+  "url_p": "Streamable HTTP. Ha a kliens kéri, OAuth-tal lépsz be, vagy az appban személyes kulcsot hozol létre (AI csatlakoztatása → API-kulcsok), és Authorization: Bearer <kulcs> fejléccel küldöd.",
+  "claude1": "A Claude-ban nyisd meg: Beállítások → Csatlakozók → Egyéni csatlakozó hozzáadása.",
+  "claude2": "Illeszd be: {url}, és mentsd.",
+  "claude3": "Lépj be, és engedélyezd a hozzáférést — az eszközök megjelennek a csevegésben.",
+  "gpt1": "A ChatGPT-ben nyisd meg: Beállítások → Alkalmazások és csatlakozók → Speciális → Fejlesztői mód.",
+  "gpt2": "Hozz létre csatlakozót ezzel a címmel: {url}.",
+  "gpt3": "Lépj be, és engedélyezd a hozzáférést.",
+  "tools_h": "A(z) {n} MCP-eszköz",
+  "faq": [
+   [
+    "Mely asszisztensekkel működik?",
+    "Bármely Streamable HTTP-t tudó MCP-klienssel: Claude (web, asztali, Claude Code), ChatGPT fejlesztői mód és Apps, Cursor és mások."
+   ],
+   [
+    "Látja az asszisztens a többi fájlomat?",
+    "Csak az eszközökön keresztül, csak a saját munkaterületeden, és csak ha kéred; a hozzáférést az appban bármikor visszavonhatod."
+   ],
+   [
+    "Rákérdezhet az asszisztens a hiányzó űrlapadatokra?",
+    "Igen. Ügynöki kitöltésnél MCP-elicitationnel kérdezi meg a hiányzó értékeket, ha a kliens ezt tudja, különben a csevegésben."
+   ]
+  ]
+ },
+ "units": {
+  "title": "Mértékegység-váltó — hossz, tömeg, hőmérséklet, térfogat és más",
+  "desc": "Átváltás {n} mértékegység között: hossz, tömeg, hőmérséklet, terület, térfogat, sebesség, idő, adatméret, energia, nyomás, teljesítmény, szög, frekvencia és fogyasztás.",
+  "cat_title": "{name} – átváltó",
+  "cat_desc": "{name} mértékegységeinek ({n} egység) átváltása pontos tényezőkkel.",
+  "example": "{v} {a} = {r} {b}",
+  "value": "Érték",
+  "from": "Miből",
+  "to": "Mibe",
+  "examples_h": "Gyakori átváltások",
+  "cats_h": "Minden mértékegység-váltó"
+ },
+ "unitcat": {
+  "length": {
+   "slug": "hossz",
+   "name": "Hosszúság"
+  },
+  "mass": {
+   "slug": "tomeg",
+   "name": "Tömeg"
+  },
+  "temperature": {
+   "slug": "homerseklet",
+   "name": "Hőmérséklet"
+  },
+  "area": {
+   "slug": "terulet",
+   "name": "Terület"
+  },
+  "volume": {
+   "slug": "terfogat",
+   "name": "Térfogat"
+  },
+  "speed": {
+   "slug": "sebesseg",
+   "name": "Sebesség"
+  },
+  "time": {
+   "slug": "ido",
+   "name": "Idő"
+  },
+  "data": {
+   "slug": "adatmeret",
+   "name": "Adatméret"
+  },
+  "energy": {
+   "slug": "energia",
+   "name": "Energia"
+  },
+  "pressure": {
+   "slug": "nyomas",
+   "name": "Nyomás"
+  },
+  "power": {
+   "slug": "teljesitmeny",
+   "name": "Teljesítmény"
+  },
+  "angle": {
+   "slug": "szog",
+   "name": "Szög"
+  },
+  "frequency": {
+   "slug": "frekvencia",
+   "name": "Frekvencia"
+  },
+  "fuel": {
+   "slug": "fogyasztas",
+   "name": "Üzemanyag-fogyasztás"
+  }
+ },
+ "unit": {
+  "m": "méter",
+  "km": "kilométer",
+  "cm": "centiméter",
+  "mm": "milliméter",
+  "um": "mikrométer",
+  "nm": "nanométer",
+  "in": "hüvelyk",
+  "ft": "láb",
+  "yd": "yard",
+  "mi": "mérföld",
+  "nmi": "tengeri mérföld",
+  "ly": "fényév",
+  "au": "csillagászati egység",
+  "kg": "kilogramm",
+  "g": "gramm",
+  "mg": "milligramm",
+  "t": "tonna",
+  "lb": "font",
+  "oz": "uncia",
+  "st": "stone",
+  "ct": "karát",
+  "dkg": "dekagramm",
+  "q": "mázsa",
+  "k": "kelvin",
+  "c": "Celsius-fok",
+  "f": "Fahrenheit-fok",
+  "r": "Rankine-fok",
+  "m2": "négyzetméter",
+  "km2": "négyzetkilométer",
+  "cm2": "négyzetcentiméter",
+  "ha": "hektár",
+  "a": "ár",
+  "acre": "acre",
+  "ft2": "négyzetláb",
+  "in2": "négyzethüvelyk",
+  "mi2": "négyzetmérföld",
+  "negyszogol": "négyszögöl",
+  "m3": "köbméter",
+  "l": "liter",
+  "ml": "milliliter",
+  "dl": "deciliter",
+  "cl": "centiliter",
+  "cm3": "köbcentiméter",
+  "gal": "amerikai gallon",
+  "galuk": "angol gallon",
+  "qt": "amerikai quart",
+  "pt": "amerikai pint",
+  "cup": "amerikai bögre",
+  "floz": "amerikai folyadékuncia",
+  "tbsp": "evőkanál",
+  "tsp": "teáskanál",
+  "ft3": "köbláb",
+  "mps": "méter/másodperc",
+  "kmh": "kilométer/óra",
+  "mph": "mérföld/óra",
+  "kn": "csomó",
+  "fps": "láb/másodperc",
+  "mach": "Mach",
+  "s": "másodperc",
+  "ms": "ezredmásodperc",
+  "min": "perc",
+  "h": "óra",
+  "d": "nap",
+  "wk": "hét",
+  "mo": "hónap",
+  "yr": "év",
+  "b": "bájt",
+  "bit": "bit",
+  "kb": "kilobájt",
+  "mb": "megabájt",
+  "gb": "gigabájt",
+  "tb": "terabájt",
+  "kib": "kibibájt",
+  "mib": "mebibájt",
+  "gib": "gibibájt",
+  "tib": "tebibájt",
+  "j": "joule",
+  "kj": "kilojoule",
+  "cal": "kalória",
+  "kcal": "kilokalória",
+  "wh": "wattóra",
+  "kwh": "kilowattóra",
+  "btu": "BTU",
+  "ev": "elektronvolt",
+  "pa": "pascal",
+  "kpa": "kilopascal",
+  "bar": "bar",
+  "atm": "atmoszféra",
+  "psi": "psi",
+  "mmhg": "higanymilliméter",
+  "hpa": "hektopascal",
+  "w": "watt",
+  "kw": "kilowatt",
+  "hp": "angol lóerő",
+  "le": "lóerő",
+  "mw": "megawatt",
+  "deg": "fok",
+  "rad": "radián",
+  "grad": "újfok (gon)",
+  "arcmin": "szögperc",
+  "arcsec": "szögmásodperc",
+  "turn": "fordulat",
+  "hz": "hertz",
+  "khz": "kilohertz",
+  "mhz": "megahertz",
+  "ghz": "gigahertz",
+  "rpm": "fordulat/perc",
+  "l100km": "liter/100 km",
+  "kml": "kilométer/liter",
+  "mpg": "mérföld/amerikai gallon",
+  "mpguk": "mérföld/angol gallon"
+ },
+ "tz": {
+  "title": "Időzóna-váltó — időpont átváltása városok és zónák között",
+  "desc": "Dátum és idő átváltása időzónák között a nyári időszámítással: UTC, CET, EST, PST, JST és minden IANA-zóna.",
+  "h1": "Időzóna-váltó",
+  "lead": "Válassz időpontot és zónát, jelöld be a szükséges zónákat — a nyári időszámítást az IANA-időzóna-adatbázis alapján magától számolja.",
+  "time": "Időpont",
+  "from": "Kiinduló zóna",
+  "to": "Célzónák"
+ }
+}

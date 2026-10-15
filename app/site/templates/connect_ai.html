@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_macros.html" import faq %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+<section><h2>{{ t('cai.url_h') }}</h2><pre><code>{{ p.mcp_url }}</code></pre><p>{{ t('cai.url_p') }}</p></section>
+<section class="split">
+  <div><h2>Claude</h2><ol class="steps"><li>{{ t('cai.claude1') }}</li><li>{{ t('cai.claude2', url=p.mcp_url) }}</li><li>{{ t('cai.claude3') }}</li></ol>
+  <pre><code>claude mcp add --transport http {{ product|lower|replace(' ', '-') }} {{ p.mcp_url }}</code></pre></div>
+  <div><h2>ChatGPT</h2><ol class="steps"><li>{{ t('cai.gpt1') }}</li><li>{{ t('cai.gpt2', url=p.mcp_url) }}</li><li>{{ t('cai.gpt3') }}</li></ol></div>
+</section>
+<section><h2>{{ t('cai.tools_h', n=p.mcp_tools|length) }}</h2>
+<div class="scroll"><table class="facts"><tbody>{% for name, d in p.mcp_tools %}<tr><th scope="row"><code>{{ name }}</code></th><td>{{ d }}</td></tr>{% endfor %}</tbody></table></div></section>
+{{ faq(p.faq, t) }}
+{% endblock %}
