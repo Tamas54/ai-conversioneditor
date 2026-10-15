@@ -42,3 +42,12 @@ python-dotenv>=1.0.1
 psycopg[binary,pool]>=3.3,<4  # Postgres: verziótörténet + lektorálási kérések (app/db.py)
 onnxruntime>=1.23,<1.24    # ISNet háttéreltávolítás (app/tools/cutout.py); 1.24+ már nem támogatja a py3.10-et
 tzdata>=2024.1           # zoneinfo a konténerben (nincs rendszer-tz-adatbázis)
+
+# Konverziós motorok (app/convert): a rendszer-motorokat (LibreOffice, ffmpeg, Calibre, Inkscape, 7-Zip…) a Dockerfile telepíti
+ocrmypdf>=16,<17           # OCR-réteg PDF-re (Tesseract), helyben — nincs LLM-költség
+pillow-heif>=0.18          # HEIC/HEIF olvasás-írás
+pillow-jxl-plugin>=1.3     # JPEG XL
+pyyaml>=6.0
+ezdxf>=1.3                 # DXF → SVG/PDF/PNG (matplotlib-háttérrel)
+fonttools[woff]>=4.50      # TTF/OTF/WOFF/WOFF2/EOT/TTC
+py7zr>=0.21                # 7z tartalék, ha nincs 7z CLI
