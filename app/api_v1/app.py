@@ -126,7 +126,9 @@ class TaskSpec(BaseModel):
     input: Optional[Union[str, list[str]]] = Field(None, description="Name(s) of earlier task(s) whose files this task takes.")
     output_format: Optional[str] = Field(None, description="convert/archive/merge/capture-website: target format, e.g. pdf, jpg, mp4.")
     input_format: Optional[str] = Field(None, description="convert: override the detected source format.")
-    options: Optional[dict[str, Any]] = Field(None, description="Conversion or tool options (see /catalog/operations).")
+    options: Optional[dict[str, Any]] = Field(None, description="Conversion or tool options (see /catalog/operations); "
+                                                                "the same options apply to every input file of the task.")
+    preset_id: Optional[int] = Field(None, description="convert: start from a saved preset (options given here override it).")
     url: Optional[str] = Field(None, description="import/url, capture-website: http(s) address.")
     filename: Optional[str] = None
 
@@ -471,6 +473,44 @@ async def webhooks_delete(request: Request, hook_id: int) -> dict[str, Any]:
     if not await webhooks.delete_hook(c.uid, hook_id):
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such webhook."})
     return {"deleted": hook_id}
+
+
+# ---------- mentett beállítások (presetek) — ugyanazok, mint a weboldalon ----------
+
+class PresetIn(BaseModel):
+    name: str = Field(..., max_length=80)
+    scope: str = Field(..., max_length=40, description="A target format (e.g. webp) or a tool key (e.g. compress-pdf).")
+    options: dict[str, Any]
+
+
+@v1.get("/presets", tags=["presets"])
+async def presets_list(request: Request, scope: Optional[str] = None) -> dict[str, Any]:
+    from app import db
+    c = ctx(request)
+    return {"data": await db.preset_list(c.uid, scope) if db.enabled() else []}
+
+
+@v1.post("/presets", status_code=201, tags=["presets"])
+async def presets_create(request: Request, body: PresetIn) -> dict[str, Any]:
+    from app import db
+    from app.convert.options import OptionError, validate
+    c = ctx(request)
+    if not db.enabled():
+        raise HTTPException(503, {"code": "UNAVAILABLE", "message": "Presets need the database."})
+    try:
+        opts = validate(body.options, tool="-" in body.scope)
+    except OptionError as e:
+        raise HTTPException(422, {"code": "INVALID_OPTIONS", "message": str(e)})
+    return await db.preset_save(c.uid, body.name.strip(), body.scope.strip().lower(), opts)
+
+
+@v1.delete("/presets/{preset_id}", tags=["presets"])
+async def presets_delete(request: Request, preset_id: int) -> dict[str, Any]:
+    from app import db
+    c = ctx(request)
+    if not db.enabled() or not await db.preset_delete(c.uid, preset_id):
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such preset."})
+    return {"deleted": preset_id}
 
 
 # ---------- egylépéses rövidítés (Zapier, Make, n8n) ----------

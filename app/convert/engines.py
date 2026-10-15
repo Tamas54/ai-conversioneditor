@@ -74,6 +74,19 @@ def available(engine: str) -> bool:
     return engine in ENGINES
 
 
+@functools.lru_cache(maxsize=None)
+def ffmpeg_encoder(name: str) -> bool:
+    """Van-e az ffmpeg-buildben ez a kódoló (pl. libopencore_amrnb) — nem minden disztribúció fordítja bele."""
+    import subprocess
+    if not available("ffmpeg"):
+        return False
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.split()[1:2] == [name] for line in out.splitlines() if len(line.split()) > 1)
+
+
 def status() -> dict[str, bool]:
     return {e: available(e) for e in ENGINES}
 

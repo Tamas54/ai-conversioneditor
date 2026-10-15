@@ -629,10 +629,14 @@ async def convert_targets(ext: str, all: bool = False) -> dict[str, Any]:
     """all=1: a bővített (minden motoros) célok is — a legacy célok változatlan sorrendben elöl."""
     from app.tools import anyconvert
     if all:
-        from app.catalog.formats import FORMATS
+        from app.catalog.formats import FORMATS, normalize
         from app.convert import service
-        return {"targets": [{"fmt": t, "label": anyconvert.LABELS.get(t) or (f"{t.upper()} — {FORMATS[t].name}" if t in FORMATS else t.upper()),
-                             "category": FORMATS[t].category if t in FORMATS else None} for t in service.targets_for(ext)]}
+        out = []
+        for t in service.targets_for(ext):
+            f = FORMATS.get(normalize(t))
+            out.append({"fmt": t, "label": anyconvert.LABELS.get(t) or (f"{t.upper()} — {f.name}" if f else t.upper()),
+                        "category": f.category if f else None})
+        return {"targets": out}
     return {"targets": [{"fmt": t, "label": anyconvert.LABELS.get(t, t.upper())} for t in anyconvert.targets_for(ext)]}
 
 

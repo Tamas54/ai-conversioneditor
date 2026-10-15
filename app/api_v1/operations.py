@@ -275,6 +275,12 @@ async def _convert(job, task, file_ids: list[str]) -> dict[str, Any]:
     from app.convert.options import OptionError
     p = task.payload
     opts = dict(p.get("options") or {})
+    if p.get("preset_id"):
+        from app import db
+        row = await db.preset_get(job.owner, int(p["preset_id"])) if db.enabled() else None
+        if not row:
+            raise OpError(f"no such preset: {p['preset_id']}", "PRESET_NOT_FOUND")
+        opts = {**row["options"], **opts}
     if p.get("filename"):
         opts["filename"] = p["filename"]
     files = []

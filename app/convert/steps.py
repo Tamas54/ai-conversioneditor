@@ -103,7 +103,7 @@ _LO_FILTER = {
              "fods": "OpenDocument Spreadsheet Flat XML", "csv": "Text - txt - csv (StarCalc):44,34,76,1",
              "pdf": "calc_pdf_Export", "html": "HTML (StarCalc)", "dif": "DIF", "slk": "SYLK"},
     "impress": {"pptx": "Impress MS PowerPoint 2007 XML", "ppt": "MS PowerPoint 97", "pptm": "Impress MS PowerPoint 2007 XML VBA",
-                "pps": "MS PowerPoint 97 Autoplay", "ppsx": "Impress MS PowerPoint 2007 XML AutoPlay",
+                "pps": "MS PowerPoint 97 AutoPlay", "ppsx": "Impress MS PowerPoint 2007 XML AutoPlay",
                 "pot": "MS PowerPoint 97 Vorlage", "potx": "Impress MS PowerPoint 2007 XML Template", "odp": "impress8",
                 "fodp": "OpenDocument Presentation Flat XML", "pdf": "impress_pdf_Export", "html": "impress_html_Export"},
     "draw": {"pdf": "draw_pdf_Export", "odg": "draw8", "fodg": "OpenDocument Drawing Flat XML", "svg": "draw_svg_Export",
@@ -177,8 +177,11 @@ async def pandoc(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
         args.append("-s")
     if fmt == "html":
         args.append("--embed-resources")
-    title = ctx.opts.get("title") or _stem(src)
-    args += ["--metadata", f"title={title}"]
+    # a cím csak metaadat legyen, ne kerüljön új címsorként a szövegbe (a fájlnév nem a dokumentum része)
+    if ctx.opts.get("title") or fmt in ("epub", "fb2"):
+        args += ["--metadata", f"title={ctx.opts.get('title') or _stem(src)}"]
+    elif fmt == "html":
+        args += ["--metadata", f"pagetitle={_stem(src)}"]
     if ctx.opts.get("author"):
         args += ["--metadata", f"author={ctx.opts['author']}"]
     media = ctx.sub("media")
@@ -465,7 +468,7 @@ def _pil_save(im, dst: Path, fmt: str, opts: dict[str, Any], frames: Optional[li
     elif fmt == "pgm":
         im = im.convert("L")
     elif fmt in ("ppm", "pnm", "pcx", "sgi", "eps", "jp2"):
-        im = _flatten(im, opts.get("background")) if fmt in ("eps", "ppm", "pnm") else im
+        im = _flatten(im, opts.get("background")) if fmt in ("eps", "ppm", "pnm", "pcx") else im
         if fmt in ("pcx", "sgi", "jp2") and im.mode not in ("RGB", "RGBA", "L"):
             im = im.convert("RGB")
     elif fmt == "pdf":
@@ -532,6 +535,8 @@ async def imagemagick(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
         args.append("-strip")
     if o.get("dpi"):
         args += ["-density", str(o["dpi"])]
+    if fmt in ("cur", "ico"):
+        args += ["-resize", "256x256>"]
     if fmt in ("jpg", "pcx", "ppm") or o.get("background"):
         args += ["-background", o.get("background") or "white", "-flatten"]
     if o.get("advanced"):
@@ -662,7 +667,7 @@ _SPECIAL_A = {"wmav2": ["-c:a", "wmav2"], "mp2": ["-c:a", "mp2"]}
 _AUDIO_DEF: dict[str, tuple[list[str], str, Optional[str]]] = {
     "mp3": (["-c:a", "libmp3lame"], "mp3", "192k"), "wav": (["-c:a", "pcm_s16le"], "wav", None),
     "aac": (["-c:a", "aac"], "adts", "192k"), "m4a": (["-c:a", "aac"], "ipod", "192k"),
-    "ogg": (["-c:a", "libvorbis"], "ogg", "192k"), "flac": (["-c:a", "flac"], "flac", None),
+    "ogg": (["-c:a", "libvorbis", "-q:a", "5"], "ogg", None), "flac": (["-c:a", "flac"], "flac", None),
     "opus": (["-c:a", "libopus"], "opus", "128k"), "wma": (["-c:a", "wmav2"], "asf", "192k"),
     "aiff": (["-c:a", "pcm_s16be"], "aiff", None), "alac": (["-c:a", "alac"], "ipod", None),
     "m4b": (["-c:a", "aac"], "ipod", "96k"), "m4r": (["-c:a", "aac"], "ipod", "192k"),
@@ -750,6 +755,10 @@ async def ffmpeg(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     work = dst.parent
     if scat == "audio" and cat == "video":
         return await _audio_to_video(src, fmt, ctx, dst)
+    if scat == "image" and cat == "image" and fmt not in ("gif", "apng", "webp"):      # pl. OpenEXR
+        pix = {"exr": ["-pix_fmt", "gbrpf32le"]}.get(fmt, [])
+        await run("ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-frames:v", "1", *pix, str(dst), timeout=300)
+        return _ok([dst])
     if fmt in ("jpg", "png") and scat == "video":
         at = o.get("at") or "1"
         await run("ffmpeg", "-y", "-ss", str(at), "-i", str(src), "-frames:v", "1", *(["-q:v", "2"] if fmt == "jpg" else []),
@@ -776,6 +785,8 @@ async def ffmpeg(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
         if br and not o.get("audio_bitrate") and a_codec in ("auto", None):
             args += ["-b:a", br]
         args += _audio_opts(o, fmt)
+        if fmt == "mp2" and not o.get("sample_rate"):
+            args += ["-ar", "44100"]
         if fmt == "m4r" and not o.get("end"):
             args += ["-t", "40"]
         args += ["-map_metadata", "-1"] if o.get("strip_metadata") else []
@@ -1108,7 +1119,14 @@ async def pack(root: Path, dst: Path, fmt: str, password: Optional[str] = None, 
     elif fmt in ("cpio", "iso"):
         await run("bsdtar", "--format", "cpio" if fmt == "cpio" else "iso9660", "-cf", str(dst), "-C", str(root), ".", timeout=1800)
     elif fmt in ("tar.z", "tz", "z"):
-        raise EngineError("the old Unix .Z format can be opened but not written — choose .tar.gz")
+        if fmt == "z" and len(files) != 1:
+            raise EngineError(".Z holds a single file — choose .tar.Z for several")
+        mid = files[0] if fmt == "z" else dst.parent / "pack.tar"
+        if fmt != "z":
+            with tarfile.open(mid, "w") as t:
+                for f in files:
+                    t.add(f, f.relative_to(root).as_posix())
+        await _compress_single(mid, dst, "z")
     else:
         raise EngineError(f"can't write .{fmt} archives")
     return dst
@@ -1117,9 +1135,39 @@ async def pack(root: Path, dst: Path, fmt: str, password: Optional[str] = None, 
 async def archive(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     tmp = ctx.sub("x")
     await extract(src, tmp / "c", ctx.opts.get("password"))
+    n = sum(1 for p in (tmp / "c").rglob("*") if p.is_file())
+    if fmt in _SINGLE and n != 1:
+        # egyfájlos tömörítő több fájlra: előbb tar, és a név .tar.<ext> lesz (ahogy a 7-Zip és a tar is teszi)
+        dst = ctx.out(src, fmt).with_name(_stem(src) + f".tar.{fmt}")
+        tar = tmp / "pack.tar"
+        await pack(tmp / "c", tar, "tar")
+        await _compress_single(tar, dst, fmt, ctx.opts.get("level"))
+        return _ok([dst])
     dst = ctx.out(src, fmt)
     await pack(tmp / "c", dst, fmt, ctx.opts.get("password") if ctx.final else None, ctx.opts.get("level"))
     return _ok([dst])
+
+
+async def _compress_single(src: Path, dst: Path, fmt: str, level: Optional[int] = None) -> None:
+    """Egyetlen fájl tömörítése: gz, bz2/bz, xz, lzma, zst, lz, lzo, z."""
+    if fmt in ("gz", "bz2", "bz", "xz", "lzma"):
+        def go():
+            opener = {"gz": gzip.open, "bz2": bz2.open, "bz": bz2.open, "xz": lzma.open,
+                      "lzma": lambda p, m: lzma.open(p, m, format=lzma.FORMAT_ALONE)}[fmt]
+            with open(src, "rb") as r, opener(dst, "wb") as w:
+                shutil.copyfileobj(r, w)
+        await asyncio.to_thread(go)
+    elif fmt == "z":
+        from app.convert.pyformats import compress_z
+        data = await asyncio.to_thread(src.read_bytes)
+        await asyncio.to_thread(dst.write_bytes, compress_z(data))
+    elif fmt == "zst":
+        await run("zstd", "-q", "-f", f"-{level or 3}", "-o", str(dst), str(src), timeout=1800)
+    elif fmt in ("lzo", "lz"):
+        out, _ = await run("lzop" if fmt == "lzo" else "lzip", "-c", str(src), timeout=1800)
+        dst.write_bytes(out)
+    else:
+        raise EngineError(f"can't write .{fmt}")
 
 
 # ======================================================================
@@ -1292,11 +1340,20 @@ async def libredwg(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     return _ok([dst])
 
 
+import threading  # noqa: E402
+
+_EZDXF_LOCK = threading.Lock()          # az ezdxf betűkezelője és a matplotlib nem szálbiztos
+
+
 async def ezdxf_render(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     dst = ctx.out(src, fmt)
     o = ctx.opts if ctx.final else {}
 
     def go():
+        with _EZDXF_LOCK:
+            _draw()
+
+    def _draw():
         import matplotlib
         matplotlib.use("Agg")
         import ezdxf
@@ -1337,9 +1394,15 @@ def _py_convert(src: Path, sfmt: str, dst: Path, fmt: str, ctx: Ctx) -> None:
         with gzip.open(dst, "wb") as w:
             w.write(src.read_bytes())
         return
-    if sfmt == "pdfa" and fmt == "pdf":
-        shutil.copy(src, dst)
+    if (sfmt, fmt) in (("pdfa", "pdf"), ("pdf", "ai"), ("ai", "pdf")):
+        shutil.copy(src, dst)              # az .ai PDF-kompatibilis: ugyanaz a tartalom
         return
+    if (sfmt, fmt) == ("plt", "svg"):
+        from app.convert.pyformats import hpgl_to_svg
+        return hpgl_to_svg(src, dst)
+    if (sfmt, fmt) == ("pdf", "plt"):
+        from app.convert.pyformats import pdf_to_hpgl
+        return pdf_to_hpgl(src, dst)
     if sfmt == "eml":
         return _eml(src, dst, fmt)
     if sfmt == "hwpx":

@@ -48,7 +48,7 @@ PANDOC_OUT = {"md", "rst", "tex", "html", "docx", "odt", "epub", "fb2", "org", "
 CALIBRE_IN = {"epub", "mobi", "azw", "azw3", "azw4", "fb2", "fbz", "lit", "lrf", "pdb", "pml", "prc", "rb", "snb",
               "tcr", "txtz", "htmlz", "cbz", "cbr", "cb7", "cbc", "chm", "docx", "odt", "rtf", "txt", "html", "md",
               "pdf", "oeb", "djvu"}
-CALIBRE_OUT = {"epub", "mobi", "azw3", "azw", "prc", "fb2", "lit", "lrf", "pdb", "pml", "rb", "snb", "tcr", "txtz",
+CALIBRE_OUT = {"epub", "mobi", "azw3", "azw", "prc", "fb2", "lit", "lrf", "pdb", "rb", "snb", "tcr", "txtz",
                "htmlz", "oeb", "pdf", "docx", "rtf", "txt"}
 
 _CAMERA_RAW = {f.key for f in FORMATS.values() if "camera-raw" in f.tags}
@@ -56,15 +56,16 @@ PILLOW_IN = {"jpg", "png", "gif", "bmp", "tiff", "webp", "avif", "ico", "icns", 
              "dds", "pcx", "ppm", "pgm", "pbm", "pnm", "sgi", "xbm", "fits", "apng"}
 PILLOW_OUT = {"jpg", "png", "gif", "bmp", "tiff", "webp", "avif", "ico", "icns", "tga", "jp2", "jfif", "pcx", "ppm",
               "pgm", "pbm", "pnm", "sgi", "xbm", "dds", "apng", "pdf", "eps"}
-IM_IN = {"jpg", "png", "gif", "bmp", "tiff", "webp", "ico", "cur", "psd", "xcf", "tga", "jp2", "jfif", "exr", "hdr",
+IM_IN = {"jpg", "png", "gif", "bmp", "tiff", "webp", "ico", "cur", "psd", "xcf", "tga", "jp2", "jfif", "hdr",
          "dds", "pcx", "ppm", "pgm", "pbm", "pnm", "sgi", "xbm", "xpm", "wbmp", "fits", "heic", "heif", "avif"}
-IM_OUT = {"jpg", "png", "gif", "bmp", "tiff", "webp", "ico", "psd", "tga", "jp2", "exr", "hdr", "pcx", "ppm", "pgm",
+IM_OUT = {"jpg", "png", "gif", "bmp", "tiff", "webp", "ico", "psd", "tga", "jp2", "hdr", "pcx", "ppm", "pgm",
           "pbm", "pnm", "sgi", "xbm", "xpm", "wbmp", "fits", "cur", "pdf"}
 HEIF_IN, HEIF_OUT = {"heic", "heif", "avif"}, {"heic", "heif"}
 JXL_IN, JXL_OUT = {"jxl"}, {"jxl"}
 
-INKSCAPE_IN = {"svg", "svgz", "eps", "ai", "pdf", "emf", "wmf", "cdr", "ps", "plt"}
-INKSCAPE_OUT = {"svg", "svgz", "pdf", "ps", "eps", "png", "emf", "wmf", "ai", "plt", "odg"}
+# (az .ai PDF-kompatibilis: PDF-ként olvassuk/írjuk; a HPGL-t saját Python-kód kezeli — az Inkscape fej nélkül nem tudja)
+INKSCAPE_IN = {"svg", "svgz", "eps", "pdf", "emf", "wmf", "cdr", "ps"}
+INKSCAPE_OUT = {"svg", "svgz", "pdf", "ps", "eps", "png", "emf", "wmf", "odg"}
 
 _VIDEO = _keys("video")
 _AUDIO = _keys("audio")
@@ -138,7 +139,11 @@ def _edges() -> list[Edge]:
     # dokumentum
     add(LO_WRITER_IN, LO_WRITER_OUT, "libreoffice", 1.0)
     add({"zabw"}, {"abw"}, "python", 0.1)
-    add(PANDOC_IN, PANDOC_OUT, "pandoc", 0.8)
+    # Pandoc a jelölőnyelvekhez; irodai forrásból irodai célra a LibreOffice tartja jobban az elrendezést
+    _office_pair = {"docx", "odt", "html"}, {"rtf", "odt", "docx", "html", "txt", "doc"}
+    add(PANDOC_IN - _office_pair[0], PANDOC_OUT, "pandoc", 0.8)
+    add(_office_pair[0], PANDOC_OUT - _office_pair[1], "pandoc", 0.8)
+    add(_office_pair[0], _office_pair[1], "pandoc", 1.3)
     add({"html"}, {"pdf"}, "weasyprint", 0.6)
     add({"pdf"}, {"docx"}, "pdf2docx", 0.9)
     add({"pdf"}, {"txt"}, "poppler", 0.3)
@@ -179,10 +184,16 @@ def _edges() -> list[Edge]:
     add(_CAMERA_RAW, {"tiff"}, "libraw", 0.8)
     add({"png", "jpg", "bmp", "gif", "tiff", "webp", "pbm", "pgm", "ppm"}, {"svg", "eps"}, "potrace", 0.9)
     add({"gif", "apng", "webp"}, {"mp4", "webm"}, "ffmpeg", 1.0)
+    add({"png", "jpg", "tiff", "bmp", "webp", "tga", "hdr"}, {"exr"}, "ffmpeg", 0.6)       # OpenEXR: az FFmpeg ír és olvas
+    add({"exr"}, {"png", "tiff", "jpg", "hdr"}, "ffmpeg", 0.6)
     # vektor
     add(INKSCAPE_IN, INKSCAPE_OUT, "inkscape", 1.0)
     add({"svg"}, {"png", "pdf", "ps", "eps"}, "rsvg", 0.4)
     add({"svgz"}, {"svg"}, "python", 0.05)
+    add({"pdf"}, {"ai"}, "python", 0.1)
+    add({"ai"}, {"pdf"}, "python", 0.1)
+    add({"plt"}, {"svg"}, "python", 0.6)
+    add({"pdf"}, {"plt"}, "python", 1.5)
     add({"svg"}, {"svgz"}, "python", 0.05)
     add({"emz"}, {"emf"}, "python", 0.05)
     add({"wmz"}, {"wmf"}, "python", 0.05)
@@ -216,11 +227,24 @@ def engine_ok(engine: str) -> bool:
     return engines.available(engine)
 
 
+# FFmpeg-célok, amelyekhez külső kódoló kell (nem minden ffmpeg-build tartalmazza): futásidőben ellenőrizve
+FFMPEG_ENCODER = {"amr": "libopencore_amrnb", "gsm": "libgsm", "opus": "libopus", "weba": "libopus", "mp3": "libmp3lame",
+                  "ogg": "libvorbis", "ogv": "libtheora", "webm": "libvpx-vp9", "hevc": "libx265", "mp4": "libx264"}
+
+
+def edge_ok(e: Edge) -> bool:
+    if not engine_ok(e.engine):
+        return False
+    if e.engine == "ffmpeg" and e.dst in FFMPEG_ENCODER:
+        return engines.ffmpeg_encoder(FFMPEG_ENCODER[e.dst])
+    return True
+
+
 @functools.lru_cache(maxsize=2)
 def _adjacency(static: bool) -> dict[str, list[Edge]]:
     adj: dict[str, list[Edge]] = {}
     for e in _edges():
-        if static or engine_ok(e.engine):
+        if static or edge_ok(e):
             adj.setdefault(e.src, []).append(e)
     return adj
 
@@ -319,3 +343,4 @@ def reset_cache() -> None:
     _targets.cache_clear()
     _reach.cache_clear()
     engines.available.cache_clear()
+    engines.ffmpeg_encoder.cache_clear()

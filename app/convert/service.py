@@ -207,7 +207,8 @@ def targets_for(ext: str, static: bool = False) -> list[str]:
     from app.tools import anyconvert
     ext = from_filename("x." + ext.lower().lstrip(".")) or ext
     legacy = anyconvert.targets_for(ext)
-    rest = [t for t in graph.targets(ext, static=static) if t not in legacy]
+    seen = {normalize(t) for t in legacy}
+    rest = [t for t in graph.targets(ext, static=static) if t not in seen]
     return legacy + rest
 
 
