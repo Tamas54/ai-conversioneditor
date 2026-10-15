@@ -49,7 +49,9 @@
   "related": "Related",
   "related_tools": "Related tools",
   "privacy": "Files stay private in your workspace and are deleted automatically. No account needed for conversions.",
-  "noscript": "The converter needs JavaScript. You can also use the full app:"
+  "noscript": "The converter needs JavaScript. You can also use the full app:",
+  "import_from": "Or import from:",
+  "from_url": "Link (URL)"
  },
  "js": {
   "download": "Download",
@@ -57,7 +59,8 @@
   "failed": "Failed",
   "timeout": "Took too long",
   "preset_name": "Name of the preset",
-  "or_drop": "or drop them here"
+  "or_drop": "or drop them here",
+  "paste_url": "Paste a link to the file (https://…)"
  },
  "footer": {
   "all_tools": "All tools",

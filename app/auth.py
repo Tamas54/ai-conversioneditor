@@ -48,6 +48,8 @@ _GUEST_OK = (
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
     ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),
     ("POST", "/api/convert/run"), ("POST", "/api/tools/run"), ("GET", "/api/presets"),   # bővítés: konverter, eszközök
+    ("POST", "/api/import"), ("GET", "/api/import/config"),            # URL / felhős import (SSRF-védett, vendégnek 25 MB)
+    ("POST", "/api/upload/chunks"), ("PUT", "/api/upload/chunks/"),     # darabolt feltöltés nagy fájlokhoz
     ("POST", "/api/make/deck"), ("POST", "/api/make/handout"),          # deck: vendégnek csak az üres pakli (AI nélkül)
     ("POST", "/api/make/blank"),                                        # „New”: üres fájl, AI nélkül
     ("POST", "/api/make/album"),                                        # fotóalbum: AI nélkül (az AI-képaláírás maga kér fiókot)

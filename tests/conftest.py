@@ -11,6 +11,12 @@ import tempfile
 from pathlib import Path
 
 _DATA = tempfile.mkdtemp(prefix="aice-test-data-")
+# helyi futtatás: ha a Playwright saját böngészője más verziójú, a gépen lévő headless shellt használjuk
+if not os.getenv("CHROMIUM_EXECUTABLE"):
+    import glob
+    _shell = sorted(glob.glob("/opt/pw-browsers/chromium_headless_shell-*/chrome-linux/headless_shell"))
+    if _shell:
+        os.environ["CHROMIUM_EXECUTABLE"] = _shell[-1]
 os.environ.update({
     "DATA_DIR": _DATA,
     "LO_WARM": "0",
@@ -98,7 +104,9 @@ def put_file():
     from app.storage import input_path, new_file_id
 
     def put(src: Path, ext: str | None = None) -> str:
+        from app.storage import write_meta
         fid = new_file_id(ext or src.suffix.lstrip("."))
         input_path(fid).write_bytes(Path(src).read_bytes())
+        write_meta(fid, original_filename=Path(src).name)
         return fid
     return put

@@ -132,6 +132,7 @@ TOOL_OPTIONS: dict[str, Opt] = {o.key: o for o in [
     Opt("every", "int", 1, min=1, max=10000),
     Opt("angle", "enum", 90, (90, 180, 270, -90)),
     Opt("expand", "bool", True),
+    Opt("direction", "enum", "horizontal", ("horizontal", "vertical")),
     Opt("order", "str", None, pattern=_PAGES),
     Opt("margins_mm", "list", None),
     Opt("page_size", "enum", "A4", ("A3", "A4", "A5", "B5", "Letter", "Legal", "Tabloid")),

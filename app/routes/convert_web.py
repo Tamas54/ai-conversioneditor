@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app import events, jobs, tenancy
 from app.convert.options import OptionError
@@ -156,3 +156,153 @@ async def timezones_convert(from_zone: str = Query(..., alias="from"), to: str =
         return U.tz_convert(time, from_zone, [z for z in to.split(",") if z.strip()])
     except U.UnitError as e:
         raise _bad(e)
+
+
+# ---------------------------------------------------------------- import: URL, felhő; darabolt feltöltés
+
+def _max_upload() -> int:
+    import os
+    from app.auth import GUEST_MAX_UPLOAD_MB
+    if tenancy.is_guest():
+        return GUEST_MAX_UPLOAD_MB * 1024 * 1024
+    return int(os.getenv("API_MAX_FILE_MB", "2048")) * 1024 * 1024
+
+
+def _store(src, filename: str, operation: str) -> dict[str, Any]:
+    import os
+    from app.api_v1.operations import _save_named
+    from app.storage import public_url
+    size = os.path.getsize(src)
+    fid = _save_named(src, filename)
+    from app.storage import write_meta
+    write_meta(fid, operation=operation)
+    events.emit("uploaded", file_id=fid, original_name=filename, size_kb=size // 1024)
+    return {"file_id": fid, "size_kb": size // 1024, "original_name": filename, "url": public_url(fid)}
+
+
+@router.post("/api/import")
+async def import_remote(body: dict[str, Any]) -> dict[str, Any]:
+    """Fájl behozása a munkaterületre: nyilvános URL (a Dropbox Chooser és a OneDrive-választó közvetlen
+    letöltési linkje is ilyen), vagy Google Drive (a Google Picker fájl-azonosítója + a böngészőben kapott
+    hozzáférési token). A token csak erre a hívásra él, nem tároljuk. Minden cím SSRF-ellenőrzésen megy át."""
+    import shutil
+    from pathlib import Path
+    from app import net
+    from app.storage import temp_path
+    from app.storage.files import new_file_id
+    provider = str(body.get("provider") or "url")
+    tmp = temp_path(new_file_id("imp"))
+    tmp.mkdir(parents=True)
+    try:
+        if provider == "url":
+            url = str(body.get("url") or "")
+            if not url.startswith(("http://", "https://")):
+                raise HTTPException(400, "url: http(s) link required")
+            try:
+                name, _, _ = await net.download(url, tmp / "dl", _max_upload())
+            except net.UnsafeURL as e:
+                raise HTTPException(400, f"This address isn't allowed: {e}")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            src = tmp / "dl"
+            name = str(body.get("name") or name or "download")
+        elif provider in ("google-drive", "dropbox", "onedrive"):
+            from app import connectors
+            spec = {k: body[k] for k in ("file_id", "path", "item_id", "access_token") if body.get(k)}
+            try:
+                src, name = await connectors.fetch(provider, spec, _max_upload(), tmp)
+            except ValueError as e:
+                raise HTTPException(400, f"{provider}: {e}")
+            name = str(body.get("name") or name)
+        else:
+            raise HTTPException(400, "provider: url, google-drive, dropbox or onedrive")
+        return _store(src, Path(name).name[:180] or "file", f"import {provider}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+_CHUNK = 8 * 1024 * 1024
+
+
+def _chunk_dir(upload_id: str):
+    import re
+    from app.storage import temp_path
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", upload_id):
+        raise HTTPException(404, "No such upload.")
+    d = temp_path(f"chunks-{upload_id}")
+    meta = d / "meta.json"
+    if not meta.exists():
+        raise HTTPException(404, "No such upload.")
+    import json
+    m = json.loads(meta.read_text("utf-8"))
+    if m["owner"] != str(tenancy.current_user_id()):
+        raise HTTPException(404, "No such upload.")
+    return d, m
+
+
+@router.post("/api/upload/chunks")
+async def chunks_start(body: dict[str, Any]) -> dict[str, Any]:
+    """Nagy fájl darabokban: start → PUT /api/upload/chunks/{id}/{n} (8 MB-os darabok) → complete."""
+    import json
+    import secrets
+    from app.storage import temp_path
+    name = str(body.get("filename") or "").strip()
+    size = int(body.get("size") or 0)
+    if not name or size <= 0:
+        raise HTTPException(400, "filename and size are required")
+    if size > _max_upload():
+        raise HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account." if tenancy.is_guest() else "."))
+    uid = secrets.token_urlsafe(18)
+    d = temp_path(f"chunks-{uid}")
+    d.mkdir(parents=True)
+    (d / "meta.json").write_text(json.dumps({"owner": str(tenancy.current_user_id()), "name": name[:180], "size": size}), "utf-8")
+    return {"upload_id": uid, "chunk_size": _CHUNK, "chunks": -(-size // _CHUNK)}
+
+
+@router.put("/api/upload/chunks/{upload_id}/{index}")
+async def chunks_put(upload_id: str, index: int, request: Request) -> dict[str, Any]:
+    d, m = _chunk_dir(upload_id)
+    if not 0 <= index < -(-m["size"] // _CHUNK):
+        raise HTTPException(400, "chunk index out of range")
+    n = 0
+    with open(d / f"{index:06d}.part", "wb") as f:
+        async for block in request.stream():
+            n += len(block)
+            if n > _CHUNK:
+                raise HTTPException(413, f"a chunk is at most {_CHUNK} bytes")
+            f.write(block)
+    return {"index": index, "bytes": n}
+
+
+@router.post("/api/upload/chunks/{upload_id}/complete")
+async def chunks_complete(upload_id: str) -> dict[str, Any]:
+    import shutil
+    d, m = _chunk_dir(upload_id)
+    parts = sorted(d.glob("*.part"))
+    total = -(-m["size"] // _CHUNK)
+    if len(parts) != total:
+        raise HTTPException(400, f"{total - len(parts)} chunk(s) missing")
+    out = d / "joined"
+    with open(out, "wb") as f:
+        for p in parts:
+            with open(p, "rb") as src:
+                shutil.copyfileobj(src, f, 1 << 20)
+    if out.stat().st_size != m["size"]:
+        shutil.rmtree(d, ignore_errors=True)
+        raise HTTPException(400, "size mismatch — upload again")
+    try:
+        return _store(out, m["name"], "upload")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@router.get("/api/import/config")
+async def import_config() -> dict[str, Any]:
+    """A böngészős fájlválasztók (Google Picker, Dropbox Chooser, OneDrive) nyilvános azonosítói az env-ből —
+    amelyik nincs beállítva, annak a gombja nem jelenik meg."""
+    import os
+    return {"google": {"client_id": os.getenv("GOOGLE_PICKER_CLIENT_ID", ""), "api_key": os.getenv("GOOGLE_PICKER_API_KEY", ""),
+                       "app_id": os.getenv("GOOGLE_PICKER_APP_ID", "")} if os.getenv("GOOGLE_PICKER_CLIENT_ID") else None,
+            "dropbox": {"app_key": os.getenv("DROPBOX_APP_KEY")} if os.getenv("DROPBOX_APP_KEY") else None,
+            "onedrive": {"client_id": os.getenv("ONEDRIVE_CLIENT_ID")} if os.getenv("ONEDRIVE_CLIENT_ID") else None,
+            "chunk_size": _CHUNK, "max_mb": _max_upload() // (1024 * 1024)}

@@ -40,6 +40,26 @@ CORE = ("convert", "archive", "merge", "thumbnail", "metadata", "capture-website
 _PROCESSING_PREFIX = ("convert", "tool/", "archive", "merge", "thumbnail", "metadata", "capture-website")
 
 
+_TASK_KEYS = {"operation", "input", "options", "output_format", "input_format", "filename", "preset_id"}
+
+
+def task_options(op: str, p: dict[str, Any]) -> dict[str, Any]:
+    """A feladat opciói: az `options` objektum, plusz a feladat legfelső szintjén megadott ismert opciók
+    (CloudConvert-stílus: {"operation": "tool/watermark-pdf", "text": "…"})."""
+    from app.convert.options import OPTIONS
+    opts = dict(p.get("options") or {})
+    if op.startswith("tool/"):
+        allowed = set(T.TOOLS[op[5:]].options)
+    elif op == "convert":
+        allowed = set(OPTIONS)
+    else:
+        return opts
+    for k, v in p.items():
+        if k in allowed and k not in _TASK_KEYS and k not in opts:
+            opts[k] = v
+    return opts
+
+
 def known(op: str) -> bool:
     if op in ("import/upload", "import/url", "import/base64", "import/file", "export/url"):
         return True
@@ -68,12 +88,12 @@ def validate(op: str, p: dict[str, Any], has_input: bool) -> None:
         if not isinstance(p.get("output_format"), str):
             raise _je("convert: output_format is required")
         try:
-            vopts(p.get("options") or {})
+            vopts(task_options(op, p))
         except OptionError as e:
             raise _je(f"convert: {e}")
     if op.startswith("tool/"):
         try:
-            vopts(p.get("options") or {}, tool=True)
+            vopts(task_options(op, p), tool=True)
         except OptionError as e:
             raise _je(f"{op}: {e}")
     if op == "capture-website" and not (isinstance(p.get("url"), str) and p["url"].startswith(("http://", "https://"))):
@@ -166,7 +186,7 @@ async def execute(job, task, inputs: list) -> dict[str, Any]:
     if op == "convert":
         return await _convert(job, task, _input_files(inputs))
     if op.startswith("tool/"):
-        return await _tool(op[5:], _input_files(inputs) if inputs else [], p.get("options") or {})
+        return await _tool(op[5:], _input_files(inputs) if inputs else [], task_options(op, p))
     if op == "archive":
         opts = {"archive_format": p.get("output_format", "zip"), **({"password": p["password"]} if p.get("password") else {}),
                 **({"filename": p["filename"]} if p.get("filename") else {})}
@@ -274,7 +294,7 @@ async def _convert(job, task, file_ids: list[str]) -> dict[str, Any]:
     from app.convert import service
     from app.convert.options import OptionError
     p = task.payload
-    opts = dict(p.get("options") or {})
+    opts = task_options("convert", p)
     if p.get("preset_id"):
         from app import db
         row = await db.preset_get(job.owner, int(p["preset_id"])) if db.enabled() else None

@@ -86,6 +86,7 @@ async def run_tool(key: str, file_ids: list[str], options: Optional[dict[str, An
         opts["_resolve"] = _resolve
         res = await handler(inputs, opts, work)
         paths, data = (res.get("files") or [], res.get("data")) if isinstance(res, dict) else (res or [], None)
+        names = (res.get("names") if isinstance(res, dict) else None) or []
         files = []
         src_id = file_ids[0] if file_ids else None
         stem = Path(filename).stem if filename else (Path(display_label(src_id)).stem if src_id else key)
@@ -94,15 +95,17 @@ async def run_tool(key: str, file_ids: list[str], options: Optional[dict[str, An
             fid = new_file_id(ext)
             shutil.move(str(p), output_path(fid))
             nice = i18n_tag(key)
-            label = f"{stem}{f' ({nice})' if nice else ''}{f'-{i:03d}' if len(paths) > 1 else ''}.{ext}"
+            arc = names[i - 1] if i - 1 < len(names) else None      # a kezelő saját neve (pl. archívumbeli útvonal)
+            label = arc.rsplit("/", 1)[-1] if arc else f"{stem}{f' ({nice})' if nice else ''}{f'-{i:03d}' if len(paths) > 1 else ''}.{ext}"
             write_meta(fid, source_file_id=src_id, operation=f"tool {key}", label=label)
-            files.append({"file_id": fid, "url": public_url(fid), "label": label, "size_kb": output_path(fid).stat().st_size // 1024})
+            files.append({"file_id": fid, "url": public_url(fid), "label": label, "size_kb": output_path(fid).stat().st_size // 1024,
+                          **({"path": arc} if arc else {})})
         out: dict[str, Any] = {"tool": key, "files": files}
         if files:
             out.update(file_id=files[0]["file_id"], url=files[0]["url"], label=files[0]["label"])
         if data is not None:
             out["data"] = data
-        if out_mode == "zip" and len(files) > 1:
+        if len(files) > 1 and (out_mode == "zip" or (out_mode == "auto" and tool.output == "zip")):
             out = await _zip_result(out, stem)
         return out
     finally:
@@ -122,7 +125,7 @@ async def _zip_result(out: dict[str, Any], stem: str) -> dict[str, Any]:
     fid = new_file_id("zip")
     with zipfile.ZipFile(output_path(fid), "w", zipfile.ZIP_DEFLATED) as z:
         for f in out["files"]:
-            z.write(output_path(f["file_id"]), f["label"])
+            z.write(output_path(f["file_id"]), f.get("path") or f["label"])
     label = f"{stem}.zip"
     write_meta(fid, operation=f"tool {out['tool']}", label=label)
     zf = {"file_id": fid, "url": public_url(fid), "label": label, "size_kb": output_path(fid).stat().st_size // 1024}

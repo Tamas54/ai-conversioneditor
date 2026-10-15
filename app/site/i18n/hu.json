@@ -54,7 +54,9 @@
   "related": "Kapcsolódó",
   "related_tools": "Kapcsolódó eszközök",
   "privacy": "A fájlok a saját, privát munkaterületeden maradnak, és automatikusan törlődnek. Az átalakításhoz nem kell fiók.",
-  "noscript": "Az átalakítóhoz JavaScript kell. A teljes appot is használhatod:"
+  "noscript": "Az átalakítóhoz JavaScript kell. A teljes appot is használhatod:",
+  "import_from": "Vagy behozás innen:",
+  "from_url": "Link (URL)"
  },
  "js": {
   "download": "Letöltés",
@@ -62,7 +64,8 @@
   "failed": "Nem sikerült",
   "timeout": "Túl sokáig tartott",
   "preset_name": "A beállítás neve",
-  "or_drop": "vagy húzd ide őket"
+  "or_drop": "vagy húzd ide őket",
+  "paste_url": "Illeszd be a fájl linkjét (https://…)"
  },
  "footer": {
   "all_tools": "Minden eszköz",

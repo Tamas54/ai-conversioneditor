@@ -62,10 +62,85 @@
     if (first && first.file_id) out.append(el("a", { href: "/app/file/" + first.file_id + "/edit", class: "small", text: tr("open_editor", "Open in the editor") }));
   }
 
-  async function upload(file) {
-    const fd = new FormData();
-    fd.append("file", file);
-    return api("/api/upload", { method: "POST", body: fd });
+  const CHUNKED_FROM = 20 * 1024 * 1024;   // ennél nagyobb fájl darabokban megy (proxy-korlátok, megszakadás)
+  async function upload(file, bar) {
+    if (file.remote) return file.remote;                  // URL-ből / felhőből már behozott fájl
+    if (file.size <= CHUNKED_FROM) {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api("/api/upload", { method: "POST", body: fd });
+    }
+    const st = await api("/api/upload/chunks", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, size: file.size }) });
+    for (let i = 0; i < st.chunks; i++) {
+      const part = file.slice(i * st.chunk_size, (i + 1) * st.chunk_size);
+      for (let k = 0; ; k++) {
+        try { await api(`/api/upload/chunks/${st.upload_id}/${i}`, { method: "PUT", body: part }); break; }
+        catch (e) { if (k >= 2) throw e; await sleep(1000 * (k + 1)); }
+      }
+      if (bar) bar.style.width = Math.round((100 * (i + 1)) / st.chunks) + "%";
+    }
+    return api(`/api/upload/chunks/${st.upload_id}/complete`, { method: "POST" });
+  }
+
+  // ---------- import: URL, Google Drive, Dropbox, OneDrive ----------
+  let importCfg = null;
+  const loadScript = (src, attrs = {}) => new Promise((ok, bad) => {
+    if ($(`script[src="${src}"]`)) return ok();
+    const s = el("script", { src, ...attrs });
+    s.onload = ok; s.onerror = bad;
+    document.head.append(s);
+  });
+  async function importRemote(box, body) {
+    const chip = el("li", { class: "chip" }, el("span", { text: body.name || body.url || "…" }));
+    $(".cv-remote", box).append(chip);
+    try {
+      const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      chip.firstChild.textContent = r.original_name;
+      box._remote.push({ name: r.original_name, size: (r.size_kb || 0) * 1024, remote: r });
+      box.dispatchEvent(new Event("cv:files"));
+    } catch (e) { chip.append(el("span", { class: "err", text: " " + e.message })); }
+  }
+  async function initImport(box) {
+    box._remote = [];
+    const bar = $(".cv-import", box);
+    if (!bar) return;
+    $("[data-src=url]", bar).addEventListener("click", () => {
+      const url = prompt(tr("paste_url", "Paste a link to the file (https://…)"));
+      if (url) importRemote(box, { provider: "url", url: url.trim() });
+    });
+    try { importCfg = importCfg || await api("/api/import/config"); } catch (e) { return; }
+    const show = (k) => { const b = $(`[data-src=${k}]`, bar); if (b) b.hidden = false; return b; };
+    if (importCfg.dropbox) show("dropbox").addEventListener("click", async () => {
+      await loadScript("https://www.dropbox.com/static/api/2/dropins.js", { id: "dropboxjs", "data-app-key": importCfg.dropbox.app_key });
+      window.Dropbox.choose({ linkType: "direct", multiselect: true,
+        success: (files) => files.forEach((f) => importRemote(box, { provider: "url", url: f.link, name: f.name })) });
+    });
+    if (importCfg.onedrive) show("onedrive").addEventListener("click", async () => {
+      await loadScript("https://js.live.net/v7.2/OneDrive.js");
+      window.OneDrive.open({ clientId: importCfg.onedrive.client_id, action: "download", multiSelect: true,
+        advanced: { redirectUri: location.origin + location.pathname },
+        success: (r) => r.value.forEach((f) => importRemote(box, { provider: "url", url: f["@microsoft.graph.downloadUrl"], name: f.name })) });
+    });
+    if (importCfg.google) show("google-drive").addEventListener("click", async () => {
+      const g = importCfg.google;
+      await loadScript("https://accounts.google.com/gsi/client");
+      await loadScript("https://apis.google.com/js/api.js");
+      await new Promise((ok) => window.gapi.load("picker", ok));
+      const tc = window.google.accounts.oauth2.initTokenClient({ client_id: g.client_id,
+        scope: "https://www.googleapis.com/auth/drive.readonly",
+        callback: (tok) => {
+          if (!tok.access_token) return;
+          const P = window.google.picker;
+          new P.PickerBuilder().addView(new P.DocsView().setIncludeFolders(false)).enableFeature(P.Feature.MULTISELECT_ENABLED)
+            .setOAuthToken(tok.access_token).setDeveloperKey(g.api_key).setAppId(g.app_id)
+            .setCallback((d) => {
+              if (d.action !== P.Action.PICKED) return;
+              d.docs.forEach((doc) => importRemote(box, { provider: "google-drive", file_id: doc.id, name: doc.name, access_token: tok.access_token }));
+            }).build().setVisible(true);
+        } });
+      tc.requestAccessToken();
+    });
   }
 
   function initWidget(box) {
@@ -75,16 +150,21 @@
     ["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
     ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, () => drop.classList.remove("over")));
     drop.addEventListener("drop", (ev) => { ev.preventDefault(); input.files = ev.dataTransfer.files; input.dispatchEvent(new Event("change")); });
-    input.addEventListener("change", async () => {
+    initImport(box);
+    const allFiles = () => Array.from(input.files).concat(box._remote || []);
+    const onFiles = async () => {
+      const all = allFiles();
       $(".drop span", box).textContent = Array.from(input.files).map((f) => f.name).join(", ") || tr("or_drop", "or drop files here");
-      if (!sel || box.dataset.target || !input.files[0]) return;
-      const ext = extOf(input.files[0].name);
+      if (!sel || box.dataset.target || !all[0]) return;
+      const ext = extOf(all[0].name);
       try {
         const r = await api("/api/convert/targets?all=1&ext=" + encodeURIComponent(ext));
         sel.innerHTML = "";
         r.targets.forEach((x) => sel.append(el("option", { value: x.fmt, text: x.label })));
       } catch (e) { /* marad a régi lista */ }
-    });
+    };
+    input.addEventListener("change", onFiles);
+    box.addEventListener("cv:files", onFiles);
     loadPresets(box, scope);
     $("[data-act=save-preset]", box)?.addEventListener("click", async () => {
       const name = prompt(tr("preset_name", "Preset name"));
@@ -101,7 +181,7 @@
     });
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
-      const files = Array.from(input.files);
+      const files = allFiles();
       const min = Number(box.dataset.min || (tool ? 1 : 1));
       if (files.length < min && min > 0) { input.click(); return; }
       const opts = readOptions(form);
@@ -112,7 +192,7 @@
         out.prepend(li);
         try {
           const ids = [];
-          for (const f of files) ids.push((await upload(f)).file_id);
+          for (const f of files) ids.push((await upload(f, $(".bar-p i", li))).file_id);
           const job = await api("/api/tools/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool, file_ids: ids, options: opts }) });
           resultRow(li, await poll(job, $(".bar-p i", li)));
         } catch (e) { li.append(el("span", { class: "err", text: e.message })); }
@@ -122,13 +202,15 @@
         const li = el("li", {}, el("span", { text: f.name }), el("span", { class: "bar-p" }, el("i")));
         out.prepend(li);
         try {
-          const up = await upload(f);
+          const up = await upload(f, $(".bar-p i", li));
           const body = tool ? { tool, file_ids: [up.file_id], options: applyAll || i === 0 ? opts : {} }
                             : { file_id: up.file_id, target, options: applyAll || i === 0 ? opts : {} };
           const job = await api(tool ? "/api/tools/run" : "/api/convert/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
           resultRow(li, await poll(job, $(".bar-p i", li)));
         } catch (e) { li.append(el("span", { class: "err", text: e.message })); }
       }
+      box._remote = [];
+      $(".cv-remote", box).innerHTML = "";
     });
   }
 

@@ -36,6 +36,14 @@
   <form class="cv-form" action="/app" method="get">
     <label class="drop"><input type="file" name="file" {% if w.accept %}accept="{{ w.accept }}"{% endif %} {% if not w.tool or w.max != 1 %}multiple{% endif %}>
       <strong>{{ t('ui.choose') }}</strong> <span>{{ t('ui.or_drop') }}</span></label>
+    {% if not w.tool or w.max != 0 %}
+    <div class="cv-import small"><span class="muted">{{ t('ui.import_from') }}</span>
+      <button type="button" class="btn ghost small" data-src="url">{{ t('ui.from_url') }}</button>
+      <button type="button" class="btn ghost small" data-src="google-drive" hidden>Google Drive</button>
+      <button type="button" class="btn ghost small" data-src="dropbox" hidden>Dropbox</button>
+      <button type="button" class="btn ghost small" data-src="onedrive" hidden>OneDrive</button></div>
+    <ul class="cv-remote"></ul>
+    {% endif %}
     {% if not w.tool %}
     <label class="to">{{ t('ui.convert_to') }} <select name="target" required>{% if w.target %}<option value="{{ w.target }}" selected>{{ w.target|upper }}</option>{% endif %}{% for x in (w.targets or []) %}{% if x != w.target %}<option value="{{ x }}">{{ x|upper }}</option>{% endif %}{% endfor %}</select></label>
     {% endif %}
