@@ -28,11 +28,13 @@
 <body>
 <header class="topbar">
   <a class="brand" href="/app">{{PRODUCT}}</a>
+  <a class="chip nav-back" id="nav-back" href="/app" hidden title="One step back">← Back</a>
   <nav aria-label="Main">
     <a href="/app" data-nav="home">Make</a>
     <a href="/app/files" data-nav="files">My workspace</a>
     <a href="/app/brand" data-nav="brand">Brand</a>
     <a href="/app/connect" data-nav="connect">Connect your AI</a>
+    <a href="{{AGENTS_URL}}" data-nav="agents">AI agents</a>
   </nav>
   <span class="spacer"></span>
   <a class="chip" id="credits" href="/app/plans" title="Your plan and credits">credits …</a>
@@ -43,6 +45,7 @@
 
 <main id="view"></main>
 {{ABOUT}}
+{{SITE_FOOT}}
 
 <dialog class="merge-dlg" id="merge-dlg" aria-labelledby="merge-title"><button type="button" class="x-close drawer-x" id="merge-x" aria-label="Close" title="Close (Esc)">✕</button><div id="merge-body"></div></dialog>
 <dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><button type="button" class="x-close drawer-x" id="drawer-x" aria-label="Close" title="Close (Esc)">✕</button><form id="make-form" method="dialog"></form></dialog>
@@ -98,6 +101,7 @@
       <button data-try="album"><span>Book · photo album</span>Your photos and a few pages of text → a print-ready album with contents and captions</button>
     </div>
     <p class="muted small connect-note">Use it from your own AI too — Claude, ChatGPT, Cursor: <a href="/app/connect">Connect your AI</a>. Without an account you can try everything that doesn't use AI.</p>
+    <p class="muted small more-note">Every format and tool: <a href="{{CONVERT_URL}}">{{N_FORMATS}} file formats</a> · <a href="{{TOOLS_URL}}">{{N_TOOLS}} file tools</a> · <a href="{{AGENTS_URL}}">what the AI agents do</a> · <a href="{{API_URL}}">REST API</a></p>
   </section>
   <section class="sheet">
     <div class="row-head"><h2>Recent</h2><a class="small" href="/app/files">All files</a></div>
@@ -745,6 +749,9 @@ async function route() {
   const arg = rest.join("/") + location.search;
   if (name !== "make") { underMaker = here(); if ($("#drawer").open) $("#drawer").close(); baseTitle = VIEW_TITLES[name] || ""; setTitle(baseTitle); }
   if (!["file", "make"].includes(name)) lastPlace = here();
+  const navBack = document.getElementById("nav-back"), siteFoot = document.getElementById("site-foot");
+  if (navBack) navBack.hidden = !name || name === "file";          // a fájlnézetnek saját „← Back” gombja van
+  if (siteFoot) siteFoot.hidden = name === "file";
   document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
   document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
   try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); if (name === "file" && cur?.file_id && location.pathname.includes(cur.file_id)) { baseTitle = cur.label; setTitle(baseTitle); } }
@@ -758,6 +765,8 @@ function nav(url, replace = false) {
   route();
 }
 window.addEventListener("popstate", route);
+// „← Back” a fejlécben: egy lépés vissza az appon belül (mint a böngésző), különben a címlapra
+document.getElementById("nav-back")?.addEventListener("click", e => { if (appSteps > 1) { e.preventDefault(); history.back(); } });
 document.addEventListener("click", e => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const a = e.target.closest("a[href]");

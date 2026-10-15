@@ -298,7 +298,15 @@ def _llms_more(base: str) -> str:
     c = content.counts()
     L = i18n.DEFAULT
     cats = "\n".join(f"- [{i18n.t(L, f'cat.{k}.h1')}]({base}{urls.category(L, k)}): {i18n.t(L, f'cat.{k}.desc')}" for k in CATEGORIES)
-    return f"""## Conversions
+    n = content.agent_counts()
+    return f"""## AI agents
+
+[{i18n.t(L, 'agents.h1')}]({base}{urls.agents(L)}): one request in plain words → finished, editable files. The in-app
+agent chains {n['agent']} tools (Word via WordCraft — a Rust Word engine —, PowerPoint, Excel, PDF, photo, design,
+conversion, forms), checks its own result by rendering pages, and keeps every change as a version. Your own AI
+(Claude, ChatGPT, Cursor) can drive {n['mcp']} MCP tools instead, including the form fill assistant with elicitation.
+
+## Conversions
 
 {c['formats']} file formats, {c['conversions']} conversion directions, open-source engines (LibreOffice, FFmpeg, Calibre,
 Inkscape, ImageMagick, 7-Zip, fontTools, LibreDWG…). Hub: [{base}{urls.convert_hub(L)}]({base}{urls.convert_hub(L)})

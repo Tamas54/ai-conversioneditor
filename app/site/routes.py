@@ -30,10 +30,6 @@ def _resp(lang: str, kind: str, *args) -> HTMLResponse:
     return HTMLResponse(html, headers=headers)
 
 
-def page_for_home(lang: str) -> HTMLResponse:
-    return _resp(lang, "home")
-
-
 def build_router() -> APIRouter:
     r = APIRouter()
     for lang in i18n.langs():
@@ -48,14 +44,15 @@ def _add(r: APIRouter, lang: str) -> None:
     def get(path: str, fn: Callable) -> None:
         r.add_api_route(path, fn, methods=["GET"], include_in_schema=False, response_class=HTMLResponse)
 
-    if P:
-        async def home():
-            return _resp(lang, "home")
-        get(P + "/", home)
+    if P:                       # a nyelvi gyökér a nyelv konverziós hubjára visz (a kezdőlap az /app)
+        async def lang_root():
+            return RedirectResponse(urls.convert_hub(lang), status_code=301)
+        get(P + "/", lang_root)
+        get(P, lang_root)
 
-        async def home_noslash():
-            return RedirectResponse(P + "/", status_code=301)
-        get(P, home_noslash)
+    async def agents():
+        return _resp(lang, "agents")
+    get(f"{P}/{S('agents')}", agents)
 
     async def convert_hub():
         return _resp(lang, "convert_hub")
@@ -145,7 +142,7 @@ def all_paths(indexable_only: bool = True) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     from app.catalog.units import CATEGORIES as UC
     for lang in i18n.langs():
-        ps = [urls.home(lang), urls.convert_hub(lang), urls.tools_hub(lang), urls.compare_hub(lang), urls.developers(lang),
+        ps = [urls.agents(lang), urls.convert_hub(lang), urls.tools_hub(lang), urls.compare_hub(lang), urls.developers(lang),
               urls.docs(lang), urls.job_builder(lang), urls.connect_ai(lang), urls.units(lang), urls.timezones(lang)]
         ps += [urls.category(lang, c) for c in CATEGORIES]
         ps += [urls.fmt(lang, k) for k, f in FORMATS.items() if not indexable_only or f.tier <= 2]

@@ -130,6 +130,19 @@ def _sniff_delimiter(p: Path) -> str:
         return "\t" if p.suffix.lower() == ".tsv" else ","
 
 
+async def wordcraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
+    """WordCraft (Rust Word-motor, a meglévő CLI): docx/odt/rtf/html/md/tex/txt → pdf/odt/rtf/html/md/tex/txt."""
+    from app.tools import wordcraft as wc
+    dst = ctx.out(src, fmt)
+    try:
+        await wc.convert_file(src, dst)
+    except RuntimeError as e:
+        raise EngineError(str(e))
+    if not dst.exists() or dst.stat().st_size == 0:
+        raise EngineError("WordCraft produced no output")
+    return [dst]
+
+
 async def libreoffice(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
     sfmt = _fmt_of(src)
     cls = _lo_class(sfmt)
@@ -1662,7 +1675,7 @@ def _write_data(data: Any, dst: Path, fmt: str, title: str) -> None:
 
 
 STEPS: dict[str, Callable[[Path, str, Ctx], Awaitable[list[Path]]]] = {
-    "libreoffice": libreoffice, "pandoc": pandoc, "weasyprint": weasyprint, "pdf2docx": pdf2docx, "poppler": poppler,
+    "wordcraft": wordcraft, "libreoffice": libreoffice, "pandoc": pandoc, "weasyprint": weasyprint, "pdf2docx": pdf2docx, "poppler": poppler,
     "mupdf": mupdf, "ghostscript": ghostscript, "djvulibre": djvulibre, "calibre": calibre, "pillow": pillow,
     "imagemagick": imagemagick, "heif": heif, "jxl": jxl, "libraw": libraw, "potrace": potrace, "inkscape": inkscape,
     "rsvg": rsvg, "ffmpeg": ffmpeg, "slideshow": slideshow, "archive": archive, "fonttools": fonttools,

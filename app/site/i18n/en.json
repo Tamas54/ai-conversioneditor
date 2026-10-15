@@ -16,7 +16,8 @@
   "job_builder": "job-builder",
   "connect_ai": "connect-ai",
   "units": "unit-converter",
-  "timezones": "time-zone-converter"
+  "timezones": "time-zone-converter",
+  "agents": "ai-agents"
  },
  "nav": {
   "home": "Home",
@@ -27,7 +28,9 @@
   "compare": "Compare",
   "open_app": "Open the app",
   "units": "Unit converter",
-  "timezones": "Time zone converter"
+  "timezones": "Time zone converter",
+  "make": "Make",
+  "agents": "AI agents"
  },
  "ui": {
   "skip": "Skip to content",
@@ -61,7 +64,8 @@
   "sig_clear": "Clear",
   "sig_save": "Save signature",
   "sig_or_upload": "Or upload a photo or scan of it below — paper, shadow and noise are removed.",
-  "sig_saved": "Your saved signatures"
+  "sig_saved": "Your saved signatures",
+  "back": "Back"
  },
  "js": {
   "download": "Download",
@@ -85,7 +89,10 @@
   "all_tools": "All tools",
   "api": "REST API",
   "compare_all": "All comparisons",
-  "note": "{product} — convert, edit and fill files with open-source engines and AI. Private by default."
+  "note": "{product} — convert, edit and fill files with open-source engines and AI. Private by default.",
+  "all_conversions": "All conversions",
+  "plans": "Plans & pricing",
+  "agents": "Agentic features"
  },
  "home": {
   "title": "{product} — convert any file: {formats} formats, AI editing, forms and signatures",
@@ -2377,5 +2384,185 @@
   "time": "Time",
   "from": "From zone",
   "to": "To zones"
+ },
+ "agents": {
+  "crumb": "AI agents",
+  "title": "AI agents that finish the job — documents, decks, PDFs, photos and forms | {product}",
+  "desc": "{product}'s AI agent turns one request into finished files: it chains {n_agent} tools, checks its own work and hands back real Word, PowerPoint, PDF and Photoshop files. Or let Claude or ChatGPT drive {n_mcp} MCP tools.",
+  "h1": "AI agents that finish the job",
+  "lead": "Tell {product} what you need in plain words and its agent does the whole job: it reads your files, picks from {n_agent} tools (Word, PowerPoint, Excel, PDF, photo, design, conversion and form tools), checks the result — it renders pages and looks at them — and gives you real files you can open and edit. Every change is a new version you can go back to. Prefer your own assistant? Claude, ChatGPT and Cursor can call the same tools over MCP.",
+  "stat_agent": "agent tools",
+  "stat_mcp": "MCP tools for your AI",
+  "stat_formats": "file formats",
+  "sections": [
+   {
+    "h": "One request, the whole job",
+    "p": "The in-app agent plans, acts and checks. It reads the working document, edits it precisely (find and replace, headings, whole sections, tracked changes and comments), builds decks slide by slide, renders pages to verify the layout and splits big jobs into sub-agents. You see each step and get every intermediate file.",
+    "examples": [
+     "Turn this report into a 12-slide deck on our template",
+     "Black out every name, number the pages and lock the PDF",
+     "Translate the headings, keep tracked changes on"
+    ],
+    "links": [
+     [
+      "Open the app",
+      "/app"
+     ]
+    ]
+   },
+   {
+    "h": "Edit anything by asking",
+    "p": "Documents, decks and PDFs change by instruction — “indent every paragraph after the third”, “add a photo of the Colosseum on page 22”. The edit is exact, every change is a new version, and the built-in editors stay open for hand-made fixes.",
+    "examples": [
+     "Make every heading dark green and 14 pt",
+     "Delete the section about pricing",
+     "Add a comment to every paragraph that mentions a date"
+    ],
+    "links": [
+     [
+      "Word editor",
+      "/app/make/document"
+     ],
+     [
+      "PDF tools",
+      "/app/make/pdf-tools"
+     ]
+    ]
+   },
+   {
+    "h": "WordCraft: a Word engine written in Rust",
+    "p": "Word files are handled by WordCraft, a Rust Word engine with about 460 commands of Word's ribbon. The agent drives it headless, the editor runs it in your browser as WebAssembly, and document conversions use it first: DOCX, ODT, RTF, HTML, Markdown and LaTeX into each other and into PDF in milliseconds, without LibreOffice.",
+    "examples": [
+     "Restyle this contract like the example I upload",
+     "Insert a table of contents and number the headings"
+    ],
+    "links": [
+     [
+      "Document converter",
+      "@category:document"
+     ]
+    ]
+   },
+   {
+    "h": "Makers that design for you",
+    "p": "Presentations from a brief or a Word document on your own .pptx template; infographics where every number is calculated from your cells and traced to them; short videos from an article; manuscripts typeset as books; posters rebuilt from a photo with every word editable.",
+    "examples": [
+     "A 10-slide pitch from this brief, with charts",
+     "This spreadsheet as an infographic, portrait and landscape"
+    ],
+    "links": [
+     [
+      "Presentations",
+      "/app/make/presentation"
+     ],
+     [
+      "Infographics",
+      "/app/make/infographic"
+     ],
+     [
+      "Books",
+      "/app/make/book"
+     ]
+    ]
+   },
+   {
+    "h": "Photos edited with words",
+    "p": "“A bit warmer, dramatic sky, crop to 4:5, logo bottom right” — done with real photo tools, each step on its own layer in a Photoshop file. A whole album page of old prints is found, repaired and coloured.",
+    "examples": [
+     "Remove the blurry grass in front of the animal",
+     "Restore and colourise this album page"
+    ],
+    "links": [
+     [
+      "Photo editor",
+      "/app/make/photos"
+     ],
+     [
+      "Restore old photos",
+      "/app/make/photos/restore"
+     ]
+    ]
+   },
+   {
+    "h": "Scans, forms and signatures",
+    "p": "Photographed pages become Word, a clean PDF or a searchable PDF. Forms are recognised from any file — fillable or flat PDF, Word, Excel, a phone photo — and filled in their original format. The form agent fills from your saved profile and your documents, asks only about what is missing, checks dates, IBANs and Hungarian tax and social security numbers, shows a preview and signs with your saved signature.",
+    "examples": [
+     "Fill this application from my profile and my ID card scan",
+     "Make this printed form fillable",
+     "Sign the contract on the signature line"
+    ],
+    "links": [
+     [
+      "AI form filler",
+      "@tool:ai-form-filler"
+     ],
+     [
+      "Form recognition",
+      "@tool:form-recognize"
+     ],
+     [
+      "Signatures",
+      "@tool:create-signature"
+     ],
+     [
+      "Scan to text",
+      "/app/make/scan-to-text"
+     ]
+    ]
+   },
+   {
+    "h": "Your own AI drives it — MCP",
+    "p": "Claude, ChatGPT, Cursor and other MCP clients get {n_mcp} grouped tools: conversion of {formats} formats, file tools, jobs, forms, signatures and the fill assistant. They get the files back with a download and an editor link. Clients that support it get questions as forms (elicitation) and interactive views — a field checker and a signature pad. Over MCP, your assistant does the thinking; {product} does the file work.",
+    "examples": [
+     "“Convert these 30 HEIC photos to JPG and zip them”",
+     "“Fill the form I just uploaded from my profile”"
+    ],
+    "links": [
+     [
+      "Connect your AI",
+      "@connect_ai"
+     ],
+     [
+      "Set it up in your account",
+      "/app/connect"
+     ]
+    ]
+   },
+   {
+    "h": "Agents in your own software",
+    "p": "The same work as a REST API: jobs made of tasks (import, convert, tool, export), live status, signed webhooks, sandbox keys, Python and Node SDKs, Zapier, Make and n8n.",
+    "examples": [
+     "Import from S3, fill a form, export the PDF back"
+    ],
+    "links": [
+     [
+      "REST API",
+      "@developers"
+     ],
+     [
+      "Job Builder",
+      "@job_builder"
+     ]
+    ]
+   }
+  ],
+  "faq": [
+   [
+    "Does the agent make things up?",
+    "No. It works from your files and your words. Infographic numbers are calculated from your cells by code, and the form agent fills only from your profile, your documents or your answers — anything else it asks."
+   ],
+   [
+    "Do I need an account?",
+    "Conversions and file tools work without one, up to {guest_mb} MB per file. Agent features use AI, so they need a free account; complex jobs use credits from your plan."
+   ],
+   [
+    "Can I use my own AI instead?",
+    "Yes. Connect Claude, ChatGPT or Cursor over MCP and your assistant calls the same {n_mcp} tools. Then your assistant does the reasoning and {product} does the file work."
+   ],
+   [
+    "Will my files stay private?",
+    "Files stay in your private workspace and are deleted automatically after {retention} days; signatures and your form profile are stored encrypted, separately for each user."
+   ]
+  ]
  }
 }

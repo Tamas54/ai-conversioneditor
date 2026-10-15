@@ -37,8 +37,9 @@ def test_i18n_parity_hu_has_every_en_key():
 
 
 def test_new_language_is_one_file(tmp_path, monkeypatch):
-    """Egy új nyelvi fájl (itt egy minimális „de”) azonnal új nyelv — a hiányzó kulcsok angolul jönnek."""
+    """Egy új nyelvi fájl (itt egy minimális „de”) + a kódja a SITE_LANGS-ben = új nyelv; a hiányzó kulcsok angolul."""
     from app.site import i18n
+    monkeypatch.setenv("SITE_LANGS", "en,hu,de")
     src = i18n.DIR
     new = tmp_path / "i18n"
     new.mkdir()
@@ -60,11 +61,11 @@ def test_new_language_is_one_file(tmp_path, monkeypatch):
 
 
 PAGES = {
-    "en": ["/", "/convert", "/convert/documents", "/convert/docx-to-pdf", "/convert/heic-to-jpg", "/convert/tar-gz-to-zip",
+    "en": ["/ai-agents", "/convert", "/convert/documents", "/convert/docx-to-pdf", "/convert/heic-to-jpg", "/convert/tar-gz-to-zip",
            "/formats/docx", "/tools", "/compare", "/compare/cloudconvert-alternative", "/developers", "/developers/docs",
            "/developers/job-builder", "/developers/convert/docx-to-pdf", "/connect-ai", "/unit-converter",
            "/unit-converter/length", "/time-zone-converter"],
-    "hu": ["/hu/", "/hu/atalakitas", "/hu/atalakitas/dokumentumok", "/hu/atalakitas/docx-bol-pdf", "/hu/atalakitas/heic-bol-jpg",
+    "hu": ["/hu/ai-ugynokok", "/hu/atalakitas", "/hu/atalakitas/dokumentumok", "/hu/atalakitas/docx-bol-pdf", "/hu/atalakitas/heic-bol-jpg",
            "/hu/formatumok/docx", "/hu/eszkozok", "/hu/osszehasonlitas", "/hu/osszehasonlitas/smallpdf-alternativa",
            "/hu/fejlesztoknek", "/hu/fejlesztoknek/dokumentacio", "/hu/ai-csatlakoztatas", "/hu/mertekegyseg-valto/homerseklet",
            "/hu/idozona-valto"],
@@ -79,14 +80,16 @@ def test_page_renders_with_seo_head(client, lang, path):
     assert s.html["lang"] == lang
     assert s.title.text and s.find("meta", {"name": "description"})["content"]
     canon = s.find("link", rel="canonical")["href"]
-    assert canon.endswith(path if path != "/" else "/")
+    assert canon.endswith(path)
     alts = {l["hreflang"]: l["href"] for l in s.find_all("link", rel="alternate") if l.get("hreflang")}
     assert {"en", "hu", "x-default"} <= set(alts)
     lds = [json.loads(x.string) for x in s.find_all("script", type="application/ld+json")]
     types = {d["@type"] for d in lds}
     assert "Organization" in types
-    if path not in ("/", "/hu/"):
-        assert "BreadcrumbList" in types and s.select_one("nav.crumbs")
+    assert "BreadcrumbList" in types and s.select_one("nav.crumbs")
+    # a meglévő honlap (/app) része: ugyanaz a fejléc, a morzsamenü gyökere az /app, és van „vissza” gomb
+    assert s.select_one("header.topbar a.brand")["href"] == "/app"
+    assert s.select_one("nav.crumbs a")["href"] == "/app" and s.select_one("a.back[data-back]")
     assert len(s.find_all("h1")) == 1
     # a nyelvváltó a másik nyelv ugyanazon oldalára mutat, ami tényleg létezik
     other = alts["hu" if lang == "en" else "en"].replace("http://testserver", "").replace("http://localhost:8000", "")
@@ -127,7 +130,7 @@ def test_link_structure_depth_and_no_orphans(client):
         s = BeautifulSoup(client.get(path).text, "lxml")
         return {a["href"].split("#")[0] for a in s.find_all("a", href=True) if a["href"].startswith("/")}
     lang = "en"
-    lvl1 = links(urls.home(lang))
+    lvl1 = links("/app")                         # a kezdőlap a meglévő /app
     for c in CATEGORIES:
         assert urls.category(lang, c) in lvl1
     for u in (urls.tools_hub(lang), urls.developers(lang), urls.connect_ai(lang), urls.compare_hub(lang), urls.units(lang)):
@@ -174,10 +177,46 @@ def test_indexnow_keyfile(client):
     assert client.get("/indexnow-wrong.txt").status_code == 404
 
 
-def test_root_landing_for_visitors(client):
+def test_root_still_goes_to_the_existing_site(client):
+    """A honlap a meglévő /app marad: a gyökér oda irányít (mint eddig), az /app linkel az új oldalakra."""
     r = client.get("/", follow_redirects=False)
-    assert r.status_code == 200 and "<h1>" in r.text
-    assert "set-cookie" not in {k.lower() for k in r.headers}       # nyilvános oldal: nincs vendég-süti
+    assert r.status_code == 301 and r.headers["location"] == "/app"
+    from app.site import urls
+    s = BeautifulSoup(client.get("/app").text, "lxml")
+    hrefs = {a["href"] for a in s.find_all("a", href=True)}
+    assert {urls.agents("en"), urls.convert_hub("en"), urls.tools_hub("en"), urls.developers("en"), "/llms.txt"} <= hrefs
+    assert s.select_one("#nav-back") is not None and s.select_one("#site-foot") is not None
+    assert "{{" not in str(s.select_one("#site-foot"))
+
+
+def test_back_button_goes_to_the_parent_page(client):
+    from app.site import urls
+    s = BeautifulSoup(client.get(urls.pair("en", "docx", "pdf")).text, "lxml")
+    assert s.select_one("a.back")["href"] == urls.category("en", "document")
+    s = BeautifulSoup(client.get(urls.tools_hub("en")).text, "lxml")
+    assert s.select_one("a.back")["href"] == "/app"
+
+
+def test_english_only_unless_enabled(monkeypatch):
+    from app.site import i18n
+    monkeypatch.delenv("SITE_LANGS", raising=False)
+    assert i18n.langs() == ["en"]
+    monkeypatch.setenv("SITE_LANGS", "en,hu")
+    assert i18n.langs() == ["en", "hu"]
+
+
+def test_agents_page_highlights_existing_agentic_features(client):
+    from app.site import content, urls
+    s = BeautifulSoup(client.get(urls.agents("en")).text, "lxml")
+    text = s.find("main").get_text(" ")
+    n = content.agent_counts()
+    assert n["agent"] >= 60 and n["mcp"] >= 40 and str(n["agent"]) in text and "WordCraft" in text and "Rust" in text
+    links = {a["href"] for a in s.find("main").find_all("a", href=True)}
+    assert {"/app/make/presentation", "/app/make/photos", "/app/make/scan-to-text", urls.tool("en", "ai-form-filler"),
+            urls.connect_ai("en")} <= links
+    for href in links:
+        if href.startswith("/") and not href.startswith("/app"):
+            assert client.get(href).status_code == 200, href
 
 
 def test_units_and_timezones_api(client):

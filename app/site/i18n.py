@@ -30,8 +30,10 @@ def _all() -> dict[str, dict[str, Any]]:
 
 
 def langs() -> list[str]:
-    """Az alapnyelv elöl, utána betűrendben."""
-    codes = list(_all())
+    """A bekapcsolt nyelvek (SITE_LANGS, vesszővel; alapból csak az alapnyelv — nemzetközi, angol termék),
+    az alapnyelv elöl. Egy további nyelv: a fájl a mappába + a kódja a SITE_LANGS-be (pl. "en,de")."""
+    on = {c.strip() for c in os.getenv("SITE_LANGS", DEFAULT).split(",") if c.strip()} | {DEFAULT}
+    codes = [c for c in _all() if c in on]
     return sorted(codes, key=lambda c: (c != DEFAULT, c))
 
 

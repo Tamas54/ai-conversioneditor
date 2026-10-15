@@ -22,6 +22,9 @@
 <meta name="theme-color" content="#1E4436">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ product_css }}">
 <link rel="stylesheet" href="{{ css }}">
 {% for ld in p.jsonld %}
 <script type="application/ld+json">{{ ld|jsonld }}</script>
@@ -29,52 +32,32 @@
 </head>
 <body class="site k-{{ p.kind }}">
 <a class="skip" href="#main">{{ t('ui.skip') }}</a>
-<header class="top">
-  <div class="wrap bar">
-    <a class="brand" href="{{ urls.home(lang) }}">{{ product }}</a>
-    <nav class="nav" aria-label="{{ t('ui.main_nav') }}">
-      {% for name, url in nav %}<a href="{{ url }}"{% if p.path.startswith(url) %} aria-current="page"{% endif %}>{{ name }}</a>{% endfor %}
-    </nav>
-    <details class="langs">
-      <summary aria-label="{{ t('ui.language') }}">{{ lang|upper }}</summary>
-      <ul>{% for L, u in p.alternates.items() %}<li><a href="{{ u }}" hreflang="{{ L }}" lang="{{ L }}"{% if L == lang %} aria-current="true"{% endif %}>{{ lang_names[L] }}</a></li>{% endfor %}</ul>
-    </details>
-    <a class="btn small" href="/app">{{ t('nav.open_app') }}</a>
-  </div>
+<header class="topbar">
+  <a class="brand" href="/app">{{ product }}</a>
+  <nav aria-label="{{ t('ui.main_nav') }}">
+    {% for name, url in nav %}<a href="{{ url }}"{% if url != '/app' and p.path.startswith(url) %} aria-current="page"{% endif %}>{{ name }}</a>{% endfor %}
+  </nav>
+  <span class="spacer"></span>
+  {% if langs|length > 1 %}
+  <details class="langs">
+    <summary aria-label="{{ t('ui.language') }}">{{ lang|upper }}</summary>
+    <ul>{% for L, u in p.alternates.items() %}<li><a href="{{ u }}" hreflang="{{ L }}" lang="{{ L }}"{% if L == lang %} aria-current="true"{% endif %}>{{ lang_names[L] }}</a></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  <a class="chip chip-cta" href="/app">{{ t('nav.open_app') }}</a>
 </header>
-{% if p.crumbs and p.crumbs|length > 1 %}
-<nav class="crumbs wrap" aria-label="{{ t('ui.breadcrumbs') }}"><ol>
-{% for name, url in p.crumbs %}<li>{% if not loop.last %}<a href="{{ url }}">{{ name }}</a>{% else %}<span aria-current="page">{{ name }}</span>{% endif %}</li>{% endfor %}
-</ol></nav>
-{% endif %}
+<div class="wrap backrow">
+  <a class="back" href="{{ parent }}" data-back>← {{ t('ui.back') }}</a>
+  {% if p.crumbs and p.crumbs|length > 1 %}
+  <nav class="crumbs" aria-label="{{ t('ui.breadcrumbs') }}"><ol>
+  {% for name, url in p.crumbs %}<li>{% if not loop.last %}<a href="{{ url }}">{{ name }}</a>{% else %}<span aria-current="page">{{ name }}</span>{% endif %}</li>{% endfor %}
+  </ol></nav>
+  {% endif %}
+</div>
 <main id="main" class="wrap">
 {% block main %}{% endblock %}
 </main>
-<footer class="foot">
-  <div class="wrap cols">
-    <section><h2>{{ t('nav.convert') }}</h2><ul>
-      {% for c in ['document','spreadsheet','presentation','ebook','image','vector','video','audio','archive','cad','font'] %}<li><a href="{{ urls.category(lang, c) }}">{{ t('cat.' ~ c ~ '.name') }}</a></li>{% endfor %}
-    </ul></section>
-    <section><h2>{{ t('nav.tools') }}</h2><ul>
-      <li><a href="{{ urls.tools_hub(lang) }}">{{ t('footer.all_tools') }}</a></li>
-      <li><a href="{{ urls.units(lang) }}">{{ t('nav.units') }}</a></li>
-      <li><a href="{{ urls.timezones(lang) }}">{{ t('nav.timezones') }}</a></li>
-      <li><a href="/app">{{ t('nav.open_app') }}</a></li>
-    </ul></section>
-    <section><h2>{{ t('nav.developers') }}</h2><ul>
-      <li><a href="{{ urls.developers(lang) }}">{{ t('footer.api') }}</a></li>
-      <li><a href="{{ urls.docs(lang) }}">{{ t('docs.crumb') }}</a></li>
-      <li><a href="{{ urls.job_builder(lang) }}">{{ t('jb.crumb') }}</a></li>
-      <li><a href="{{ urls.connect_ai(lang) }}">{{ t('nav.connect_ai') }}</a></li>
-      <li><a href="/llms.txt">llms.txt</a></li>
-    </ul></section>
-    <section><h2>{{ t('nav.compare') }}</h2><ul>
-      <li><a href="{{ urls.compare_hub(lang) }}">{{ t('footer.compare_all') }}</a></li>
-      {% for c in ['cloudconvert','freeconvert','smallpdf','ilovepdf'] %}<li><a href="{{ urls.compare(lang, c) }}">{{ t('cmp.' ~ c ~ '.name') }}</a></li>{% endfor %}
-    </ul></section>
-  </div>
-  <p class="wrap small muted">{{ t('footer.note', product=product) }} · {% for L, u in p.alternates.items() %}<a href="{{ u }}" hreflang="{{ L }}">{{ lang_names[L] }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
-</footer>
+{% include "_foot.html" %}
 <script id="t-js" type="application/json">{{ i18n.raw(lang, "js", {})|tojson }}</script>
 <script src="{{ js }}" defer></script>
 </body>

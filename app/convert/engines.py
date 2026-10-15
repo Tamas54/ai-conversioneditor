@@ -17,6 +17,7 @@ from typing import Optional
 
 # motor → (leírás, ellenőrzés). Az ellenőrzés egy futtatható neve vagy "py:<modul>".
 ENGINES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "wordcraft": ("WordCraft (Rust Word engine)", ()),
     "libreoffice": ("LibreOffice (Writer, Calc, Impress, Draw)", ("soffice",)),
     "pandoc": ("Pandoc", ("pandoc",)),
     "calibre": ("Calibre ebook-convert", ("ebook-convert",)),
@@ -64,6 +65,9 @@ _APT_PYTHON = {"ebook-convert", "inkscape", "fontforge"}
 def available(engine: str) -> bool:
     if os.getenv("AICE_DISABLE_ENGINES") and engine in os.environ["AICE_DISABLE_ENGINES"].split(","):
         return False
+    if engine == "wordcraft":                       # Rust-motor: a meglévő WordCraft-CLI (settings.WORDCRAFT_CLI)
+        from app.tools import wordcraft
+        return wordcraft.available()
     checks = ENGINES.get(engine, ("", ()))[1]
     for c in checks:
         if c.startswith("py:"):

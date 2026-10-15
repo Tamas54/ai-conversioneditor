@@ -41,10 +41,25 @@ def render(page: dict[str, Any]) -> str:
         "css": static_v("site/site.css"), "js": static_v("site/site.js"),
         "robots": "index, follow" if page.get("index", True) and _indexing() else "noindex, follow",
         "lang_names": {L: i18n.raw(L, "_meta.native", L) for L in i18n.langs()},
-        "nav": [(tr("nav.convert"), urls.convert_hub(lang)), (tr("nav.tools"), urls.tools_hub(lang)),
-                (tr("nav.developers"), urls.developers(lang)), (tr("nav.connect_ai"), urls.connect_ai(lang))],
+        "nav": nav(lang),
+        "product_css": static_v("product.css"),
+        "parent": (page.get("crumbs") or [("", "/app")])[-2][1] if len(page.get("crumbs") or []) > 1 else "/app",
     }
     return env().get_template(f"{page['kind']}.html").render(**ctx)
+
+
+def nav(lang: str) -> list[tuple[str, str]]:
+    """A fejléc menüje — ugyanaz az /app-ban és a nyilvános oldalakon."""
+    tr = lambda k: i18n.t(lang, k)  # noqa: E731
+    return [(tr("nav.make"), "/app"), (tr("nav.convert"), urls.convert_hub(lang)), (tr("nav.tools"), urls.tools_hub(lang)),
+            (tr("nav.agents"), urls.agents(lang)), (tr("nav.developers"), urls.developers(lang))]
+
+
+@functools.lru_cache(maxsize=4)
+def site_footer(lang: str) -> str:
+    """A közös lábléc HTML-je az /app oldalaihoz (szerveroldalon renderelve: a keresők is látják a linkeket)."""
+    return env().get_template("_foot.html").render(t=lambda k, **kw: i18n.t(lang, k, **kw), lang=lang,
+                                                   product=settings.PRODUCT_NAME)
 
 
 def _indexing() -> bool:

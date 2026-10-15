@@ -435,6 +435,12 @@
   $$("input[name=signature_id]").forEach((i) => { i.setAttribute("list", "sig-ids"); if (!$("#sig-ids")) document.body.append(el("datalist", { id: "sig-ids" })); });
   loadSignatures();
 
+  // „← Back”: ha az oldalunkról jött, egy lépés vissza (mint a böngésző); különben a szülőoldal (a morzsamenüből)
+  $$("[data-back]").forEach((a) => a.addEventListener("click", (e) => {
+    try {
+      if (document.referrer && new URL(document.referrer).origin === location.origin && history.length > 1) { e.preventDefault(); history.back(); }
+    } catch (err) { /* marad a link */ }
+  }));
   $$(".cv").forEach(initWidget);
   $$(".uc").forEach(initUnits);
   $$(".tz").forEach(initTz);

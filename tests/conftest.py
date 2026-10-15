@@ -26,6 +26,7 @@ os.environ.update({
     "MCP_AUTH_TOKEN": "",
     "INDEXING_OPEN": "",
     "PUBLIC_BASE_URL": "http://testserver",
+    "SITE_LANGS": "en,hu",          # a nyelvi mechanizmus tesztjéhez a magyar is be (élesben alapból csak angol)
     "SILICONFLOW_API_KEY": "",
     "FILE_SIGNING_KEY": "test-signing-key",
 })

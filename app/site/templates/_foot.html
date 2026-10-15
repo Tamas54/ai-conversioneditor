@@ -1,0 +1,30 @@
+<footer class="foot site-foot" id="site-foot">
+  <div class="wrap cols">
+    <section><h2>{{ t('nav.convert') }}</h2><ul>
+      <li><a href="{{ urls.convert_hub(lang) }}">{{ t('footer.all_conversions') }}</a></li>
+      {% for c in ['document','spreadsheet','presentation','ebook','image','vector','video','audio','archive','cad','font'] %}<li><a href="{{ urls.category(lang, c) }}">{{ t('cat.' ~ c ~ '.name') }}</a></li>{% endfor %}
+    </ul></section>
+    <section><h2>{{ t('nav.tools') }}</h2><ul>
+      <li><a href="{{ urls.tools_hub(lang) }}">{{ t('footer.all_tools') }}</a></li>
+      <li><a href="{{ urls.units(lang) }}">{{ t('nav.units') }}</a></li>
+      <li><a href="{{ urls.timezones(lang) }}">{{ t('nav.timezones') }}</a></li>
+      <li><a href="/app">{{ t('nav.open_app') }}</a></li>
+      <li><a href="/app/plans">{{ t('footer.plans') }}</a></li>
+    </ul></section>
+    <section><h2>{{ t('nav.agents') }}</h2><ul>
+      <li><a href="{{ urls.agents(lang) }}">{{ t('footer.agents') }}</a></li>
+      <li><a href="{{ urls.connect_ai(lang) }}">{{ t('nav.connect_ai') }}</a></li>
+      <li><a href="/llms.txt">llms.txt</a></li>
+    </ul></section>
+    <section><h2>{{ t('nav.developers') }}</h2><ul>
+      <li><a href="{{ urls.developers(lang) }}">{{ t('footer.api') }}</a></li>
+      <li><a href="{{ urls.docs(lang) }}">{{ t('docs.crumb') }}</a></li>
+      <li><a href="{{ urls.job_builder(lang) }}">{{ t('jb.crumb') }}</a></li>
+    </ul></section>
+    <section><h2>{{ t('nav.compare') }}</h2><ul>
+      <li><a href="{{ urls.compare_hub(lang) }}">{{ t('footer.compare_all') }}</a></li>
+      {% for c in ['cloudconvert','freeconvert','smallpdf','ilovepdf'] %}<li><a href="{{ urls.compare(lang, c) }}">{{ t('cmp.' ~ c ~ '.name') }}</a></li>{% endfor %}
+    </ul></section>
+  </div>
+  <p class="wrap small muted">{{ t('footer.note', product=product) }}</p>
+</footer>

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import faq %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+<ul class="stats agent-stats">
+  <li><strong>{{ p.n.agent }}</strong> {{ t('agents.stat_agent') }}</li>
+  <li><strong>{{ p.n.mcp }}</strong> {{ t('agents.stat_mcp') }}</li>
+  <li><strong>{{ p.counts.formats }}</strong> {{ t('agents.stat_formats') }}</li>
+</ul>
+<p><a class="btn primary" href="/app">{{ t('nav.open_app') }}</a> <a class="btn" href="{{ urls.connect_ai(lang) }}">{{ t('nav.connect_ai') }}</a></p>
+{% for s in p.sections %}
+<section class="agent-sec">
+  <h2>{{ s.h }}</h2>
+  <p>{{ s.p }}</p>
+  {% if s.examples %}<ul class="prompts">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+  {% if s.links %}<p class="chips small">{% for l in s.links %}<a href="{{ l.url }}">{{ l.name }} →</a>{% endfor %}</p>{% endif %}
+</section>
+{% endfor %}
+{{ faq(p.faq, t) }}
+{% endblock %}

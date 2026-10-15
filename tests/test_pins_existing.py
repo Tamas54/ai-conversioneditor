@@ -250,6 +250,11 @@ def test_seo_pages_and_sitemap(client):
     assert "/mcp" in client.get("/llms.txt").text
 
 
+def test_root_redirects_visitors_to_app(client):
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/app"
+
+
 def test_root_redirects_signed_in_user_to_app(client):
     from app.auth import COOKIE, new_session
     client.cookies.set(COOKIE, new_session("abcdef123456"))

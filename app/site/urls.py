@@ -46,7 +46,12 @@ def pair_slug(lang: str, src: str, dst: str) -> str:
 
 
 def home(lang: str) -> str:
-    return P(lang) + "/"
+    """A kezdőlap a meglévő app-címlap (/app) — a nyilvános oldalak annak a részei, nem külön honlap."""
+    return "/app"
+
+
+def agents(lang: str) -> str:
+    return f"{P(lang)}/{S(lang, 'agents')}"
 
 
 def convert_hub(lang: str) -> str:

@@ -21,7 +21,8 @@
   "job_builder": "feladat-szerkeszto",
   "connect_ai": "ai-csatlakoztatas",
   "units": "mertekegyseg-valto",
-  "timezones": "idozona-valto"
+  "timezones": "idozona-valto",
+  "agents": "ai-ugynokok"
  },
  "nav": {
   "home": "Kezdőlap",
@@ -32,7 +33,9 @@
   "compare": "Összehasonlítás",
   "open_app": "Az app megnyitása",
   "units": "Mértékegység-váltó",
-  "timezones": "Időzóna-váltó"
+  "timezones": "Időzóna-váltó",
+  "make": "Készítés",
+  "agents": "AI-ügynökök"
  },
  "ui": {
   "skip": "Ugrás a tartalomra",
@@ -66,7 +69,8 @@
   "sig_clear": "Törlés",
   "sig_save": "Aláírás mentése",
   "sig_or_upload": "Vagy töltsd fel lent egy fotóját vagy szkennelt képét — a papírt, az árnyékot és a zajt eltávolítjuk.",
-  "sig_saved": "Mentett aláírásaid"
+  "sig_saved": "Mentett aláírásaid",
+  "back": "Vissza"
  },
  "js": {
   "download": "Letöltés",
@@ -90,7 +94,10 @@
   "all_tools": "Minden eszköz",
   "api": "REST API",
   "compare_all": "Minden összehasonlítás",
-  "note": "{product} — fájlok átalakítása, szerkesztése és kitöltése nyílt forrású motorokkal és AI-jal. Alapból privát."
+  "note": "{product} — fájlok átalakítása, szerkesztése és kitöltése nyílt forrású motorokkal és AI-jal. Alapból privát.",
+  "all_conversions": "Minden átalakítás",
+  "plans": "Csomagok és árak",
+  "agents": "Ügynöki funkciók"
  },
  "home": {
   "title": "{product} — bármilyen fájl átalakítása: {formats} formátum, AI-szerkesztés, űrlapok, aláírás",
@@ -2313,5 +2320,145 @@
   "time": "Időpont",
   "from": "Kiinduló zóna",
   "to": "Célzónák"
+ },
+ "agents": {
+  "crumb": "AI-ügynökök",
+  "title": "AI-ügynökök, amelyek végigviszik a munkát — dokumentum, prezentáció, PDF, fotó, űrlap | {product}",
+  "desc": "A(z) {product} ügynöke egy kérésből kész fájlokat ad: {n_agent} eszközt fűz össze, ellenőrzi a saját munkáját, és valódi Word-, PowerPoint-, PDF- és Photoshop-fájlokat ad vissza. Vagy a Claude, a ChatGPT {n_mcp} MCP-eszközt hív.",
+  "h1": "AI-ügynökök, amelyek végigviszik a munkát",
+  "lead": "Írd le egyszerűen, mire van szükséged, és az ügynök elvégzi az egészet: elolvassa a fájljaidat, {n_agent} eszközből választ (Word, PowerPoint, Excel, PDF, fotó, design, átalakítás, űrlap), ellenőrzi az eredményt — lerendereli és megnézi az oldalakat —, és valódi, szerkeszthető fájlokat ad. Minden változtatás új verzió, bármikor visszaléphetsz. Saját asszisztenst használnál? A Claude, a ChatGPT és a Cursor MCP-n ugyanezeket az eszközöket hívja.",
+  "stat_agent": "ügynök-eszköz",
+  "stat_mcp": "MCP-eszköz a saját AI-dnak",
+  "stat_formats": "fájlformátum",
+  "sections": [
+   {
+    "h": "Egy kérés, a teljes munka",
+    "p": "Az appba épített ügynök tervez, végrehajt és ellenőriz: elolvassa a dokumentumot, pontosan szerkeszt (csere, címsorok, teljes szakaszok, változáskövetés, megjegyzések), diánként épít prezentációt, oldalképeken ellenőrzi az elrendezést, a nagy feladatot alügynökökre bontja.",
+    "examples": [
+     "Ebből a jelentésből 12 diás prezentáció a sablonunkon",
+     "Takard ki a neveket, számozd az oldalakat, zárold a PDF-et"
+    ],
+    "links": [
+     [
+      "Az app megnyitása",
+      "/app"
+     ]
+    ]
+   },
+   {
+    "h": "Szerkesztés kéréssel",
+    "p": "Dokumentum, prezentáció, PDF utasításra változik — pontosan, minden változtatás új verzió, és a beépített szerkesztők kézi javításra is nyitva maradnak.",
+    "examples": [
+     "Minden címsor legyen sötétzöld, 14 pontos",
+     "Töröld az árakról szóló részt"
+    ],
+    "links": [
+     [
+      "Word-szerkesztő",
+      "/app/make/document"
+     ],
+     [
+      "PDF-eszközök",
+      "/app/make/pdf-tools"
+     ]
+    ]
+   },
+   {
+    "h": "WordCraft: Rustban írt Word-motor",
+    "p": "A Word-fájlokat a WordCraft kezeli: Rustban írt Word-motor, a Word menüszalagjának mintegy 460 parancsával. Az ügynök fej nélkül hajtja, a szerkesztő WebAssemblyként fut a böngészőben, és a dokumentum-átalakítás is elsőként ezt használja — DOCX, ODT, RTF, HTML, Markdown és LaTeX egymásba és PDF-be, ezredmásodpercek alatt, LibreOffice nélkül.",
+    "examples": [
+     "Formázd ezt a szerződést a feltöltött minta szerint"
+    ],
+    "links": [
+     [
+      "Dokumentum-átalakító",
+      "@category:document"
+     ]
+    ]
+   },
+   {
+    "h": "Készítők, amelyek terveznek",
+    "p": "Prezentáció rövid leírásból vagy Word-dokumentumból a saját sablonodon; infografika, ahol minden szám a celláidból számolódik; rövid videó cikkből; kézirat könyvként szedve; plakát fotóból újraépítve, minden szó szerkeszthető.",
+    "examples": [
+     "10 diás bemutató ebből a leírásból, grafikonokkal"
+    ],
+    "links": [
+     [
+      "Prezentáció",
+      "/app/make/presentation"
+     ],
+     [
+      "Infografika",
+      "/app/make/infographic"
+     ]
+    ]
+   },
+   {
+    "h": "Fotó szerkesztése szavakkal",
+    "p": "„Kicsit melegebb, drámai ég, 4:5-ös vágás, logó jobbra lent” — valódi fotóeszközökkel, minden lépés külön rétegen egy Photoshop-fájlban. Régi fotók albumoldalanként javítva, színezve.",
+    "examples": [
+     "Restauráld és színezd ki ezt az albumoldalt"
+    ],
+    "links": [
+     [
+      "Fotószerkesztő",
+      "/app/make/photos"
+     ]
+    ]
+   },
+   {
+    "h": "Szkennek, űrlapok, aláírás",
+    "p": "A lefotózott oldalakból Word, tiszta vagy kereshető PDF lesz. Az űrlapot bármiből felismeri — kitölthető vagy lapos PDF, Word, Excel, telefonfotó —, és az eredeti formátumban tölti ki. Az űrlap-ügynök a mentett profilodból és az irataidból dolgozik, csak a hiányzót kérdezi meg, ellenőrzi a dátumot, az IBAN-t, az adóazonosító jelet és a TAJ-számot, előnézetet ad, és a mentett aláírásoddal ír alá.",
+    "examples": [
+     "Töltsd ki ezt a kérelmet a profilomból és a személyim szkennjéből"
+    ],
+    "links": [
+     [
+      "AI űrlapkitöltő",
+      "@tool:ai-form-filler"
+     ],
+     [
+      "Aláírás",
+      "@tool:create-signature"
+     ]
+    ]
+   },
+   {
+    "h": "A saját AI-d vezérli — MCP",
+    "p": "A Claude, a ChatGPT, a Cursor és más MCP-kliensek {n_mcp} csoportosított eszközt kapnak: {formats} formátum átalakítása, fájleszközök, feladatok, űrlapok, aláírás, kitöltő asszisztens. MCP-n a gondolkodást a te asszisztensed végzi, a fájlmunkát a(z) {product}.",
+    "examples": [
+     "„Alakítsd JPG-vé ezt a 30 HEIC fotót, és tömörítsd ZIP-be”"
+    ],
+    "links": [
+     [
+      "Kapcsold a saját AI-dat",
+      "@connect_ai"
+     ]
+    ]
+   },
+   {
+    "h": "Ügynökök a saját szoftveredben",
+    "p": "Ugyanez REST API-ként: feladatokból álló jobok, élő státusz, aláírt webhookok, sandbox-kulcsok, Python- és Node-SDK, Zapier, Make, n8n.",
+    "examples": [
+     "Import S3-ról, űrlapkitöltés, PDF vissza"
+    ],
+    "links": [
+     [
+      "REST API",
+      "@developers"
+     ]
+    ]
+   }
+  ],
+  "faq": [
+   [
+    "Kitalál dolgokat az ügynök?",
+    "Nem. A fájljaidból és a szavaidból dolgozik; az infografika számait kód számolja a cellákból, az űrlap-ügynök csak a profilodból, az irataidból vagy a válaszaidból tölt ki — minden mást megkérdez."
+   ],
+   [
+    "Kell fiók?",
+    "Az átalakítás és a fájleszközök fiók nélkül is mennek, fájlonként {guest_mb} MB-ig. Az ügynöki funkciók AI-t használnak, ehhez ingyenes fiók kell."
+   ]
+  ]
  }
 }

@@ -137,6 +137,8 @@ def _edges() -> list[Edge]:
                     E.append(Edge(s, d, engine, cost))
 
     # dokumentum
+    # WordCraft (Rust): dokumentumok ms-ok alatt, LibreOffice nélkül — a meglévő app is ezt használja (DOCX-célra nem)
+    add(WORDCRAFT_IN, WORDCRAFT_OUT, "wordcraft", 0.5)
     add(LO_WRITER_IN, LO_WRITER_OUT, "libreoffice", 1.0)
     add({"zabw"}, {"abw"}, "python", 0.1)
     # Pandoc a jelölőnyelvekhez; irodai forrásból irodai célra a LibreOffice tartja jobban az elrendezést
@@ -216,6 +218,9 @@ def _edges() -> list[Edge]:
     add(FONTFORGE_IN, FONTFORGE_OUT, "fontforge", 1.0)
     return [e for e in E if e.src in FORMATS and e.dst in FORMATS]
 
+
+WORDCRAFT_IN = {"docx", "docm", "dotx", "dotm", "odt", "rtf", "html", "md", "tex", "txt"}
+WORDCRAFT_OUT = {"pdf", "odt", "rtf", "html", "md", "tex", "txt"}
 
 # az "archive" és "slideshow" összetett lépések: a hozzájuk kellő motorok
 _COMPOSITE = {"archive": ("python",), "slideshow": ("libreoffice", "poppler", "ffmpeg")}

@@ -99,7 +99,8 @@ def alternates(builder, *args) -> dict[str, str]:
 
 
 def crumbs_home(lang: str) -> list[tuple[str, str]]:
-    return [(t(lang, "nav.home"), urls.home(lang))]
+    """A morzsamenü gyökere a meglévő honlap (/app) — a nyilvános oldalak annak a részei."""
+    return [(product(), urls.home(lang))]
 
 
 def org_ld() -> dict[str, Any]:
@@ -200,28 +201,6 @@ def pair_link(lang: str, s: str, d: str) -> dict[str, str]:
 
 
 # ---------- oldalak ----------
-
-def home(lang: str) -> dict[str, Any]:
-    c, L = counts(), limits()
-    title = t(lang, "home.title", product=product(), formats=c["formats"])
-    desc = t(lang, "home.desc", formats=c["formats"], conversions=c["conversions"], tools=c["tools"])
-    cats = [{"key": k, "name": t(lang, f"cat.{k}.name"), "url": urls.category(lang, k), "n": len(by_category(k)),
-             "desc": t(lang, f"cat.{k}.desc")} for k in CATEGORIES]
-    popular = [pair_link(lang, s, d) for s, d in POPULAR if graph.plan(s, d, static=True)]
-    groups = [{"key": g, "name": t(lang, f"tgroup.{g}.name"),
-               "tools": [x for x in (tool_link(lang, tt.key) for tt in tl) if x]} for g, tl in T.by_group().items()]
-    p = base_page(lang, "home", title, desc, urls.home(lang), alternates(urls.home), [],
-                  h1=t(lang, "home.h1"), lead=t(lang, "home.lead", formats=c["formats"], conversions=c["conversions"],
-                                                   tools=c["tools"], guest_mb=L["guest_mb"], retention=L["retention"]),
-                  cats=cats, popular=popular, groups=groups, counts=c,
-                  faq=_faq(lang, "home.faq", formats=c["formats"], guest_mb=L["guest_mb"], retention=L["retention"],
-                           product=product(), conversions=c["conversions"]))
-    p["jsonld"].append({"@context": "https://schema.org", "@type": "WebSite", "name": product(),
-                        "url": urls.absolute(urls.home(lang)), "inLanguage": i18n.raw(lang, "_meta.html", lang)})
-    p["jsonld"].append(app_ld(lang, product(), desc, urls.home(lang), [t(lang, f"cat.{k}.name") for k in CATEGORIES]))
-    _add_faq_ld(p)
-    return p
-
 
 POPULAR = [("docx", "pdf"), ("pdf", "docx"), ("pdf", "jpg"), ("jpg", "pdf"), ("heic", "jpg"), ("png", "jpg"), ("webp", "png"),
            ("mp4", "mp3"), ("mov", "mp4"), ("mp4", "gif"), ("wav", "mp3"), ("m4a", "mp3"), ("epub", "pdf"), ("mobi", "epub"),
@@ -484,6 +463,47 @@ def connect_ai(lang: str) -> dict[str, Any]:
                   urls.connect_ai(lang), alternates(urls.connect_ai), crumbs, h1=t(lang, "cai.h1", product=product()),
                   lead=t(lang, "cai.lead", product=product(), n=len(tools_)), mcp_url=settings.PUBLIC_BASE_URL.rstrip("/") + "/mcp",
                   mcp_tools=tools_, faq=_faq(lang, "cai.faq", product=product()))
+    _add_faq_ld(p)
+    return p
+
+
+@functools.lru_cache(maxsize=1)
+def agent_counts() -> dict[str, int]:
+    """Az app ügynökének eszközei (a még nem kész, „PLACEHOLDER” jelűek nélkül) és az MCP-eszközök száma."""
+    from app.llm import agent as A
+    from app.mcp_server import mcp
+    return {"agent": len([s for s in A.TOOL_SCHEMAS if "PLACEHOLDER" not in s["function"]["description"]]),
+            "mcp": len(mcp._tool_manager.list_tools())}
+
+
+def _agent_link(lang: str, label: str, ref: str) -> Optional[dict[str, str]]:
+    if not ref.startswith("@"):
+        return {"name": label, "url": ref}
+    kind, _, arg = ref[1:].partition(":")
+    if kind == "tool":
+        return {"name": label, "url": urls.tool(lang, arg)} if arg in T.TOOLS else None
+    fn = getattr(urls, kind, None)
+    return {"name": label, "url": fn(lang, arg) if arg else fn(lang)} if fn else None
+
+
+def agents(lang: str) -> dict[str, Any]:
+    """Az app meglévő ügynöki funkciói egy oldalon: az ügynök, szerkesztés kéréssel, WordCraft, készítők, fotó,
+    szken/űrlap/aláírás, MCP, API — mindegyik a meglévő termékoldalakra és eszközökre linkel."""
+    c, L, n = counts(), limits(), agent_counts()
+    kw = dict(product=product(), n_agent=n["agent"], n_mcp=n["mcp"], formats=c["formats"], tools=c["tools"],
+              guest_mb=L["guest_mb"], retention=L["retention"])
+    crumbs = crumbs_home(lang) + [(t(lang, "agents.crumb"), urls.agents(lang))]
+    sections = []
+    for sec in i18n.raw(lang, "agents.sections", []) or []:
+        sections.append({"h": sec["h"].format_map(i18n._Safe(kw)), "p": sec["p"].format_map(i18n._Safe(kw)),
+                         "examples": sec.get("examples", []),
+                         "links": [x for x in (_agent_link(lang, a, b) for a, b in sec.get("links", [])) if x]})
+    title, desc = t(lang, "agents.title", **kw), t(lang, "agents.desc", **kw)
+    p = base_page(lang, "agents", title, desc, urls.agents(lang), alternates(urls.agents), crumbs,
+                  h1=t(lang, "agents.h1", **kw), lead=t(lang, "agents.lead", **kw), sections=sections, n=n, counts=c,
+                  faq=_faq(lang, "agents.faq", **kw))
+    p["jsonld"].append(app_ld(lang, f"{product()} — {t(lang, 'agents.h1')}", desc, urls.agents(lang),
+                              [s["h"] for s in sections], "BusinessApplication"))
     _add_faq_ld(p)
     return p
 
