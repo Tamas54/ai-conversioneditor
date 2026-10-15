@@ -35,7 +35,7 @@ SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook",
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
                     "/.well-known/", "/oauth/",
-                    "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog",
+                    "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
                     "/api/units/", "/api/timezones/", "/indexnow-")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
@@ -383,7 +383,10 @@ async def api_account(request: Request) -> dict:
 @router.post("/api/account/keys")
 async def api_key_create(body: Optional[dict] = None) -> dict:
     db = _require_db()
-    created = await db.api_key_create(tenancy.current_user_id(), ((body or {}).get("name") or "MCP key")[:60])
+    sandbox = bool((body or {}).get("sandbox"))
+    created = await db.api_key_create(tenancy.current_user_id(), ((body or {}).get("name") or ("Sandbox key" if sandbox else "MCP key"))[:60],
+                                      sandbox=sandbox)
+    created["sandbox"] = sandbox
     created["mcp_url"] = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/mcp?key={created['key']}"
     return created
 

@@ -118,6 +118,8 @@ from app.routes import convert_web  # noqa: E402  (a weboldal konverter-widgetje
 app.include_router(convert_web.router)
 from app.site.routes import build_router as _site_router  # noqa: E402  (nyilvános, többnyelvű oldalak)
 app.include_router(_site_router())
+from app.api_v1.app import v1 as _api_v1  # noqa: E402  (nyilvános REST API, saját OpenAPI-val)
+app.mount("/v1", _api_v1)
 mount_mcp(app)
 
 

@@ -37,16 +37,17 @@ WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 PLANS: dict[str, dict[str, Any]] = {
     "free": {"name": "Free", "monthly_credits": 10,
              "quota": {"deck": 3, "revise": 20, "document": 10, "photo_edit": 10, "scan_pages": 100, "form_pages": 20, "check": 40},
-             "batch": 10, "retention_days": 30},
+             "batch": 10, "retention_days": 30, "api_tasks": 250},
     "plus": {"name": "Plus", "month": 9, "year": 90, "monthly_credits": 150,
              "quota": {"deck": 300, "revise": 3000, "document": 1000, "photo_edit": 1500, "scan_pages": 1000, "form_pages": 500, "check": 3000},
-             "batch": 50, "retention_days": 90},
+             "batch": 50, "retention_days": 90, "api_tasks": 5000},
     "pro": {"name": "Pro", "month": 19, "year": 190, "monthly_credits": 400,
             "quota": {"deck": 1500, "revise": 15000, "document": 5000, "photo_edit": 8000, "scan_pages": 5000, "form_pages": 2500, "check": 15000},
-            "batch": 200, "retention_days": 365},
+            "batch": 200, "retention_days": 365, "api_tasks": 25000},
 }
 PACKS = {"pack100": {"credits": 100, "price": 10}, "pack300": {"credits": 300, "price": 25}}
 SCAN_PAGES_PER_CREDIT = 20          # a havi oldalkeret felett
+API_TASKS_PER_CREDIT = 20           # REST API: a havi feladatkeret felett 20 feladatonként 1 kredit
 
 
 def enabled() -> bool:
@@ -102,6 +103,24 @@ async def scan_pages(n: int) -> int:
     if credits:
         await db.credits_spend(uid, credits, "scan pages over the monthly allowance", ref=f"{over} pages")
     return credits
+
+
+async def api_task(uid: str, n: int = 1) -> int:
+    """REST API: egy (vagy n) feldolgozó feladat (átalakítás, eszköz) a havi keretből; felette 20-anként 1 kredit,
+    a 20-as blokk ELEJÉN levonva (így előre fizet, és fedezet nélkül nem indul). Vissza: levont kredit."""
+    from app import db
+    if uid == tenancy.ADMIN_ID or not db.enabled() or tenancy.is_guest(uid):
+        return 0
+    plan = await plan_of(uid)
+    limit = PLANS[plan].get("api_tasks", 0)
+    before = await db.usage_get(uid, month_key(), "api_tasks")
+    after = before + n
+    over_before, over_after = max(0, before - limit), max(0, after - limit)
+    blocks = -(-over_after // API_TASKS_PER_CREDIT) - -(-over_before // API_TASKS_PER_CREDIT)
+    if blocks:
+        await db.credits_spend(uid, blocks, "API tasks over the monthly allowance", ref=f"{n} task(s)")
+    await db.usage_add(uid, month_key(), "api_tasks", n, None)
+    return blocks
 
 
 async def monthly_topup(uid: str) -> None:

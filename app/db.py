@@ -448,9 +448,9 @@ def _key_hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-async def api_key_create(uid: str, name: Optional[str]) -> dict[str, Any]:
+async def api_key_create(uid: str, name: Optional[str], sandbox: bool = False) -> dict[str, Any]:
     import secrets
-    key = "sk_" + secrets.token_urlsafe(30)
+    key = ("sk_test_" if sandbox else "sk_") + secrets.token_urlsafe(30)
     rows = await _rows("""INSERT INTO api_keys (user_id, name, prefix, key_hash) VALUES (%s, %s, %s, %s)
                           RETURNING id, name, prefix, created_at""", (uid, name, key[:10], _key_hash(key)))
     return {**rows[0], "key": key}  # a teljes kulcs csak itt, egyszer látszik
