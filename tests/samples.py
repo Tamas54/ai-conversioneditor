@@ -129,6 +129,107 @@ class Samples:
         d.save(p)
         return p
 
+    def word_review(self, name: str = "fonok_kommentjei.docx") -> Path:
+        """Wordben kommentelt dokumentum, ahogy a Word 2019+ menti: a főnök megjegyzései (szál Beata válaszával,
+        egy lezárt, egy két bekezdésen átívelő, egy táblázatcellában), a főnök saját követett változásai, és a
+        Word-kiegészítő részek (commentsExtended: szál + lezárás, commentsIds, commentsExtensible, people)."""
+        import zipfile
+        from docx import Document
+        base = self._p("_base_" + name)
+        Document().save(base)
+        boss, beata = "Dr. Főnök Ferenc", "Kiss Beata"
+        d0, d1 = "2026-10-14T09:12:00Z", "2026-10-14T10:30:00Z"
+        NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+              'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+              'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+              'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
+              'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" '
+              'xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid" '
+              'xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex" '
+              'mc:Ignorable="w14 w15 w16cid w16cex"')
+
+        def run(t):
+            return f'<w:r><w:t xml:space="preserve">{t}</w:t></w:r>'
+
+        def ref(i):
+            return f'<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="{i}"/></w:r>'
+
+        def para(pid, inner, style=None):
+            ppr = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
+            return f'<w:p w14:paraId="{pid}" w14:textId="77777777">{ppr}{inner}</w:p>'
+        body = "".join([
+            para("1A000001", run("Integritás Hatóság – javaslat"), "Heading1"),
+            para("1A000002", run("A hatóság ") + '<w:commentRangeStart w:id="0"/><w:commentRangeStart w:id="1"/>'
+                 + run("2022-ben jött létre") + '<w:commentRangeEnd w:id="0"/>' + ref(0) + '<w:commentRangeEnd w:id="1"/>'
+                 + ref(1) + run(" az uniós források védelmére.")),
+            para("1A000003", run("Az ") + '<w:commentRangeStart w:id="4"/>' + run("elnököt az Állami Számvevőszék elnöke javasolja.")),
+            para("1A000004", run("A testület munkája ") + run("független") + '<w:commentRangeEnd w:id="4"/>' + ref(4)
+                 + run(", és évente beszámol.")),
+            para("1A000005", run("A költségvetés évi ")
+                 + f'<w:del w:id="101" w:author="{boss}" w:date="{d0}"><w:r><w:delText>4</w:delText></w:r></w:del>'
+                 + f'<w:ins w:id="102" w:author="{boss}" w:date="{d0}">{run("5")}</w:ins>' + run(" milliárd forint.")),
+            para("1A000006", run("Ezt a mondatot a főnök már ") + '<w:commentRangeStart w:id="2"/>' + run("lezárt")
+                 + '<w:commentRangeEnd w:id="2"/>' + ref(2) + run(" megjegyzéssel látta el.")),
+            '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr>'
+            '<w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid><w:tr>'
+            '<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>' + para("1A000007", run("Határidő")) + '</w:tc>'
+            '<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>' + para("1A000008", '<w:commentRangeStart w:id="3"/>'
+            + run("március 31.") + '<w:commentRangeEnd w:id="3"/>' + ref(3)) + '</w:tc></w:tr></w:tbl>',
+            para("1A000009", run("Záró bekezdés, ő és ű betűkkel.")),
+        ])
+        document = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {NS}><w:body>{body}'
+                    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" '
+                    'w:left="1417" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>')
+        cs = [("0", boss, d0, "B", "2B000001", "Pontosítsd: melyik törvény hozta létre?", None, "0"),
+              ("1", beata, d1, "KB", "2B000002", "Utánanézek.", "2B000001", "0"),
+              ("2", boss, d0, "B", "2B000003", "Rendben.", None, "1"),
+              ("3", boss, d0, "B", "2B000004", "Ez a határidő nem jó, április 15. legyen.", None, "0"),
+              ("4", boss, d0, "B", "2B000005", "Ez a két mondat ellentmond egymásnak.", None, "0")]
+        comments = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments {NS}>' + "".join(
+            f'<w:comment w:id="{i}" w:author="{a}" w:date="{dt}" w:initials="{ini}"><w:p w14:paraId="{pid}" w14:textId="77777777">'
+            f'<w:pPr><w:pStyle w:val="CommentText"/></w:pPr><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>'
+            f'<w:annotationRef/></w:r>{run(t)}</w:p></w:comment>' for i, a, dt, ini, pid, t, _, _ in cs) + '</w:comments>')
+        ext = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx {NS}>' + "".join(
+            f'<w15:commentEx w15:paraId="{pid}"' + (f' w15:paraIdParent="{par}"' if par else "") + f' w15:done="{done}"/>'
+            for _, _, _, _, pid, _, par, done in cs) + '</w15:commentsEx>')
+        ids = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w16cid:commentsIds {NS}>' + "".join(
+            f'<w16cid:commentId w16cid:paraId="{pid}" w16cid:durableId="{0x3C000001 + k:08X}"/>'
+            for k, (_, _, _, _, pid, _, _, _) in enumerate(cs)) + '</w16cid:commentsIds>')
+        cex = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w16cex:commentsExtensible {NS}>' + "".join(
+            f'<w16cex:commentExtensible w16cex:durableId="{0x3C000001 + k:08X}" w16cex:dateUtc="{dt}"/>'
+            for k, (_, _, dt, _, _, _, _, _) in enumerate(cs)) + '</w16cex:commentsExtensible>')
+        people = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:people {NS}>' + "".join(
+            f'<w15:person w15:author="{a}"><w15:presenceInfo w15:providerId="None" w15:userId="{a}"/></w15:person>'
+            for a in (boss, beata)) + '</w15:people>')
+        parts = {"word/comments.xml": ("application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+                                       "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments", comments),
+                 "word/commentsExtended.xml": ("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+                                               "http://schemas.microsoft.com/office/2011/relationships/commentsExtended", ext),
+                 "word/commentsIds.xml": ("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+                                          "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds", ids),
+                 "word/commentsExtensible.xml": ("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+                                                 "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible", cex),
+                 "word/people.xml": ("application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml",
+                                     "http://schemas.microsoft.com/office/2011/relationships/people", people)}
+        out = self._p(name)
+        with zipfile.ZipFile(base) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zo:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "word/document.xml":
+                    data = document.encode()
+                elif item.filename == "[Content_Types].xml":
+                    data = data.replace(b"</Types>", "".join(
+                        f'<Override PartName="/{n}" ContentType="{ct}"/>' for n, (ct, _, _) in parts.items()).encode() + b"</Types>")
+                elif item.filename == "word/_rels/document.xml.rels":
+                    data = data.replace(b"</Relationships>", "".join(
+                        f'<Relationship Id="rIdC{k}" Type="{rt}" Target="{n.split("/", 1)[1]}"/>'
+                        for k, (n, (_, rt, _)) in enumerate(parts.items())).encode() + b"</Relationships>")
+                zo.writestr(zipfile.ZipInfo(item.filename, date_time=item.date_time), data, zipfile.ZIP_DEFLATED)
+            for n, (_, _, xml) in parts.items():
+                zo.writestr(n, xml.encode())
+        base.unlink()
+        return out
+
     def form_xlsx(self, name: str = "urlap.xlsx") -> Path:
         from openpyxl import Workbook
         wb = Workbook()

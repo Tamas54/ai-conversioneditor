@@ -763,6 +763,20 @@ async def wordcraft(
        base_file_id = the version that was sent → per paragraph before /
        after / diff, tracked or untracked (edited with tracking off), new
        comments and replies, resolved threads.
+    More review moves, as items in the same `address` list (mix freely):
+       {"new_comment": "your question", "on": "exact text"} (or
+         "paragraph": n, or both) → a new comment of your own, Word-native;
+       {"accept": "all" | id | [ids] | {"author": "…", "paragraph": n,
+         "type": "ins|del|format|paragraph_mark|row", "not_author": "…"}}
+         and the same for "reject" → tracked changes decided selectively
+         (read="comments" lists them with id, author, paragraph, type);
+       {"comment": id, "edit": "new text"} | {"comment": id, "delete": true}
+         (whole thread) | {"comment": id, "reopen": true};
+       {"final": true} → a clean copy: all changes accepted, all comments
+         removed (send it when the review is over).
+    Threads, resolved state, durable ids, dates and authors stay Word-native
+    (commentsExtended / commentsIds / commentsExtensible / people) — also
+    after `commands`, so the reviewer's Word shows exactly what they sent.
 
     commands: in order, each {"command": id, "params": {...}} or "id={json}".
       [{"command": "review.trackChanges", "params": {"value": true}},

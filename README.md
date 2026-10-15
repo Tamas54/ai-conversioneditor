@@ -120,6 +120,15 @@ teljes konverziós söprés: `python scripts/sweep_conversions.py`.
 
 `weasy/cr` = WeasyPrint default; `use_browser=True` → Chromium (JS-rendering).
 
+**Word-lektorálás MCP-n (Beata és a Wordben kommentelő főnöke)**: `wordcraft(read="comments")` → a
+szálak a kijelölt szöveggel, válaszokkal, lezárással, a követett változások azonosítóval; `address=[…]` egy hívásban:
+javítás követett változásként a felhasználó nevén, válasz a szálba, lezárás — és mostantól saját új megjegyzés
+(`new_comment` + `on`/`paragraph`), változások elfogadása/elutasítása szelektíven (`accept`/`reject`: id, szerző,
+bekezdés, típus), megjegyzés átírása/törlése/újranyitása, tiszta végleges példány (`final`). Minden Word-natív marad
+(commentsExtended, commentsIds, commentsExtensible, people) — a WordCraft 460 parancsa után is (`docx_extras.restore`
+visszateszi, amit a motor eldob). Tesztelve a Word 2019+ szerkezetű mintán (`samples.word_review`), az Open XML SDK
+validátorán 0 hiba.
+
 **Rust-motorok elöl**: a konverziós gráf a saját Rust-motorjainkat választja, ahol a mérés szerint jobbak
 (production kép, 2026-10): WordCraft (dokumentumok), DeckCraft (pptx→pdf 0,08 s a LibreOffice 1,6 s-a helyett,
 pptx→png diánként, a diasor→videó is ebből), GridCraft (xlsx/csv/tsv ↔ xlsx/csv/tsv/html, 4–6 ms), PhotoCraft

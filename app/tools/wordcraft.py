@@ -128,6 +128,9 @@ async def run(
         raise
     from app.storage.naming import result_stem
     from app.tools import ios_safe
+    if file_id and fmt == "docx" and _existing(file_id).suffix.lower() in (".docx", ".docm", ".dotx"):
+        from app.tools import docx_extras                 # a Word megjegyzés-részei (tartós id, szerzők) maradnak
+        await asyncio.to_thread(docx_extras.restore, _existing(file_id), output_path(out_id))
     await ios_safe.finalize(output_path(out_id))          # iPhone (Pages, Quick Look): sémahelyes docx
     ids_used = " ".join(c for c, _ in parsed)
     what = "reviewed" if ("review." in ids_used or "comment" in ids_used) else "edited" if file_id else ""
