@@ -48,7 +48,8 @@ PANDOC_OUT = {"md", "rst", "tex", "html", "docx", "odt", "epub", "fb2", "org", "
 CALIBRE_IN = {"epub", "mobi", "azw", "azw3", "azw4", "fb2", "fbz", "lit", "lrf", "pdb", "pml", "prc", "rb", "snb",
               "tcr", "txtz", "htmlz", "cbz", "cbr", "cb7", "cbc", "chm", "docx", "odt", "rtf", "txt", "html", "md",
               "pdf", "oeb", "djvu"}
-CALIBRE_OUT = {"epub", "mobi", "azw3", "azw", "prc", "fb2", "lit", "lrf", "pdb", "rb", "snb", "tcr", "txtz",
+# LIT (Microsoft Reader) csak bemenet: a Debian/Ubuntu Calibre 5.x LIT-írója üres fájlt ad
+CALIBRE_OUT = {"epub", "mobi", "azw3", "azw", "prc", "fb2", "lrf", "pdb", "rb", "snb", "tcr", "txtz",
                "htmlz", "oeb", "pdf", "docx", "rtf", "txt"}
 
 _CAMERA_RAW = {f.key for f in FORMATS.values() if "camera-raw" in f.tags}
@@ -65,7 +66,7 @@ JXL_IN, JXL_OUT = {"jxl"}, {"jxl"}
 
 # (az .ai PDF-kompatibilis: PDF-ként olvassuk/írjuk; a HPGL-t saját Python-kód kezeli — az Inkscape fej nélkül nem tudja)
 INKSCAPE_IN = {"svg", "svgz", "eps", "pdf", "emf", "wmf", "cdr", "ps"}
-INKSCAPE_OUT = {"svg", "svgz", "pdf", "ps", "eps", "png", "emf", "wmf", "odg"}
+INKSCAPE_OUT = {"svg", "svgz", "pdf", "ps", "eps", "png", "emf", "wmf"}   # ODG: az Inkscape 1.1 parancssorból nem ír (→ EMF → LibreOffice Draw)
 
 _VIDEO = _keys("video")
 _AUDIO = _keys("audio")
