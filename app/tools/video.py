@@ -1694,7 +1694,8 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
             specs[i] = chosen
 
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": keep}
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": keep,
+            "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language")}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text,
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
                            pre_verified=pre_v, pre_findings=pre_f)
@@ -1743,7 +1744,8 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
     dur = body.get("duration")
     total = float(min(max(float(dur), 10), 180)) if dur else None
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": False}
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": False,
+            "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language")}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text or source,
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
                            pre_verified=pre_v, pre_findings=[], scene_plan=True)
@@ -1915,6 +1917,48 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
     return names, lotties, credits
 
 
+NARRATION_ASSET = "narration.wav"
+_NO_NARRATION = {"none", "off", "false", "no", "0"}
+
+
+def fit_to_narration(story: dict[str, Any], clips: list) -> dict[str, Any]:
+    """A forgatókönyv másolata, amelyben minden jelenet legalább a narrációja + 1,4 s (átmenet és lélegzet)."""
+    out = json.loads(json.dumps(story))
+    for sc, (_, secs) in zip(out.get("scenes") or [], clips[1:]):
+        if secs:
+            sc["duration"] = round(max(float(sc.get("duration") or 0), secs + 1.4), 2)
+    return out
+
+
+def narration_segments(D: dict[str, Any], clips: list) -> list[tuple[float, Path]]:
+    """A narráció darabjai az idővonalon: a cím a címkártyán (ha belefér), a jelenetek a saját elejükön."""
+    segs: list[tuple[float, Path]] = []
+    title = clips[0] if clips else (None, 0.0)
+    if title[0] and title[1] <= D["title"]["dur"] - 0.8:
+        segs.append((0.35, title[0]))
+    segs += [(tl["start"] + 0.45, clip) for tl, (clip, _) in zip(D["timeline"][1:-1], clips[1:]) if clip]
+    return segs
+
+
+async def _narrate(story: dict[str, Any], opts: dict[str, Any], work: Path) -> tuple[Optional[str], list, Optional[str]]:
+    """A cím és a jelenetek felolvasandó szövege → AI-narráció darabjai (offline Piper-hang, app/tools/narration.py).
+    → (hang, [(wav, hossz)…] a címmel kezdve, megjegyzés ha kimaradt). Hiba esetén a videó narráció nélkül készül."""
+    from app.tools import narration
+    if not narration.available():
+        return None, [], "AI narration isn't installed on this server — the video has no voice (give voice_file_id)."
+    texts = [story.get("title") or ""] + [sc.get("caption") or sc.get("headline") or "" for sc in story.get("scenes") or []]
+    mode = str(opts.get("narration") or "ai")
+    want = opts.get("narration_voice") or (mode if "-" in mode and "_" in mode else None)     # szerkesztés: ugyanaz a hang
+    lang = narration.lang_code(opts.get("language")) or narration.detect(" ".join(texts))
+    try:
+        key = await asyncio.to_thread(narration.pick, lang, want)
+        clips = await narration.speak_all(texts, key, work, float(opts.get("narration_speed") or 1.0))
+    except Exception as e:
+        log.warning("AI-narráció kimaradt: %s", e)
+        return None, [], f"AI narration was skipped ({str(e)[:160]}) — the video has no voice."
+    return key, clips, None
+
+
 async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any], *, chart_notes: list[str],
                     source_text: str, source_file_id: Optional[str], step: Callable[..., None], render: bool = True,
                     parent: Optional[str] = None, label_stem: Optional[str] = None, operation: str = "video",
@@ -1935,6 +1979,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         for key, base in (("voice_file_id", "voice"), ("music_file_id", "music")):
             fid = opts.get(key)
             kept = opts.get(f"{base}_asset")          # szerkesztés: a szülőprojekt hangja marad
+            if base == "voice" and kept == NARRATION_ASSET:
+                kept = None                           # …kivéve az AI-narrációt: az a (módosult) szövegből újra készül
             if not fid and kept and parent_assets.get(kept):
                 shutil.copyfile(crafts.existing(parent_assets[kept]), work / kept)
                 if base == "voice":
@@ -1954,6 +2000,11 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                     music = f"music.{ext}"
         if voice:
             voice_s = await _probe_duration(work, voice)
+        narr_key, narr_clips, narr_note = None, [], None
+        if not voice and str(opts.get("narration") or "ai").lower() not in _NO_NARRATION:
+            step(3, 5, "recording the AI narration")
+            narr_key, narr_clips, narr_note = await _narrate(story, opts, work)
+        story_c = fit_to_narration(story, narr_clips) if narr_clips else story
         anim = any(c.startswith("Animation ") for c in credit_list)
         label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else "Pictures: "
         credits = (label + " · ".join(credit_list)) if credit_list else ""     # teljes (linkekkel): a projekt metájába
@@ -1963,8 +2014,19 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
         focus = {nm: await asyncio.to_thread(_focus, work / nm) for nm in names if nm} if kb != "off" else {}
-        D = compose(story, fmt=fmt, total=total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
+        D = compose(story_c, fmt=fmt, total=total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
                     voice=voice, voice_s=voice_s, music=music)
+        if narr_clips:                   # a darabok a jelenetek elejére, egy sávban, a videó teljes hosszára
+            from app.tools import narration
+            segs = narration_segments(D, narr_clips)
+            if segs:
+                await narration.track(segs, D["total"], work / NARRATION_ASSET)
+                voice = NARRATION_ASSET
+                D["audio"].update(voice=voice, musicDb=-20)
+                pre_verified = list(pre_verified or []) + [
+                    f"AI narration ({narr_key}): {len(segs)} part(s) read aloud — each scene lasts as long as its narration."]
+        if narr_note:
+            pre_findings = list(pre_findings or []) + [narr_note]
         # előre megrajzolt rétegek (képkockánként effekt helyett): sötét átmenet a cím/jelenet alá, elmosott zárókép
         W, H = FORMATS[fmt]
         _shade_png(work / "shade-title.png", W, H, 0.28, 0.80, 0.92)
@@ -2002,7 +2064,9 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         spec = {"story": _without_runtime(story), "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
                                               for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
-                         "music_asset": music, "keep_wording": bool(opts.get("keep_wording"))},
+                         "music_asset": music, "keep_wording": bool(opts.get("keep_wording")),
+                         "narration": narr_key or ("none" if str(opts.get("narration") or "").lower() in _NO_NARRATION else None),
+                         "narration_voice": opts.get("narration_voice"), "language": opts.get("language")},
                 "source": (source_text or "")[:30000], "chart_notes": [n for n in chart_notes if not n.startswith("⚠ ")],
                 "timeline": D.get("timeline")}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
@@ -2406,9 +2470,11 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     if "duration" in changes:
         d = changes["duration"]
         opts["total"] = None if d in (None, "", "auto") else float(min(max(float(d), 10), 180))
-    for key in ("ken_burns", "accent"):
+    for key in ("ken_burns", "accent", "narration", "narration_voice"):
         if key in changes:
             opts[key] = changes[key]
+    if changes.get("voice_file_id") not in (None, "", "none"):
+        opts["narration"] = "none"                       # saját hang jött: az AI-narráció kimarad
     for key, base in (("music_file_id", "music"), ("voice_file_id", "voice")):
         if key in changes:
             v = changes[key]

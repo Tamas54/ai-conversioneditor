@@ -120,6 +120,17 @@ teljes konverziós söprés: `python scripts/sweep_conversions.py`.
 
 `weasy/cr` = WeasyPrint default; `use_browser=True` → Chromium (JS-rendering).
 
+**AI-narráció a videókban**: a videókészítő alapból felolvastatja a címet és a jelenetek szövegét
+(`app/tools/narration.py`, offline Piper-hangok — 58 nyelv, magyarul Anna/Berta/Imre; a nyelv a szövegből vagy a
+`language`-ből; `narration_voice`: female | male | hang-id; `narration: "none"` = hang nélkül). A jelenet a
+narrációja hosszáig tart, a zene alatta halkabban szól; szerkesztéskor a módosult szövegből újra készül. A
+hangmodell (~63 MB) első használatkor töltődik le a Hugging Face-ről a `DATA_DIR/models/piper` alá
+(`PIPER_VOICES_DIR`, `PIPER_BASE_URL`), utána gépen fut, új szolgáltató és költség nélkül.
+
+**Videó a dián**: a „videó diára” és minden python-pptx-szel beszúrt videó a PowerPoint saját időzítését kapja
+(`app/tools/pptx_media.py`): a dia megjelenésekor magától indul, koppintásra/kattintásra megáll és folytatódik —
+Keynote-ban (iPhone is) és PowerPointban.
+
 **iPhone (és minden Apple-eszköz)**: minden kimenet átmegy az `app/tools/ios_safe.py` kapun —
 a konverziók, az eszközök, a Craft-motorok (DeckCraft, GridCraft, WordCraft), a videógenerátor és a „videó diára”:
 - PowerPoint → `keynote_safe.py`: jegyzetmester regisztrálva, jegyzetdia-színleképezés, 16:9 sldSz, nyomtató-csonk ki,

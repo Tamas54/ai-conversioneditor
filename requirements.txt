@@ -41,6 +41,7 @@ aiofiles>=24.1.0
 python-dotenv>=1.0.1
 psycopg[binary,pool]>=3.3,<4  # Postgres: verziótörténet + lektorálási kérések (app/db.py)
 onnxruntime>=1.23,<1.24    # ISNet háttéreltávolítás (app/tools/cutout.py); 1.24+ már nem támogatja a py3.10-et
+piper-tts>=1.8,<2           # AI-narráció a videókhoz (offline Piper-hangok, app/tools/narration.py)
 tzdata>=2024.1           # zoneinfo a konténerben (nincs rendszer-tz-adatbázis)
 
 # Konverziós motorok (app/convert): a rendszer-motorokat (LibreOffice, ffmpeg, Calibre, Inkscape, 7-Zip…) a Dockerfile telepíti

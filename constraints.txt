@@ -48,11 +48,13 @@ opencv-python-headless==5.0.0.93
 openpyxl==3.1.5
 opentelemetry-api==1.45.1
 packaging==26.3
+pathvalidate==3.3.1
 pdf2docx==0.5.13
 pdfminer.six==20260107
 pdfplumber==0.11.10
 pikepdf==10.13.0.post1
 Pillow==12.3.0
+piper-tts==1.8.0
 playwright==1.47.0
 protobuf==7.36.2
 psycopg-binary==3.3.6

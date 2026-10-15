@@ -1697,8 +1697,11 @@ const MAKERS = {
           ${seg("vpicmode", [["stock", "Stock photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}</fieldset>
         ${fileSlot("vpics", { exts: EXT.image, multiple: true, label: "Your pictures (optional — used in order)" })}
         ${fileSlot("vdata", { exts: ["csv", "tsv", "xlsx", "xls"], label: "Data for animated charts (optional — a spreadsheet)" })}
+        <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
+          ${seg("vnarr", [["female", "AI voice — female"], ["male", "AI voice — male"], ["none", "No voice"]], 0)}
+          <p class="muted small" style="margin:6px 0 0">A natural voice reads the captions aloud, in the text's language; each scene lasts as long as its narration.</p></fieldset>
         ${fileSlot("vmusic", { exts: EXT.audio, label: "Music (optional)" })}
-        ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — the video follows its length)" })}
+        ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — replaces the AI voice; the video follows its length)" })}
         ${swatches()}</div>`,
     wire(form, o = {}) {
       wireBlank(form);
@@ -1714,7 +1717,9 @@ const MAKERS = {
     async submit(fd, form) {
       const m = fd.get("vmode");
       if (m === "new") return blankSubmit("video", fd);
-      const body = { mode: m, format: fd.get("vformat"), duration: +fd.get("vlen") || null, pictures: fd.get("vpicmode"), accent: fd.get("accent") };
+      const nv = fd.get("vnarr") || "female";
+      const body = { mode: m, format: fd.get("vformat"), duration: +fd.get("vlen") || null, pictures: fd.get("vpicmode"), accent: fd.get("accent"),
+        narration: nv === "none" ? "none" : "ai", narration_voice: nv === "none" ? null : nv };
       // üres mező (nincs cikk / szöveg / dokumentum) → nem a példát gyártjuk le: üres idővonal a választott
       // formátumban és hosszban, a szerkesztőben (Kommandant 10-12: „ha üresen, egy szerkesztőbe kéne vinnie”)
       const typed = m === "article" ? (fd.get("article") || "").trim() : (fd.get("script") || "").trim();
@@ -1738,6 +1743,7 @@ const MAKERS = {
       [body.voice_file_id = null] = await readSlot(form, "vvoice");
       const job = await api("/api/make/video", { method: "POST", body: JSON.stringify(body) });
       const STAGES = { "reading the source": "Reading it…", "writing the script": "Writing the script…", "finding pictures": "Finding pictures…",
+        "recording the AI narration": "Recording the AI voice…",
         "building the timeline": "Building the timeline…", "rendering the video": "Rendering the video — about a minute…" };
       const r = await pollJob(job, j => STAGES[j.stage] || "Working on it…");
       return { file_id: r.file_id, n: (r.files || []).length, edit: true,
