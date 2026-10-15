@@ -129,13 +129,13 @@ TOOLS_LIST: list[Tool] = [
     _t("ffmpeg-advanced", "video", f"{_VID} {_AUD}", f"{_H}.advanced:ffmpeg", ("output_format", "args"), engines=("ffmpeg",), tier=3, related=("compress-video", "trim-video")),
     _t("imagemagick-advanced", "image", _IMG, f"{_H}.advanced:imagemagick", ("output_format", "args"), max_files=50, engines=("imagemagick",), tier=3, related=("resize-image", "compress-image")),
     # ---------- űrlap, aláírás, ügynöki kitöltés ----------
-    _t("form-recognize", "forms", "pdf docx xlsx doc odt rtf xls ods @image", f"{_H}.forms:recognize", ("language", "keep_look"), output="json", quota="form_pages", related=("fill-form", "ai-form-filler", "make-fillable")),
-    _t("fill-form", "forms", "pdf docx xlsx doc odt rtf xls ods @image", f"{_H}.forms:fill", ("values", "flatten", "keep_look", "schema"), quota="form_pages", app_path="/app/make/pdf-tools", related=("form-recognize", "bulk-fill-form", "sign-document")),
+    _t("form-recognize", "forms", "pdf docx xlsx doc odt rtf xls ods @image", f"{_H}.forms:recognize", ("language", "keep_look", "deep"), output="json", quota="form_pages", related=("fill-form", "ai-form-filler", "make-fillable")),
+    _t("fill-form", "forms", "pdf docx xlsx doc odt rtf xls ods @image", f"{_H}.forms:fill", ("values", "flatten", "keep_look", "schema", "deep"), quota="form_pages", app_path="/app/make/pdf-tools", related=("form-recognize", "bulk-fill-form", "sign-document")),
     _t("bulk-fill-form", "forms", "pdf docx xlsx doc odt rtf xls ods", f"{_H}.forms:bulk_fill", ("data_file", "flatten", "schema"), min_files=1, max_files=1, quota="form_pages", related=("fill-form",)),
-    _t("make-fillable", "forms", "pdf docx @image", f"{_H}.forms:make_fillable", ("language",), output="pdf", quota="form_pages", related=("form-recognize", "fill-form")),
+    _t("make-fillable", "forms", "pdf docx @image", f"{_H}.forms:make_fillable", ("language", "deep"), output="pdf", quota="form_pages", related=("form-recognize", "fill-form")),
     _t("create-signature", "signature", "@image pdf", f"{_H}.signature:create", ("name", "kind", "color", "image_base64"), min_files=0, output="png", related=("sign-document",)),
     _t("sign-document", "signature", "pdf docx", f"{_H}.signature:place", ("signature_id", "image_file", "placement", "page", "x", "y", "width", "field"), output="", related=("create-signature", "fill-form", "flatten-pdf")),
-    _t("ai-form-filler", "forms", "pdf docx xlsx doc odt rtf xls ods @image", f"{_H}.forms:agent_fill", ("profile", "source_files", "answers", "values", "schema", "signature_id", "flatten", "keep_look"), quota="form_pages", ai=True, related=("form-recognize", "sign-document")),
+    _t("ai-form-filler", "forms", "pdf docx xlsx doc odt rtf xls ods @image", f"{_H}.forms:agent_fill", ("profile", "source_files", "answers", "values", "schema", "signature_id", "flatten", "keep_look", "deep"), quota="form_pages", ai=True, related=("form-recognize", "sign-document")),
     # ---------- segédek ----------
     _t("unit-converter", "utility", "none", f"{_H}.utility:units", ("value", "from_unit", "to_unit"), min_files=0, max_files=0, output="json", quota="", related=("time-zone-converter",)),
     _t("time-zone-converter", "utility", "none", f"{_H}.utility:timezones", ("time", "from_zone", "to_zones"), min_files=0, max_files=0, output="json", quota="", related=("unit-converter",)),

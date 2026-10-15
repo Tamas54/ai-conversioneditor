@@ -46,7 +46,11 @@ async def _back(path: Path, orig: Optional[str], work: Path) -> Path:
 
 
 async def schema_for(src: Path, o: dict[str, Any]) -> dict[str, Any]:
-    sch = await detect.recognize(src, _lang(o))
+    from app.formkit.deep import DeepUnavailable
+    try:
+        sch = await detect.recognize(src, _lang(o), o.get("deep") or ("off" if o.get("schema") else "auto"))
+    except DeepUnavailable as e:
+        raise OptionError(str(e))
     given = o.get("schema")
     if given:
         if not isinstance(given.get("fields"), list):
@@ -69,15 +73,18 @@ async def schema_for(src: Path, o: dict[str, Any]) -> dict[str, Any]:
     return sch
 
 
-def preview(src: Path, sch: dict[str, Any], dst: Path, filled: bool = False) -> Optional[Path]:
-    """Az első oldal képe a mezők dobozaival és sorszámával (a felismerés ellenőrzéséhez)."""
+def preview(src: Path, sch: dict[str, Any], dst: Path, filled: bool = False, page: int = 1) -> Optional[Path]:
+    """Egy oldal képe a mezők dobozaival és sorszámával (a felismerés ellenőrzéséhez — MCP-n a kliens ügynöke
+    ezekből javít)."""
     import pymupdf
     from PIL import Image, ImageDraw, ImageFont
     from app.formkit.fill import FONT
     fmt = from_filename(src.name) or ""
     if fmt == "pdf":
         with pymupdf.open(str(src)) as d:
-            pix = d[0].get_pixmap(dpi=100)
+            if page > d.page_count:
+                return None
+            pix = d[page - 1].get_pixmap(dpi=100)
             im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             scale = 100 / 72
     elif sch["kind"] == "image":
@@ -94,7 +101,7 @@ def preview(src: Path, sch: dict[str, Any], dst: Path, filled: bool = False) -> 
     if not filled:
         dr = ImageDraw.Draw(im, "RGBA")
         fnt = ImageFont.truetype(FONT, 12)
-        for i, f in enumerate([f for f in sch["fields"] if f.get("box") and (f.get("page") or 1) == 1], 1):
+        for i, f in enumerate([f for f in sch["fields"] if f.get("box") and (f.get("page") or 1) == page], 1):
             x0, y0, x1, y1 = (v * scale for v in f["box"])
             col = {"signature": (156, 39, 176), "checkbox": (0, 137, 123)}.get(f["type"], (25, 118, 210))
             dr.rectangle((x0, y0, x1, y1), outline=col + (255,), fill=col + (40,), width=2)
@@ -113,9 +120,14 @@ async def recognize(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[st
     js = out_name(out, inputs[0], "-fields", "json")
     js.write_text(json.dumps(sch, ensure_ascii=False, indent=1), "utf-8")
     files = [js]
-    pv = await asyncio.to_thread(preview, src, sch, out_name(out, inputs[0], "-fields", "png"))
-    if pv:
-        files.append(pv)
+    from app import tenancy
+    from app.formkit.deep import MAX_PAGES
+    # gyenge eredménynél / MCP-n minden oldal képe kell (a felhasználó vagy a kliens ügynöke ezekből javít)
+    every = (sch.get("quality") or {}).get("level") == "low" or tenancy.client_makes_images.get()
+    for pg in range(1, (min(len(sch.get("pages") or [1]), MAX_PAGES) if every else 1) + 1):
+        pv = await asyncio.to_thread(preview, src, sch, out_name(out, inputs[0], f"-fields-p{pg}", "png"), False, pg)
+        if pv:
+            files.append(pv)
     return {"files": files, "data": sch}
 
 
@@ -190,16 +202,9 @@ async def make_fillable(inputs: list[Path], o: dict[str, Any], out: Path) -> dic
     elif fmt in ("docx", "doc", "odt", "rtf"):
         base = await to_pdf(src, out)
     else:
-        if detect._vision_ready():         # fotó/szken: kiegyenesítve, tisztán újraszedve, valódi mezőkkel
-            from app.tools import forms as legacy
-            dst = out_name(out, src, "-fillable", "pdf")
-            page = out / f"page{src.suffix.lower()}"          # a kiegyenesített lap a munkamappába kerüljön
-            shutil.copy(src, page)
-            info = await legacy.rebuild([page], {"hun+eng": "Hungarian"}.get(_lang(o)), dst)
-            return {"files": [dst], "data": {"fields": [{"name": n} for n in info.get("fields", [])], "rebuilt": True}}
         base = out / "page.pdf"
         await asyncio.to_thread(F._image_to_pdf, src, base)
-    sch = await detect.recognize(base, _lang(o))
+    sch = await detect.recognize(base, _lang(o), o.get("deep") or "auto")
     if sch["kind"] == "acroform":
         raise ValueError("This PDF already has form fields — use fill-form.")
     if not sch["fields"]:
@@ -242,7 +247,9 @@ async def agent_fill(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[s
     sch = await schema_for(src, o)
     if not sch["fields"]:
         raise ValueError("No form fields found in this file.")
-    pl = await P.plan(sch, values=o.get("values"), answers=o.get("answers"), profile=prof, sources=text)
+    # MCP-n a következtetést a kliens saját ügynöke végzi — a mi modellünket nem hívjuk
+    pl = await P.plan(sch, values=o.get("values"), answers=o.get("answers"), profile=prof, sources=text,
+                      use_ai=not tenancy.client_makes_images.get())
     vals = dict(pl["values"])
     sig_id = o.get("signature_id") or prof.get("signature_id")
     if pl["signature_fields"] and sig_id:

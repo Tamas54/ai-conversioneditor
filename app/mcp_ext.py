@@ -244,10 +244,15 @@ def _ui_meta(uri: str, sky: str, invoking: str) -> dict:
 
 
 async def _tool(key: str, file_ids: list[str], options: dict) -> dict:
-    from app import ops
+    from app import ops, tenancy
     from app.catalog import tools as T
     ops.check_tool_call(T.TOOLS[key], file_ids, options)
-    return await _await_or_job(f"tool:{key}", lambda: ops.run_tool(key, file_ids, options))
+    # MCP: a látó/nyelvi munkát a kliens saját ügynöke végzi (a háttérmunka a környezetet örökli)
+    tok = tenancy.client_makes_images.set(True)
+    try:
+        return await _await_or_job(f"tool:{key}", lambda: ops.run_tool(key, file_ids, options))
+    finally:
+        tenancy.client_makes_images.reset(tok)
 
 
 @mcp.tool()
@@ -261,6 +266,9 @@ async def forms(action: str = "recognize", file_id: Optional[str] = None, values
       (types: text, multiline, checkbox, date, signature, choice, number, email, phone, iban, hu_tax_id, taj,
       hu_vat, hu_bank, postcode) and a preview PNG with the boxes. You may edit the schema (labels, types, boxes,
       new fields with a box/cell/label, {"name": …, "remove": true}) and pass it back as schema.
+      data.quality says whether the free recognition looks complete; if it is "low" (or data.deep.hint is set),
+      YOU do the vision work: look at the preview PNG of every page and send the corrected fields back as schema
+      (boxes in page units: PDF points or image pixels, origin top left). This server's own AI isn't used over MCP.
     action="fill": values {field name or label: value} → the form filled in its ORIGINAL format (PDF stays PDF,
       DOCX stays DOCX, XLSX stays XLSX; a photo keeps its look unless keep_look=false → clean PDF). Values are
       validated (dates, IBAN, Hungarian tax ID / TAJ / VAT / bank account check digits); errors come back per field.

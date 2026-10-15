@@ -75,31 +75,125 @@ async def test_recognize_every_format(samples):
     assert s["fields"][3]["type"] == "iban"
 
 
-async def test_recognize_photo_offline_and_with_vision(samples, monkeypatch, tmp_path):
-    _engine("tesseract")
+def _photo_of(pdf: Path, tmp_path: Path) -> Path:
     import pymupdf
     from PIL import Image, ImageFilter
-    from app.formkit import detect
     png = tmp_path / "urlap.png"
-    with pymupdf.open(str(samples.flat_form_pdf())) as d:
+    with pymupdf.open(str(pdf)) as d:
         d[0].get_pixmap(dpi=150).save(str(png))
     photo = tmp_path / "fotó.jpg"
     Image.open(png).convert("RGB").filter(ImageFilter.GaussianBlur(0.7)).save(photo, quality=85)
-    s = await detect.recognize(photo)
-    assert s["kind"] == "image" and s["engine"] == "offline"
+    return photo
+
+
+async def test_recognize_photo_offline_first(samples, tmp_path):
+    """Fotó/szken: alapból ingyenes, helyi felismerés (Tesseract + OpenCV) — a látó modell nem fut."""
+    _engine("tesseract")
+    from app.formkit import detect
+    s = await detect.recognize(_photo_of(samples.flat_form_pdf(), tmp_path))
+    assert s["kind"] == "image" and s["engine"] == "offline" and s["quality"]["level"] == "good"
     assert [f["type"] for f in s["fields"]] == ["text", "text", "hu_tax_id", "date", "checkbox", "signature"]
-    # látó modell (ha be van állítva): a meglévő forms.read_layout, 0–1000 ezrelékes dobozokkal
+    assert "deep" not in s
+
+
+def _vision_mock(monkeypatch, answers: list[dict], seen: list):
+    from app.config import settings
+    from app.llm import vision
+    monkeypatch.setattr(settings, "SILICONFLOW_API_KEY", "teszt")
+
+    async def fake_call(msgs, max_tokens=4096, model=None, **kw):
+        seen.append((model, msgs[0]["content"][0]["text"][:40], msgs[0]["content"][1]["image_url"]["url"][:22]))
+        return json.dumps(answers.pop(0))
+    monkeypatch.setattr(vision, "_call", fake_call)
+
+
+async def test_deep_recognition_multi_step_for_paid_plans(samples, tmp_path, monkeypatch):
+    """Kérve (deep=on) vagy gyenge eredménynél: a helyi mezők számozva az oldalképen → a modell javít, töröl,
+    pótol (DeepSeek V4.1 Flash = settings.OCR_MODEL); sok változásnál második ellenőrző kör."""
+    from app.config import settings
+    from app.formkit import detect
+    seen: list = []
+    _vision_mock(monkeypatch, [
+        {"fix": [{"n": 1, "label": "Teljes név", "kind": "text"}], "remove": [5],
+         "add": [{"label": "Megjegyzés", "kind": "multiline", "box": [120, 480, 850, 560]}]},
+        {"fix": [], "remove": [], "add": []}], seen)
+    s = await detect.recognize(samples.flat_form_pdf(), deep="on")
+    assert s["engine"] == "vision" and s["deep"]["used"] and s["deep"]["pages"] == 1
+    labels = [f["label"] for f in s["fields"]]
+    assert labels[0] == "Teljes név" and "Hozzájárulok" not in labels and labels[-1] == "Megjegyzés"
+    assert s["fields"][-1]["type"] == "multiline" and s["fields"][-1]["box"][0] == pytest.approx(595 * 0.12, abs=0.5)
+    assert seen[0][0] == settings.OCR_MODEL and seen[0][2].startswith("data:image/")
+    assert s["deep"]["steps"] == len(seen) == 2
+    # gyenge helyi eredmény (nincs vonal, csak feliratok) → automatikusan indul, ha jár (itt: admin = Pro)
+    import pymupdf
+    bare = tmp_path / "csak_feliratok.pdf"
+    with pymupdf.open() as d:
+        pg = d.new_page()
+        for k, lab in enumerate(("Név:", "Lakcím:", "Telefon:", "E-mail:")):
+            pg.insert_text((72, 100 + 30 * k), lab, fontsize=11)
+        d.save(str(bare))
     from app.tools import forms as legacy
-    monkeypatch.setattr(detect, "_vision_ready", lambda: True)
 
     async def fake_layout(page, hint=None):
-        return {"items": [{"type": "text", "text": "Név:", "box": [50, 80, 150, 95]},
-                          {"type": "field", "kind": "text", "name": "nev", "label": "Név", "box": [330, 80, 800, 95]},
-                          {"type": "field", "kind": "signature", "name": "alairas", "label": "Aláírás", "box": [330, 430, 700, 460]}]}
+        return {"items": [{"type": "field", "kind": "text", "name": "nev", "label": "Név", "box": [200, 100, 800, 125]}]}
     monkeypatch.setattr(legacy, "read_layout", fake_layout)
-    s = await detect.recognize(photo)
-    assert s["engine"] == "vision" and [f["type"] for f in s["fields"]] == ["text", "signature"]
-    assert s["fields"][0]["box"][0] == pytest.approx(330 * s["pages"][0]["width"] / 1000)
+    seen.clear()
+    _vision_mock(monkeypatch, [{"fix": [], "remove": [], "add": []}], seen)
+    s = await detect.recognize(bare)
+    assert s["deep"]["used"] and [f["name"] for f in s["fields"]] == ["nev"]
+
+
+async def test_deep_recognition_gated_mcp_and_free_plan(samples, monkeypatch):
+    from app import billing, tenancy
+    from app.formkit import deep as D, detect
+    from app.config import settings
+    monkeypatch.setattr(settings, "SILICONFLOW_API_KEY", "teszt")
+    tok = tenancy.client_makes_images.set(True)                      # MCP-hívás: a kliens ügynöke dolgozik
+    try:
+        s = await detect.recognize(samples.flat_form_pdf(), deep="auto")
+        assert "deep" not in s                                       # jó eredménynél nincs teendő
+        with pytest.raises(D.DeepUnavailable, match="own vision"):
+            await detect.recognize(samples.flat_form_pdf(), deep="on")
+    finally:
+        tenancy.client_makes_images.reset(tok)
+
+    async def free(uid):
+        return "free"
+    monkeypatch.setattr(billing, "plan_of", free)
+    with pytest.raises(D.DeepUnavailable, match="Plus and Pro"):
+        await detect.recognize(samples.flat_form_pdf(), deep="on")
+    sch = {"kind": "image", "pages": [{"width": 10, "height": 10}], "fields": [], "label_hints": 4}
+    assert D.quality(sch)["level"] == "low"
+    out = await detect._maybe_deep(sch, Path("x.png"), "hun+eng", "auto")
+    assert out["deep"] == {"used": False, "reason": "plan", "hint": D.UPGRADE}
+
+
+async def test_deep_recognition_charges_credits(monkeypatch):
+    from app import db, tenancy
+    from app.formkit import deep as D
+    calls = []
+
+    async def spend(uid, n, reason, ref=None):
+        calls.append((uid, n, reason))
+        return 10
+    monkeypatch.setattr(db, "enabled", lambda: True)
+    monkeypatch.setattr(db, "credits_spend", spend)
+    tok = tenancy.set_user("fizetos01")
+    try:
+        assert await D.charge(3) == 3 * D.CREDITS_PER_PAGE
+    finally:
+        tenancy.reset(tok)
+    assert calls == [("fizetos01", 3 * D.CREDITS_PER_PAGE, "AI form recognition")]
+
+    async def broke(uid, n, reason, ref=None):
+        raise db.InsufficientCredits("no")
+    monkeypatch.setattr(db, "credits_spend", broke)
+    tok = tenancy.set_user("fizetos01")
+    try:
+        with pytest.raises(D.DeepUnavailable, match="credits"):
+            await D.charge(1)
+    finally:
+        tenancy.reset(tok)
 
 
 # ---------------------------------------------------------------- kitöltés az eredeti formátumban
@@ -149,7 +243,7 @@ async def test_fill_photo_keeps_look_or_becomes_pdf(samples, put_file, tmp_path,
     sch = S.make("image", "image", [{"page": 1, "width": 827, "height": 1170}],
                  [S.field("nev", "Név", "text", page=1, box=[278, 185, 694, 211], anchor={"kind": "xy", "page": 1, "rect": [278, 185, 694, 211]})])
 
-    async def fake(path, language="hun+eng", engine="auto"):
+    async def fake(path, language="hun+eng", deep="auto"):
         return json.loads(json.dumps(sch))
     monkeypatch.setattr(detect, "recognize", fake)
     fid = put_file(png)

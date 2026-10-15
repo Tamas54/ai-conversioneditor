@@ -1127,6 +1127,10 @@
   "answers": {
    "label": "Válaszok",
    "help": "Válaszok az asszisztens kérdéseire."
+  },
+  "deep": {
+   "label": "AI-felismerés összetett űrlapokhoz",
+   "help": "auto: csak ha az ingyenes felismerés hiányosnak tűnik vagy az űrlap összetett (Plus és Pro csomag, oldalanként 1 kredit) · on: mindig · off: soha."
   }
  },
  "thub": {
@@ -1869,7 +1873,12 @@
    "h1": "Űrlapfelismerés bármilyen fájlból",
    "intro": "Az űrlapfelismerés beolvas egy űrlapot — kitölthető vagy lapos PDF-et, Word- vagy Excel-fájlt, fotót vagy szkent —, és egységes mezőlistát ad (név, címke, típus, oldal, hely, kötelező-e). A mezők kitöltés előtt kézzel javíthatók és pótolhatók.",
    "points": [],
-   "faq": []
+   "faq": [
+    [
+     "Mi van, ha az űrlap összetett vagy rossz a fotó?",
+     "Mindig az ingyenes felismerés fut először. Ha hiányosnak tűnik, vagy az űrlap hosszú, összetett, a Plus és Pro csomagban egy látó AI-modell több lépésben újraolvassa: az oldalképen ellenőriz minden talált mezőt, javítja a feliratokat, törli a téveseket, pótolja a hiányzókat (oldalanként 1 kredit). A saját AI-dról MCP-n ezt a lépést a te asszisztensed végzi el az oldalképekből."
+    ]
+   ]
   },
   "fill-form": {
    "slug": "urlap-kitoltes",
@@ -1879,7 +1888,12 @@
    "h1": "Űrlap kitöltése",
    "intro": "Az űrlapkitöltés a felismert mezőkbe írja az értékeidet, és az eredeti formátumban adja vissza az űrlapot — a PDF PDF marad, a DOCX DOCX —, fotónál pedig az oldal eredeti kinézetén.",
    "points": [],
-   "faq": []
+   "faq": [
+    [
+     "Mi van, ha az űrlap összetett vagy rossz a fotó?",
+     "Mindig az ingyenes felismerés fut először. Ha hiányosnak tűnik, vagy az űrlap hosszú, összetett, a Plus és Pro csomagban egy látó AI-modell több lépésben újraolvassa: az oldalképen ellenőriz minden talált mezőt, javítja a feliratokat, törli a téveseket, pótolja a hiányzókat (oldalanként 1 kredit). A saját AI-dról MCP-n ezt a lépést a te asszisztensed végzi el az oldalképekből."
+    ]
+   ]
   },
   "bulk-fill-form": {
    "slug": "tomeges-urlapkitoltes",
@@ -1899,7 +1913,12 @@
    "h1": "Kitölthető PDF készítése",
    "intro": "A kitölthetővé tétel megkeresi egy nyomtatott űrlap vonalait, dobozait és jelölőnégyzeteit, és valódi PDF-űrlapmezőket tesz rájuk; a fotókat és szkenneket előbb újraépíti.",
    "points": [],
-   "faq": []
+   "faq": [
+    [
+     "Mi van, ha az űrlap összetett vagy rossz a fotó?",
+     "Mindig az ingyenes felismerés fut először. Ha hiányosnak tűnik, vagy az űrlap hosszú, összetett, a Plus és Pro csomagban egy látó AI-modell több lépésben újraolvassa: az oldalképen ellenőriz minden talált mezőt, javítja a feliratokat, törli a téveseket, pótolja a hiányzókat (oldalanként 1 kredit). A saját AI-dról MCP-n ezt a lépést a te asszisztensed végzi el az oldalképekből."
+    ]
+   ]
   },
   "create-signature": {
    "slug": "alairas-keszites",

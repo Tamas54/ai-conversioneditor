@@ -1122,6 +1122,10 @@
   "sheet": {
    "label": "Sheet",
    "help": "Which sheet (the active one by default)."
+  },
+  "deep": {
+   "label": "AI recognition for complex forms",
+   "help": "auto: only when the free recognition looks incomplete or the form is complex (Plus and Pro plans, 1 credit per page) · on: always · off: never."
   }
  },
  "thub": {
@@ -1925,7 +1929,12 @@
    "h1": "Form recognition from any file",
    "intro": "Form recognition reads a form — a fillable or flat PDF, a Word or Excel file, or a photo or scan — and returns one field list (name, label, type, page, position, required). You can correct and add fields before filling.",
    "points": [],
-   "faq": []
+   "faq": [
+    [
+     "What if the form is complex or badly photographed?",
+     "The free recognition always runs first. If it looks incomplete, or the form is long or complex, the Plus and Pro plans read it again with an AI vision model in several passes — it checks every field we found on the page image, fixes labels, removes false ones and adds the missing ones (1 credit per page). From your own AI over MCP, your assistant does that step itself with the page images."
+    ]
+   ]
   },
   "fill-form": {
    "slug": "fill-form",
@@ -1936,7 +1945,12 @@
    "h1": "Fill a form",
    "intro": "Fill form writes your values into the recognised fields and gives the form back in its original format — PDF stays PDF, DOCX stays DOCX — or, for photos, on the original look of the page.",
    "points": [],
-   "faq": []
+   "faq": [
+    [
+     "What if the form is complex or badly photographed?",
+     "The free recognition always runs first. If it looks incomplete, or the form is long or complex, the Plus and Pro plans read it again with an AI vision model in several passes — it checks every field we found on the page image, fixes labels, removes false ones and adds the missing ones (1 credit per page). From your own AI over MCP, your assistant does that step itself with the page images."
+    ]
+   ]
   },
   "bulk-fill-form": {
    "slug": "bulk-fill-form",
@@ -1958,7 +1972,12 @@
    "h1": "Make a PDF fillable",
    "intro": "Make fillable finds the lines, boxes and tick boxes of a printed form and puts real PDF form fields on them; photos and scans are rebuilt first.",
    "points": [],
-   "faq": []
+   "faq": [
+    [
+     "What if the form is complex or badly photographed?",
+     "The free recognition always runs first. If it looks incomplete, or the form is long or complex, the Plus and Pro plans read it again with an AI vision model in several passes — it checks every field we found on the page image, fixes labels, removes false ones and adds the missing ones (1 credit per page). From your own AI over MCP, your assistant does that step itself with the page images."
+    ]
+   ]
   },
   "create-signature": {
    "slug": "create-signature",

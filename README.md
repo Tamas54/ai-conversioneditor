@@ -82,12 +82,12 @@ app **ügynökénél**. A forrás egy helyen van: `app/catalog` (formátumok, es
 |---|---|---|
 | Konverzió | `app/convert` | 264 formátum, ~8700 irány, legfeljebb 3 lépéses útvonal a legolcsóbb motorokkal; opciók kategóriánként (oldaltartomány, motor, OCR-nyelv; kép: méret, minőség, metaadat; videó/hang: kodek, felbontás, képarány, fps, bitráta, vágás, forgatás, tükrözés, felirat, hangerő, néma), mentett presetek, „mindre alkalmaz” |
 | Eszközök | `app/ops/handlers` | tömörítés (PDF, kép, JPEG, PNG, GIF, videó, MP3, WAV), PDF-csomag (PDF/A, PDF/X, OCR-réteg, titkosítás jogosultságokkal, feloldás, lapítás, vágás, átméretezés, rendezés, bontás, kivonat, törlés, forgatás, képkinyerés, annotálás, szerkesztés, kitakarás, oldalszám, összevetés), kép, videó, hang, vízjel, weboldal → PDF/kép, összefűzés, bélyegkép, archívum, metaadat, haladó ffmpeg/ImageMagick (engedélyezőlistás) |
-| Űrlap, aláírás | `app/formkit` | felismerés bármiből (kitölthető/lapos PDF, DOCX, XLSX, fotó/szken) → egységes séma → kitöltés az eredeti formátumban; aláírás tisztítása átlátszó PNG-vé, felhasználónként titkosítva; ügynöki kitöltés profilból és iratokból, kérdésekkel és validálással (dátum, IBAN, adóazonosító jel, TAJ, adószám, bankszámlaszám) |
+| Űrlap, aláírás | `app/formkit` | felismerés bármiből — mindig az ingyenes helyi felismerés először; gyenge vagy összetett eredménynél Plus/Pro csomaggal több lépéses látó modell (`OCR_MODEL`, oldalanként kredit), MCP-n helyette a kliens saját ügynöke javít az oldalképekből; (kitölthető/lapos PDF, DOCX, XLSX, fotó/szken) → egységes séma → kitöltés az eredeti formátumban; aláírás tisztítása átlátszó PNG-vé, felhasználónként titkosítva; ügynöki kitöltés profilból és iratokból, kérdésekkel és validálással (dátum, IBAN, adóazonosító jel, TAJ, adószám, bankszámlaszám) |
 | Import/export | `app/net.py`, `app/connectors` | eszköz, URL, Google Drive, Dropbox, OneDrive (web); S3, Azure Blob, GCS, SFTP (API); darabolt feltöltés; ideiglenes aláírt link |
 | REST API | `app/api_v1` | jobs/tasks DAG, élő státusz (`?wait`, SSE), webhookok (HMAC), sandbox (`sk_test_`), rate limit, kreditelszámolás, OpenAPI (`/v1/openapi.json`) |
 | SDK, integrációk | `sdk/python`, `sdk/node`, `integrations/` | Python és Node SDK, Zapier, Make, n8n |
 | MCP | `app/mcp_ext.py` | `convert`, `file_tools`, `transfer`, `jobs`, `catalog`, `units`, `forms`, `signature`, `fill_assistant` (elicitation, MCP Apps / ChatGPT Apps nézet) |
-| Honlap | `app/site` | SSR oldal minden konverzióhoz és eszközhöz, kategória-hubok, összevetések, API-oldalak, „Connect your AI”; sitemap-index, hreflang, canonical, schema.org, `llms.txt`, `llms-full.txt`, IndexNow |
+| Honlap | `app/site` | a meglévő `/app` honlap része (ugyanaz a fejléc és stílus, a `/` továbbra is `/app`-ra visz, az `/app` láblécéből linkelve, minden oldalon „← Back”); SSR oldal minden konverzióhoz és eszközhöz, „AI agents” oldal a meglévő ügynöki funkciókkal, kategória-hubok, összevetések, API-oldalak, „Connect your AI”; sitemap-index, hreflang, canonical, schema.org, `llms.txt`, `llms-full.txt`, IndexNow |
 
 **Új nyelv**: másold le az `app/site/i18n/en.json`-t `xx.json` néven, fordítsd le (a `_meta` adja a beszédes
 URL-mintákat és a nyelvtani szabályokat) — az oldalak, a sitemap és a hreflang automatikusan bővül.
@@ -147,7 +147,9 @@ Bővítés (konverzió, eszközök, űrlapok, API, honlap) — mind opcionális,
 PRODUCT_NAME=Studio                 # márkanév a honlapon, az API-ban és az MCP-ben
 PUBLIC_BASE_URL=https://…           # domain (canonical, sitemap, hreflang, OpenAPI servers)
 INDEXING_OPEN=1                     # keresők és AI-robotok csak a végleges domainen
-SITE_DEFAULT_LANG=en                # a gyökér nyelve (/hu/… a többi)
+SITE_DEFAULT_LANG=en                # az alapnyelv
+SITE_LANGS=en                       # bekapcsolt nyelvek (nemzetközi termék: alapból csak angol; pl. "en,hu")
+DEEP_FORM_CREDITS_PER_PAGE=1  DEEP_FORM_MAX_PAGES=10   # összetett űrlap: fizetős, több lépéses látó modell
 INDEXNOW_KEY=…                      # IndexNow (Bing, Yandex…) kulcs
 DATA_ENCRYPTION_KEY=$(openssl rand -hex 32)   # aláírások, adatprofil titkosítása (ennek híján FILE_SIGNING_KEY)
 API_RATE_PER_MIN=60                 # /v1 kulcsonként (sandbox: fele)

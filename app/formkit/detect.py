@@ -179,8 +179,10 @@ def _pdf_widgets(doc) -> list[dict[str, Any]]:
     return out
 
 
-def _pdf_flat(doc) -> list[dict[str, Any]]:
+def _pdf_flat(doc) -> tuple[list[dict[str, Any]], int]:
+    """Vissza: (mezők, a „Felirat:” formák száma — a minőség-becsléshez)."""
     out: list[dict[str, Any]] = []
+    hints = 0
     for pi, page in enumerate(doc, 1):
         words = [(*w[:5], (w[5], w[6])) for w in page.get_text("words")]
         hlines, squares, boxes = [], [], []
@@ -199,7 +201,8 @@ def _pdf_flat(doc) -> list[dict[str, Any]]:
                     elif r.width >= 40 and 10 <= r.height <= 200 and r.width < page.rect.width * 0.95:
                         boxes.append((r.x0, r.y0, r.x1, r.y1))
         out += fields_from_layout(words, hlines, squares, boxes, pi, "xy")
-    return out
+        hints += _label_hints(words)
+    return out, hints
 
 
 def recognize_pdf(path: Path) -> dict[str, Any]:
@@ -211,15 +214,15 @@ def recognize_pdf(path: Path) -> dict[str, Any]:
         fields = _pdf_widgets(doc)
         if fields:
             # az aláírás helye gyakran csak egy vonal ("Aláírás: ____") — azt is felvesszük, ha nincs ott mező
-            for f in _pdf_flat(doc):
+            for f in _pdf_flat(doc)[0]:
                 if f["type"] == "signature" and not any(
                         g["page"] == f["page"] and g["box"][0] < f["box"][2] and g["box"][2] > f["box"][0]
                         and g["box"][1] < f["box"][3] and g["box"][3] > f["box"][1] for g in fields):
                     fields.append(f)
             return S.make("pdf", "acroform", pages, fields)
         has_text = any(p.get_text().strip() for p in doc)
-        fields = _pdf_flat(doc)
-    return S.make("pdf", "flat_pdf", pages, fields, **({} if has_text else {"scanned": True}))
+        fields, hints = _pdf_flat(doc)
+    return S.make("pdf", "flat_pdf", pages, fields, label_hints=hints, **({} if has_text else {"scanned": True}))
 
 
 # ---------------------------------------------------------------- DOCX
@@ -362,25 +365,23 @@ def recognize_xlsx(path: Path) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- fotó, szken
 
-def _vision_ready() -> bool:
-    from app.config import settings
-    return bool(settings.SILICONFLOW_API_KEY)
-
-
-async def _tesseract_words(img: Path, lang: str) -> list[tuple]:
+async def _tesseract_words(img: Path, lang: str) -> tuple[list[tuple], Optional[float]]:
     from app.convert.engines import run
     from app.convert.service import ocr_languages
     have = ocr_languages()
     langs = "+".join(l for l in lang.split("+") if l in have) or ("eng" if "eng" in have else "")
     out, _ = await run("tesseract", str(img), "stdout", *(["-l", langs] if langs else []), "--psm", "11", "tsv", timeout=300)
-    words = []
+    words, confs = [], []
     for ln in out.decode("utf-8", "replace").splitlines()[1:]:
         p = ln.split("\t")
-        if len(p) < 12 or not p[11].strip() or float(p[10]) < 30:
+        if len(p) < 12 or not p[11].strip() or float(p[10]) < 0:
+            continue
+        confs.append(float(p[10]))
+        if float(p[10]) < 30:
             continue
         x, y, w, h = (int(p[i]) for i in (6, 7, 8, 9))
         words.append((x, y, x + w, y + h, p[11], (p[2], p[3], p[4])))
-    return words
+    return words, (sum(confs) / len(confs) if confs else None)
 
 
 def _cv_shapes(img: Path) -> tuple[list, list, list]:
@@ -409,7 +410,8 @@ def _cv_shapes(img: Path) -> tuple[list, list, list]:
     return hlines, squares, boxes
 
 
-async def recognize_image(path: Path, language: str = "hun+eng", engine: str = "auto") -> dict[str, Any]:
+async def recognize_image(path: Path, language: str = "hun+eng") -> dict[str, Any]:
+    """Fotó/szken helyben, ingyen: Tesseract-szavak + OpenCV-vonalak/-négyzetek (a látó modell: deep.py)."""
     from PIL import Image, ImageOps
     from app.convert.steps import _register_plugins
     _register_plugins()
@@ -418,58 +420,107 @@ async def recognize_image(path: Path, language: str = "hun+eng", engine: str = "
         im = ImageOps.exif_transpose(im).convert("RGB")
         im.save(work)
         W, H = im.size
-    pages = [{"page": 1, "width": W, "height": H}]
-    if engine != "offline" and _vision_ready():
-        from app.tools import forms
-        lay = await forms.read_layout(work, {"hun": "Hungarian", "eng": "English"}.get(language.split("+")[0]))
-        fields = []
-        for it in lay.get("items", []):
-            if it.get("type") != "field":
-                continue
-            b = it.get("box") or [0, 0, 0, 0]
-            box = [b[0] * W / 1000, b[1] * H / 1000, b[2] * W / 1000, b[3] * H / 1000]
-            label = S.clean_label(it.get("label") or it.get("name") or "")
-            kind = it.get("kind", "text")
-            typ = kind if kind in ("checkbox", "signature", "multiline", "date") else S.guess_type(label)
-            fields.append(S.field(S.slug(it.get("name") or label), label or it.get("name", ""), typ, page=1, box=box,
-                                  anchor={"kind": "xy", "page": 1, "rect": [round(v, 2) for v in box]}))
+    try:
+        words, conf = await _tesseract_words(work, language)
+        hlines, squares, boxes = await asyncio.to_thread(_cv_shapes, work)
+    finally:
         work.unlink(missing_ok=True)
-        return S.make("image", "image", pages, fields, engine="vision")
-    words = await _tesseract_words(work, language)
-    hlines, squares, boxes = await asyncio.to_thread(_cv_shapes, work)
-    work.unlink(missing_ok=True)
-    return S.make("image", "image", pages, fields_from_layout(words, hlines, squares, boxes, 1, "xy"), engine="offline")
+    return S.make("image", "image", [{"page": 1, "width": W, "height": H}],
+                  fields_from_layout(words, hlines, squares, boxes, 1, "xy"), engine="offline",
+                  ocr_confidence=round(conf, 1) if conf is not None else None, label_hints=_label_hints(words))
+
+
+def _label_hints(words: list[tuple]) -> int:
+    """Hány „Felirat:” forma van a lapon (a minőség-becsléshez: ennyi körüli mezőt várunk)."""
+    return sum(1 for w in words if len(w[4]) > 2 and w[4].endswith(":") and not _is_blank_word(w[4]))
 
 
 # ----------------------------------------------------------------
 
-async def recognize(path: Path, language: str = "hun+eng", engine: str = "auto") -> dict[str, Any]:
+async def recognize(path: Path, language: str = "hun+eng", deep: str = "auto") -> dict[str, Any]:
+    """deep: "auto" (gyenge vagy összetett eredménynél, ha jár: fizetős látó modell), "on" (kérve), "off"."""
     fmt = from_filename(path.name) or path.suffix.lstrip(".").lower()
     cat = FORMATS[fmt].category if fmt in FORMATS else ""
     if fmt == "pdf":
         sch = await asyncio.to_thread(recognize_pdf, path)
-        if sch.get("scanned"):       # képből álló PDF: első oldal képként
-            import pymupdf
-            img = path.with_name(path.stem + "-p1.png")
-            with pymupdf.open(str(path)) as d:
-                d[0].get_pixmap(dpi=150).save(str(img))
-            try:
-                im_sch = await recognize_image(img, language, engine)
-            finally:
-                img.unlink(missing_ok=True)
-            scale = sch["pages"][0]["width"] / im_sch["pages"][0]["width"]
-            for f in im_sch["fields"]:
-                f["box"] = [round(v * scale, 2) for v in f["box"]]
-                f["anchor"] = {"kind": "xy", "page": 1, "rect": f["box"]}
-            sch["fields"] = im_sch["fields"]
-            sch["engine"] = im_sch.get("engine")
-        return sch
+        if sch.get("kind") == "flat_pdf" and sch.get("scanned"):
+            sch = await _scanned_pdf(path, sch, language)
+        return await _maybe_deep(sch, path, language, deep)
     if fmt in ("docx", "docm", "dotx"):
         return await asyncio.to_thread(recognize_docx, path)
     if fmt in ("xlsx", "xlsm"):
         return await asyncio.to_thread(recognize_xlsx, path)
     if cat == "image":
-        return await recognize_image(path, language, engine)
+        return await _maybe_deep(await recognize_image(path, language), path, language, deep)
     if cat in ("document", "spreadsheet"):
         raise ValueError(f".{fmt}: convert it to {'DOCX' if cat == 'document' else 'XLSX'} or PDF first, then recognize")
     raise ValueError(f".{fmt} files can't hold a form")
+
+
+async def _scanned_pdf(path: Path, sch: dict[str, Any], language: str) -> dict[str, Any]:
+    """Képből álló PDF: oldalanként (legfeljebb 10) helyi felismerés, a dobozok pontra váltva."""
+    import pymupdf
+    from app.formkit.deep import MAX_PAGES
+    fields, confs, hints = [], [], 0
+    with pymupdf.open(str(path)) as d:
+        n = min(d.page_count, MAX_PAGES)
+        for i in range(n):
+            img = path.with_name(f"{path.stem}-p{i + 1}.png")
+            d[i].get_pixmap(dpi=150).save(str(img))
+            try:
+                im = await recognize_image(img, language)
+            finally:
+                img.unlink(missing_ok=True)
+            scale = sch["pages"][i]["width"] / im["pages"][0]["width"]
+            for f in im["fields"]:
+                f["box"] = [round(v * scale, 2) for v in f["box"]]
+                f["page"] = i + 1
+                f["anchor"] = {"kind": "xy", "page": i + 1, "rect": f["box"]}
+                fields.append(f)
+            if im.get("ocr_confidence") is not None:
+                confs.append(im["ocr_confidence"])
+            hints += im.get("label_hints") or 0
+    sch["fields"] = S.unique_names(fields)
+    sch["engine"] = "offline"
+    sch["ocr_confidence"] = round(sum(confs) / len(confs), 1) if confs else None
+    sch["label_hints"] = hints
+    return sch
+
+
+async def _maybe_deep(sch: dict[str, Any], src: Path, language: str, deep: str) -> dict[str, Any]:
+    """Gyenge vagy összetett eredmény → fizetős, több lépéses látó modell (deep.py); MCP-n a kliens ügynöke."""
+    import shutil
+    from app.formkit import deep as D
+    if sch["kind"] not in ("flat_pdf", "image"):
+        return sch
+    q = D.quality(sch)
+    sch["quality"] = q
+    if deep == "off" or not (deep == "on" or q["level"] == "low" or q["complex"]):
+        return sch
+    ok, why = await D.eligibility()
+    if not ok:
+        if deep == "on":
+            raise D.DeepUnavailable(D.why_text(why))
+        sch["deep"] = {"used": False, "reason": why, "hint": D.why_text(why)}
+        return sch
+    from app.storage import temp_path
+    from app.storage.files import new_file_id
+    work = temp_path(new_file_id("deep"))
+    work.mkdir(parents=True)
+    try:
+        pages: list[tuple[Path, float, float]] = []
+        if sch["kind"] == "image":
+            pages.append((src, sch["pages"][0]["width"], sch["pages"][0]["height"]))
+        else:
+            import pymupdf
+            with pymupdf.open(str(src)) as d:
+                for i in range(min(d.page_count, D.MAX_PAGES)):
+                    img = work / f"page{i + 1}.png"
+                    d[i].get_pixmap(dpi=150).save(str(img))
+                    pages.append((img, d[i].rect.width, d[i].rect.height))
+        hint = {"hun": "Hungarian", "eng": "English", "deu": "German"}.get(language.split("+")[0])
+        out = await D.recognize(sch, pages, work, hint)
+        out["quality"] = D.quality(out)
+        return out
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
