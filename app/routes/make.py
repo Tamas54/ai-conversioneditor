@@ -632,22 +632,31 @@ async def convert_targets(ext: str, all: bool = False) -> dict[str, Any]:
         from app.catalog.formats import FORMATS, normalize
         from app.convert import service
         out = []
+        top = set(anyconvert.targets_for(ext))
         for t in service.targets_for(ext):
             f = FORMATS.get(normalize(t))
             out.append({"fmt": t, "label": anyconvert.LABELS.get(t) or (f"{t.upper()} — {f.name}" if f else t.upper()),
-                        "category": f.category if f else None})
+                        "category": f.category if f else None, "top": t in top})
         return {"targets": out}
     return {"targets": [{"fmt": t, "label": anyconvert.LABELS.get(t, t.upper())} for t in anyconvert.targets_for(ext)]}
 
 
 @router.post("/api/make/convert")
 async def make_convert(request: Request, body: dict[str, Any]) -> dict[str, Any]:
-    from app.tools import anyconvert
+    from app.tools import anyconvert, crafts
     fid, target = body.get("file_id"), (body.get("target") or "").strip()
     if not fid or not target:
         raise HTTPException(400, "Choose a file and a format.")
     try:
-        out = await anyconvert.convert_any(getattr(request.app.state, "pool", None), fid, target)
+        src_ext = crafts.existing(fid).suffix.lstrip(".").lower()
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+    try:
+        if target in anyconvert.targets_for(src_ext):           # a bevált út, változatlanul
+            out = await anyconvert.convert_any(getattr(request.app.state, "pool", None), fid, target)
+        else:                                                    # minden más formátum: az univerzális konverter
+            from app.convert import service
+            out = await service.convert_file(fid, target, {}, getattr(request.app.state, "pool", None))
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
     except Exception as e:

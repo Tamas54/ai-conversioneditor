@@ -1466,6 +1466,17 @@ function withNew(kind, m, other, otherLabel, extra = []) {
       return v === "new" ? blankSubmit(kind, fd) : ex(v) ? ex(v).submit(fd, form, opts) : m.submit(fd, form, opts); },
   };
 }
+const CONVERT_GROUPS = { document: "Documents", spreadsheet: "Spreadsheets", presentation: "Presentations", ebook: "E-books", image: "Images",
+  vector: "Vector", video: "Video", audio: "Audio", archive: "Archives", cad: "CAD", font: "Fonts" };
+function convertOptions(targets) {     // a bevált (leggyakoribb) célok elöl, a többi formátum kategóriánként
+  const opt = x => `<option value="${x.fmt}">${esc(x.label)}</option>`;
+  const top = targets.filter(x => x.top !== false), rest = targets.filter(x => x.top === false);
+  if (!rest.length) return top.map(opt).join("");
+  const groups = {};
+  rest.forEach(x => (groups[x.category || "other"] ||= []).push(x));
+  return (top.length ? `<optgroup label="Most used">${top.map(opt).join("")}</optgroup>` : "") + Object.entries(groups).map(([k, xs]) =>
+    `<optgroup label="${esc(CONVERT_GROUPS[k] || "Other")}">${xs.map(opt).join("")}</optgroup>`).join("");
+}
 const blankDocLink = `<p class="blank-alt"><a href="/app/make/document/new">Start a blank document instead <span aria-hidden="true">→</span></a></p>`;
 
 // automata tervező: a választható méretek [kulcs, felirat, alapból bejelölve]
@@ -1924,8 +1935,8 @@ const MAKERS = {
         if (e.target.dataset?.slot !== "file") return;
         const ext = slotExt(form, "file"), sel = form.querySelector("[name=target]");
         if (!ext) { sel.innerHTML = `<option value="">Choose a file first</option>`; sel.disabled = true; return; }
-        const { targets } = await api(`/api/convert/targets?ext=${encodeURIComponent(ext)}`);
-        sel.innerHTML = targets.length ? targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("") : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
+        const { targets } = await api(`/api/convert/targets?all=1&ext=${encodeURIComponent(ext)}`);
+        sel.innerHTML = targets.length ? convertOptions(targets) : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
         sel.disabled = !targets.length; sel.dispatchEvent(new Event("change", { bubbles: true }));   // a gomb felirata: „Convert to PDF”
       });
     },

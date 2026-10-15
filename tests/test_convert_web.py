@@ -78,3 +78,15 @@ def test_presets_need_account_and_roundtrip(db_client, samples, put_file):
     assert db_client.delete(f"/api/presets/{pid}").status_code == 200
     assert db_client.get("/api/presets").json()["presets"] == []
     db_client.cookies.clear()
+
+
+def test_app_converter_reaches_every_format(client, samples, put_file):
+    """Az app saját „Convert” készítője: a bevált célok változatlanul elöl, a többi formátum is választható,
+    és a régi végpont az új célokat az univerzális konverterrel csinálja meg."""
+    full = client.get("/api/convert/targets", params={"ext": "png", "all": 1}).json()["targets"]
+    assert [t["fmt"] for t in full if t["top"]] == ["jpg", "webp", "pdf", "tif", "psd"]
+    assert any(t["fmt"] == "avif" and not t["top"] for t in full)
+    fid = put_file(samples.png())
+    r = client.post("/api/make/convert", json={"file_id": fid, "target": "avif"})
+    assert r.status_code == 200, r.text
+    assert r.json()["file_id"].endswith(".avif") and r.json()["engines"] == ["pillow"]
