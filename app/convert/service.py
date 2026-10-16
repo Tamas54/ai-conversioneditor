@@ -185,6 +185,9 @@ async def convert_file(file_id: str, target: str, options: Optional[dict[str, An
     src = crafts.existing(file_id)
     ext = from_filename(src.name) or src.suffix.lstrip(".").lower()
     tfmt = normalize(target)
+    if pool is None:                    # a webes /api/convert/run és a /v1 nem ad át poolt → a futó appé
+        from app.mcp_server import _pool_or_none
+        pool = _pool_or_none()
     if _legacy_ok(ext, tfmt, opts):
         from app.tools import anyconvert
         try:
