@@ -244,6 +244,19 @@ def category(lang: str, cat: str) -> dict[str, Any]:
     return p
 
 
+def formats_hub(lang: str) -> dict[str, Any]:
+    """Minden formátum egy helyen, kategóriánként — a /formats/<x> oldalak gyűjtője (eddig 404 volt)."""
+    c = counts()
+    crumbs = crumbs_home(lang) + [(t(lang, "nav.convert"), urls.convert_hub(lang)), (t(lang, "fhub.crumb"), urls.formats_hub(lang))]
+    cats = [{"key": k, "name": t(lang, f"cat.{k}.name"), "url": urls.category(lang, k),
+             "formats": [{"label": f.label, "name": f.name, "url": urls.fmt(lang, f.key)}
+                         for f in sorted(by_category(k), key=lambda f: (f.tier, f.key))]}
+            for k in CATEGORIES]
+    return base_page(lang, "formats_hub", t(lang, "fhub.title", formats=c["formats"]), t(lang, "fhub.desc", formats=c["formats"]),
+                     urls.formats_hub(lang), alternates(urls.formats_hub), crumbs, h1=t(lang, "fhub.h1"),
+                     lead=t(lang, "fhub.lead", formats=c["formats"], conversions=c["conversions"]), cats=cats)
+
+
 def format_page(lang: str, key: str) -> dict[str, Any]:
     f = FORMATS[key]
     outs = graph.targets(key, static=True)

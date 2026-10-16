@@ -93,7 +93,7 @@ CROSS: dict[str, set[str]] = {
     "presentation": {"presentation", "document", "image", "video"},
     "ebook": {"ebook", "document"},
     "image": {"image", "document", "vector", "video"},
-    "vector": {"vector", "image", "document"},
+    "vector": {"vector", "image", "document", "cad"},
     "video": {"video", "audio", "image"},
     "audio": {"audio", "video"},
     "archive": {"archive"},
@@ -115,6 +115,7 @@ CROSS_ONLY: dict[tuple[str, str], set[str]] = {
     ("image", "vector"): {"svg", "eps", "ai"},
     ("image", "video"): {"mp4", "webm"},
     ("vector", "document"): {"pdf", "ps"},
+    ("vector", "cad"): {"dxf"},                                  # VectorCraft írja; DWG-t nem ígérünk vektorból
     ("video", "image"): {"gif", "apng", "webp", "jpg", "png"},
     ("audio", "video"): {"mp4", "webm", "mov", "mkv"},
     ("cad", "vector"): {"svg", "eps", "ai"},

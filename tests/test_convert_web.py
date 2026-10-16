@@ -14,10 +14,15 @@ def _poll(client, job):
 
 
 def test_targets_all_extends_legacy_order(client):
+    from app.catalog.formats import normalize
     legacy = [t["fmt"] for t in client.get("/api/convert/targets", params={"ext": "png"}).json()["targets"]]
     full = client.get("/api/convert/targets", params={"ext": "png", "all": 1}).json()["targets"]
     fmts = [t["fmt"] for t in full]
-    assert fmts[:len(legacy)] == legacy and {"avif", "heic", "ico", "svg"} <= set(fmts)
+    assert fmts[:len(legacy)] == [normalize(t) for t in legacy]
+    # a bővített lista a katalógus kulcsát adja (élesben a png → tiff nem látszott, mert itt „tif” állt)
+    assert "tiff" in fmts and "tif" not in fmts
+    assert next(t for t in full if t["fmt"] == "tiff")["label"] == "TIFF image"
+    assert {"avif", "heic", "ico", "svg"} <= set(fmts)
     assert all(t["category"] for t in full)
 
 
@@ -65,6 +70,26 @@ def test_csv_through_libreoffice_keeps_accents_and_columns(samples, tmp_path):
     with zipfile.ZipFile(out) as z:
         xml = z.read("content.xml").decode()
     assert ">Kőváry Ödön<" in xml and ">Győr, Fő utca 1.<" in xml and "Å" not in xml   # a ; is oszlophatár
+
+
+def test_png_to_tiff_is_offered_and_runs(client, samples, put_file):
+    """Élesben a png → tiff nem látszott felkínáltnak (a bővített lista „tif”-et adott); a „tiff” kérés a bevált
+    úton fut, és ha az itt nincs (PhotoCraft), a gráf csinálja meg."""
+    fid = put_file(samples.png())
+    job = _poll(client, client.post("/api/convert/run", json={"file_id": fid, "target": "tiff"}).json())
+    assert job["status"] == "done", job
+    from PIL import Image
+    from app.storage import output_path
+    with Image.open(output_path(job["result"]["file_id"])) as im:
+        assert im.format == "TIFF"
+
+
+def test_svg_to_dxf_is_offered():
+    """A VectorCraft svg → dxf éle megvolt, de a vektor → CAD átjárás hiányzott, ezért sosem került a tervbe."""
+    from app.convert import graph
+    assert [e.engine for e in graph.plan("svg", "dxf", static=True)] == ["vectorcraft"]
+    assert "dxf" in graph.targets("svg", static=True)
+    assert graph.plan("svg", "dwg", static=True) is None              # DWG-t vektorból nem ígérünk
 
 
 def test_convert_run_validation(client, samples, put_file):
@@ -117,7 +142,7 @@ def test_app_converter_reaches_every_format(client, samples, put_file):
     """Az app saját „Convert” készítője: a bevált célok változatlanul elöl, a többi formátum is választható,
     és a régi végpont az új célokat az univerzális konverterrel csinálja meg."""
     full = client.get("/api/convert/targets", params={"ext": "png", "all": 1}).json()["targets"]
-    assert [t["fmt"] for t in full if t["top"]] == ["jpg", "webp", "pdf", "tif", "psd"]
+    assert [t["fmt"] for t in full if t["top"]] == ["jpg", "webp", "pdf", "tiff", "psd"]
     assert any(t["fmt"] == "avif" and not t["top"] for t in full)
     fid = put_file(samples.png())
     r = client.post("/api/make/convert", json={"file_id": fid, "target": "avif"})

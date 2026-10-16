@@ -165,11 +165,15 @@ def _resolver() -> Callable[[str], Path]:
     return resolve
 
 
-def _legacy_ok(ext: str, target: str, options: dict[str, Any]) -> bool:
+def legacy_target(ext: str, target: str) -> Optional[str]:
+    """A bevált (anyconvert) út célja a saját írásmódjával — a „tiff” kérés a régi „tif” útját kapja."""
     from app.tools import anyconvert
-    if options:
-        return False
-    return target in anyconvert.targets_for(ext)
+    tfmt = normalize(target)
+    return next((t for t in anyconvert.targets_for(ext) if normalize(t) == tfmt), None)
+
+
+def _legacy_ok(ext: str, target: str, options: dict[str, Any]) -> bool:
+    return not options and legacy_target(ext, target) is not None
 
 
 async def convert_file(file_id: str, target: str, options: Optional[dict[str, Any]] = None, pool=None,
@@ -191,7 +195,7 @@ async def convert_file(file_id: str, target: str, options: Optional[dict[str, An
     if _legacy_ok(ext, tfmt, opts):
         from app.tools import anyconvert
         try:
-            res = await anyconvert.convert_any(pool, file_id, tfmt)
+            res = await anyconvert.convert_any(pool, file_id, legacy_target(ext, tfmt))
             res.setdefault("engines", ["legacy"])
             res.setdefault("files", [{k: res[k] for k in ("file_id", "url", "label", "size_kb") if k in res}])
             return res
@@ -228,12 +232,12 @@ async def convert_file(file_id: str, target: str, options: Optional[dict[str, An
 
 
 def targets_for(ext: str, static: bool = False) -> list[str]:
-    """A legacy célok (változatlan sorrendben) elöl, utána a gráf többi célja."""
+    """A legacy célok (változatlan sorrendben) elöl, utána a gráf többi célja — mind a katalógus kulcsával
+    (a régi „tif” itt „tiff”, különben a png → tiff nem látszott felkínáltnak)."""
     from app.tools import anyconvert
     ext = from_filename("x." + ext.lower().lstrip(".")) or ext
-    legacy = anyconvert.targets_for(ext)
-    seen = {normalize(t) for t in legacy}
-    rest = [t for t in graph.targets(ext, static=static) if t not in seen]
+    legacy = list(dict.fromkeys(normalize(t) for t in anyconvert.targets_for(ext)))
+    rest = [t for t in graph.targets(ext, static=static) if t not in legacy]
     return legacy + rest
 
 
