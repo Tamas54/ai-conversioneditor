@@ -62,11 +62,11 @@ def test_new_language_is_one_file(tmp_path, monkeypatch):
 
 PAGES = {
     "en": ["/ai-agents", "/convert", "/convert/documents", "/convert/docx-to-pdf", "/convert/heic-to-jpg", "/convert/tar-gz-to-zip",
-           "/formats/docx", "/tools", "/compare", "/compare/cloudconvert-alternative", "/developers", "/developers/docs",
+           "/formats", "/formats/docx", "/tools", "/compare", "/compare/cloudconvert-alternative", "/developers", "/developers/docs",
            "/developers/job-builder", "/developers/convert/docx-to-pdf", "/connect-ai", "/unit-converter",
            "/unit-converter/length", "/time-zone-converter"],
     "hu": ["/hu/ai-ugynokok", "/hu/atalakitas", "/hu/atalakitas/dokumentumok", "/hu/atalakitas/docx-bol-pdf", "/hu/atalakitas/heic-bol-jpg",
-           "/hu/formatumok/docx", "/hu/eszkozok", "/hu/osszehasonlitas", "/hu/osszehasonlitas/smallpdf-alternativa",
+           "/hu/formatumok", "/hu/formatumok/docx", "/hu/eszkozok", "/hu/osszehasonlitas", "/hu/osszehasonlitas/smallpdf-alternativa",
            "/hu/fejlesztoknek", "/hu/fejlesztoknek/dokumentacio", "/hu/ai-csatlakoztatas", "/hu/mertekegyseg-valto/homerseklet",
            "/hu/idozona-valto"],
 }
@@ -113,6 +113,19 @@ def test_hungarian_accents_and_suffix(client):
     t = client.get("/hu/atalakitas/mp3-bol-wav").text
     assert "MP3-ból WAV" in t and "Átalakítás" in t and "törlődik" in t
     assert "HEIC-ből JPG" in client.get("/hu/atalakitas/heic-bol-jpg").text
+
+
+def test_formats_hub_lists_every_format_and_is_linked(client):
+    """A /formats eddig 404 volt (csak a /formats/<x> létezett): most minden formátum egy helyen, a láblécből elérve."""
+    from app.catalog.formats import FORMATS
+    from app.site import urls
+    s = BeautifulSoup(client.get("/formats").text, "lxml")
+    hrefs = {a["href"] for a in s.select("main a[href]")}
+    assert {urls.fmt("en", k) for k in FORMATS} <= hrefs
+    for path in ("/app", "/convert", "/formats/png"):                  # a lábléc minden oldalon ide visz
+        assert "/formats" in {a["href"] for a in BeautifulSoup(client.get(path).text, "lxml").select("footer a[href]")}, path
+    from app.site.routes import all_paths
+    assert "/formats" in all_paths()["en"]
 
 
 def test_unknown_pages_404(client):

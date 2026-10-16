@@ -2,6 +2,7 @@
   <div class="wrap cols">
     <section><h2>{{ t('nav.convert') }}</h2><ul>
       <li><a href="{{ urls.convert_hub(lang) }}">{{ t('footer.all_conversions') }}</a></li>
+      <li><a href="{{ urls.formats_hub(lang) }}">{{ t('footer.all_formats') }}</a></li>
       {% for c in ['document','spreadsheet','presentation','ebook','image','vector','video','audio','archive','cad','font'] %}<li><a href="{{ urls.category(lang, c) }}">{{ t('cat.' ~ c ~ '.name') }}</a></li>{% endfor %}
     </ul></section>
     <section><h2>{{ t('nav.tools') }}</h2><ul>

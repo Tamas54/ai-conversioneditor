@@ -98,7 +98,8 @@
   "note": "{product} — fájlok átalakítása, szerkesztése és kitöltése nyílt forrású motorokkal és AI-jal. Alapból privát.",
   "all_conversions": "Minden átalakítás",
   "plans": "Csomagok és árak",
-  "agents": "Ügynöki funkciók"
+  "agents": "Ügynöki funkciók",
+  "all_formats": "Minden formátum"
  },
  "home": {
   "title": "{product} — bármilyen fájl átalakítása: {formats} formátum, AI-szerkesztés, űrlapok, aláírás",
@@ -2495,5 +2496,12 @@
     "Az átalakítás és a fájleszközök fiók nélkül is mennek, fájlonként {guest_mb} MB-ig. Az ügynöki funkciók AI-t használnak, ehhez ingyenes fiók kell."
    ]
   ]
+ },
+ "fhub": {
+  "crumb": "Formátumok",
+  "title": "Mind a {formats} fájlformátum — mi ez, és mire alakítható",
+  "desc": "Minden formátum, amit olvasunk és írunk, összesen {formats}: dokumentum, táblázat, diasor, e-könyv, kép, vektor, videó, hang, tömörített, CAD és betűkészlet.",
+  "h1": "Fájlformátumok",
+  "lead": "{formats} formátum, {conversions} átalakítási irány. Válassz egyet: mi ez, mivel nyitható meg, és mire alakítható."
  }
 }

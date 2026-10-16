@@ -93,7 +93,8 @@
   "note": "{product} — convert, edit and fill files with open-source engines and AI. Private by default.",
   "all_conversions": "All conversions",
   "plans": "Plans & pricing",
-  "agents": "Agentic features"
+  "agents": "Agentic features",
+  "all_formats": "All formats"
  },
  "home": {
   "title": "{product} — convert any file: {formats} formats, AI editing, forms and signatures",
@@ -2599,5 +2600,12 @@
     "Files stay in your private workspace and are deleted automatically after {retention} days; signatures and your form profile are stored encrypted, separately for each user."
    ]
   ]
+ },
+ "fhub": {
+  "crumb": "Formats",
+  "title": "All {formats} file formats — what they are and how to convert them",
+  "desc": "Every file format we read and write, {formats} in all: documents, spreadsheets, slides, e-books, images, vectors, video, audio, archives, CAD and fonts.",
+  "h1": "File formats",
+  "lead": "{formats} formats, {conversions} conversion directions. Pick one to see what it is, how to open it and what it converts to."
  }
 }

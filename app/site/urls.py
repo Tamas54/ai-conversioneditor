@@ -70,6 +70,10 @@ def fmt(lang: str, key: str) -> str:
     return f"{P(lang)}/{S(lang, 'formats')}/{FORMATS[key].slug}"
 
 
+def formats_hub(lang: str) -> str:
+    return f"{P(lang)}/{S(lang, 'formats')}"
+
+
 def tools_hub(lang: str) -> str:
     return f"{P(lang)}/{S(lang, 'tools')}"
 

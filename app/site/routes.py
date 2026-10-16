@@ -68,6 +68,10 @@ def _add(r: APIRouter, lang: str) -> None:
         raise HTTPException(404, "Not found")
     get(f"{P}/{S('convert')}/{{item}}", convert_item)
 
+    async def formats_hub():
+        return _resp(lang, "formats_hub")
+    get(f"{P}/{S('formats')}", formats_hub)
+
     async def fmt_page(item: str):
         key = next((f.key for f in FORMATS.values() if f.slug == item), None)
         if not key:
@@ -142,7 +146,7 @@ def all_paths(indexable_only: bool = True) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     from app.catalog.units import CATEGORIES as UC
     for lang in i18n.langs():
-        ps = [urls.agents(lang), urls.convert_hub(lang), urls.tools_hub(lang), urls.compare_hub(lang), urls.developers(lang),
+        ps = [urls.agents(lang), urls.convert_hub(lang), urls.formats_hub(lang), urls.tools_hub(lang), urls.compare_hub(lang), urls.developers(lang),
               urls.docs(lang), urls.job_builder(lang), urls.connect_ai(lang), urls.units(lang), urls.timezones(lang)]
         ps += [urls.category(lang, c) for c in CATEGORIES]
         ps += [urls.fmt(lang, k) for k, f in FORMATS.items() if not indexable_only or f.tier <= 2]

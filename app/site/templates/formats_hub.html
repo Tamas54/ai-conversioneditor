@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+{% for c in p.cats %}
+<section class="cat"><h2><a href="{{ c.url }}">{{ c.name }}</a> <span class="muted small">{{ c.formats|length }}</span></h2>
+<dl class="fmts">{% for f in c.formats %}<div><dt><a href="{{ f.url }}">{{ f.label }}</a> <span class="muted">{{ f.name }}</span></dt></div>{% endfor %}</dl></section>
+{% endfor %}
+{% endblock %}
