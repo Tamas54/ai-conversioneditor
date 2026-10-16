@@ -237,7 +237,8 @@ dialog.drawer::backdrop { background: rgba(10, 22, 16, .45); }
   .topbar { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
 }
 @media (max-width: 600px) {
-  .topbar nav { order: 5; width: 100%; margin: 2px 0 0 -12px; }
+  .topbar nav { order: 5; width: 100%; margin: 2px 0 0 -10px; flex-wrap: wrap; }
+  .topbar nav a { white-space: nowrap; padding: 7px 10px; }     /* egész szavak; ha nem fér ki, a menüpont a következő sorba kerül */
   .topbar .chip { padding: 7px 9px; }
 }
 

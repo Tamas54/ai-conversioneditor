@@ -31,6 +31,7 @@
   <a class="chip nav-back" id="nav-back" href="/app" hidden title="One step back">← Back</a>
   <nav aria-label="Main">
     <a href="/app" data-nav="home">Make</a>
+    <a href="/app/make/convert" data-nav="convert">Convert</a>
     <a href="/app/files" data-nav="files">My workspace</a>
     <a href="/app/brand" data-nav="brand">Brand</a>
     <a href="/app/connect" data-nav="connect">Connect your AI</a>
@@ -56,6 +57,9 @@
     <h1>What are we making?</h1>
     <p class="lede">Pick a tool, answer a few questions, get a finished file. Fix anything by hand in the built-in editors — or let your own AI drive it.</p>
     <div class="tools">
+      <!-- az átalakítás nem kerül nekünk semmibe: belépés nélkül is megy, ezért elöl áll, mindenki lássa -->
+      <button class="tool" data-make="convert"><span class="obj"><span class="o-convert"><span class="paper a">DOCX</span><span class="paper b">PDF</span><b>⇄</b></span></span>
+        <span class="label">Convert</span><span class="hint">Word, PDF, slides, sheets, images, e-books — any to any. Free, no account needed</span></button>
       <button class="tool" data-make="doc"><span class="obj"><span class="paper o-doc"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>
         <span class="label">Document</span><span class="hint">Write or edit like in Word — letters, reports, CVs; start blank or from a brief</span></button>
       <button class="tool" data-make="deck"><span class="obj"><span class="paper o-deck"><i></i><i></i><i></i><b></b></span></span>
@@ -76,8 +80,6 @@
         <span class="label">Scan to text <em class="ai-badge">AI</em></span><span class="hint">Old books and photographed pages → Word, a new PDF, searchable PDF</span></button>
       <button class="tool" data-make="pdf"><span class="obj"><span class="paper o-pdf"><i></i><i></i><i class="x"></i><i></i><i></i><b>PDF</b></span></span>
         <span class="label">PDF tools</span><span class="hint">Merge, compress, black out, number, protect, to Word</span></button>
-      <button class="tool" data-make="convert"><span class="obj"><span class="o-convert"><span class="paper a">DOCX</span><span class="paper b">PDF</span><b>⇄</b></span></span>
-        <span class="label">Convert</span><span class="hint">Word, PDF, slides, sheets, images, e-books — any to any</span></button>
     </div>
   </div></section>
   <section class="sheet intro">
@@ -287,8 +289,8 @@ async function loadAccount() {
 }
 const AI_NOTE = "This uses AI — create a free account to use it.";
 const AI_MAKERS = new Set(["scan", "infographic"]);
-const SLUGS = { doc: "document", deck: "presentation", social: "social-post", print: "print-design", infographic: "infographic", photo: "photos",
-  book: "book", video: "video", scan: "scan-to-text", pdf: "pdf-tools", convert: "convert" };
+const SLUGS = { convert: "convert", doc: "document", deck: "presentation", social: "social-post", print: "print-design", infographic: "infographic",
+  photo: "photos", book: "book", video: "video", scan: "scan-to-text", pdf: "pdf-tools" };   // a sorrend = a csempék és a fiók fülei
 const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
   doc: ["dmode", { template: "new", brief: "from-brief", open: "open" }],
   deck: ["pmode", { blank: "new", brief: "from-brief", document: "from-document", open: "open" }],
@@ -759,10 +761,14 @@ async function route() {
   for (const [id, base] of [["signin", "/login"], ["signup", "/signup"]])   // belépés / új fiók után vissza ugyanide
     document.getElementById(id)?.setAttribute("href", `${base}?next=${encodeURIComponent(here())}`);
   if (siteFoot) siteFoot.hidden = name === "file";
-  document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
-  document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
+  markNav();
   try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); if (name === "file" && cur?.file_id && location.pathname.includes(cur.file_id)) { baseTitle = cur.label; setTitle(baseTitle); } }
   catch (e) { if (e.message !== "signed out") toast(e.message); }
+}
+function markNav() {      // a fejléc aktív menüpontja; a Convert fiók a saját menüpontját jelöli (bezárva újra az alatta lévőt)
+  const [name = "", sub] = location.pathname.replace(/^\/app\/?/, "").replace(/\/+$/, "").split("/");
+  const key = name === "make" && sub === "convert" ? "convert" : (name || "home");
+  document.querySelectorAll("[data-nav]").forEach(a => a.dataset.nav === key ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
 }
 // statikus linkek: History API; a belső <a href="/app…"> kattintás nem tölti újra az oldalt
 const here = () => location.pathname + location.search;
@@ -2740,7 +2746,7 @@ $("#make-form").addEventListener("invalid", e => {      // a böngésző buboré
 let keepMakeLink = false;   // sikeres készítés után a fiók linkje marad az előzményekben (a Vissza oda hoz)
 $("#drawer").addEventListener("close", () => {
   if (keepMakeLink) { keepMakeLink = false; return; }
-  if (here().startsWith("/app/make/")) { history.replaceState(null, "", underMaker); setTitle(baseTitle); }
+  if (here().startsWith("/app/make/")) { history.replaceState(null, "", underMaker); setTitle(baseTitle); markNav(); }
 });
 $("#drawer").addEventListener("click", e => {          // kattintás a fiók mellé (a sötét háttérre) = bezárás
   if (e.target === e.currentTarget && e.clientX < e.currentTarget.getBoundingClientRect().left) e.currentTarget.close();

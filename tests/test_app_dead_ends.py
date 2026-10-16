@@ -7,6 +7,7 @@ belépés után a kezdőlapra dobott, nem oda, ahonnan jött.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import threading
 import time
@@ -91,3 +92,32 @@ def test_guest_ask_for_a_change_leads_to_sign_in_and_back(guest_page, live_url):
     page.locator("#rev-go").click()                                      # az Apply is ugyanide visz
     page.locator("#drawer[open]").wait_for()
     assert _next(page.locator("#signin").get_attribute("href")) == path   # a fejléc „Sign in” is vissza ide hoz
+
+
+def test_guest_finds_convert_first_and_converts_without_an_account(guest_page, live_url, samples):
+    """Az átalakítás nem kerül nekünk semmibe, ezért belépés nélkül is megy, és mindenki látja: az első csempe,
+    és külön menüpont a fejlécben (élesben 10-16 a csempék végén állt, telefonon két képernyőnyit lejjebb)."""
+    page = guest_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{live_url}/app")
+    first = page.locator(".tools .tool").first
+    first.wait_for()
+    assert first.get_attribute("data-make") == "convert"
+    assert first.bounding_box()["y"] + first.bounding_box()["height"] < 844        # telefonon is görgetés nélkül látszik
+    assert "no account" in first.inner_text()
+    menu = page.locator(".topbar nav a[data-nav=convert]")
+    assert menu.is_visible() and menu.get_attribute("href") == "/app/make/convert"
+    menu.click()                                                          # a menüpont a Convert fiókot nyitja …
+    page.locator("#drawer[open] #drawer-title", has_text="Convert").wait_for()
+    assert page.url.endswith("/app/make/convert") and menu.get_attribute("aria-current") == "page"
+    page.locator("#drawer-x").click()                                     # … és a bezárás visszavisz a címlapra
+    page.wait_for_url(f"{live_url}/app")                                 # (a dialógus close eseménye utána fut)
+    assert menu.get_attribute("aria-current") is None
+    assert page.locator(".topbar nav a[data-nav=home]").get_attribute("aria-current") == "page"
+    first.click()                                                         # belépés nélkül végig: fájl → cél → eredmény
+    page.locator("#make-form [data-slot=file] input[type=file]").set_input_files(str(samples.png()))
+    page.wait_for_function("!document.querySelector('#make-form [name=target]').disabled")
+    page.select_option("#make-form [name=target]", "jpg")
+    page.locator("#make-go").click()
+    page.wait_for_url(re.compile(r"/app/file/[0-9a-f]+\.jpg(/|$)"))         # a kész fájl a fotószerkesztőben nyílik
+    assert page.locator("#drawer[open]").count() == 0
