@@ -15,6 +15,9 @@ Javítások (csak ami tényleg kell, minden más bájtra ugyanaz marad):
   6. image/jpg          nem létező MIME-típus → image/jpeg.
   7. videós dia         a python-pptx videója nem indul (csak „várakozó” médiacsomópont) → a PowerPoint saját
                         időzítése: magától indul a dia megjelenésekor, koppintásra szünet/folytatás.
+  8. tömörítetlen média a PowerPoint a videót/hangot tömörítés nélkül (STORED) teszi a csomagba; a python-pptx
+                        mindent DEFLATE-tel ír. A Keynote a tömörített filmet nem játssza le — a dián csak a
+                        borítókép marad (iPhone, 10-16) → a hang- és videórészek STORED-ként kerülnek vissza.
 
 A ZIP-et sorrendtartóan írjuk újra ([Content_Types].xml elöl), a médiát adatfolyamként másolva. Ha nincs mit
 javítani, a fájlhoz nem nyúlunk. Hiba esetén sem bukik a mentés: a fájl marad, ahogy volt.
@@ -59,6 +62,7 @@ _SLD_TYPES = {"screen4x3": (9144000, 6858000), "screen16x9": (9144000, 5143500),
               "A3": (14400213, 10800160), "B4ISO": (10826750, 8120063), "B5ISO": (7169150, 5376863),
               "B4JIS": (11447463, 8585200), "B5JIS": (8077200, 6058000), "hagakiCard": (3600450, 5329238)}
 _WIDE = (12192000, 6858000)
+_AV_EXTS = {"mp4", "m4v", "mov", "qt", "avi", "wmv", "mpg", "mpeg", "3gp", "m4a", "mp3", "wav", "wma", "aac", "aif", "aiff"}
 _AX_MAX = 2147483647          # c:axId: unsignedInt, de az Office (és a Keynote) csak 2^31-1-ig fogadja
 
 Target = Union[str, os.PathLike, IO[bytes]]
@@ -128,19 +132,20 @@ def _video_autoplay(zf: zipfile.ZipFile, part: str, root) -> bool:
     return True
 
 
-def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str]]:
-    """→ (átírandó részek új tartalma, törlendő részek, mit javított)."""
+def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str], set[str]]:
+    """→ (átírandó részek új tartalma, törlendő részek, mit javított, tömörítés nélkül írandó részek)."""
     names = set(zf.namelist())
     new: dict[str, bytes] = {}
     drop: set[str] = set()
     done: list[str] = []
+    store: set[str] = set()
     if "[Content_Types].xml" not in names or "_rels/.rels" not in names:
-        return new, drop, done
+        return new, drop, done, store
     root_rels = etree.fromstring(zf.read("_rels/.rels"))
     pres = next((_resolve("", r.get("Target", "")) for r in root_rels.iter(_q(_PR, "Relationship"))
                  if r.get("Type") == _OFFICE_DOC), "ppt/presentation.xml")
     if pres not in names:
-        return new, drop, done
+        return new, drop, done, store
     ct = etree.fromstring(zf.read("[Content_Types].xml"))
     defaults = {d.get("Extension", "").lower(): d for d in ct.iter(_q(_CT, "Default"))}
     overrides = {o.get("PartName", "").lstrip("/"): o for o in ct.iter(_q(_CT, "Override"))}
@@ -279,19 +284,29 @@ def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str]]:
         done.append(f"axis ids in {charts_fixed} chart(s)")
     if videos_fixed:
         done.append(f"video autoplay on {videos_fixed} slide(s)")
+    # 8. hang és videó tömörítés nélkül, ahogy a PowerPoint írja (a Keynote csak így játssza le)
+    for i in zf.infolist():
+        if i.filename in drop or i.compress_type == zipfile.ZIP_STORED:
+            continue
+        typ = ctype(i.filename).lower()
+        if typ.startswith(("video/", "audio/")) or i.filename.rsplit(".", 1)[-1].lower() in _AV_EXTS:
+            store.add(i.filename)
+    if store:
+        done.append(f"{len(store)} video/audio part(s) stored uncompressed")
     if ct_changed:
         new["[Content_Types].xml"] = _xml(ct)
-    return new, drop, done
+    return new, drop, done, store
 
 
-def _rewrite(zf: zipfile.ZipFile, out: IO[bytes], new: dict[str, bytes], drop: set[str]) -> None:
+def _rewrite(zf: zipfile.ZipFile, out: IO[bytes], new: dict[str, bytes], drop: set[str],
+             store: frozenset[str] | set[str] = frozenset()) -> None:
     infos = [i for i in zf.infolist() if i.filename not in drop]
     infos.sort(key=lambda i: i.filename != "[Content_Types].xml")     # stabil: a többi sorrendje marad
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zo:
         for i in infos:
             ni = zipfile.ZipInfo(i.filename, date_time=i.date_time)
-            ni.compress_type = i.compress_type if i.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) \
-                else zipfile.ZIP_DEFLATED
+            ni.compress_type = zipfile.ZIP_STORED if i.filename in store else \
+                i.compress_type if i.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) else zipfile.ZIP_DEFLATED
             ni.external_attr = i.external_attr
             if i.filename in new:
                 zo.writestr(ni, new[i.filename])
@@ -306,13 +321,13 @@ def fix(target: Target) -> list[str]:
         if isinstance(target, (str, os.PathLike)):
             p = Path(target)
             with zipfile.ZipFile(p) as zf:
-                new, drop, done = _plan(zf)
+                new, drop, done, store = _plan(zf)
                 if not done:
                     return []
                 fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".keynote-", suffix=".pptx")
                 try:
                     with os.fdopen(fd, "wb") as fh:
-                        _rewrite(zf, fh, new, drop)
+                        _rewrite(zf, fh, new, drop, store)
                     os.replace(tmp, p)
                 except BaseException:
                     Path(tmp).unlink(missing_ok=True)
@@ -322,11 +337,11 @@ def fix(target: Target) -> list[str]:
         stream.seek(0)
         data = stream.read()
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            new, drop, done = _plan(zf)
+            new, drop, done, store = _plan(zf)
             if not done:
                 return []
             buf = io.BytesIO()
-            _rewrite(zf, buf, new, drop)
+            _rewrite(zf, buf, new, drop, store)
         stream.seek(0)
         stream.truncate()
         stream.write(buf.getvalue())
