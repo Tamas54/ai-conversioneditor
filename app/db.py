@@ -149,6 +149,80 @@ CREATE TABLE IF NOT EXISTS ocr_cache (
     created_at      timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (sha256, prompt_ver, model)
 );
+-- ---- bővítés (10-15), csak additív: mentett konverziós beállítások, nyilvános REST API (jobs/tasks), webhookok,
+-- aláírások és űrlap-adatprofil (titkosítva, felhasználónként) ----
+CREATE TABLE IF NOT EXISTS convert_presets (
+    id              bigserial PRIMARY KEY,
+    owner_id        text NOT NULL,
+    name            text NOT NULL,
+    scope           text NOT NULL,
+    options         jsonb NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (owner_id, scope, name)
+);
+CREATE TABLE IF NOT EXISTS api_jobs (
+    id              text PRIMARY KEY,
+    owner_id        text NOT NULL,
+    tag             text,
+    status          text NOT NULL,
+    sandbox         boolean NOT NULL DEFAULT false,
+    webhook_url     text,
+    credits         integer NOT NULL DEFAULT 0,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    started_at      timestamptz,
+    ended_at        timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_jobs_owner_idx ON api_jobs (owner_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS api_tasks (
+    id              text PRIMARY KEY,
+    job_id          text NOT NULL,
+    owner_id        text NOT NULL,
+    name            text NOT NULL,
+    operation       text NOT NULL,
+    status          text NOT NULL,
+    depends_on      jsonb NOT NULL DEFAULT '[]',
+    payload         jsonb NOT NULL DEFAULT '{}',
+    result          jsonb,
+    message         text,
+    code            text,
+    percent         integer NOT NULL DEFAULT 0,
+    credits         integer NOT NULL DEFAULT 0,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    started_at      timestamptz,
+    ended_at        timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_tasks_job_idx ON api_tasks (job_id);
+CREATE TABLE IF NOT EXISTS api_webhooks (
+    id              bigserial PRIMARY KEY,
+    owner_id        text NOT NULL,
+    url             text NOT NULL,
+    events          jsonb NOT NULL DEFAULT '["job.finished","job.failed"]',
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    disabled_at     timestamptz,
+    last_status     integer,
+    last_error      text,
+    last_at         timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_webhooks_owner_idx ON api_webhooks (owner_id);
+CREATE TABLE IF NOT EXISTS user_signatures (
+    id              text PRIMARY KEY,
+    owner_id        text NOT NULL,
+    name            text NOT NULL,
+    kind            text NOT NULL DEFAULT 'signature',
+    nonce           bytea NOT NULL,
+    data            bytea NOT NULL,
+    width           integer,
+    height          integer,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    deleted_at      timestamptz
+);
+CREATE INDEX IF NOT EXISTS user_signatures_owner_idx ON user_signatures (owner_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS user_profiles (
+    owner_id        text PRIMARY KEY,
+    nonce           bytea NOT NULL,
+    data            bytea NOT NULL,
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
 """
 
 _pool = None
@@ -374,9 +448,9 @@ def _key_hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-async def api_key_create(uid: str, name: Optional[str]) -> dict[str, Any]:
+async def api_key_create(uid: str, name: Optional[str], sandbox: bool = False) -> dict[str, Any]:
     import secrets
-    key = "sk_" + secrets.token_urlsafe(30)
+    key = ("sk_test_" if sandbox else "sk_") + secrets.token_urlsafe(30)
     rows = await _rows("""INSERT INTO api_keys (user_id, name, prefix, key_hash) VALUES (%s, %s, %s, %s)
                           RETURNING id, name, prefix, created_at""", (uid, name, key[:10], _key_hash(key)))
     return {**rows[0], "key": key}  # a teljes kulcs csak itt, egyszer látszik
@@ -613,3 +687,67 @@ async def stripe_event_done(event_id: str, kind: str) -> None:
     """Csak SIKERES feldolgozás után: ha közben hiba van, a Stripe újrapróbálkozása újra feldolgozza."""
     await _rows("INSERT INTO stripe_events (id, type) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING", (event_id, kind))
 
+
+
+# ---------- mentett konverziós / eszköz-beállítások ----------
+
+async def preset_list(uid: str, scope: Optional[str] = None) -> list[dict[str, Any]]:
+    if scope:
+        return await _rows("SELECT id, name, scope, options, created_at FROM convert_presets WHERE owner_id = %s AND scope = %s "
+                           "ORDER BY name", (uid, scope))
+    return await _rows("SELECT id, name, scope, options, created_at FROM convert_presets WHERE owner_id = %s ORDER BY scope, name", (uid,))
+
+
+async def preset_get(uid: str, preset_id: int) -> Optional[dict[str, Any]]:
+    rows = await _rows("SELECT id, name, scope, options FROM convert_presets WHERE owner_id = %s AND id = %s", (uid, preset_id))
+    return rows[0] if rows else None
+
+
+async def preset_save(uid: str, name: str, scope: str, options: dict[str, Any]) -> dict[str, Any]:
+    from psycopg.types.json import Jsonb
+    rows = await _rows("""INSERT INTO convert_presets (owner_id, name, scope, options) VALUES (%s, %s, %s, %s)
+                          ON CONFLICT (owner_id, scope, name) DO UPDATE SET options = EXCLUDED.options
+                          RETURNING id, name, scope, options, created_at""", (uid, name, scope, Jsonb(options)))
+    return rows[0]
+
+
+async def preset_delete(uid: str, preset_id: int) -> bool:
+    return bool(await _rows("DELETE FROM convert_presets WHERE owner_id = %s AND id = %s RETURNING id", (uid, preset_id)))
+
+
+# ---------- aláírások, adatprofil (titkosítva: app/formkit/crypto.py) ----------
+
+async def signature_put(uid: str, sid: str, name: str, kind: str, nonce: bytes, data: bytes, width: int, height: int) -> None:
+    await _rows("""INSERT INTO user_signatures (id, owner_id, name, kind, nonce, data, width, height)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""", (sid, uid, name, kind, nonce, data, width, height))
+
+
+async def signature_list(uid: str) -> list[dict[str, Any]]:
+    return await _rows("SELECT id, name, kind, width, height, created_at FROM user_signatures WHERE owner_id = %s "
+                       "AND deleted_at IS NULL ORDER BY created_at DESC", (uid,))
+
+
+async def signature_get(uid: str, sid: str) -> Optional[dict[str, Any]]:
+    rows = await _rows("SELECT id, name, kind, nonce, data, width, height FROM user_signatures WHERE owner_id = %s AND id = %s "
+                       "AND deleted_at IS NULL", (uid, sid))
+    return rows[0] if rows else None
+
+
+async def signature_delete(uid: str, sid: str) -> bool:
+    """Végleges törlés (a titkosított adat is) — az aláírás érzékeny adat, nem tartjuk meg."""
+    return bool(await _rows("DELETE FROM user_signatures WHERE owner_id = %s AND id = %s RETURNING id", (uid, sid)))
+
+
+async def profile_get(uid: str) -> Optional[dict[str, Any]]:
+    rows = await _rows("SELECT nonce, data, updated_at FROM user_profiles WHERE owner_id = %s", (uid,))
+    return rows[0] if rows else None
+
+
+async def profile_put(uid: str, nonce: bytes, data: bytes) -> None:
+    await _rows("""INSERT INTO user_profiles (owner_id, nonce, data) VALUES (%s, %s, %s)
+                   ON CONFLICT (owner_id) DO UPDATE SET nonce = EXCLUDED.nonce, data = EXCLUDED.data, updated_at = now()
+                   RETURNING owner_id""", (uid, nonce, data))
+
+
+async def profile_delete(uid: str) -> bool:
+    return bool(await _rows("DELETE FROM user_profiles WHERE owner_id = %s RETURNING owner_id", (uid,)))

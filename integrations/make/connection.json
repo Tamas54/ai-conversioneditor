@@ -1,0 +1,14 @@
+{
+  "name": "aice-key",
+  "label": "API key",
+  "type": "basic",
+  "parameters": [
+    {"name": "baseUrl", "type": "url", "label": "Base URL", "required": true, "help": "Address of the service, e.g. https://your-domain"},
+    {"name": "apiKey", "type": "password", "label": "API key", "required": true, "help": "sk_… (or sk_test_… for the sandbox)"}
+  ],
+  "communication": {
+    "url": "{{parameters.baseUrl}}/v1/me",
+    "headers": {"Authorization": "Bearer {{parameters.apiKey}}"},
+    "response": {"metadata": {"type": "text", "value": "{{body.user_id}} ({{body.plan}})"}, "error": {"message": "{{body.error.message}}"}}
+  }
+}

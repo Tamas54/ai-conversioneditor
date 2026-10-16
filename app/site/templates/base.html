@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="{{ meta.html or lang }}" dir="{{ meta.dir or 'ltr' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ p.title }}</title>
+<meta name="description" content="{{ p.desc }}">
+<link rel="canonical" href="{{ base }}{{ p.path }}">
+<meta name="robots" content="{{ robots }}">
+{% for L, u in p.alternates.items() %}
+<link rel="alternate" hreflang="{{ i18n.raw(L, '_meta.html', L) }}" href="{{ base }}{{ u }}">
+{% endfor %}
+<link rel="alternate" hreflang="x-default" href="{{ base }}{{ p.alternates[langs[0]] }}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ p.title }}">
+<meta property="og:description" content="{{ p.desc }}">
+<meta property="og:url" content="{{ base }}{{ p.path }}">
+<meta property="og:site_name" content="{{ product }}">
+<meta property="og:locale" content="{{ meta.locale or lang }}">
+<meta property="og:image" content="{{ base }}/static/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#1E4436">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ product_css }}">
+<link rel="stylesheet" href="{{ css }}">
+{% for ld in p.jsonld %}
+<script type="application/ld+json">{{ ld|jsonld }}</script>
+{% endfor %}
+</head>
+<body class="site k-{{ p.kind }}">
+<a class="skip" href="#main">{{ t('ui.skip') }}</a>
+<header class="topbar">
+  <a class="brand" href="/app">{{ product }}</a>
+  <nav aria-label="{{ t('ui.main_nav') }}">
+    {% for name, url in nav %}<a href="{{ url }}"{% if url != '/app' and p.path.startswith(url) %} aria-current="page"{% endif %}>{{ name }}</a>{% endfor %}
+  </nav>
+  <span class="spacer"></span>
+  {% if langs|length > 1 %}
+  <details class="langs">
+    <summary aria-label="{{ t('ui.language') }}">{{ lang|upper }}</summary>
+    <ul>{% for L, u in p.alternates.items() %}<li><a href="{{ u }}" hreflang="{{ L }}" lang="{{ L }}"{% if L == lang %} aria-current="true"{% endif %}>{{ lang_names[L] }}</a></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  <a class="chip chip-cta" href="/app">{{ t('nav.open_app') }}</a>
+</header>
+<div class="wrap backrow">
+  <a class="back" href="{{ parent }}" data-back>← {{ t('ui.back') }}</a>
+  {% if p.crumbs and p.crumbs|length > 1 %}
+  <nav class="crumbs" aria-label="{{ t('ui.breadcrumbs') }}"><ol>
+  {% for name, url in p.crumbs %}<li>{% if not loop.last %}<a href="{{ url }}">{{ name }}</a>{% else %}<span aria-current="page">{{ name }}</span>{% endif %}</li>{% endfor %}
+  </ol></nav>
+  {% endif %}
+</div>
+<main id="main" class="wrap">
+{% block main %}{% endblock %}
+</main>
+{% include "_foot.html" %}
+<script id="t-js" type="application/json">{{ i18n.raw(lang, "js", {})|tojson }}</script>
+<script src="{{ js }}" defer></script>
+<script src="/static/webmcp.js" defer></script>
+</body>
+</html>

@@ -35,7 +35,7 @@ def _fail(e: Exception) -> HTTPException:
 @router.post("/api/make/video")
 async def make_video(body: dict[str, Any]) -> dict[str, Any]:
     """{mode: article|text|new, text?, url?, source_file_id?, format: vertical|landscape|square, duration?, images?,
-    pictures?: stock|mine|none, music_file_id?, voice_file_id?, accent?, language?}"""
+    pictures?: stock|mine|none, music_file_id?, voice_file_id?, narration?: ai|none, narration_voice?, accent?, language?}"""
     from app import jobs
     from app.tools import video
     mode = (body.get("mode") or "article").lower()

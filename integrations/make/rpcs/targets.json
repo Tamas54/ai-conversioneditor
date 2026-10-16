@@ -1,0 +1,5 @@
+{
+  "name": "targets",
+  "label": "Output formats",
+  "communication": {"url": "/catalog/formats", "method": "GET", "response": {"iterate": "{{body.formats}}", "output": {"label": "{{upper(item.key)}} — {{item.name}}", "value": "{{item.key}}"}}}
+}

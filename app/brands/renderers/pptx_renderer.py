@@ -384,6 +384,8 @@ async def apply_brand_to_pptx(
         - document_label: footer label (defaults to brief_code or 'BRIEF')
     """
     from pptx import Presentation
+    from app.tools import keynote_safe
+    keynote_safe.install()
 
     if brief_meta is None:
         brief_meta = {}

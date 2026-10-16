@@ -45,6 +45,8 @@ body.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px
               repeating-linear-gradient(90deg, var(--mat-line) 0 1px, transparent 1px 32px) var(--mat); }   /* a szín csak az utolsó rétegben lehet (különben az egész érvénytelen → fehér) */
 .auth-card { background: var(--paper); width: min(400px, 100%); padding: 32px; border-radius: var(--radius); box-shadow: var(--shadow); }
 .auth-card h1 { font: 700 26px/1.15 var(--f-display); margin: 18px 0 20px; }
+.auth-card .back { display: block; margin: -12px 0 14px; font-size: 14px; color: var(--graphite); text-decoration: none; }
+.auth-card .back:hover { text-decoration: underline; }
 .brand { font: 800 20px/1 var(--f-display); text-decoration: none; letter-spacing: -.01em; }
 
 /* ---------- app-váz ---------- */
@@ -641,3 +643,14 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
 .mg-foot { position: sticky; bottom: -22px; background: var(--paper); padding: 12px 0 4px; display: flex; gap: 8px; }
 .mg-foot input { flex: 1; min-width: 0; padding: 11px 13px; border: 1px solid var(--rule); border-radius: 10px; font: inherit; background: var(--card); margin: 0; }
 @media (max-width: 700px) { .mg-cols { grid-template-columns: 1fr; } }
+
+/* ---------- közös lábléc a nyilvános oldalakkal (konverziók, eszközök, AI agents, API) ---------- */
+.site-foot { border-top: 1px solid var(--rule); background: var(--paper-2); padding: 28px 0 18px; font-size: 14px; margin-top: 24px; }
+.site-foot .wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px; }
+.site-foot .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px; }
+.site-foot h2 { font: 700 15px/1.2 var(--f-display); margin: 0 0 8px; }
+.site-foot ul { list-style: none; padding: 0; margin: 0; } .site-foot li { margin: 4px 0; }
+.site-foot a { color: var(--graphite); text-decoration: none; } .site-foot a:hover { color: var(--ink); text-decoration: underline; }
+.site-foot p { margin: 18px auto 0; }
+.nav-back { cursor: pointer; }
+.more-note a { color: inherit; }

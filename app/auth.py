@@ -34,7 +34,9 @@ COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/static/", "/api/stripe/webhook",
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
-                    "/.well-known/", "/oauth/")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
+                    "/.well-known/", "/oauth/",
+                    "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
+                    "/api/units/", "/api/timezones/", "/indexnow-", "/api/catalog")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
@@ -45,6 +47,10 @@ _GUEST_OK = (
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
     ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),
+    ("POST", "/api/convert/run"), ("POST", "/api/tools/run"), ("GET", "/api/presets"),   # bővítés: konverter, eszközök
+    ("POST", "/api/import"), ("GET", "/api/import/config"), ("POST", "/api/export"),            # URL / felhős import (SSRF-védett, vendégnek 25 MB)
+    ("POST", "/api/upload/chunks"), ("PUT", "/api/upload/chunks/"),     # darabolt feltöltés nagy fájlokhoz
+    ("GET", "/api/signatures"), ("DELETE", "/api/signatures/"),         # a vendég saját (munkamenetes) aláírásai
     ("POST", "/api/make/deck"), ("POST", "/api/make/handout"),          # deck: vendégnek csak az üres pakli (AI nélkül)
     ("POST", "/api/make/blank"),                                        # „New”: üres fájl, AI nélkül
     ("POST", "/api/make/album"),                                        # fotóalbum: AI nélkül (az AI-képaláírás maga kér fiókot)
@@ -156,6 +162,10 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)
+    if request.method in ("GET", "HEAD"):
+        from app.site.urls import is_public
+        if is_public(path) and not (path == "/" and request.cookies.get(COOKIE)):
+            return await call_next(request)          # nyilvános oldal: nincs munkaterület, nincs vendég-süti
     uid = await key_uid(request)
     if path.startswith("/mcp") and uid is None:
         if settings.MCP_AUTH_TOKEN:
@@ -219,6 +229,7 @@ def _safe_next(nxt: str) -> str:
 
 _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{title} — {product}</title>
+<meta name="robots" content="noindex, follow"><meta name="description" content="{title} to {product}: convert, edit and make files by asking.">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png"><meta name="theme-color" content="#1E4436">
 <meta property="og:title" content="{product} — finished files, changed by asking"><meta property="og:image" content="/static/og.png">
@@ -226,6 +237,7 @@ _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/product.css"></head>
 <body class="auth"><main class="auth-card">
+  <a class="back" href="/" data-back>← Back</a>
   <a class="brand" href="/">{product}</a>
   <h1>{title}</h1>
   {error}
@@ -376,7 +388,10 @@ async def api_account(request: Request) -> dict:
 @router.post("/api/account/keys")
 async def api_key_create(body: Optional[dict] = None) -> dict:
     db = _require_db()
-    created = await db.api_key_create(tenancy.current_user_id(), ((body or {}).get("name") or "MCP key")[:60])
+    sandbox = bool((body or {}).get("sandbox"))
+    created = await db.api_key_create(tenancy.current_user_id(), ((body or {}).get("name") or ("Sandbox key" if sandbox else "MCP key"))[:60],
+                                      sandbox=sandbox)
+    created["sandbox"] = sandbox
     created["mcp_url"] = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/mcp?key={created['key']}"
     return created
 

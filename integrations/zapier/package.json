@@ -1,0 +1,9 @@
+{
+  "name": "aice-zapier",
+  "version": "1.0.0",
+  "description": "Zapier integration: convert files, run processing jobs, react to finished jobs",
+  "main": "index.js",
+  "scripts": {"test": "node --test test/*.test.js"},
+  "dependencies": {"zapier-platform-core": "15.19.0"},
+  "private": true
+}

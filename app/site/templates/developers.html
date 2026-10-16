@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+<ul class="cards">
+  <li><a href="{{ p.docs_url }}"><strong>{{ t('docs.crumb') }}</strong></a><p>{{ t('dev.docs_p') }}</p></li>
+  <li><a href="{{ p.jb_url }}"><strong>{{ t('jb.crumb') }}</strong></a><p>{{ t('dev.jb_p') }}</p></li>
+  <li><a href="{{ p.connect_url }}"><strong>{{ t('nav.connect_ai') }}</strong></a><p>{{ t('dev.mcp_p') }}</p></li>
+  <li><a href="/v1/openapi.json"><strong>OpenAPI</strong></a><p>{{ t('dev.openapi_p') }}</p></li>
+</ul>
+<section><h2>{{ t('dev.quick_h') }}</h2>
+<pre><code>curl -X POST {{ p.base }}/v1/jobs \
+  -H "Authorization: Bearer sk_…" -H "Content-Type: application/json" \
+  -d '{"tasks": {
+        "in":  {"operation": "import/url", "url": "https://example.com/file.docx"},
+        "pdf": {"operation": "convert", "input": "in", "output_format": "pdf"},
+        "out": {"operation": "export/url", "input": "pdf"}}}'</code></pre></section>
+<section><h2>{{ t('dev.sdk_h') }}</h2><p>{{ t('dev.sdk_p') }}</p></section>
+<section><h2>{{ t('dev.top_h') }}</h2>{{ links(p.top) }}</section>
+{% endblock %}

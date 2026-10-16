@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+<form class="tz" onsubmit="return false">
+  <label>{{ t('tz.time') }} <input type="datetime-local" name="time"></label>
+  <label>{{ t('tz.from') }} <select name="from">{% for z in p.zones %}<option{% if z == 'Europe/Budapest' %} selected{% endif %}>{{ z }}</option>{% endfor %}</select></label>
+  <fieldset><legend>{{ t('tz.to') }}</legend>{% for z in p.zones %}<label class="chk"><input type="checkbox" name="to" value="{{ z }}"{% if z in ['UTC','Europe/London','America/New_York','Asia/Tokyo'] %} checked{% endif %}> {{ z }}</label>{% endfor %}</fieldset>
+  <ol class="tz-out" aria-live="polite"></ol>
+</form>
+{% endblock %}

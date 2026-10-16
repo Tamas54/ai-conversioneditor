@@ -55,10 +55,32 @@ async def app_page(rest: str = "") -> HTMLResponse:
     page = (APP_HTML.read_text("utf-8")
             .replace("{{TITLE}}", e(meta["title"])).replace("{{DESCRIPTION}}", e(meta["desc"]))
             .replace("{{CANONICAL}}", e(meta["canonical"])).replace("{{SEO_HEAD}}", seo.head_html(meta))
-            .replace("{{ABOUT}}", meta["about"])
+            .replace("{{ABOUT}}", meta["about"]).replace("{{SITE_FOOT}}", _site_foot())
+            .replace("{{AGENTS_URL}}", _u("agents")).replace("{{CONVERT_URL}}", _u("convert_hub"))
+            .replace("{{TOOLS_URL}}", _u("tools_hub")).replace("{{API_URL}}", _u("developers")).replace("{{DOCS_URL}}", _u("docs"))
+            .replace("{{N_FORMATS}}", str(_counts()["formats"])).replace("{{N_TOOLS}}", str(_counts()["tools"]))
             .replace("{{PRODUCT}}", e(settings.PRODUCT_NAME)).replace("{{BASE}}", e(settings.PUBLIC_BASE_URL.rstrip("/")))
             .replace('href="/static/product.css"', f'href="{static_v("product.css")}"'))
     return HTMLResponse(page, headers={"Cache-Control": "no-cache", **seo.robots_header(meta)})
+
+
+def _site_foot() -> str:
+    """A nyilvános oldalak közös lábléce (konverziók, eszközök, AI agents, API, összevetések) — szerveroldalon."""
+    from app.site import i18n, render
+    try:
+        return render.site_footer(i18n.DEFAULT)
+    except Exception:        # a lábléc soha ne vigye el az appot
+        return ""
+
+
+def _u(kind: str) -> str:
+    from app.site import i18n, urls
+    return getattr(urls, kind)(i18n.DEFAULT)
+
+
+def _counts() -> dict:
+    from app.site import content
+    return content.counts()
 
 
 # ---------- bélyegképek a fájlkártyákhoz ----------
@@ -111,8 +133,21 @@ async def _render_thumb(src: Path, ext: str, dst: Path) -> None:
     elif ext == "ecproj" or ext in ("mp4", "mov", "webm", "m4v"):
         from app.tools import video          # videó: projektnél a címjelenet egy kockája, filmnél az 1. másodperc
         await video.thumb(src, raw)
-    else:
-        raise HTTPException(404, "no thumbnail for this type")
+    else:                    # minden más formátum (HEIC, AVIF, RAW, MKV, EPUB, DWG…): a thumbnail eszközzel
+        from app.catalog import tools as T
+        from app.catalog.formats import from_filename
+        if not T.accepts(T.TOOLS["thumbnail"], from_filename(src.name) or ext):
+            raise HTTPException(404, "no thumbnail for this type")
+        import shutil
+        from app.ops.handlers.files import thumbnail as make_thumb
+        work = dst.with_suffix(".work")
+        work.mkdir(exist_ok=True)
+        try:
+            outs = await make_thumb([src], {"width": THUMB_W, "image_format": "png"}, work)
+            if outs:
+                shutil.move(str(outs[0]), raw)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     if not raw.exists():
         raise HTTPException(404, "render produced nothing")
     await asyncio.to_thread(_shrink, raw, dst)

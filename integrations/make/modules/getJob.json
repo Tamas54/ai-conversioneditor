@@ -1,0 +1,9 @@
+{
+  "name": "getJob",
+  "label": "Get a job",
+  "typeOf": "action",
+  "connection": "aice-key",
+  "communication": {"url": "/jobs/{{parameters.id}}", "method": "GET", "qs": {"wait": "{{parameters.wait}}"}, "response": {"output": "{{body}}"}},
+  "parameters": [{"name": "id", "type": "text", "label": "Job ID", "required": true}, {"name": "wait", "type": "uinteger", "label": "Wait (s)", "default": 0}],
+  "interface": [{"name": "id", "type": "text", "label": "Job ID"}, {"name": "status", "type": "text", "label": "Status"}, {"name": "tasks", "type": "array", "label": "Tasks"}]
+}

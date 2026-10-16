@@ -42,6 +42,68 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Konverziós motorok (bővítés 10-15, mind nyílt forrású; app/convert/engines.py futásidőben ellenőrzi őket) ---
+# videó/hang: ffmpeg · képek: ImageMagick, libvips, libheif, LibRaw (dcraw_emu) · vektor: Inkscape, librsvg, Potrace
+# e-könyv: Calibre (hivatalos build, lent) · archívum: 7-Zip, The Unarchiver, libarchive, zstd, lzip, lzop · PDF/DjVu/XPS: MuPDF, QPDF, DjVuLibre
+# OCR-réteg: Tesseract (+ nyelvek; az ocrmypdf a pip-ből) · metaadat: ExifTool · betűk: FontForge
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    imagemagick \
+    libvips-tools \
+    libheif-examples \
+    libraw-bin \
+    inkscape \
+    librsvg2-bin \
+    potrace \
+    p7zip-full \
+    unar \
+    libarchive-tools \
+    zstd \
+    lzip \
+    lzop \
+    djvulibre-bin \
+    mupdf-tools \
+    qpdf \
+    tesseract-ocr \
+    tesseract-ocr-eng tesseract-ocr-hun tesseract-ocr-deu tesseract-ocr-fra tesseract-ocr-spa tesseract-ocr-ita \
+    tesseract-ocr-pol tesseract-ocr-ces tesseract-ocr-slk tesseract-ocr-ron tesseract-ocr-nld tesseract-ocr-por \
+    unpaper \
+    pngquant \
+    libimage-exiftool-perl \
+    fontforge \
+    libreoffice-draw \
+    && rm -rf /var/lib/apt/lists/*
+
+# Calibre — a hivatalos, önálló build (saját Python és Qt): újabb, mint a jammy 5.37-e, ír LIT-et is, és nem ütközik a
+# pip-es lxml-lel. Rögzített verzió + SHA256 (a calibre-ebook.com/signatures SHA512-jével is egyezik).
+ARG CALIBRE_VERSION=9.14.0
+ARG CALIBRE_SHA256=7f53a0863ed6d32407bc72053b966e39d5b64813f2592bd9c741504c01c0e7f3
+RUN set -eux; \
+    apt-get update; apt-get install -y --no-install-recommends xz-utils libegl1 libopengl0 libxcb-cursor0 libxkbcommon0 \
+        libfontconfig1 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/calibre.txz \
+        "https://download.calibre-ebook.com/${CALIBRE_VERSION}/calibre-${CALIBRE_VERSION}-x86_64.txz"; \
+    echo "${CALIBRE_SHA256}  /tmp/calibre.txz" | sha256sum -c -; \
+    mkdir -p /opt/calibre; tar xJf /tmp/calibre.txz -C /opt/calibre; rm /tmp/calibre.txz; \
+    ln -sf /opt/calibre/ebook-convert /usr/local/bin/ebook-convert; \
+    rm -rf /var/lib/apt/lists/*; \
+    QT_QPA_PLATFORM=offscreen ebook-convert --version
+
+# LibreDWG (GPLv3, GNU): DWG ⇄ DXF (dwg2dxf, dxf2dwg) — a jammy-ben nincs csomag, ezért forrásból, SHA256-tal
+ARG LIBREDWG_VERSION=0.13.3
+ARG LIBREDWG_SHA256=83f1f6e78a744777a481ff4520e4cef3f8ac4b2c1c25671077ca12fe81e8816e
+RUN set -eux; cd /tmp; \
+    apt-get update; apt-get install -y --no-install-recommends build-essential; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o libredwg.tar.xz \
+        "https://ftp.gnu.org/gnu/libredwg/libredwg-${LIBREDWG_VERSION}.tar.xz"; \
+    echo "${LIBREDWG_SHA256}  libredwg.tar.xz" | sha256sum -c -; \
+    tar xJf libredwg.tar.xz; cd "libredwg-${LIBREDWG_VERSION}"; \
+    ./configure --disable-bindings --disable-python --disable-docs --disable-dependency-tracking --prefix=/usr/local; \
+    make -j"$(nproc)"; make install; ldconfig; \
+    cd /tmp; rm -rf libredwg*; \
+    apt-get purge -y --auto-remove build-essential; rm -rf /var/lib/apt/lists/*; \
+    dwg2dxf --version >/dev/null
+
 # --- WordCraft (storytold/wordcraft, MIT OR Apache-2.0): Rust Word-motor, kész release ---
 # CLI → /opt/wordcraft/bin (headless parancsok, gyors konverzió);
 # WASM-szerkesztő → /opt/wordcraft-web (a dashboard ✏️ gombja). Verzióváltásnál a két

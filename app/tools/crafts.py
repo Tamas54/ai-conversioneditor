@@ -440,6 +440,8 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
             raise ValueError(await _explain(e, app, parsed)) from None
     if not out.exists():
         raise RuntimeError(f"{name}: no output was produced ({log_lines[-300:]})")
+    from app.tools import ios_safe
+    await ios_safe.finalize(out)                          # iPhone: Keynote-biztos pptx, sémahelyes xlsx
     res = _finish(fid, file_id, app, _stem(file_id, _office_what(app, commands), _OFFICE_NEW[app]))
     res.update({"steps_run": len(commands or []), "ms_elapsed": int((time.time() - t0) * 1000)})
     try:

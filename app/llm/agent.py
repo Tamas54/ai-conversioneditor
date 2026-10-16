@@ -2328,12 +2328,18 @@ async def _tool_insert_image(state: AgentState, args: dict, pool) -> dict:
 
 
 async def _tool_convert_format(state: AgentState, args: dict, pool) -> dict:
-    out = await t_convert(
-        pool,
-        file_id=state.current_fid,
-        target_format=args["target_format"],
-        use_browser=bool(args.get("use_browser", False)),
-    )
+    try:
+        out = await t_convert(
+            pool,
+            file_id=state.current_fid,
+            target_format=args["target_format"],
+            use_browser=bool(args.get("use_browser", False)),
+        )
+    except ValueError as e:
+        if "Unsupported" not in str(e) and "not supported" not in str(e):
+            raise
+        from app.convert import service       # a régi út nem ismeri a párt → az univerzális gráf
+        out = await service.convert_file(state.current_fid, args["target_format"], {}, pool)
     state.current_fid = out["file_id"]
     return {
         "file_id": state.current_fid,
@@ -3745,3 +3751,9 @@ async def run_agent(
         "model": model_used,
         "ms_elapsed": elapsed_ms,
     }
+
+
+# ---- bővítés: a katalógus minden konverziója és eszköze az ügynöknek is (app/llm/agent_ext.py) ----
+from app.llm import agent_ext as _agent_ext  # noqa: E402
+
+_agent_ext.register(TOOL_SCHEMAS, TOOL_HANDLERS)

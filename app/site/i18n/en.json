@@ -1,0 +1,2603 @@
+{
+ "_meta": {
+  "native": "English",
+  "html": "en",
+  "locale": "en_US",
+  "dir": "ltr",
+  "pair": "{src}-to-{dst}"
+ },
+ "slug": {
+  "convert": "convert",
+  "formats": "formats",
+  "tools": "tools",
+  "compare": "compare",
+  "developers": "developers",
+  "docs": "docs",
+  "job_builder": "job-builder",
+  "connect_ai": "connect-ai",
+  "units": "unit-converter",
+  "timezones": "time-zone-converter",
+  "agents": "ai-agents"
+ },
+ "nav": {
+  "home": "Home",
+  "convert": "Convert",
+  "tools": "Tools",
+  "developers": "API",
+  "connect_ai": "Connect your AI",
+  "compare": "Compare",
+  "open_app": "Open the app",
+  "units": "Unit converter",
+  "timezones": "Time zone converter",
+  "make": "Make",
+  "agents": "AI agents"
+ },
+ "ui": {
+  "skip": "Skip to content",
+  "main_nav": "Main",
+  "language": "Language",
+  "breadcrumbs": "Breadcrumbs",
+  "faq": "Questions and answers",
+  "default": "default",
+  "list_hint": "comma-separated",
+  "choose": "Choose files",
+  "or_drop": "or drop them here",
+  "convert_to": "Convert to",
+  "options": "Options",
+  "apply_all": "Apply to all files",
+  "save_preset": "Save as preset",
+  "presets": "Saved presets",
+  "convert": "Convert",
+  "run": "Start",
+  "related": "Related",
+  "related_tools": "Related tools",
+  "privacy": "Files stay private in your workspace and are deleted automatically. No account needed for conversions.",
+  "noscript": "The converter needs JavaScript. You can also use the full app:",
+  "import_from": "Or import from:",
+  "from_url": "Link (URL)",
+  "sig_draw": "Draw your signature",
+  "sig_name": "Name",
+  "sig_default": "Signature",
+  "sig_kind": "Kind",
+  "sig_signature": "Signature",
+  "sig_initials": "Initials",
+  "sig_clear": "Clear",
+  "sig_save": "Save signature",
+  "sig_or_upload": "Or upload a photo or scan of it below — paper, shadow and noise are removed.",
+  "sig_saved": "Your saved signatures",
+  "back": "Back"
+ },
+ "js": {
+  "download": "Download",
+  "open_editor": "Open in the editor",
+  "failed": "Failed",
+  "timeout": "Took too long",
+  "preset_name": "Name of the preset",
+  "or_drop": "or drop them here",
+  "paste_url": "Paste a link to the file (https://…)",
+  "save_to": "Save to",
+  "yes_no": "yes / no",
+  "yes": "yes",
+  "label": "Label",
+  "review_hint": "Check the labels, type the values, then fill. Leave a value empty to skip the field.",
+  "fill_now": "Fill the form",
+  "questions_hint": "A few details are missing:",
+  "continue": "Continue",
+  "delete": "Delete",
+  "details": "Details"
+ },
+ "footer": {
+  "all_tools": "All tools",
+  "api": "REST API",
+  "compare_all": "All comparisons",
+  "note": "{product} — convert, edit and fill files with open-source engines and AI. Private by default.",
+  "all_conversions": "All conversions",
+  "plans": "Plans & pricing",
+  "agents": "Agentic features"
+ },
+ "home": {
+  "title": "{product} — convert any file: {formats} formats, AI editing, forms and signatures",
+  "desc": "Convert documents, images, video, audio, e-books, archives, CAD and fonts — {formats} formats, {conversions} conversion directions and {tools} tools, free in the browser, by API or from your AI.",
+  "h1": "Convert, edit and fill any file",
+  "lead": "{formats} file formats and {conversions} conversion directions in one place, run by open-source engines (LibreOffice, FFmpeg, Calibre, Inkscape, ImageMagick, 7-Zip). Up to {guest_mb} MB per file without an account; files stay private and are deleted after {retention} days. On top of converting: AI editing, form recognition from any file, signatures and agentic form filling.",
+  "stat_formats": "formats",
+  "stat_conversions": "conversion directions",
+  "stat_tools": "tools",
+  "categories": "What do you want to convert?",
+  "formats_word": "formats",
+  "popular": "Popular conversions",
+  "tools": "Tools",
+  "ai_h": "Use it from your AI",
+  "ai_p": "Claude, ChatGPT and other assistants can call every converter and tool of {product} over MCP — they get the file back with a download and an editor link.",
+  "api_h": "REST API for developers",
+  "api_p": "Jobs and tasks, webhooks, sandbox keys, OpenAPI, Python and Node SDKs, Zapier, Make and n8n.",
+  "faq": [
+   [
+    "Is it free?",
+    "Yes. Conversions and file tools are free in the browser, up to {guest_mb} MB per file without an account. AI features (editing by instruction, reading scans, agentic form filling) need a free account and use its monthly allowance."
+   ],
+   [
+    "How many formats are supported?",
+    "{formats} formats in 11 categories and {conversions} conversion directions, from DOCX, PDF and HEIC to DWG, EPUB, MKV and WOFF2."
+   ],
+   [
+    "Are my files private?",
+    "Files go into your own workspace, are never shared or used for training, download links are signed, and files are deleted automatically after {retention} days."
+   ],
+   [
+    "Can my AI assistant use it?",
+    "Yes. {product} is an MCP server: connect it to Claude or ChatGPT once and ask in plain words — “turn this HEIC into a JPG”, “fill this form from my profile and sign it”."
+   ]
+  ]
+ },
+ "chub": {
+  "title": "File converter — {formats} formats, free online",
+  "desc": "Convert between {formats} file formats ({conversions} directions): documents, spreadsheets, slides, e-books, images, vectors, video, audio, archives, CAD and fonts.",
+  "h1": "File converter",
+  "lead": "Pick a category or a format. Every conversion runs on open-source engines and keeps your text, accents (ő, ű, ß, é) and layout. {formats} formats, {conversions} directions."
+ },
+ "catone": {
+  "document": "document format",
+  "spreadsheet": "spreadsheet format",
+  "presentation": "presentation format",
+  "ebook": "e-book format",
+  "image": "image format",
+  "vector": "vector graphics format",
+  "video": "video format",
+  "audio": "audio format",
+  "archive": "archive format",
+  "cad": "CAD drawing format",
+  "font": "font format"
+ },
+ "cat": {
+  "lead": "{n} formats and {pairs} conversion directions for {name}.",
+  "formats_h": "Formats",
+  "pairs_h": "All conversions",
+  "document": {
+   "slug": "documents",
+   "name": "Documents",
+   "h1": "Document converter",
+   "title": "Document converter — Word, PDF, ODT, Pages and {n} formats",
+   "desc": "Convert Word, PDF, ODT, RTF, Markdown, LaTeX, Pages, WordPerfect, HWP, XPS, DjVu and more — layout, tables and accents kept.",
+   "intro": "LibreOffice handles office formats, Pandoc the text markups (Markdown, reStructuredText, LaTeX), Ghostscript and MuPDF the PDF, PostScript and XPS files."
+  },
+  "spreadsheet": {
+   "slug": "spreadsheets",
+   "name": "Spreadsheets",
+   "h1": "Spreadsheet converter",
+   "title": "Spreadsheet converter — Excel, CSV, ODS, Numbers and {n} formats",
+   "desc": "Convert XLSX, XLS, CSV, ODS, Numbers and other spreadsheets; export to PDF, JSON, XML or Markdown tables.",
+   "intro": "Formulas and sheets are kept between Excel and OpenDocument; CSV delimiters (comma, semicolon, tab) are detected automatically."
+  },
+  "presentation": {
+   "slug": "presentations",
+   "name": "Presentations",
+   "h1": "Presentation converter",
+   "title": "Presentation converter — PowerPoint, Keynote, ODP and {n} formats",
+   "desc": "Convert PPTX, PPT, Keynote and ODP decks to each other, to PDF, to images or to an MP4 video.",
+   "intro": "Slides keep their layout and notes; a deck can also become a video with a set number of seconds per slide."
+  },
+  "ebook": {
+   "slug": "ebooks",
+   "name": "E-books",
+   "h1": "E-book converter",
+   "title": "E-book converter — EPUB, MOBI, AZW3, FB2 and {n} formats",
+   "desc": "Convert EPUB, MOBI, AZW3 (Kindle), FB2, LIT, comics (CBZ, CBR) and more, with title, author and cover.",
+   "intro": "Calibre's conversion engine does the work, with device profiles for Kindle, Kobo and tablets."
+  },
+  "image": {
+   "slug": "images",
+   "name": "Images",
+   "h1": "Image converter",
+   "title": "Image converter — HEIC, WebP, AVIF, RAW and {n} formats",
+   "desc": "Convert HEIC, JPG, PNG, WebP, AVIF, JPEG XL, TIFF, PSD, camera RAW and more; resize, set quality, strip metadata.",
+   "intro": "Pillow, ImageMagick, libheif and LibRaw cover the formats; quality, size and metadata are set per conversion or for all files at once."
+  },
+  "vector": {
+   "slug": "vectors",
+   "name": "Vector graphics",
+   "h1": "Vector converter",
+   "title": "Vector converter — SVG, EPS, AI, EMF, CDR and {n} formats",
+   "desc": "Convert SVG, EPS, AI, EMF, WMF, CorelDRAW and more; trace bitmaps into SVG.",
+   "intro": "Inkscape and librsvg render vectors; Potrace turns a bitmap logo into a clean SVG."
+  },
+  "video": {
+   "slug": "videos",
+   "name": "Video",
+   "h1": "Video converter",
+   "title": "Video converter — MP4, MOV, MKV, WebM, AVI and {n} formats",
+   "desc": "Convert MP4, MOV, MKV, WebM, AVI and other videos; set codec, resolution, frame rate, quality, trim, rotate, add subtitles.",
+   "intro": "FFmpeg encodes with H.264, H.265, VP9 or AV1; every option (codec, CRF, bitrate, aspect ratio, trim) is available."
+  },
+  "audio": {
+   "slug": "audio",
+   "name": "Audio",
+   "h1": "Audio converter",
+   "title": "Audio converter — MP3, WAV, FLAC, M4A, OGG and {n} formats",
+   "desc": "Convert MP3, WAV, FLAC, AAC, M4A, OGG, Opus and more; set bitrate, sample rate, channels, volume and trim.",
+   "intro": "FFmpeg encodes MP3 with LAME, AAC, Opus, Vorbis and lossless FLAC or ALAC."
+  },
+  "archive": {
+   "slug": "archives",
+   "name": "Archives",
+   "h1": "Archive converter",
+   "title": "Archive converter — ZIP, RAR, 7Z, TAR.GZ and {n} formats",
+   "desc": "Convert RAR, 7Z, TAR.GZ, ISO and 40+ archive formats to ZIP or 7Z; password-protected archives too.",
+   "intro": "7-Zip, The Unarchiver and libarchive open the archives; paths are checked so nothing can escape the folder."
+  },
+  "cad": {
+   "slug": "cad",
+   "name": "CAD",
+   "h1": "CAD converter",
+   "title": "CAD converter — DWG and DXF to PDF, SVG, PNG",
+   "desc": "Convert AutoCAD DWG and DXF drawings to DXF, PDF, SVG, PNG or JPG without AutoCAD.",
+   "intro": "LibreDWG reads DWG, ezdxf renders the drawing with its layers and line types."
+  },
+  "font": {
+   "slug": "fonts",
+   "name": "Fonts",
+   "h1": "Font converter",
+   "title": "Font converter — TTF, OTF, WOFF, WOFF2, EOT and {n} formats",
+   "desc": "Convert TTF, OTF, WOFF, WOFF2, EOT and PostScript Type 1 fonts; subset a font to the characters you need.",
+   "intro": "fontTools converts web fonts and outlines (TrueType ↔ CFF), FontForge the older formats."
+  }
+ },
+ "tag": {
+  "lossy": "lossy compression",
+  "lossless": "lossless",
+  "raster": "raster (pixels)",
+  "vector": "vector",
+  "text": "plain text based",
+  "binary": "binary",
+  "zip-xml": "ZIP container with XML",
+  "container": "container",
+  "layered": "layers",
+  "animated": "animation",
+  "macro": "macros",
+  "template": "template",
+  "compressed": "compressed",
+  "fixed-layout": "fixed layout",
+  "reflowable": "reflowable text",
+  "legacy": "legacy format",
+  "camera-raw": "camera raw sensor data",
+  "single-file": "single file",
+  "open-standard": "open standard"
+ },
+ "facts": {
+  "name": "Full name",
+  "ext": "Extensions",
+  "mime": "MIME type",
+  "category": "Category",
+  "developer": "Developed by",
+  "year": "Introduced",
+  "type": "Properties"
+ },
+ "fmtp": {
+  "title": "{label} file ({name}) — what it is and how to convert it",
+  "desc": "{name}: what a .{label} file is, how to open it, and how to convert it to {n} formats (and from {m}).",
+  "h1": "{label} — {name}",
+  "facts_h": "Facts",
+  "outs_h": "Convert {label} to",
+  "ins_h": "Convert to {label}"
+ },
+ "conv": {
+  "title": "Convert {src} to {dst} online — free, private, no install",
+  "desc": "Convert {src} ({srcname}) to {dst} ({dstname}) in the browser, by API or from your AI. Free, accurate, files deleted automatically.",
+  "h1": "Convert {src} to {dst}",
+  "crumb": "{src} to {dst}",
+  "link": "{src} to {dst}",
+  "answer": "To convert {src} to {dst}, upload the file, check that {dst} is selected and press Convert — the conversion runs on {engines} {steps} and the {dst} file is ready to download, usually within seconds. It is free up to {guest_mb} MB per file without an account, and the file is deleted after {retention} days.",
+  "steps_1": "in one step",
+  "steps_n": "in {n} steps",
+  "fact_by": "by {dev}",
+  "fact_year": "in {year}",
+  "fact_sentence": "{label} ({name}) is a {kind} {by} introduced {year}.",
+  "step1": "Choose or drop your {src} file (several at once work too).",
+  "step2": "Check that the target is {dst}; open Options for quality, size or page range.",
+  "step3": "Press Convert — the progress bar shows each file.",
+  "step4": "Download the {dst} file, or open it in the built-in editor.",
+  "how_h": "How to convert {src} to {dst}",
+  "what_h": "What happens to the file",
+  "chain": "Engine chain:",
+  "api_h": "API and AI assistants",
+  "api_p": "The same {src} → {dst} conversion is one task in the REST API and one call in MCP.",
+  "api_link": "API example",
+  "others_out": "Convert {src} to other formats",
+  "others_in": "Other formats to {dst}",
+  "all_in_cat": "All {cat} conversions",
+  "note_generic": "The content and structure of the file are carried over to {dst}; what the target format can't store is flattened.",
+  "faq": [
+   [
+    "Is converting {src} to {dst} free?",
+    "Yes — free in the browser up to {guest_mb} MB per file without an account; with a free account batches of up to {batch_free} files, on Pro {batch_pro}."
+   ],
+   [
+    "Will my {src} file look the same as {dst}?",
+    "{note}"
+   ],
+   [
+    "Which engine converts {src} to {dst}?",
+    "{engines} — open-source, the same engines professional tools use."
+   ],
+   [
+    "Are my files safe?",
+    "They stay in your private workspace, download links are signed, and files are deleted after {retention} days."
+   ],
+   [
+    "Can I convert {src} to {dst} with an API or from ChatGPT or Claude?",
+    "Yes: one REST task ({api}) or one MCP call from your AI assistant — see {mcp}."
+   ]
+  ]
+ },
+ "default": {
+  "quality": "{dst} quality defaults to {q} out of 100 (adjustable 1–100).",
+  "lossless": "{dst} is lossless: pixels are kept exactly.",
+  "lzw": "{dst} is saved with lossless LZW compression.",
+  "palette": "{dst} uses an adaptive 256-colour palette.",
+  "bitrate": "{dst} defaults to {br} (adjustable).",
+  "lossless_audio": "{dst} is lossless: the audio is bit-exact.",
+  "pcm": "{dst} is uncompressed {bits}-bit PCM (24 and 32 bit available).",
+  "video": "{dst} defaults to {codec} at CRF {crf} with {audio} audio (codec, CRF and bitrate adjustable).",
+  "video_q": "{dst} uses {codec} video with {audio} audio.",
+  "pdf": "{dst} embeds the fonts, so the result looks the same everywhere.",
+  "pdfa": "PDF/A-2b is produced with an embedded sRGB colour profile for long-term archiving.",
+  "docx": "{dst} opens in Microsoft Word, LibreOffice and Google Docs.",
+  "epub": "{dst} is EPUB 3, readable on Apple Books, Kobo, Google Play Books and most readers.",
+  "zip": "{dst} uses Deflate compression (level {level} of 9).",
+  "7z": "{dst} uses LZMA2 compression; a password encrypts the file names too.",
+  "woff2": "{dst} uses Brotli compression, typically 30% smaller than WOFF."
+ },
+ "pairnote": {
+  "document>document": "Text, headings, lists, tables and images are carried over; page layout is recalculated where the target is reflowable (Markdown, HTML, EPUB).",
+  "document>ebook": "Chapters come from the headings and a table of contents is generated; fonts are left to the reader device.",
+  "document>image": "Every page becomes one image (a multi-page document gives one image per page, packed in a ZIP); resolution defaults to 150 dpi.",
+  "document>vector": "Pages become vector graphics: text and lines stay sharp at any zoom.",
+  "document>spreadsheet": "Each record becomes a row and each field a column; nested values are flattened into column names like address.city.",
+  "spreadsheet>spreadsheet": "Sheets, formulas, number formats and merged cells are kept between Excel and OpenDocument; CSV keeps only the values of the active sheet.",
+  "spreadsheet>document": "The sheet is laid out as a table; formulas are exported as their current values.",
+  "spreadsheet>image": "The printable area of the sheet becomes an image.",
+  "presentation>presentation": "Slides, layouts, speaker notes and images are kept; transitions and animations are kept where the target supports them.",
+  "presentation>document": "Every slide becomes one page; to Word you get a handout with the slide picture, text and notes.",
+  "presentation>image": "Every slide becomes one image (a ZIP for several slides).",
+  "presentation>video": "Each slide is shown for 3 seconds by default (adjustable) in a Full HD video.",
+  "ebook>ebook": "Text, chapters, table of contents, cover and metadata are kept; layout is adapted to the target device profile.",
+  "ebook>document": "The book's text and chapters are carried over; DRM-protected books can't be converted.",
+  "image>image": "Pixels, transparency (where the target has it), colour profile and EXIF data are kept unless you choose to strip metadata.",
+  "image>document": "The image is placed on a page at its own size and resolution.",
+  "image>vector": "The image is traced into vector paths (Potrace): best for logos, icons and line art, not for photos.",
+  "image>video": "The animation frames become a video with the original timing.",
+  "vector>vector": "Paths, text and colours stay vector; effects the target can't store are rasterised.",
+  "vector>image": "The drawing is rendered at 150 dpi by default; set a width for a sharper or smaller image.",
+  "vector>document": "The drawing becomes a vector PDF page: it stays sharp when printed.",
+  "video>video": "Video and audio are re-encoded for the target container; resolution and frame rate stay the same unless you change them.",
+  "video>audio": "The audio track is extracted and encoded; the picture is dropped.",
+  "video>image": "A GIF, WebP or APNG animation is made at 12 fps and 480 px width by default; JPG or PNG gives one frame.",
+  "audio>audio": "Sample rate and channels are kept unless you change them; lossy targets use the default bitrate below.",
+  "audio>video": "The sound gets a still picture (black by default, or a cover you choose) so it can be uploaded to video sites.",
+  "archive>archive": "The files and folders are unpacked and repacked; a password can be given for the source and for the new archive.",
+  "cad>cad": "Entities, layers and blocks are carried over; DWG writing is experimental in LibreDWG, so check the result in your CAD program.",
+  "cad>vector": "The model space is drawn with layer colours and line types as vectors.",
+  "cad>image": "The model space is rendered on white at 200 dpi by default.",
+  "cad>document": "The model space becomes a vector PDF page.",
+  "font>font": "Glyphs, metrics, kerning and names are kept; TrueType and CFF outlines are converted when the target needs the other kind."
+ },
+ "fmt": {
+  "pdf": "PDF fixes the layout of a document — fonts, pictures and pages look the same on every device and printer.",
+  "docx": "DOCX is the default Word document since Office 2007: a ZIP package of XML parts that most office suites open.",
+  "doc": "DOC is the binary Word format of Office 97–2003, still common in older archives and offices.",
+  "docm": "DOCM is a Word document that may contain VBA macros; converting drops the macros unless the target is DOCM.",
+  "dot": "DOT is a Word 97–2003 template from which new documents are started.",
+  "dotx": "DOTX is a Word template (Open XML) with styles and boilerplate text.",
+  "odt": "ODT is the OpenDocument text format of LibreOffice and an ISO standard (ISO/IEC 26300).",
+  "ott": "OTT is an OpenDocument text template.",
+  "fodt": "FODT is OpenDocument text stored as a single, uncompressed XML file — handy for version control.",
+  "rtf": "RTF is a plain-text based rich text format that almost every word processor reads.",
+  "txt": "TXT is plain text without formatting; here always UTF-8, so accents survive.",
+  "md": "Markdown is lightweight markup for headings, lists and links, used on GitHub and in documentation.",
+  "html": "HTML is the language of web pages; converting to it keeps headings, lists, tables and images.",
+  "rst": "reStructuredText is the markup of Python documentation and Sphinx.",
+  "tex": "LaTeX source is the standard for scientific papers with formulas.",
+  "pages": "Pages is Apple's word processor format from iWork.",
+  "wpd": "WPD is a WordPerfect document from Corel's word processor.",
+  "wps": "WPS is a Microsoft Works or Kingsoft WPS Writer document.",
+  "lwp": "LWP is a Lotus Word Pro document from the IBM SmartSuite.",
+  "abw": "ABW is an AbiWord document (XML).",
+  "zabw": "ZABW is a gzip-compressed AbiWord document.",
+  "sdw": "SDW is an old StarOffice Writer document, the predecessor of OpenOffice.",
+  "hwp": "HWP is the Hangul Word Processor format widely used in Korea.",
+  "hwpx": "HWPX is the newer, XML-based (OWPML) Hangul document format.",
+  "djvu": "DjVu stores scanned books and documents very compactly with separate text and picture layers.",
+  "xps": "XPS (and OpenXPS) is Microsoft's fixed-layout page format, an alternative to PDF.",
+  "ps": "PostScript is the page description language of printers and the ancestor of PDF.",
+  "eml": "EML is a saved e-mail (MIME) with headers, body and attachments.",
+  "xml": "XML is a structured text format for data exchange.",
+  "pub": "PUB is a Microsoft Publisher layout for flyers and newsletters.",
+  "vsd": "VSD is a Microsoft Visio drawing (2003–2010 binary format).",
+  "vsdx": "VSDX is a Microsoft Visio drawing in Open XML.",
+  "json": "JSON is the most common data format of web APIs.",
+  "yaml": "YAML is a human-friendly data format used for configuration.",
+  "pdfa": "PDF/A is an ISO standard PDF for long-term archiving: fonts embedded, no external dependencies.",
+  "org": "Org is the outline and notes format of Emacs Org-mode.",
+  "adoc": "AsciiDoc is a markup for technical documentation and books.",
+  "ipynb": "IPYNB is a Jupyter notebook with code, results and text.",
+  "textile": "Textile is a lightweight web markup.",
+  "wiki": "MediaWiki markup is the source format of Wikipedia articles.",
+  "xlsx": "XLSX is the default Excel workbook since Office 2007.",
+  "xls": "XLS is the binary Excel 97–2003 workbook.",
+  "xlsm": "XLSM is an Excel workbook with VBA macros.",
+  "xlsb": "XLSB is Excel's binary workbook, fast for very large sheets.",
+  "xlt": "XLT is an Excel 97–2003 template.",
+  "xltx": "XLTX is an Excel template in Open XML.",
+  "ods": "ODS is the OpenDocument spreadsheet of LibreOffice Calc.",
+  "fods": "FODS is an OpenDocument spreadsheet in a single XML file.",
+  "csv": "CSV stores a table as text with comma- (or semicolon-) separated values — the universal data exchange format.",
+  "tsv": "TSV is a table as text with tab-separated values.",
+  "numbers": "Numbers is Apple's spreadsheet format from iWork.",
+  "dif": "DIF is an old data interchange format for spreadsheets.",
+  "slk": "SYLK is an old Microsoft spreadsheet exchange format.",
+  "pptx": "PPTX is the default PowerPoint presentation since Office 2007.",
+  "ppt": "PPT is the binary PowerPoint 97–2003 presentation.",
+  "pptm": "PPTM is a PowerPoint presentation with VBA macros.",
+  "pps": "PPS is a PowerPoint 97–2003 slide show that opens straight in presentation mode.",
+  "ppsx": "PPSX is a PowerPoint slide show that opens straight in presentation mode.",
+  "ppsm": "PPSM is a macro-enabled PowerPoint slide show.",
+  "pot": "POT is a PowerPoint 97–2003 template.",
+  "potx": "POTX is a PowerPoint template in Open XML.",
+  "potm": "POTM is a macro-enabled PowerPoint template.",
+  "odp": "ODP is the OpenDocument presentation of LibreOffice Impress.",
+  "fodp": "FODP is an OpenDocument presentation in a single XML file.",
+  "key": "Key is Apple's Keynote presentation format.",
+  "epub": "EPUB is the open e-book standard read by Apple Books, Kobo and most e-readers.",
+  "mobi": "MOBI is the older Kindle and Mobipocket e-book format.",
+  "azw3": "AZW3 (KF8) is the current Kindle e-book format with richer layout.",
+  "azw": "AZW is Amazon's Kindle e-book format (MOBI-based).",
+  "azw4": "AZW4 is Kindle Print Replica, a PDF-based fixed-layout book.",
+  "fb2": "FB2 (FictionBook) is an XML e-book format popular in Eastern Europe.",
+  "fbz": "FBZ is a zipped FictionBook.",
+  "lit": "LIT is the Microsoft Reader e-book format (discontinued).",
+  "lrf": "LRF is the e-book format of old Sony Reader devices.",
+  "pdb": "PDB is an eReader / Palm database e-book.",
+  "pml": "PML is the Palm Markup Language of eReader books.",
+  "prc": "PRC is a Palm resource / Mobipocket e-book.",
+  "rb": "RB is the Rocket eBook format.",
+  "snb": "SNB is the e-book format of Shanda Bambook readers.",
+  "tcr": "TCR is the compressed e-book format of Psion devices.",
+  "txtz": "TXTZ is a zipped Markdown/text e-book with pictures (calibre).",
+  "htmlz": "HTMLZ is a zipped HTML e-book (calibre).",
+  "oeb": "OEB is the Open eBook package, the predecessor of EPUB.",
+  "cbz": "CBZ is a comic book: numbered pictures in a ZIP archive.",
+  "cbr": "CBR is a comic book: numbered pictures in a RAR archive.",
+  "cb7": "CB7 is a comic book: numbered pictures in a 7z archive.",
+  "cbc": "CBC is a collection of several comic books in one file.",
+  "chm": "CHM is Microsoft's compiled HTML help, also used for e-books.",
+  "jpg": "JPG (JPEG) is the most common photo format: small files thanks to lossy compression.",
+  "png": "PNG is a lossless image format with transparency, ideal for screenshots, logos and graphics.",
+  "webp": "WebP is Google's web image format: smaller than JPG and PNG, with transparency and animation.",
+  "heic": "HEIC is the default photo format of iPhones since iOS 11: half the size of JPG at the same quality.",
+  "heif": "HEIF is the container behind HEIC photos.",
+  "avif": "AVIF is the AV1-based image format: even smaller than WebP, supported by modern browsers.",
+  "gif": "GIF is the classic 256-colour image format for simple animations.",
+  "bmp": "BMP is the uncompressed Windows bitmap.",
+  "tiff": "TIFF is the lossless format of print and scanning, with layers and multiple pages.",
+  "ico": "ICO is the Windows icon and website favicon format with several sizes in one file.",
+  "icns": "ICNS is the macOS app icon format.",
+  "cur": "CUR is a Windows mouse cursor.",
+  "psd": "PSD is the Adobe Photoshop document with layers.",
+  "xcf": "XCF is the native GIMP image with layers.",
+  "tga": "TGA (Targa) is used in games and video production.",
+  "jxl": "JPEG XL is the newest JPEG standard: smaller files and lossless recompression of JPGs.",
+  "jp2": "JPEG 2000 is a wavelet-based format used in medicine, film and archives.",
+  "jfif": "JFIF is a JPEG file with the .jfif extension, often saved by browsers.",
+  "exr": "OpenEXR is a high-dynamic-range format of visual effects studios.",
+  "hdr": "HDR (Radiance RGBE) stores high-dynamic-range images.",
+  "dds": "DDS (DirectDraw Surface) holds textures for games.",
+  "pcx": "PCX is an old PC Paintbrush image.",
+  "ppm": "PPM is the simple Netpbm colour image.",
+  "pgm": "PGM is the simple Netpbm greyscale image.",
+  "pbm": "PBM is the simple Netpbm black-and-white image.",
+  "pnm": "PNM is the common name of the Netpbm image formats.",
+  "sgi": "SGI is the Silicon Graphics image format.",
+  "xbm": "XBM is a monochrome bitmap stored as C source text.",
+  "xpm": "XPM is a colour pixmap stored as C source text.",
+  "wbmp": "WBMP is a one-bit image of early mobile phones.",
+  "fits": "FITS is the standard image format of astronomy.",
+  "apng": "APNG is an animated PNG with full colour and transparency.",
+  "dng": "DNG is Adobe's open camera RAW format.",
+  "cr2": "CR2 is the RAW photo of older Canon cameras.",
+  "cr3": "CR3 is the RAW photo of current Canon cameras.",
+  "crw": "CRW is the RAW photo of early Canon digital cameras.",
+  "nef": "NEF is the RAW photo of Nikon cameras.",
+  "nrw": "NRW is the RAW photo of Nikon Coolpix cameras.",
+  "arw": "ARW is the RAW photo of Sony Alpha cameras.",
+  "srf": "SRF is the RAW photo of early Sony cameras.",
+  "sr2": "SR2 is the RAW photo of some Sony cameras.",
+  "orf": "ORF is the RAW photo of Olympus and OM System cameras.",
+  "rw2": "RW2 is the RAW photo of Panasonic Lumix cameras.",
+  "raf": "RAF is the RAW photo of Fujifilm cameras.",
+  "pef": "PEF is the RAW photo of Pentax cameras.",
+  "srw": "SRW is the RAW photo of Samsung cameras.",
+  "x3f": "X3F is the RAW photo of Sigma Foveon cameras.",
+  "erf": "ERF is the RAW photo of Epson cameras.",
+  "kdc": "KDC is the RAW photo of Kodak cameras.",
+  "dcr": "DCR is the RAW photo of Kodak professional cameras.",
+  "mrw": "MRW is the RAW photo of Minolta cameras.",
+  "3fr": "3FR is the RAW photo of Hasselblad cameras.",
+  "mos": "MOS is the RAW photo of Leaf digital backs.",
+  "raw": "RAW is a generic camera RAW file (Panasonic, Leica).",
+  "svg": "SVG is the web's vector image format: sharp at any size and editable as text.",
+  "svgz": "SVGZ is a gzip-compressed SVG.",
+  "eps": "EPS is the classic vector exchange format of print and logos.",
+  "ai": "AI is the Adobe Illustrator artwork (PDF-compatible).",
+  "emf": "EMF is the Windows vector metafile used in Office documents.",
+  "emz": "EMZ is a compressed EMF.",
+  "wmf": "WMF is the older 16-bit Windows metafile.",
+  "wmz": "WMZ is a compressed WMF.",
+  "cdr": "CDR is a CorelDRAW drawing.",
+  "odg": "ODG is the OpenDocument drawing of LibreOffice Draw.",
+  "fodg": "FODG is an OpenDocument drawing in a single XML file.",
+  "cgm": "CGM is an ISO vector format of technical illustration.",
+  "plt": "PLT (HP-GL) is a plotter and cutter file.",
+  "mp4": "MP4 is the most widely supported video format: H.264 video with AAC audio plays everywhere.",
+  "mov": "MOV is Apple's QuickTime video, the default of iPhones and Macs.",
+  "avi": "AVI is Microsoft's older video container.",
+  "mkv": "MKV (Matroska) is an open container with any number of audio and subtitle tracks.",
+  "webm": "WebM is the open web video format with VP9 or AV1 video and Opus audio.",
+  "wmv": "WMV is Windows Media Video.",
+  "flv": "FLV is the Flash Video format of early web video.",
+  "f4v": "F4V is the MP4-based Flash video.",
+  "m4v": "M4V is Apple's MP4 video from iTunes.",
+  "mpeg": "MPEG is MPEG-1/2 video, as on VCDs and DVDs.",
+  "mpg": "MPG is MPEG-1/2 video.",
+  "m2ts": "M2TS is the Blu-ray transport stream.",
+  "mts": "MTS is AVCHD video from camcorders.",
+  "ts": "TS is the MPEG transport stream of television broadcasts.",
+  "vob": "VOB is the video object of DVD discs.",
+  "3gp": "3GP is the video format of older mobile phones.",
+  "3g2": "3G2 is the 3GPP2 mobile video format.",
+  "ogv": "OGV is Ogg Theora video.",
+  "asf": "ASF is Microsoft's streaming container of Windows Media.",
+  "mxf": "MXF is the professional broadcast and film exchange format.",
+  "dv": "DV is the digital video of MiniDV camcorders.",
+  "divx": "DivX is MPEG-4 video in AVI.",
+  "hevc": "HEVC (H.265) is a raw H.265 video stream.",
+  "rm": "RM is RealMedia video.",
+  "rmvb": "RMVB is variable-bitrate RealMedia video.",
+  "swf": "SWF is Adobe Flash animation.",
+  "wtv": "WTV is a TV recording of Windows Media Center.",
+  "mjpeg": "MJPEG is a video made of JPEG frames.",
+  "mp3": "MP3 is the most widely supported audio format.",
+  "wav": "WAV is uncompressed audio in studio quality.",
+  "aac": "AAC is the successor of MP3: better quality at the same size.",
+  "m4a": "M4A is AAC audio in an MP4 container, the default of Apple devices.",
+  "ogg": "OGG (Vorbis) is an open, patent-free audio format.",
+  "flac": "FLAC is lossless audio: about half the size of WAV with exactly the same sound.",
+  "opus": "Opus is the modern open audio codec for speech and music.",
+  "wma": "WMA is Windows Media Audio.",
+  "aiff": "AIFF is Apple's uncompressed audio format.",
+  "alac": "ALAC (Apple Lossless) is lossless audio in an M4A file.",
+  "m4b": "M4B is an audiobook with chapters.",
+  "m4r": "M4R is an iPhone ringtone (up to 40 seconds).",
+  "amr": "AMR is the speech codec of mobile voice recordings.",
+  "ac3": "AC3 is Dolby Digital surround sound.",
+  "dts": "DTS is a surround sound format of cinemas and Blu-ray.",
+  "ape": "APE (Monkey's Audio) is lossless audio.",
+  "wv": "WavPack is lossless (or hybrid) audio.",
+  "mka": "MKA is audio in a Matroska container.",
+  "au": "AU is the Sun / NeXT audio format.",
+  "caf": "CAF is Apple's Core Audio Format.",
+  "mp2": "MP2 is MPEG audio layer II, used in broadcasting.",
+  "weba": "WEBA is WebM audio (Opus).",
+  "gsm": "GSM is the speech codec of mobile networks.",
+  "voc": "VOC is the Creative Sound Blaster audio format.",
+  "ra": "RA is RealAudio.",
+  "zip": "ZIP is the most widely supported archive: Windows, macOS and Linux open it without extra software.",
+  "rar": "RAR is a popular archive with strong compression and recovery records.",
+  "7z": "7Z is the open 7-Zip archive with the strongest compression (LZMA2) and AES-256 encryption.",
+  "tar": "TAR bundles files into one without compression, as on Unix systems.",
+  "tar.gz": "TAR.GZ is a tarball compressed with gzip — the standard of Linux software.",
+  "tgz": "TGZ is the short name of a gzip-compressed tarball.",
+  "tar.bz2": "TAR.BZ2 is a tarball compressed with bzip2.",
+  "tbz2": "TBZ2 is the short name of a bzip2-compressed tarball.",
+  "tbz": "TBZ is a bzip2-compressed tarball.",
+  "tar.bz": "TAR.BZ is a bzip-compressed tarball.",
+  "tar.xz": "TAR.XZ is a tarball compressed with xz (LZMA2).",
+  "txz": "TXZ is the short name of an xz-compressed tarball.",
+  "tar.zst": "TAR.ZST is a tarball compressed with Zstandard: fast and compact.",
+  "tar.7z": "TAR.7Z is a tarball inside a 7z archive.",
+  "tar.lzo": "TAR.LZO is a tarball compressed with the very fast LZO.",
+  "tar.z": "TAR.Z is a tarball compressed with the old Unix compress.",
+  "tz": "TZ is a compress-ed tarball.",
+  "tzo": "TZO is an LZO-compressed tarball.",
+  "gz": "GZ is a single file compressed with gzip.",
+  "bz2": "BZ2 is a single file compressed with bzip2.",
+  "bz": "BZ is a single file compressed with bzip.",
+  "xz": "XZ is a single file compressed with LZMA2.",
+  "zst": "ZST is a single file compressed with Zstandard.",
+  "lz": "LZ is a single file compressed with lzip.",
+  "lzma": "LZMA is a single file compressed with LZMA.",
+  "lzo": "LZO is a single file compressed with lzop.",
+  "z": "Z is a single file compressed with Unix compress.",
+  "cab": "CAB is the Microsoft Cabinet archive of Windows installers.",
+  "iso": "ISO is a CD/DVD disc image.",
+  "img": "IMG is a raw disk image.",
+  "dmg": "DMG is a macOS disk image.",
+  "jar": "JAR is a Java archive (ZIP).",
+  "war": "WAR is a Java web application archive.",
+  "apk": "APK is an Android app package.",
+  "deb": "DEB is a Debian / Ubuntu software package.",
+  "rpm": "RPM is a Red Hat / Fedora software package.",
+  "cpio": "CPIO is an old Unix archive, used in Linux initramfs.",
+  "arj": "ARJ is an old DOS-era archive.",
+  "lha": "LHA (LZH) is a Japanese archive format popular on the Amiga.",
+  "ace": "ACE is an old Windows archive format.",
+  "alz": "ALZ is the ALZip archive from Korea.",
+  "arc": "ARC is one of the first PC archive formats.",
+  "wim": "WIM is the Windows imaging format of installers.",
+  "dwg": "DWG is AutoCAD's native drawing format and the most common CAD file.",
+  "dxf": "DXF is Autodesk's open drawing exchange format that most CAD programs read.",
+  "ttf": "TTF (TrueType) is the most widely supported desktop font format.",
+  "otf": "OTF (OpenType) is a font with advanced typography (ligatures, small caps).",
+  "woff": "WOFF is a compressed web font.",
+  "woff2": "WOFF2 is the most compact web font, supported by all modern browsers.",
+  "eot": "EOT is the web font of old Internet Explorer versions.",
+  "ttc": "TTC is a TrueType collection with several fonts in one file.",
+  "pfb": "PFB is a PostScript Type 1 font (binary).",
+  "pfa": "PFA is a PostScript Type 1 font (text).",
+  "sfd": "SFD is FontForge's editable font source.",
+  "dfont": "DFONT is an old macOS font suitcase.",
+  "bdf": "BDF is a bitmap font of the X Window System."
+ },
+ "opt": {
+  "engine": {
+   "label": "Engine",
+   "help": "Auto picks the best engine for the pair; you can force LibreOffice, Pandoc, Calibre, ImageMagick and others."
+  },
+  "page_range": {
+   "label": "Pages",
+   "help": "Only these pages, e.g. 1-3,5,8- (from page 8 to the end)."
+  },
+  "ocr": {
+   "label": "OCR",
+   "help": "Recognise text in scanned PDFs (auto: only when the PDF has no text layer)."
+  },
+  "ocr_language": {
+   "label": "OCR language",
+   "help": "Tesseract language codes, e.g. eng, hun or hun+eng."
+  },
+  "title": {
+   "label": "Title",
+   "help": "Book or document title written into the metadata."
+  },
+  "author": {
+   "label": "Author",
+   "help": "Author written into the metadata."
+  },
+  "output_profile": {
+   "label": "Device",
+   "help": "E-book device profile: Kindle, Kobo, tablet…"
+  },
+  "delimiter": {
+   "label": "CSV delimiter",
+   "help": "Auto detects comma, semicolon or tab."
+  },
+  "seconds_per_slide": {
+   "label": "Seconds per slide",
+   "help": "How long each slide is shown in the video (0.5–60)."
+  },
+  "width": {
+   "label": "Width (px)",
+   "help": "New width; with only width set, the height follows the aspect ratio."
+  },
+  "height": {
+   "label": "Height (px)",
+   "help": "New height; with only height set, the width follows the aspect ratio."
+  },
+  "fit": {
+   "label": "Fit",
+   "help": "inside: within the box · cover: fill and crop · contain: pad · fill: stretch."
+  },
+  "quality": {
+   "label": "Quality",
+   "help": "1–100; lower is smaller. JPG default 88, WebP 85, AVIF 70."
+  },
+  "strip_metadata": {
+   "label": "Remove metadata",
+   "help": "Drop EXIF (camera, GPS location, date) and other metadata."
+  },
+  "dpi": {
+   "label": "Resolution (dpi)",
+   "help": "For rendering pages and vectors (default 150)."
+  },
+  "background": {
+   "label": "Background",
+   "help": "Colour behind transparent areas, e.g. #ffffff or white."
+  },
+  "grayscale": {
+   "label": "Greyscale",
+   "help": "Convert to shades of grey."
+  },
+  "lossless": {
+   "label": "Lossless",
+   "help": "WebP / JPEG XL without quality loss."
+  },
+  "video_codec": {
+   "label": "Video codec",
+   "help": "auto, H.264, H.265, VP9, AV1, MPEG-4, MPEG-2, ProRes, copy (no re-encoding)."
+  },
+  "audio_codec": {
+   "label": "Audio codec",
+   "help": "auto, AAC, MP3, Opus, Vorbis, FLAC, PCM, AC3, copy, none."
+  },
+  "resolution": {
+   "label": "Resolution",
+   "help": "e.g. 1920x1080, 1080p, 720p, 4k."
+  },
+  "aspect": {
+   "label": "Aspect ratio",
+   "help": "e.g. 16:9, 9:16, 1:1, 4:3."
+  },
+  "aspect_mode": {
+   "label": "Aspect mode",
+   "help": "pad with black bars, crop, or stretch."
+  },
+  "fps": {
+   "label": "Frame rate",
+   "help": "Frames per second, e.g. 24, 30, 60."
+  },
+  "crf": {
+   "label": "Quality (CRF)",
+   "help": "0–51, lower is better; H.264 default 23."
+  },
+  "preset": {
+   "label": "Encoding speed",
+   "help": "Slower presets give smaller files at the same quality."
+  },
+  "video_bitrate": {
+   "label": "Video bitrate",
+   "help": "e.g. 2500k or 5M (instead of CRF)."
+  },
+  "audio_bitrate": {
+   "label": "Audio bitrate",
+   "help": "e.g. 128k, 192k, 320k."
+  },
+  "sample_rate": {
+   "label": "Sample rate",
+   "help": "e.g. 44100 or 48000 Hz."
+  },
+  "channels": {
+   "label": "Channels",
+   "help": "1 = mono, 2 = stereo."
+  },
+  "bit_depth": {
+   "label": "Bit depth",
+   "help": "16, 24 or 32 bit (WAV, AIFF, FLAC)."
+  },
+  "start": {
+   "label": "Start",
+   "help": "Cut from here: seconds or hh:mm:ss."
+  },
+  "end": {
+   "label": "End",
+   "help": "Cut until here: seconds or hh:mm:ss."
+  },
+  "rotate": {
+   "label": "Rotate",
+   "help": "90, 180 or 270 degrees clockwise."
+  },
+  "flip": {
+   "label": "Flip",
+   "help": "Mirror horizontally or vertically."
+  },
+  "subtitles": {
+   "label": "Subtitles",
+   "help": "An uploaded SRT, VTT or ASS file (file_id)."
+  },
+  "subtitles_mode": {
+   "label": "Subtitle mode",
+   "help": "burn into the picture, or add as a switchable track."
+  },
+  "volume": {
+   "label": "Volume",
+   "help": "Multiplier (1.5) or decibels (+3dB, -6dB)."
+  },
+  "remove_audio": {
+   "label": "Remove audio",
+   "help": "Make a silent video."
+  },
+  "at": {
+   "label": "Frame at",
+   "help": "Time of the frame for JPG/PNG from video, in seconds."
+  },
+  "password": {
+   "label": "Password",
+   "help": "For opening a protected source, or for encrypting the result (ZIP, 7Z)."
+  },
+  "level": {
+   "label": "Compression level",
+   "help": "0 (store) to 9 (smallest)."
+  },
+  "font_index": {
+   "label": "Font index",
+   "help": "Which font of a collection (TTC), from 0."
+  },
+  "subset_text": {
+   "label": "Only these characters",
+   "help": "Keep only the glyphs of this text (smaller web font)."
+  },
+  "threshold": {
+   "label": "Threshold",
+   "help": "Brightness cut-off for tracing (1–254)."
+  },
+  "text_to_path": {
+   "label": "Text to paths",
+   "help": "Turn text into outlines (no fonts needed to open)."
+  },
+  "advanced": {
+   "label": "Advanced parameters",
+   "help": "Allow-listed FFmpeg or ImageMagick flags, e.g. -tune film or -sharpen 0x1."
+  },
+  "frame": {
+   "label": "Frame / layer",
+   "help": "Which frame of an animation or multi-page image, from 0."
+  },
+  "loop": {
+   "label": "Loop",
+   "help": "Loop the animation forever."
+  },
+  "compression": {
+   "label": "Compression",
+   "help": "low (best quality), recommended, extreme (smallest)."
+  },
+  "max_width": {
+   "label": "Maximum width",
+   "help": "Shrink wider images to this width."
+  },
+  "colors": {
+   "label": "Colours",
+   "help": "Number of palette colours (2–256)."
+  },
+  "target_size_mb": {
+   "label": "Target size (MB)",
+   "help": "Aim for this file size; bitrate is calculated from the length."
+  },
+  "page_ranges": {
+   "label": "Page ranges",
+   "help": "One range per file, e.g. 1-3, all, 2."
+  },
+  "mode": {
+   "label": "Split mode",
+   "help": "ranges, every N pages, or each page separately."
+  },
+  "every": {
+   "label": "Every N pages",
+   "help": "Pages per part when splitting evenly."
+  },
+  "angle": {
+   "label": "Angle",
+   "help": "90, 180, 270 (or -90)."
+  },
+  "expand": {
+   "label": "Grow canvas",
+   "help": "Enlarge the canvas so nothing is cut off."
+  },
+  "order": {
+   "label": "New page order",
+   "help": "e.g. 3,1,2,4-"
+  },
+  "margins_mm": {
+   "label": "Margins (mm)",
+   "help": "top, right, bottom, left to cut off."
+  },
+  "page_size": {
+   "label": "Page size",
+   "help": "A3, A4, A5, B5, Letter, Legal, Tabloid."
+  },
+  "fit_page": {
+   "label": "Fit",
+   "help": "fit (keep ratio), fill (crop), stretch."
+  },
+  "pdfa_level": {
+   "label": "PDF/A level",
+   "help": "1b, 2b (default) or 3b."
+  },
+  "deskew": {
+   "label": "Straighten",
+   "help": "Straighten crooked scans before OCR."
+  },
+  "owner_password": {
+   "label": "Permissions password",
+   "help": "Needed to change the permissions."
+  },
+  "allow_print": {
+   "label": "Allow printing",
+   "help": ""
+  },
+  "allow_copy": {
+   "label": "Allow copying text",
+   "help": ""
+  },
+  "allow_edit": {
+   "label": "Allow editing",
+   "help": ""
+  },
+  "allow_annotate": {
+   "label": "Allow comments",
+   "help": ""
+  },
+  "what": {
+   "label": "Flatten",
+   "help": "all, only form fields, or only annotations."
+  },
+  "min_size": {
+   "label": "Minimum size (px)",
+   "help": "Skip images smaller than this."
+  },
+  "words": {
+   "label": "Words",
+   "help": "Words or phrases to black out."
+  },
+  "patterns": {
+   "label": "Patterns",
+   "help": "email, phone, credit-card, ssn, date."
+  },
+  "position": {
+   "label": "Position",
+   "help": "Where to place it on the page or picture."
+  },
+  "start_number": {
+   "label": "First number",
+   "help": "Number of the first page."
+  },
+  "text_format": {
+   "label": "Format",
+   "help": "e.g. {n} or Page {n} of {total}."
+  },
+  "percent": {
+   "label": "Percent",
+   "help": "Scale by percent instead of pixels."
+  },
+  "box": {
+   "label": "Area",
+   "help": "x, y, width, height in pixels."
+  },
+  "scale": {
+   "label": "Scale",
+   "help": "2×, 3× or 4×."
+  },
+  "columns": {
+   "label": "Columns",
+   "help": "Number of columns (auto by default)."
+  },
+  "gap": {
+   "label": "Gap (px)",
+   "help": "Space between pictures."
+  },
+  "text": {
+   "label": "Text",
+   "help": "Watermark text."
+  },
+  "image_file": {
+   "label": "Logo image",
+   "help": "An uploaded image used as the watermark (file_id)."
+  },
+  "opacity": {
+   "label": "Opacity",
+   "help": "0.02–1; 0.3 is a subtle watermark."
+  },
+  "rotation": {
+   "label": "Rotation",
+   "help": "Degrees, e.g. 45 for a diagonal watermark."
+  },
+  "font_size": {
+   "label": "Font size",
+   "help": "In points (auto by default)."
+  },
+  "audio_format": {
+   "label": "Audio format",
+   "help": "mp3, m4a, wav, flac, ogg, opus, aac."
+  },
+  "loops": {
+   "label": "Repeats",
+   "help": "How many times the animation plays in the video."
+  },
+  "burn": {
+   "label": "Burn in",
+   "help": "Burn the subtitles into the picture (otherwise a switchable track)."
+  },
+  "language": {
+   "label": "Language",
+   "help": "Language of the content, e.g. Hungarian."
+  },
+  "fade_in": {
+   "label": "Fade in (s)",
+   "help": ""
+  },
+  "fade_out": {
+   "label": "Fade out (s)",
+   "help": ""
+  },
+  "normalize": {
+   "label": "Normalise loudness",
+   "help": "EBU R128 loudness normalisation."
+  },
+  "url": {
+   "label": "Web address",
+   "help": "The page to capture (https://…)."
+  },
+  "full_page": {
+   "label": "Whole page",
+   "help": "Capture the full scrolling page, not only the screen."
+  },
+  "wait_ms": {
+   "label": "Wait (ms)",
+   "help": "Extra time for the page to finish loading."
+  },
+  "image_format": {
+   "label": "Image format",
+   "help": "png, jpg, webp or pdf."
+  },
+  "output_format": {
+   "label": "Output format",
+   "help": "Format of the result."
+  },
+  "page": {
+   "label": "Page",
+   "help": "Which page or slide."
+  },
+  "archive_format": {
+   "label": "Archive format",
+   "help": "zip, 7z, tar, tar.gz, tar.bz2, tar.xz, tar.zst."
+  },
+  "fields": {
+   "label": "Fields",
+   "help": "Metadata fields to write, e.g. {\"Title\": \"…\"}."
+  },
+  "args": {
+   "label": "Parameters",
+   "help": "Allow-listed flags only."
+  },
+  "keep_look": {
+   "label": "Keep the original look",
+   "help": "Fill on the original page (for photos and scans) instead of a clean rebuild."
+  },
+  "values": {
+   "label": "Values",
+   "help": "Field values, e.g. {\"Name\": \"…\"}."
+  },
+  "flatten": {
+   "label": "Flatten",
+   "help": "Bake the values in for printing."
+  },
+  "data_file": {
+   "label": "Data table",
+   "help": "CSV or XLSX: one filled copy per row."
+  },
+  "name": {
+   "label": "Name",
+   "help": "Name of the signature."
+  },
+  "kind": {
+   "label": "Type",
+   "help": "signature or initials."
+  },
+  "color": {
+   "label": "Ink colour",
+   "help": "e.g. #1a237e (blue) or black."
+  },
+  "signature_id": {
+   "label": "Signature",
+   "help": "A saved signature."
+  },
+  "placement": {
+   "label": "Placement",
+   "help": "auto (signature field or line), field, xy, anchor."
+  },
+  "x": {
+   "label": "X (pt)",
+   "help": ""
+  },
+  "y": {
+   "label": "Y (pt)",
+   "help": ""
+  },
+  "field": {
+   "label": "Field",
+   "help": "Name of the signature field."
+  },
+  "profile": {
+   "label": "Profile",
+   "help": "Your saved data (name, address, IDs)."
+  },
+  "source_files": {
+   "label": "Source documents",
+   "help": "Documents to take answers from (ID card, invoice…)."
+  },
+  "answers": {
+   "label": "Answers",
+   "help": "Answers to the questions the assistant asked."
+  },
+  "cover": {
+   "label": "Cover",
+   "help": "An uploaded image (file_id) as cover or still picture."
+  },
+  "sheet": {
+   "label": "Sheet",
+   "help": "Which sheet (the active one by default)."
+  },
+  "deep": {
+   "label": "AI recognition for complex forms",
+   "help": "auto: only when the free recognition looks incomplete or the form is complex (Plus and Pro plans, 1 credit per page) · on: always · off: never."
+  }
+ },
+ "thub": {
+  "title": "{n} free file tools — compress, edit PDFs, trim video, sign",
+  "desc": "{n} online tools: compress PDFs and images, merge, split and protect PDFs, trim and compress video, watermark, capture websites, archives, metadata, forms and signatures.",
+  "h1": "File tools",
+  "lead": "{n} tools for everyday file work, the same in the browser, the API and your AI assistant.",
+  "ai_h": "AI tools in the app"
+ },
+ "tgroup": {
+  "compress": {
+   "name": "Compress",
+   "desc": "Make PDFs, images, video and audio smaller."
+  },
+  "pdf": {
+   "name": "PDF",
+   "desc": "Merge, split, organise, protect, archive and edit PDFs."
+  },
+  "image": {
+   "name": "Images",
+   "desc": "Resize, crop, rotate, upscale, collage, colour picker."
+  },
+  "video": {
+   "name": "Video",
+   "desc": "Trim, crop, resize, rotate, GIFs and subtitles."
+  },
+  "audio": {
+   "name": "Audio",
+   "desc": "Trim, set the volume, fade."
+  },
+  "watermark": {
+   "name": "Watermark",
+   "desc": "Text or logo on PDFs, images and videos."
+  },
+  "web": {
+   "name": "Web capture",
+   "desc": "Save web pages as PDF or image."
+  },
+  "files": {
+   "name": "Files and archives",
+   "desc": "Merge, thumbnails, ZIP and 7Z, unpack."
+  },
+  "metadata": {
+   "name": "Metadata",
+   "desc": "Read, edit and remove EXIF and document data."
+  },
+  "forms": {
+   "name": "Forms",
+   "desc": "Recognise, fill and bulk-fill forms from any file."
+  },
+  "signature": {
+   "name": "Signatures",
+   "desc": "Create a signature once, place it on PDFs and Word files."
+  },
+  "ai": {
+   "name": "AI",
+   "desc": ""
+  },
+  "utility": {
+   "name": "Converters",
+   "desc": "Units and time zones."
+  }
+ },
+ "aitool": {
+  "document": {
+   "name": "AI document writer",
+   "desc": "Write and edit Word documents by asking."
+  },
+  "presentation": {
+   "name": "AI presentation maker",
+   "desc": "A designed deck from a brief or a document."
+  },
+  "scan-to-text": {
+   "name": "Scan to text",
+   "desc": "Old books and photographed pages to Word, searchable PDF or a fillable form."
+  },
+  "photos/restore": {
+   "name": "Restore old photos",
+   "desc": "Repair and colourise scanned photos."
+  },
+  "print-design": {
+   "name": "Print design",
+   "desc": "Posters and flyers from a brief."
+  },
+  "infographic": {
+   "name": "Infographic maker",
+   "desc": "Charts and figures from your data."
+  },
+  "book": {
+   "name": "Book typesetting",
+   "desc": "A manuscript typeset as a book."
+  }
+ },
+ "toolstep": {
+  "1": "Choose your files (or drop them on the box).",
+  "2": "Set the options if you need to — the defaults suit most files.",
+  "3": "Press Start and download the result, or open it in the editor."
+ },
+ "toolfaq": [
+  [
+   "Is {name} free?",
+   "Yes — free in the browser up to {guest_mb} MB per file without an account. With a free account you can run batches of up to {batch_free} files ({batch_pro} on Pro)."
+  ],
+  [
+   "Are my files private?",
+   "Files stay in your private workspace, download links are signed, and everything is deleted after {retention} days."
+  ]
+ ],
+ "tool": {
+  "how_h": "How to use {name}",
+  "open_editor": "Open the full editor",
+  "formats_h": "Supported formats",
+  "api_p": "In the REST API this is the operation {op}; in MCP the file_tools tool.",
+  "compress-pdf": {
+   "slug": "compress-pdf",
+   "name": "Compress PDF",
+   "tag": "compressed",
+   "title": "Compress PDF — make PDF files smaller online, free",
+   "desc": "Shrink PDF files with Ghostscript: three levels from print quality to smallest. Text stays selectable.",
+   "h1": "Compress PDF",
+   "intro": "Compress PDF reduces the size of a PDF by re-compressing its images and fonts with Ghostscript: “recommended” resamples pictures to 150 dpi, “extreme” to 72 dpi, “low” keeps 300 dpi for print. Text, links and bookmarks stay intact; files up to {guest_mb} MB are free without an account.",
+   "points": [
+    "Three levels: low (300 dpi), recommended (150 dpi), extreme (72 dpi)",
+    "Text stays selectable and searchable",
+    "Several PDFs at once with the same setting"
+   ],
+   "faq": [
+    [
+     "How much smaller will my PDF get?",
+     "PDFs with photos or scans usually shrink by 50–90%; text-only PDFs are already small and change little."
+    ]
+   ]
+  },
+  "compress-image": {
+   "slug": "compress-image",
+   "name": "Compress image",
+   "tag": "compressed",
+   "title": "Compress images — JPG, PNG, WebP, HEIC smaller online",
+   "desc": "Reduce image file size: set the quality, a maximum width, and remove EXIF data. Up to {max_files} images at once.",
+   "h1": "Compress images",
+   "intro": "Compress images re-encodes photos and graphics at a lower, still sharp quality (JPG/WebP 80 by default), can limit the width and removes EXIF data such as GPS location. Up to {max_files} images at once; the format stays the same.",
+   "points": [
+    "Quality slider 1–100",
+    "Optional maximum width",
+    "Removes camera and location data on request"
+   ],
+   "faq": []
+  },
+  "compress-jpeg": {
+   "slug": "compress-jpeg",
+   "name": "Compress JPEG",
+   "tag": "compressed",
+   "title": "Compress JPEG — smaller JPG photos online",
+   "desc": "Make JPG photos smaller with progressive encoding and adjustable quality.",
+   "h1": "Compress JPEG",
+   "intro": "Compress JPEG re-encodes JPG photos as optimised, progressive JPEGs at quality 80 by default — typically 40–70% smaller with no visible difference. Metadata can be removed.",
+   "points": [],
+   "faq": []
+  },
+  "compress-png": {
+   "slug": "compress-png",
+   "name": "Compress PNG",
+   "tag": "compressed",
+   "title": "Compress PNG — smaller PNG images online",
+   "desc": "Shrink PNG images with palette quantisation while keeping transparency.",
+   "h1": "Compress PNG",
+   "intro": "Compress PNG reduces the colours to an optimised palette (256 by default) and recompresses the file; transparency is kept. Screenshots and graphics typically shrink by 50–80%.",
+   "points": [],
+   "faq": []
+  },
+  "compress-gif": {
+   "slug": "compress-gif",
+   "name": "Compress GIF",
+   "tag": "compressed",
+   "title": "Compress GIF — smaller animated GIFs",
+   "desc": "Make animated GIFs smaller: fewer colours, lower frame rate, smaller width.",
+   "h1": "Compress GIF",
+   "intro": "Compress GIF rebuilds the animation with an optimised palette, and can reduce the frame rate and width — the main levers of GIF size.",
+   "points": [],
+   "faq": []
+  },
+  "compress-video": {
+   "slug": "compress-video",
+   "name": "Compress video",
+   "tag": "compressed",
+   "title": "Compress video — MP4, MOV, MKV smaller online",
+   "desc": "Shrink videos with H.264 or H.265: choose a quality (CRF), a resolution or a target size in MB.",
+   "h1": "Compress video",
+   "intro": "Compress video re-encodes the video with H.264 at CRF 28 by default (H.265 on request), optionally at a lower resolution, or aims for a file size you set in MB. Phone videos often shrink by 60–80%.",
+   "points": [
+    "Quality (CRF), resolution or target size",
+    "H.264 or H.265",
+    "Keeps the audio track"
+   ],
+   "faq": []
+  },
+  "compress-mp3": {
+   "slug": "compress-mp3",
+   "name": "Compress MP3",
+   "tag": "compressed",
+   "title": "Compress MP3 — smaller audio files",
+   "desc": "Reduce the bitrate of MP3 and other audio files; mono for speech.",
+   "h1": "Compress MP3",
+   "intro": "Compress MP3 re-encodes audio at a lower bitrate (96 kbit/s by default) and can make it mono — enough for speech and podcasts, about a third of a 320 kbit/s file.",
+   "points": [],
+   "faq": []
+  },
+  "compress-wav": {
+   "slug": "compress-wav",
+   "name": "Compress WAV",
+   "tag": "compressed",
+   "title": "Compress WAV — smaller uncompressed audio",
+   "desc": "Make WAV files smaller by lowering the sample rate, channels or bit depth.",
+   "h1": "Compress WAV",
+   "intro": "Compress WAV keeps the file uncompressed and lossless in format but lowers the sample rate (e.g. 48 → 22.05 kHz), the channels or the bit depth. For the smallest lossless file convert to FLAC instead.",
+   "points": [],
+   "faq": []
+  },
+  "merge-pdf": {
+   "slug": "merge-pdf",
+   "name": "Merge PDF",
+   "tag": "merged",
+   "title": "Merge PDF — combine up to {max_files} files into one PDF",
+   "desc": "Combine PDFs, Word files and images into one PDF in the order you choose; up to {max_files} files.",
+   "h1": "Merge PDF",
+   "intro": "Merge PDF joins up to {max_files} files into one PDF in the order you upload them. Word, PowerPoint and image files are converted to PDF first, and for each file you can take only some pages (e.g. 1-3).",
+   "points": [
+    "Up to {max_files} files",
+    "Mix PDFs, Word files and images",
+    "Page ranges per file"
+   ],
+   "faq": []
+  },
+  "split-pdf": {
+   "slug": "split-pdf",
+   "name": "Split PDF",
+   "tag": "split",
+   "title": "Split PDF — by page ranges, every N pages or every page",
+   "desc": "Split a PDF into several files: by ranges, every N pages, or one file per page. Delivered as a ZIP.",
+   "h1": "Split PDF",
+   "intro": "Split PDF cuts a document into parts: by page ranges you list (1-3,4-10), into equal parts of N pages, or into single pages. The parts come in a ZIP.",
+   "points": [],
+   "faq": []
+  },
+  "extract-pages": {
+   "slug": "extract-pdf-pages",
+   "name": "Extract PDF pages",
+   "tag": "pages",
+   "title": "Extract pages from a PDF",
+   "desc": "Save chosen pages of a PDF as a new PDF.",
+   "h1": "Extract pages from a PDF",
+   "intro": "Extract pages makes a new PDF from the pages you list (e.g. 2,5-7), in that order; the original stays unchanged.",
+   "points": [],
+   "faq": []
+  },
+  "delete-pdf-pages": {
+   "slug": "delete-pdf-pages",
+   "name": "Delete PDF pages",
+   "tag": "pages removed",
+   "title": "Delete pages from a PDF",
+   "desc": "Remove pages from a PDF by number or range.",
+   "h1": "Delete pages from a PDF",
+   "intro": "Delete pages removes the pages you list (e.g. 1,4-6) and saves the rest as a new PDF.",
+   "points": [],
+   "faq": []
+  },
+  "rotate-pdf": {
+   "slug": "rotate-pdf",
+   "name": "Rotate PDF",
+   "tag": "rotated",
+   "title": "Rotate PDF pages — all or selected",
+   "desc": "Rotate all or selected PDF pages by 90, 180 or 270 degrees, permanently.",
+   "h1": "Rotate PDF",
+   "intro": "Rotate PDF turns all pages, or only the ones you list, by 90, 180 or 270 degrees and saves the rotation in the file.",
+   "points": [],
+   "faq": []
+  },
+  "organize-pdf": {
+   "slug": "organize-pdf",
+   "name": "Organise PDF",
+   "tag": "reordered",
+   "title": "Organise PDF — reorder pages",
+   "desc": "Put PDF pages in a new order, duplicate or drop them.",
+   "h1": "Organise PDF pages",
+   "intro": "Organise PDF rebuilds the document in the page order you give (e.g. 3,1,2,4-); pages left out are dropped, listed twice are duplicated.",
+   "points": [],
+   "faq": []
+  },
+  "crop-pdf": {
+   "slug": "crop-pdf",
+   "name": "Crop PDF",
+   "tag": "cropped",
+   "title": "Crop PDF margins",
+   "desc": "Cut the margins of PDF pages in millimetres.",
+   "h1": "Crop PDF",
+   "intro": "Crop PDF trims the margins you give in millimetres (top, right, bottom, left) from all or selected pages.",
+   "points": [],
+   "faq": []
+  },
+  "resize-pdf": {
+   "slug": "resize-pdf",
+   "name": "Resize PDF",
+   "tag": "resized",
+   "title": "Resize PDF pages — A4, Letter, A5 and more",
+   "desc": "Change the page size of a PDF to A3, A4, A5, Letter or Legal.",
+   "h1": "Resize PDF pages",
+   "intro": "Resize PDF places every page on a new paper size (A4 by default), scaled to fit, to fill or stretched.",
+   "points": [],
+   "faq": []
+  },
+  "pdf-to-pdfa": {
+   "slug": "pdf-to-pdfa",
+   "name": "PDF to PDF/A",
+   "tag": "PDF-A",
+   "title": "Convert PDF to PDF/A for archiving",
+   "desc": "Make an ISO PDF/A-1b, 2b or 3b file with Ghostscript: fonts embedded, sRGB colour profile.",
+   "h1": "PDF to PDF/A",
+   "intro": "PDF to PDF/A produces an archival PDF/A-2b file by default (1b and 3b available): all fonts are embedded and an sRGB output intent is added, as courts and public archives require.",
+   "points": [],
+   "faq": []
+  },
+  "pdf-to-pdfx": {
+   "slug": "pdf-to-pdfx",
+   "name": "PDF to PDF/X",
+   "tag": "PDF-X",
+   "title": "Convert PDF to PDF/X for print",
+   "desc": "Prepare a print-ready PDF/X file with Ghostscript.",
+   "h1": "PDF to PDF/X",
+   "intro": "PDF to PDF/X makes a print-oriented PDF/X-3 file with embedded fonts and a defined output intent.",
+   "points": [],
+   "faq": []
+  },
+  "ocr-pdf": {
+   "slug": "ocr-pdf",
+   "name": "OCR PDF",
+   "tag": "searchable",
+   "title": "OCR PDF — make scanned PDFs searchable",
+   "desc": "Add an invisible text layer to scanned PDFs and photos with Tesseract OCR; Hungarian and 100+ languages.",
+   "h1": "OCR PDF",
+   "intro": "OCR PDF recognises the text of scanned pages with Tesseract and adds it as an invisible layer, so the PDF becomes searchable and copyable while looking the same. Crooked pages are straightened first.",
+   "points": [],
+   "faq": []
+  },
+  "protect-pdf": {
+   "slug": "protect-pdf",
+   "name": "Protect PDF",
+   "tag": "protected",
+   "title": "Protect PDF with a password and permissions",
+   "desc": "Encrypt a PDF with AES-256, set an open password and permissions for printing, copying and editing.",
+   "h1": "Protect PDF",
+   "intro": "Protect PDF encrypts the file with AES-256: an open password is needed to read it, and a separate permissions password controls printing, copying, editing and comments.",
+   "points": [],
+   "faq": []
+  },
+  "unlock-pdf": {
+   "slug": "unlock-pdf",
+   "name": "Unlock PDF",
+   "tag": "unlocked",
+   "title": "Unlock PDF — remove a password you know",
+   "desc": "Remove the password and restrictions from a PDF when you know the password.",
+   "h1": "Unlock PDF",
+   "intro": "Unlock PDF removes the encryption and permission restrictions from a PDF whose password you know; without the password it can't be opened.",
+   "points": [],
+   "faq": []
+  },
+  "flatten-pdf": {
+   "slug": "flatten-pdf",
+   "name": "Flatten PDF",
+   "tag": "flattened",
+   "title": "Flatten PDF — bake in form fields and comments",
+   "desc": "Make filled form fields and annotations part of the page so they can't be changed.",
+   "h1": "Flatten PDF",
+   "intro": "Flatten PDF bakes form field values and annotations into the page content: the result prints and looks the same everywhere and can't be edited. Accented text (ő, ű) stays correct.",
+   "points": [],
+   "faq": []
+  },
+  "extract-pdf-images": {
+   "slug": "extract-pdf-images",
+   "name": "Extract images from PDF",
+   "tag": "images",
+   "title": "Extract images from a PDF",
+   "desc": "Save every picture embedded in a PDF in its original quality, as a ZIP.",
+   "h1": "Extract images from a PDF",
+   "intro": "Extract images saves the pictures embedded in a PDF at their original resolution and format (JPG, PNG…) in a ZIP; tiny decorations are skipped.",
+   "points": [],
+   "faq": []
+  },
+  "annotate-pdf": {
+   "slug": "annotate-pdf",
+   "name": "Annotate PDF",
+   "tag": "annotated",
+   "title": "Annotate PDF — highlights, notes and shapes",
+   "desc": "Add highlights, sticky notes, text boxes, rectangles and lines to a PDF.",
+   "h1": "Annotate PDF",
+   "intro": "Annotate PDF adds standard PDF annotations — highlight, note, text box, rectangle, line — that every PDF reader shows and that can be flattened later.",
+   "points": [],
+   "faq": []
+  },
+  "edit-pdf": {
+   "slug": "edit-pdf",
+   "name": "Edit PDF",
+   "tag": "edited",
+   "title": "Edit PDF — add text, images and white-out",
+   "desc": "Add text and images to PDF pages, cover parts with white, or open the full PDF editor.",
+   "h1": "Edit PDF",
+   "intro": "Edit PDF places new text (with accents) and images on the pages and can cover areas with white; for rewriting the existing text open the full PDF editor of the app.",
+   "points": [],
+   "faq": []
+  },
+  "redact-pdf": {
+   "slug": "redact-pdf",
+   "name": "Redact PDF",
+   "tag": "redacted",
+   "title": "Redact PDF — permanently black out text",
+   "desc": "Black out words and patterns (e-mails, phone numbers, card numbers) permanently.",
+   "h1": "Redact PDF",
+   "intro": "Redact PDF finds the words and patterns you give, removes the text under them permanently and draws black boxes — not just a cover that can be lifted.",
+   "points": [],
+   "faq": []
+  },
+  "page-numbers": {
+   "slug": "pdf-page-numbers",
+   "name": "Add page numbers",
+   "tag": "numbered",
+   "title": "Add page numbers to a PDF",
+   "desc": "Number PDF pages at the position and in the format you choose.",
+   "h1": "Add page numbers to a PDF",
+   "intro": "Add page numbers writes a number on each page — bottom centre by default, or any corner — in a format like “{n}” or “Page {n} of {total}”.",
+   "points": [],
+   "faq": []
+  },
+  "compare-pdf": {
+   "slug": "compare-pdf",
+   "name": "Compare PDF",
+   "tag": "comparison",
+   "title": "Compare two PDFs — see what changed",
+   "desc": "Compare two versions of a PDF and get a report of the differences.",
+   "h1": "Compare PDF",
+   "intro": "Compare PDF puts two versions side by side and marks inserted, deleted and changed text, page by page.",
+   "points": [],
+   "faq": []
+  },
+  "resize-image": {
+   "slug": "resize-image",
+   "name": "Resize image",
+   "tag": "resized",
+   "title": "Resize images — pixels or percent, up to {max_files} at once",
+   "desc": "Resize JPG, PNG, WebP, HEIC and other images by pixels or percent; keep or change the aspect ratio.",
+   "h1": "Resize images",
+   "intro": "Resize image sets a new width, height or percentage with high-quality Lanczos resampling; fit, cover (crop) or pad keeps the proportions as you choose. Up to {max_files} images at once.",
+   "points": [],
+   "faq": []
+  },
+  "crop-image": {
+   "slug": "crop-image",
+   "name": "Crop image",
+   "tag": "cropped",
+   "title": "Crop images — to an area or an aspect ratio",
+   "desc": "Crop pictures to a pixel area or to an aspect ratio like 1:1, 4:5 or 16:9.",
+   "h1": "Crop images",
+   "intro": "Crop image cuts a pixel area (x, y, width, height) or the largest centred area of an aspect ratio such as 1:1 for profile pictures or 9:16 for stories.",
+   "points": [],
+   "faq": []
+  },
+  "rotate-image": {
+   "slug": "rotate-image",
+   "name": "Rotate image",
+   "tag": "rotated",
+   "title": "Rotate images by 90, 180 or 270 degrees",
+   "desc": "Rotate pictures permanently, several at once.",
+   "h1": "Rotate images",
+   "intro": "Rotate image turns pictures by 90, 180 or 270 degrees and saves the pixels rotated (not only an EXIF flag), so every program shows them right.",
+   "points": [],
+   "faq": []
+  },
+  "flip-image": {
+   "slug": "flip-image",
+   "name": "Flip image",
+   "tag": "flipped",
+   "title": "Flip images horizontally or vertically",
+   "desc": "Mirror pictures left–right or upside down.",
+   "h1": "Flip images",
+   "intro": "Flip image mirrors pictures horizontally (left–right) or vertically (upside down), several at once.",
+   "points": [],
+   "faq": []
+  },
+  "upscale-image": {
+   "slug": "upscale-image",
+   "name": "Upscale image",
+   "tag": "upscaled",
+   "title": "Upscale images 2×, 3× or 4×",
+   "desc": "Enlarge pictures 2–4 times with Lanczos resampling and sharpening.",
+   "h1": "Upscale images",
+   "intro": "Upscale image enlarges pictures 2, 3 or 4 times with Lanczos resampling and gentle sharpening — good for small logos and screenshots.",
+   "points": [],
+   "faq": []
+  },
+  "collage-maker": {
+   "slug": "collage-maker",
+   "name": "Collage maker",
+   "tag": "collage",
+   "title": "Collage maker — combine photos into one image",
+   "desc": "Arrange up to {max_files} photos in a grid with gaps and a background colour.",
+   "h1": "Collage maker",
+   "intro": "Collage maker arranges your photos in a balanced grid (columns automatic or chosen), with the gap and background colour you set, as one JPG.",
+   "points": [],
+   "faq": []
+  },
+  "color-picker": {
+   "slug": "color-picker",
+   "name": "Colour picker",
+   "tag": "colours",
+   "title": "Image colour picker — the main colours of a picture",
+   "desc": "Get the dominant colours of an image as HEX and RGB values.",
+   "h1": "Colour picker from an image",
+   "intro": "Colour picker finds the dominant colours of a picture (8 by default) and lists them with HEX, RGB and their share of the image — handy for brand palettes.",
+   "points": [],
+   "faq": []
+  },
+  "trim-video": {
+   "slug": "trim-video",
+   "name": "Trim video",
+   "tag": "trimmed",
+   "title": "Trim video — cut the start and end online",
+   "desc": "Cut a video to the part you need by start and end time.",
+   "h1": "Trim video",
+   "intro": "Trim video keeps the part between the start and end you give (seconds or hh:mm:ss) and re-encodes it so the cut is frame-accurate.",
+   "points": [],
+   "faq": []
+  },
+  "crop-video": {
+   "slug": "crop-video",
+   "name": "Crop video",
+   "tag": "cropped",
+   "title": "Crop video — to 9:16, 1:1, 16:9 or an area",
+   "desc": "Crop a video to an aspect ratio for Reels, TikTok or YouTube, or to a pixel area.",
+   "h1": "Crop video",
+   "intro": "Crop video cuts the picture to an aspect ratio (9:16 for Reels and TikTok, 1:1, 4:5, 16:9) centred, or to an exact pixel area.",
+   "points": [],
+   "faq": []
+  },
+  "resize-video": {
+   "slug": "resize-video",
+   "name": "Resize video",
+   "tag": "resized",
+   "title": "Resize video — 4K, 1080p, 720p and more",
+   "desc": "Change the resolution of a video, with bars or cropping for a new aspect ratio.",
+   "h1": "Resize video",
+   "intro": "Resize video scales the video to a resolution (1080p, 720p, custom) and, for a different aspect ratio, adds bars or crops.",
+   "points": [],
+   "faq": []
+  },
+  "rotate-video": {
+   "slug": "rotate-video",
+   "name": "Rotate video",
+   "tag": "rotated",
+   "title": "Rotate or flip a video",
+   "desc": "Turn a sideways video by 90, 180 or 270 degrees, or mirror it.",
+   "h1": "Rotate video",
+   "intro": "Rotate video fixes sideways phone videos by turning the picture 90, 180 or 270 degrees, and can mirror it.",
+   "points": [],
+   "faq": []
+  },
+  "mute-video": {
+   "slug": "mute-video",
+   "name": "Mute video",
+   "tag": "muted",
+   "title": "Remove audio from a video",
+   "desc": "Make a silent copy of a video without re-encoding the picture.",
+   "h1": "Mute video",
+   "intro": "Mute video removes the sound track; the picture is copied unchanged, so it's quick and lossless.",
+   "points": [],
+   "faq": []
+  },
+  "video-to-gif": {
+   "slug": "video-to-gif",
+   "name": "Video to GIF",
+   "tag": "GIF",
+   "title": "Video to GIF — make GIFs from MP4, MOV, WebM",
+   "desc": "Turn a part of a video into an animated GIF with an optimised palette.",
+   "h1": "Video to GIF",
+   "intro": "Video to GIF converts the part you choose (start, end) to an animated GIF at 12 fps and 480 px width by default, with a palette computed from the clip so colours stay clean.",
+   "points": [],
+   "faq": []
+  },
+  "gif-to-video": {
+   "slug": "gif-to-mp4",
+   "name": "GIF to MP4",
+   "tag": "video",
+   "title": "GIF to MP4 — animated GIF to video",
+   "desc": "Turn GIF, WebP or APNG animations into a small MP4 video.",
+   "h1": "GIF to MP4",
+   "intro": "GIF to MP4 turns an animation into an H.264 video that is usually 5–10 times smaller and plays everywhere; it can repeat the loop several times.",
+   "points": [],
+   "faq": []
+  },
+  "extract-audio": {
+   "slug": "extract-audio",
+   "name": "Extract audio",
+   "tag": "audio",
+   "title": "Extract audio from video — MP3, M4A, WAV",
+   "desc": "Save the sound of a video as MP3, M4A, WAV, FLAC or another audio format.",
+   "h1": "Extract audio from video",
+   "intro": "Extract audio saves the sound track of a video as MP3 (192 kbit/s by default) or M4A, WAV, FLAC, OGG, Opus.",
+   "points": [],
+   "faq": []
+  },
+  "add-subtitles": {
+   "slug": "add-subtitles",
+   "name": "Add subtitles",
+   "tag": "subtitled",
+   "title": "Add subtitles to a video — SRT, VTT, ASS",
+   "desc": "Burn subtitles into a video or add them as a switchable track.",
+   "h1": "Add subtitles to a video",
+   "intro": "Add subtitles takes a video and an SRT, VTT or ASS file and burns the text into the picture (visible everywhere) or adds a switchable subtitle track.",
+   "points": [],
+   "faq": []
+  },
+  "trim-audio": {
+   "slug": "trim-audio",
+   "name": "Trim audio",
+   "tag": "trimmed",
+   "title": "Trim audio — cut MP3, WAV, M4A online",
+   "desc": "Cut audio by start and end time, with fade in and fade out.",
+   "h1": "Trim audio",
+   "intro": "Trim audio keeps the part between the start and end you give, with optional fade-in and fade-out, in the same format.",
+   "points": [],
+   "faq": []
+  },
+  "adjust-volume": {
+   "slug": "adjust-volume",
+   "name": "Change volume",
+   "tag": "volume",
+   "title": "Change the volume of audio or video",
+   "desc": "Make audio louder or quieter, or normalise loudness to EBU R128.",
+   "h1": "Change volume",
+   "intro": "Change volume multiplies the level (e.g. 1.5×) or adds decibels (+3 dB), or normalises loudness to the EBU R128 broadcast standard.",
+   "points": [],
+   "faq": []
+  },
+  "watermark-pdf": {
+   "slug": "watermark-pdf",
+   "name": "Watermark PDF",
+   "tag": "watermarked",
+   "title": "Watermark PDF — text or logo",
+   "desc": "Put a text or logo watermark on every PDF page: position, opacity, rotation.",
+   "h1": "Watermark PDF",
+   "intro": "Watermark PDF places a text (accents included) or a logo on every page, centred and diagonal by default, at 30% opacity.",
+   "points": [],
+   "faq": []
+  },
+  "watermark-image": {
+   "slug": "watermark-image",
+   "name": "Watermark image",
+   "tag": "watermarked",
+   "title": "Watermark images — text or logo, many at once",
+   "desc": "Add a text or logo watermark to up to {max_files} pictures at once.",
+   "h1": "Watermark images",
+   "intro": "Watermark image adds the same text or logo to up to {max_files} pictures, at the position and opacity you choose.",
+   "points": [],
+   "faq": []
+  },
+  "watermark-video": {
+   "slug": "watermark-video",
+   "name": "Watermark video",
+   "tag": "watermarked",
+   "title": "Watermark video — text or logo",
+   "desc": "Put a text or logo on a video in any corner.",
+   "h1": "Watermark video",
+   "intro": "Watermark video overlays a text or a logo on the whole video, in the corner and opacity you choose.",
+   "points": [],
+   "faq": []
+  },
+  "website-to-pdf": {
+   "slug": "website-to-pdf",
+   "name": "Website to PDF",
+   "tag": "web",
+   "title": "Website to PDF — save a web page as PDF",
+   "desc": "Save any public web page as a PDF with a real browser (Chromium).",
+   "h1": "Website to PDF",
+   "intro": "Website to PDF opens the page in Chromium, waits for it to load and prints it to PDF on the paper size you choose.",
+   "points": [],
+   "faq": []
+  },
+  "website-to-image": {
+   "slug": "website-screenshot",
+   "name": "Website screenshot",
+   "tag": "screenshot",
+   "title": "Website screenshot — full page PNG or JPG",
+   "desc": "Capture a web page as a full-length PNG, JPG or WebP image.",
+   "h1": "Website screenshot",
+   "intro": "Website screenshot captures a page in Chromium at the width you set (1280 px by default), the whole scrolling page or only the first screen.",
+   "points": [],
+   "faq": []
+  },
+  "merge-files": {
+   "slug": "merge-files",
+   "name": "Merge files",
+   "tag": "merged",
+   "title": "Merge files — PDFs, images, videos or audio into one",
+   "desc": "Join up to {max_files} files into one: PDFs and documents into a PDF, videos into one video, audio into one track.",
+   "h1": "Merge files",
+   "intro": "Merge files joins up to {max_files} files of one kind: documents and images into one PDF, video clips into one video, audio files into one track, in upload order.",
+   "points": [],
+   "faq": []
+  },
+  "thumbnail": {
+   "slug": "thumbnail-maker",
+   "name": "Thumbnail maker",
+   "tag": "thumbnail",
+   "title": "Thumbnail maker — preview images of documents, videos, images",
+   "desc": "Make a preview image of the first page of a document, a frame of a video, or a picture.",
+   "h1": "Thumbnail maker",
+   "intro": "Thumbnail maker renders the first page (or the page you choose) of a document, a frame of a video, or a picture as a PNG, JPG or WebP thumbnail, 400 px wide by default.",
+   "points": [],
+   "faq": []
+  },
+  "create-archive": {
+   "slug": "create-zip",
+   "name": "Create archive",
+   "tag": "",
+   "title": "Create ZIP or 7Z archive online — with password",
+   "desc": "Pack up to {max_files} files into ZIP, 7Z or TAR.GZ, optionally encrypted with a password.",
+   "h1": "Create an archive",
+   "intro": "Create archive packs your files into ZIP (default), 7Z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ or TAR.ZST; a password encrypts ZIP and 7Z with AES-256.",
+   "points": [],
+   "faq": []
+  },
+  "extract-archive": {
+   "slug": "extract-archive",
+   "name": "Extract archive",
+   "tag": "extracted",
+   "title": "Extract RAR, 7Z, ZIP and 40+ archives online",
+   "desc": "Unpack RAR, 7Z, TAR.GZ, ISO and other archives, also with a password.",
+   "h1": "Extract an archive",
+   "intro": "Extract archive unpacks 40+ formats (RAR, 7Z, ZIP, TAR.GZ, ISO, CAB, DMG…) with 7-Zip or The Unarchiver and gives you the files, in a ZIP if there are several. Unsafe paths are refused.",
+   "points": [],
+   "faq": []
+  },
+  "read-metadata": {
+   "slug": "metadata-viewer",
+   "name": "Metadata viewer",
+   "tag": "",
+   "title": "Metadata viewer — EXIF, GPS, document properties",
+   "desc": "Read EXIF, GPS, camera, author and document metadata of any file with ExifTool.",
+   "h1": "Metadata viewer",
+   "intro": "Metadata viewer shows everything ExifTool can read from a file: camera and lens, GPS location, dates, author, software, PDF and Office properties.",
+   "points": [],
+   "faq": []
+  },
+  "edit-metadata": {
+   "slug": "edit-metadata",
+   "name": "Edit metadata",
+   "tag": "metadata",
+   "title": "Edit metadata — title, author, date, copyright",
+   "desc": "Write title, author, copyright and other metadata into images, videos, PDFs and Office files.",
+   "h1": "Edit metadata",
+   "intro": "Edit metadata writes the fields you give (Title, Author, Copyright, Description, Keywords…) into the file with ExifTool.",
+   "points": [],
+   "faq": []
+  },
+  "remove-metadata": {
+   "slug": "remove-metadata",
+   "name": "Remove metadata",
+   "tag": "clean",
+   "title": "Remove metadata — strip EXIF and GPS location",
+   "desc": "Remove EXIF, GPS location, author and editing history from images, videos, PDFs and Office files.",
+   "h1": "Remove metadata",
+   "intro": "Remove metadata deletes camera data, GPS location, author names and editing history with ExifTool before you share a file.",
+   "points": [],
+   "faq": []
+  },
+  "ffmpeg-advanced": {
+   "slug": "ffmpeg-online",
+   "name": "FFmpeg online (advanced)",
+   "tag": "",
+   "title": "FFmpeg online — advanced video and audio parameters",
+   "desc": "Run allow-listed FFmpeg options (CRF, preset, tune, filters such as scale, crop, eq) safely in the cloud.",
+   "h1": "FFmpeg online",
+   "intro": "FFmpeg online accepts allow-listed FFmpeg flags and filters (crf, preset, tune, pix_fmt, scale, crop, eq, loudnorm…) — every value is checked, file and network access are impossible.",
+   "points": [],
+   "faq": []
+  },
+  "imagemagick-advanced": {
+   "slug": "imagemagick-online",
+   "name": "ImageMagick online (advanced)",
+   "tag": "",
+   "title": "ImageMagick online — advanced image parameters",
+   "desc": "Run allow-listed ImageMagick operations (resize, sharpen, modulate, colorspace…) safely.",
+   "h1": "ImageMagick online",
+   "intro": "ImageMagick online accepts allow-listed operations (-resize, -sharpen, -modulate, -colorspace, -level…) with checked values.",
+   "points": [],
+   "faq": []
+  },
+  "form-recognize": {
+   "slug": "form-field-detection",
+   "name": "Form recognition",
+   "tag": "fields",
+   "title": "Form recognition — find the fields of any form",
+   "desc": "Find the fields of fillable and flat PDFs, Word and Excel forms and photographed forms, as one field list.",
+   "h1": "Form recognition from any file",
+   "intro": "Form recognition reads a form — a fillable or flat PDF, a Word or Excel file, or a photo or scan — and returns one field list (name, label, type, page, position, required). You can correct and add fields before filling.",
+   "points": [],
+   "faq": [
+    [
+     "What if the form is complex or badly photographed?",
+     "The free recognition always runs first. If it looks incomplete, or the form is long or complex, the Plus and Pro plans read it again with an AI vision model in several passes — it checks every field we found on the page image, fixes labels, removes false ones and adds the missing ones (1 credit per page). From your own AI over MCP, your assistant does that step itself with the page images."
+    ]
+   ]
+  },
+  "fill-form": {
+   "slug": "fill-form",
+   "name": "Fill form",
+   "tag": "filled",
+   "title": "Fill forms online — PDF, Word, Excel, photo",
+   "desc": "Fill any form and get it back in its original format; accents (ő, ű) stay correct.",
+   "h1": "Fill a form",
+   "intro": "Fill form writes your values into the recognised fields and gives the form back in its original format — PDF stays PDF, DOCX stays DOCX — or, for photos, on the original look of the page.",
+   "points": [],
+   "faq": [
+    [
+     "What if the form is complex or badly photographed?",
+     "The free recognition always runs first. If it looks incomplete, or the form is long or complex, the Plus and Pro plans read it again with an AI vision model in several passes — it checks every field we found on the page image, fixes labels, removes false ones and adds the missing ones (1 credit per page). From your own AI over MCP, your assistant does that step itself with the page images."
+    ]
+   ]
+  },
+  "bulk-fill-form": {
+   "slug": "bulk-fill-form",
+   "name": "Bulk fill",
+   "tag": "filled copies",
+   "title": "Bulk fill forms from Excel or CSV",
+   "desc": "One filled copy of a form per row of a spreadsheet, combined into one file.",
+   "h1": "Bulk fill forms",
+   "intro": "Bulk fill makes one filled copy of the form for every row of a CSV or XLSX table (the first row holds the field names), up to 500 rows.",
+   "points": [],
+   "faq": []
+  },
+  "make-fillable": {
+   "slug": "make-pdf-fillable",
+   "name": "Make PDF fillable",
+   "tag": "fillable",
+   "title": "Make a PDF fillable — add real form fields",
+   "desc": "Turn a printed or scanned form into a fillable PDF with real fields.",
+   "h1": "Make a PDF fillable",
+   "intro": "Make fillable finds the lines, boxes and tick boxes of a printed form and puts real PDF form fields on them; photos and scans are rebuilt first.",
+   "points": [],
+   "faq": [
+    [
+     "What if the form is complex or badly photographed?",
+     "The free recognition always runs first. If it looks incomplete, or the form is long or complex, the Plus and Pro plans read it again with an AI vision model in several passes — it checks every field we found on the page image, fixes labels, removes false ones and adds the missing ones (1 credit per page). From your own AI over MCP, your assistant does that step itself with the page images."
+    ]
+   ]
+  },
+  "create-signature": {
+   "slug": "create-signature",
+   "name": "Create signature",
+   "tag": "signature",
+   "title": "Create a signature — draw, photograph or upload",
+   "desc": "Draw your signature or initials, or take a photo of one on paper; we make a clean, transparent image and keep it encrypted.",
+   "h1": "Create your signature",
+   "intro": "Create signature turns a drawing, a photo or a scan of your signature into a clean, transparent PNG (paper, shadow and noise removed) and stores it encrypted, only for you, to reuse on documents.",
+   "points": [],
+   "faq": []
+  },
+  "sign-document": {
+   "slug": "sign-pdf",
+   "name": "Sign document",
+   "tag": "signed",
+   "title": "Sign PDF and Word documents with your signature",
+   "desc": "Place your saved signature into a signature field or at a chosen spot of a PDF or DOCX.",
+   "h1": "Sign a document",
+   "intro": "Sign document puts your saved signature into the document's signature field, on the signature line it finds, or exactly where you say — in PDF and Word files.",
+   "points": [],
+   "faq": []
+  },
+  "ai-form-filler": {
+   "slug": "ai-form-filler",
+   "name": "AI form filler",
+   "tag": "filled",
+   "title": "AI form filler — fills forms from your data and documents",
+   "desc": "An assistant fills forms from your profile and uploaded documents, asks what's missing and checks dates, IBANs and Hungarian IDs.",
+   "h1": "AI form filler",
+   "intro": "AI form filler takes the answers from your saved profile and the documents you upload, asks only about what is missing, checks the values (dates, IBAN, Hungarian tax and social security numbers) and shows a preview before you sign.",
+   "points": [],
+   "faq": []
+  },
+  "unit-converter": {
+   "slug": "unit-converter-tool",
+   "name": "Unit converter",
+   "tag": "",
+   "title": "Unit converter",
+   "desc": "Convert length, weight, temperature, volume and more.",
+   "h1": "Unit converter",
+   "intro": "Convert between 111 units in 14 categories with exact SI factors.",
+   "points": [],
+   "faq": []
+  },
+  "time-zone-converter": {
+   "slug": "time-zone-converter-tool",
+   "name": "Time zone converter",
+   "tag": "",
+   "title": "Time zone converter",
+   "desc": "Convert a time between time zones, daylight saving included.",
+   "h1": "Time zone converter",
+   "intro": "Convert a date and time between any of the IANA time zones, with daylight saving time.",
+   "points": [],
+   "faq": []
+  }
+ },
+ "cmphub": {
+  "title": "{product} vs CloudConvert, FreeConvert, Smallpdf, iLovePDF",
+  "desc": "How {product} compares with CloudConvert, FreeConvert, Smallpdf and iLovePDF: formats, API, AI editing, forms, signatures and MCP.",
+  "h1": "{product} compared",
+  "lead": "A fair, feature-by-feature comparison with the best-known converters. What sets {product} apart: AI editing, form recognition from any file, signatures, agentic form filling and an MCP server for AI assistants."
+ },
+ "cmprow": {
+  "formats": "Formats and conversions ({formats} formats here)",
+  "api": "REST API",
+  "ai_edit": "Edit documents by instruction (AI)",
+  "form_detect": "Form recognition from photos, Word and Excel",
+  "agent_fill": "Agentic form filling from a profile and documents",
+  "esign": "Signatures on PDF and Word",
+  "mcp": "MCP server for Claude, ChatGPT",
+  "editors": "Built-in editors (Word, slides, photo, vector, video)",
+  "hu": "Hungarian interface",
+  "open_engines": "Open-source engines named per conversion"
+ },
+ "cmpadv": {
+  "ai_edit": "Edit by asking: “indent every paragraph after the third”, “add a photo on page 22” — on the real Word, PowerPoint or PDF file.",
+  "form_detect": "Form recognition from any file: fillable and flat PDF, Word, Excel or a photo, into one field list you can correct.",
+  "esign": "A signature you draw or photograph once, cleaned and stored encrypted, placed into PDF and Word files.",
+  "agent_fill": "Agentic filling: the assistant fills forms from your profile and documents, asks what is missing and checks IBANs and Hungarian IDs.",
+  "mcp": "An MCP server: Claude, ChatGPT and other assistants call every converter and tool directly."
+ },
+ "cmp": {
+  "title": "{product} vs {name} — comparison and alternative",
+  "h1": "{product} vs {name}",
+  "crumb": "vs {name}",
+  "feature": "Feature",
+  "v_y": "Yes",
+  "v_n": "Not listed",
+  "v_p": "Partly",
+  "checked": "Competitor features as listed on their public websites, checked {date}. Tell us if something changed.",
+  "adv_h": "What {product} adds",
+  "others_h": "Other comparisons",
+  "cloudconvert": {
+   "slug": "cloudconvert-alternative",
+   "name": "CloudConvert",
+   "desc": "A broad conversion API; {product} adds AI editing, forms, signatures and MCP.",
+   "intro": "CloudConvert is a well-known conversion service with a jobs-and-tasks API covering 200+ formats. {product} uses the same jobs/tasks model and similar format coverage ({formats} formats, {conversions} directions), and adds what a pure converter doesn't do: editing the file by instruction, recognising and filling forms, signatures, and an MCP server for AI assistants.",
+   "faq": [
+    [
+     "Is {product} a CloudConvert alternative?",
+     "Yes: a jobs/tasks REST API with import, convert and export tasks, webhooks and sandbox keys, plus the browser converter — and AI editing, forms and signatures on top."
+    ],
+    [
+     "Can I move my CloudConvert jobs over?",
+     "The job JSON is very close: named tasks with operation, input and output_format. Most jobs need only the base URL and the key changed."
+    ]
+   ]
+  },
+  "freeconvert": {
+   "slug": "freeconvert-alternative",
+   "name": "FreeConvert",
+   "desc": "Many browser converters; {product} adds AI editing, forms, signatures and MCP.",
+   "intro": "FreeConvert offers a large set of browser converters and compressors with advanced options. {product} matches the conversion and option range ({formats} formats, presets, apply-to-all) and adds AI editing, form recognition, signatures and MCP.",
+   "faq": [
+    [
+     "Does {product} have the same advanced video options?",
+     "Yes: codec, CRF, bitrate, resolution, aspect ratio, frame rate, trim, rotate, flip, subtitles and volume — and allow-listed FFmpeg parameters."
+    ]
+   ]
+  },
+  "smallpdf": {
+   "slug": "smallpdf-alternative",
+   "name": "Smallpdf",
+   "desc": "PDF tools with e-sign; {product} covers {formats} formats and edits by instruction.",
+   "intro": "Smallpdf focuses on PDF tools and e-signatures. {product} has the PDF suite (merge, split, compress, protect, OCR, PDF/A, sign) and goes beyond PDFs: {formats} formats, video and audio, AI editing of Word and PowerPoint files, form recognition from photos, and MCP.",
+   "faq": [
+    [
+     "Can I sign PDFs as with Smallpdf?",
+     "Yes: draw or photograph your signature once, it is stored encrypted and placed into PDF or Word files — also by your AI assistant."
+    ]
+   ]
+  },
+  "ilovepdf": {
+   "slug": "ilovepdf-alternative",
+   "name": "iLovePDF",
+   "desc": "PDF tools with an API; {product} adds all other formats, AI editing and MCP.",
+   "intro": "iLovePDF is a popular PDF toolkit with an API and e-signatures. {product} offers the same PDF operations and an API, plus {formats} formats beyond PDF, AI editing, agentic form filling and an MCP server.",
+   "faq": [
+    [
+     "Is there a Hungarian interface?",
+     "Yes, {product} is fully available in Hungarian and English, and a new language is one translation file."
+    ]
+   ]
+  }
+ },
+ "dev": {
+  "title": "{product} API — file conversion, tools, forms and signatures",
+  "desc": "REST API for {formats} file formats: jobs and tasks, webhooks, sandbox keys, OpenAPI, SDKs for Python and Node, Zapier, Make and n8n.",
+  "h1": "File conversion API",
+  "lead": "One REST API for {formats} formats, {conversions} conversion directions and {tools} tools. Jobs are made of named tasks (import → convert or tool → export) that run in parallel where they can; you follow them live (long-poll or Server-Sent Events) or by webhook. Default limit: {rate} requests per minute per key.",
+  "docs_p": "Authentication, jobs, uploads, live status, webhooks, sandbox, limits and every operation.",
+  "jb_p": "Build a job visually and copy it as JSON or curl.",
+  "mcp_p": "Connect Claude or ChatGPT to the same tools over MCP.",
+  "openapi_p": "The machine-readable spec for code generators.",
+  "quick_h": "Quick start",
+  "sdk_h": "SDKs and integrations",
+  "sdk_p": "Python (sdk/python) and Node (sdk/node) SDKs, Zapier, Make and n8n integrations ship in the repository and need only the base URL and a key.",
+  "top_h": "Conversion API examples"
+ },
+ "docs": {
+  "title": "{product} API documentation",
+  "desc": "How to use the {product} REST API: keys, jobs and tasks, uploads, status, webhooks, sandbox and limits, with curl, Python and JavaScript.",
+  "h1": "API documentation",
+  "lead": "Everything to integrate in an afternoon. Default rate limit: {rate} requests per minute per key.",
+  "crumb": "Documentation",
+  "auth_h": "Authentication",
+  "auth_p": "Create a key in the app under Connect your AI → API keys and send it as a Bearer token. Keys starting with sk_test_ are sandbox keys: they don't use credits.",
+  "jobs_h": "Jobs and tasks",
+  "jobs_p": "A job is a set of named tasks. A task's input is the name of an earlier task (or a list of names). Tasks without dependencies start immediately and in parallel.",
+  "upload_h": "Uploading files",
+  "upload_p": "Use an import/upload task: its result gives a one-time upload URL. Large files can be sent in chunks of up to 50 MB each.",
+  "status_h": "Live status",
+  "status_p": "Poll the job with ?wait=N (long-poll up to 60 s) or open the Server-Sent Events stream for task.updated, job.finished and job.failed events.",
+  "webhooks_h": "Webhooks",
+  "webhooks_p": "Register a URL for job.finished and job.failed, or give webhook_url per job. Every delivery is signed with HMAC-SHA256 over the timestamp and body; failed deliveries are retried three times.",
+  "sandbox_h": "Sandbox",
+  "sandbox_p": "Sandbox keys (sk_test_…) run real conversions on files up to 10 MB without using credits; results are kept for one hour. Use them for development and CI.",
+  "limits_h": "Limits and billing",
+  "limits_p": "Default {rate} requests per minute per key (HTTP 429 with Retry-After beyond). Tasks count against the monthly task allowance of your plan; above it, 1 credit per 20 tasks. AI tasks (OCR by vision model, form recognition from photos, agentic filling) use the existing page allowances.",
+  "ops_h": "Operations",
+  "op": "Operation",
+  "op_desc": "What it does"
+ },
+ "jb": {
+  "title": "Job Builder — build {product} API jobs visually",
+  "desc": "Assemble import, convert, tool and export tasks and copy the job as JSON or curl, or run it with a sandbox key.",
+  "h1": "Job Builder",
+  "lead": "Add tasks, set their fields, and copy the JSON or the curl command — or run it right here with a sandbox key.",
+  "crumb": "Job Builder",
+  "add_import": "Import",
+  "add_convert": "Convert",
+  "add_tool": "Tool",
+  "add_export": "Export",
+  "run": "Run job"
+ },
+ "api": {
+  "title": "{src} to {dst} API — convert {src} to {dst} with a REST call",
+  "desc": "Convert {src} to {dst} programmatically: one REST job with import, convert and export tasks; curl, Python and JavaScript examples.",
+  "h1": "{src} to {dst} conversion API",
+  "lead": "Send a {src} file and get {dst} back with one job: import the file, convert it ({engines}), export a download link. Webhooks and live status included; default limit {rate} requests per minute.",
+  "crumb": "{src} → {dst} API",
+  "pairlink": "{src} to {dst} API",
+  "web_link": "Convert {src} to {dst} in the browser"
+ },
+ "cai": {
+  "title": "Connect your AI to {product} — MCP for Claude and ChatGPT",
+  "desc": "Give Claude, ChatGPT and other AI assistants every converter, tool, form and signature function of {product} over MCP.",
+  "h1": "Connect your AI to {product}",
+  "lead": "{product} is an MCP server with {n} grouped tools. Connect it once and your assistant converts, edits, fills and signs files for you — and every result comes back with a download and an editor link.",
+  "url_h": "MCP address",
+  "url_p": "Streamable HTTP. Sign in with OAuth when the client asks, or create a personal key in the app (Connect your AI → API keys) and send it as Authorization: Bearer <key>.",
+  "claude1": "In Claude open Settings → Connectors → Add custom connector.",
+  "claude2": "Paste {url} and save.",
+  "claude3": "Sign in and allow access — the tools appear in the chat.",
+  "gpt1": "In ChatGPT open Settings → Apps & Connectors → Advanced → Developer mode.",
+  "gpt2": "Create a connector with the URL {url}.",
+  "gpt3": "Sign in and allow access.",
+  "tools_h": "The {n} MCP tools",
+  "faq": [
+   [
+    "Which assistants work?",
+    "Any MCP client with Streamable HTTP: Claude (web, desktop, Claude Code), ChatGPT developer mode and Apps, Cursor, and others."
+   ],
+   [
+    "Does the assistant see my other files?",
+    "Only through the tools, only in your own workspace, and only when you ask it to; you can revoke access in the app at any time."
+   ],
+   [
+    "Can the assistant ask me for missing form data?",
+    "Yes. During agentic form filling it asks for missing values through MCP elicitation when the client supports it, otherwise in the chat."
+   ]
+  ]
+ },
+ "units": {
+  "title": "Unit converter — length, weight, temperature, volume and more",
+  "desc": "Convert between {n} units: length, weight, temperature, area, volume, speed, time, data, energy, pressure, power, angle, frequency and fuel consumption.",
+  "cat_title": "{name} converter",
+  "cat_desc": "Convert {name} units ({n} units) with exact factors.",
+  "example": "{v} {a} = {r} {b}",
+  "value": "Value",
+  "from": "From",
+  "to": "To",
+  "examples_h": "Common conversions",
+  "cats_h": "All unit converters"
+ },
+ "unitcat": {
+  "length": {
+   "slug": "length",
+   "name": "Length"
+  },
+  "mass": {
+   "slug": "weight",
+   "name": "Weight"
+  },
+  "temperature": {
+   "slug": "temperature",
+   "name": "Temperature"
+  },
+  "area": {
+   "slug": "area",
+   "name": "Area"
+  },
+  "volume": {
+   "slug": "volume",
+   "name": "Volume"
+  },
+  "speed": {
+   "slug": "speed",
+   "name": "Speed"
+  },
+  "time": {
+   "slug": "time",
+   "name": "Time"
+  },
+  "data": {
+   "slug": "data-size",
+   "name": "Data size"
+  },
+  "energy": {
+   "slug": "energy",
+   "name": "Energy"
+  },
+  "pressure": {
+   "slug": "pressure",
+   "name": "Pressure"
+  },
+  "power": {
+   "slug": "power",
+   "name": "Power"
+  },
+  "angle": {
+   "slug": "angle",
+   "name": "Angle"
+  },
+  "frequency": {
+   "slug": "frequency",
+   "name": "Frequency"
+  },
+  "fuel": {
+   "slug": "fuel-consumption",
+   "name": "Fuel consumption"
+  }
+ },
+ "unit": {
+  "m": "metre",
+  "km": "kilometre",
+  "cm": "centimetre",
+  "mm": "millimetre",
+  "um": "micrometre",
+  "nm": "nanometre",
+  "in": "inch",
+  "ft": "foot",
+  "yd": "yard",
+  "mi": "mile",
+  "nmi": "nautical mile",
+  "ly": "light year",
+  "au": "astronomical unit",
+  "kg": "kilogram",
+  "g": "gram",
+  "mg": "milligram",
+  "t": "tonne",
+  "lb": "pound",
+  "oz": "ounce",
+  "st": "stone",
+  "ct": "carat",
+  "dkg": "decagram",
+  "q": "quintal",
+  "k": "kelvin",
+  "c": "degree Celsius",
+  "f": "degree Fahrenheit",
+  "r": "degree Rankine",
+  "m2": "square metre",
+  "km2": "square kilometre",
+  "cm2": "square centimetre",
+  "ha": "hectare",
+  "a": "are",
+  "acre": "acre",
+  "ft2": "square foot",
+  "in2": "square inch",
+  "mi2": "square mile",
+  "negyszogol": "square fathom (négyszögöl)",
+  "m3": "cubic metre",
+  "l": "litre",
+  "ml": "millilitre",
+  "dl": "decilitre",
+  "cl": "centilitre",
+  "cm3": "cubic centimetre",
+  "gal": "US gallon",
+  "galuk": "UK gallon",
+  "qt": "US quart",
+  "pt": "US pint",
+  "cup": "US cup",
+  "floz": "US fluid ounce",
+  "tbsp": "tablespoon",
+  "tsp": "teaspoon",
+  "ft3": "cubic foot",
+  "mps": "metre per second",
+  "kmh": "kilometre per hour",
+  "mph": "mile per hour",
+  "kn": "knot",
+  "fps": "foot per second",
+  "mach": "Mach",
+  "s": "second",
+  "ms": "millisecond",
+  "min": "minute",
+  "h": "hour",
+  "d": "day",
+  "wk": "week",
+  "mo": "month",
+  "yr": "year",
+  "b": "byte",
+  "bit": "bit",
+  "kb": "kilobyte",
+  "mb": "megabyte",
+  "gb": "gigabyte",
+  "tb": "terabyte",
+  "kib": "kibibyte",
+  "mib": "mebibyte",
+  "gib": "gibibyte",
+  "tib": "tebibyte",
+  "j": "joule",
+  "kj": "kilojoule",
+  "cal": "calorie",
+  "kcal": "kilocalorie",
+  "wh": "watt-hour",
+  "kwh": "kilowatt-hour",
+  "btu": "BTU",
+  "ev": "electronvolt",
+  "pa": "pascal",
+  "kpa": "kilopascal",
+  "bar": "bar",
+  "atm": "atmosphere",
+  "psi": "psi",
+  "mmhg": "millimetre of mercury",
+  "hpa": "hectopascal",
+  "w": "watt",
+  "kw": "kilowatt",
+  "hp": "horsepower",
+  "le": "metric horsepower",
+  "mw": "megawatt",
+  "deg": "degree",
+  "rad": "radian",
+  "grad": "gradian",
+  "arcmin": "arcminute",
+  "arcsec": "arcsecond",
+  "turn": "turn",
+  "hz": "hertz",
+  "khz": "kilohertz",
+  "mhz": "megahertz",
+  "ghz": "gigahertz",
+  "rpm": "revolutions per minute",
+  "l100km": "litres per 100 km",
+  "kml": "kilometres per litre",
+  "mpg": "miles per US gallon",
+  "mpguk": "miles per UK gallon"
+ },
+ "tz": {
+  "title": "Time zone converter — convert time between cities and zones",
+  "desc": "Convert a date and time between time zones with daylight saving time: UTC, CET, EST, PST, JST and all IANA zones.",
+  "h1": "Time zone converter",
+  "lead": "Pick a time and a zone, tick the zones you need — daylight saving time is applied automatically from the IANA time zone database.",
+  "time": "Time",
+  "from": "From zone",
+  "to": "To zones"
+ },
+ "agents": {
+  "crumb": "AI agents",
+  "title": "AI agents that finish the job — documents, decks, PDFs, photos and forms | {product}",
+  "desc": "{product}'s AI agent turns one request into finished files: it chains {n_agent} tools, checks its own work and hands back real Word, PowerPoint, PDF and Photoshop files. Or let Claude or ChatGPT drive {n_mcp} MCP tools.",
+  "h1": "AI agents that finish the job",
+  "lead": "Tell {product} what you need in plain words and its agent does the whole job: it reads your files, picks from {n_agent} tools (Word, PowerPoint, Excel, PDF, photo, design, conversion and form tools), checks the result — it renders pages and looks at them — and gives you real files you can open and edit. Every change is a new version you can go back to. Prefer your own assistant? Claude, ChatGPT and Cursor can call the same tools over MCP.",
+  "stat_agent": "agent tools",
+  "stat_mcp": "MCP tools for your AI",
+  "stat_formats": "file formats",
+  "sections": [
+   {
+    "h": "One request, the whole job",
+    "p": "The in-app agent plans, acts and checks. It reads the working document, edits it precisely (find and replace, headings, whole sections, tracked changes and comments), builds decks slide by slide, renders pages to verify the layout and splits big jobs into sub-agents. You see each step and get every intermediate file.",
+    "examples": [
+     "Turn this report into a 12-slide deck on our template",
+     "Black out every name, number the pages and lock the PDF",
+     "Translate the headings, keep tracked changes on"
+    ],
+    "links": [
+     [
+      "Open the app",
+      "/app"
+     ]
+    ]
+   },
+   {
+    "h": "Edit anything by asking",
+    "p": "Documents, decks and PDFs change by instruction — “indent every paragraph after the third”, “add a photo of the Colosseum on page 22”. The edit is exact, every change is a new version, and the built-in editors stay open for hand-made fixes.",
+    "examples": [
+     "Make every heading dark green and 14 pt",
+     "Delete the section about pricing",
+     "Add a comment to every paragraph that mentions a date"
+    ],
+    "links": [
+     [
+      "Word editor",
+      "/app/make/document"
+     ],
+     [
+      "PDF tools",
+      "/app/make/pdf-tools"
+     ]
+    ]
+   },
+   {
+    "h": "WordCraft: a Word engine written in Rust",
+    "p": "Word files are handled by WordCraft, a Rust Word engine with about 460 commands of Word's ribbon. The agent drives it headless, the editor runs it in your browser as WebAssembly, and document conversions use it first: DOCX, ODT, RTF, HTML, Markdown and LaTeX into each other and into PDF in milliseconds, without LibreOffice.",
+    "examples": [
+     "Restyle this contract like the example I upload",
+     "Insert a table of contents and number the headings"
+    ],
+    "links": [
+     [
+      "Document converter",
+      "@category:document"
+     ]
+    ]
+   },
+   {
+    "h": "Makers that design for you",
+    "p": "Presentations from a brief or a Word document on your own .pptx template; infographics where every number is calculated from your cells and traced to them; short videos from an article; manuscripts typeset as books; posters rebuilt from a photo with every word editable.",
+    "examples": [
+     "A 10-slide pitch from this brief, with charts",
+     "This spreadsheet as an infographic, portrait and landscape"
+    ],
+    "links": [
+     [
+      "Presentations",
+      "/app/make/presentation"
+     ],
+     [
+      "Infographics",
+      "/app/make/infographic"
+     ],
+     [
+      "Books",
+      "/app/make/book"
+     ]
+    ]
+   },
+   {
+    "h": "Photos edited with words",
+    "p": "“A bit warmer, dramatic sky, crop to 4:5, logo bottom right” — done with real photo tools, each step on its own layer in a Photoshop file. A whole album page of old prints is found, repaired and coloured.",
+    "examples": [
+     "Remove the blurry grass in front of the animal",
+     "Restore and colourise this album page"
+    ],
+    "links": [
+     [
+      "Photo editor",
+      "/app/make/photos"
+     ],
+     [
+      "Restore old photos",
+      "/app/make/photos/restore"
+     ]
+    ]
+   },
+   {
+    "h": "Scans, forms and signatures",
+    "p": "Photographed pages become Word, a clean PDF or a searchable PDF. Forms are recognised from any file — fillable or flat PDF, Word, Excel, a phone photo — and filled in their original format. The form agent fills from your saved profile and your documents, asks only about what is missing, checks dates, IBANs and Hungarian tax and social security numbers, shows a preview and signs with your saved signature.",
+    "examples": [
+     "Fill this application from my profile and my ID card scan",
+     "Make this printed form fillable",
+     "Sign the contract on the signature line"
+    ],
+    "links": [
+     [
+      "AI form filler",
+      "@tool:ai-form-filler"
+     ],
+     [
+      "Form recognition",
+      "@tool:form-recognize"
+     ],
+     [
+      "Signatures",
+      "@tool:create-signature"
+     ],
+     [
+      "Scan to text",
+      "/app/make/scan-to-text"
+     ]
+    ]
+   },
+   {
+    "h": "Your own AI drives it — MCP",
+    "p": "Claude, ChatGPT, Cursor and other MCP clients get {n_mcp} grouped tools: conversion of {formats} formats, file tools, jobs, forms, signatures and the fill assistant. They get the files back with a download and an editor link. Clients that support it get questions as forms (elicitation) and interactive views — a field checker and a signature pad. Over MCP, your assistant does the thinking; {product} does the file work.",
+    "examples": [
+     "“Convert these 30 HEIC photos to JPG and zip them”",
+     "“Fill the form I just uploaded from my profile”"
+    ],
+    "links": [
+     [
+      "Connect your AI",
+      "@connect_ai"
+     ],
+     [
+      "Set it up in your account",
+      "/app/connect"
+     ]
+    ]
+   },
+   {
+    "h": "Agents in the browser (WebMCP)",
+    "p": "Every page of this site offers its tools to AI agents that run in the browser, through WebMCP (the W3C proposal now in preview in Chrome): list formats and tools, import a file from a link, convert it, run any tool, open a page. The agent acts as the visitor — with their files and their account, nothing more.",
+    "examples": [
+     "Convert the PDF I just uploaded to Word",
+     "Compress this video link to under 25 MB",
+     "Which formats can a .heic become?"
+    ],
+    "links": [
+     [
+      "Machine-readable catalog",
+      "/api/catalog"
+     ]
+    ]
+   },
+   {
+    "h": "Agents in your own software",
+    "p": "The same work as a REST API: jobs made of tasks (import, convert, tool, export), live status, signed webhooks, sandbox keys, Python and Node SDKs, Zapier, Make and n8n.",
+    "examples": [
+     "Import from S3, fill a form, export the PDF back"
+    ],
+    "links": [
+     [
+      "REST API",
+      "@developers"
+     ],
+     [
+      "Job Builder",
+      "@job_builder"
+     ]
+    ]
+   }
+  ],
+  "faq": [
+   [
+    "Does the agent make things up?",
+    "No. It works from your files and your words. Infographic numbers are calculated from your cells by code, and the form agent fills only from your profile, your documents or your answers — anything else it asks."
+   ],
+   [
+    "Do I need an account?",
+    "Conversions and file tools work without one, up to {guest_mb} MB per file. Agent features use AI, so they need a free account; complex jobs use credits from your plan."
+   ],
+   [
+    "Can I use my own AI instead?",
+    "Yes. Connect Claude, ChatGPT or Cursor over MCP and your assistant calls the same {n_mcp} tools. Then your assistant does the reasoning and {product} does the file work."
+   ],
+   [
+    "Will my files stay private?",
+    "Files stay in your private workspace and are deleted automatically after {retention} days; signatures and your form profile are stored encrypted, separately for each user."
+   ]
+  ]
+ }
+}

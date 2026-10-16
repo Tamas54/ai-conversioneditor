@@ -154,6 +154,8 @@ async def build(file_id: str, slide_images: bool = True) -> dict[str, Any]:
         fid = new_file_id("docx")
         await asyncio.to_thread(pypandoc.convert_text, "\n".join(md), "docx", format="markdown",
                                 outputfile=str(output_path(fid)), extra_args=[f"--reference-doc={ref}", f"--resource-path={work}"])
+        from app.tools import ooxml_safe
+        await asyncio.to_thread(ooxml_safe.fix, output_path(fid))     # iPhone/Pages: sémahelyes docx
     finally:
         shutil.rmtree(work, ignore_errors=True)
     label = f"{stem} (handout).docx"

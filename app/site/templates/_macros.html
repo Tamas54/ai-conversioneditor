@@ -1,0 +1,64 @@
+{% macro links(items, cls='chips') %}
+<ul class="{{ cls }}">{% for x in items %}<li><a href="{{ x.url }}">{{ x.name }}</a></li>{% endfor %}</ul>
+{% endmacro %}
+
+{% macro faq(items, t) %}
+{% if items %}
+<section class="faq" id="faq"><h2>{{ t('ui.faq') }}</h2>
+{% for q, a in items %}<details{% if loop.first %} open{% endif %}><summary><h3>{{ q }}</h3></summary><p>{{ a }}</p></details>{% endfor %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro facts(rows) %}
+<table class="facts"><tbody>{% for k, v in rows %}<tr><th scope="row">{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</tbody></table>
+{% endmacro %}
+
+{% macro option_field(o, t) %}
+{% set s = o.schema %}
+<label class="opt"><span>{{ o.label }}</span>
+{% if s.type == 'boolean' %}
+<input type="checkbox" name="{{ o.key }}"{% if s.default %} checked{% endif %}>
+{% elif s.enum %}
+<select name="{{ o.key }}"><option value="">{{ t('ui.default') }}</option>{% for v in s.enum %}<option value="{{ v }}">{{ v }}</option>{% endfor %}</select>
+{% elif s.type in ('integer', 'number') %}
+<input type="number" name="{{ o.key }}" inputmode="decimal"{% if s.minimum is defined %} min="{{ s.minimum }}"{% endif %}{% if s.maximum is defined %} max="{{ s.maximum }}"{% endif %} step="{{ '1' if s.type == 'integer' else 'any' }}" placeholder="{{ s.default if s.default is not none else '' }}">
+{% elif s.type == 'array' %}
+<input type="text" name="{{ o.key }}" data-list="1" placeholder="{{ t('ui.list_hint') }}">
+{% else %}
+<input type="text" name="{{ o.key }}" autocomplete="off"{% if s.pattern %} data-pattern="{{ s.pattern }}"{% endif %}>
+{% endif %}
+<small>{{ o.help }}</small></label>
+{% endmacro %}
+
+{% macro widget(w, options, t, lang) %}
+<section class="cv" id="convert" data-lang="{{ lang }}"{% if w.src %} data-src="{{ w.src }}"{% endif %}{% if w.target %} data-target="{{ w.target }}"{% endif %}{% if w.tool %} data-tool="{{ w.tool }}" data-min="{{ w.min }}" data-max="{{ w.max }}"{% endif %}{% if w.ai %} data-ai="1"{% endif %}>
+  <form class="cv-form" action="/app" method="get">
+    <label class="drop"><input type="file" name="file" {% if w.accept %}accept="{{ w.accept }}"{% endif %} {% if not w.tool or w.max != 1 %}multiple{% endif %}>
+      <strong>{{ t('ui.choose') }}</strong> <span>{{ t('ui.or_drop') }}</span></label>
+    {% if not w.tool or w.max != 0 %}
+    <div class="cv-import small"><span class="muted">{{ t('ui.import_from') }}</span>
+      <button type="button" class="btn ghost small" data-src="url">{{ t('ui.from_url') }}</button>
+      <button type="button" class="btn ghost small" data-src="google-drive" hidden>Google Drive</button>
+      <button type="button" class="btn ghost small" data-src="dropbox" hidden>Dropbox</button>
+      <button type="button" class="btn ghost small" data-src="onedrive" hidden>OneDrive</button></div>
+    <ul class="cv-remote"></ul>
+    {% endif %}
+    {% if not w.tool %}
+    <label class="to">{{ t('ui.convert_to') }} <select name="target" required>{% if w.target %}<option value="{{ w.target }}" selected>{{ w.target|upper }}</option>{% endif %}{% for x in (w.targets or []) %}{% if x != w.target %}<option value="{{ x }}">{{ x|upper }}</option>{% endif %}{% endfor %}</select></label>
+    {% endif %}
+    {% if options %}
+    <details class="opts"><summary>{{ t('ui.options') }}</summary>
+      <div class="grid">{% for o in options %}{{ option_field(o, t) }}{% endfor %}</div>
+      <div class="presets"><label><input type="checkbox" name="_apply_all" checked> {{ t('ui.apply_all') }}</label>
+        <button type="button" class="btn ghost small" data-act="save-preset">{{ t('ui.save_preset') }}</button>
+        <select data-act="load-preset" aria-label="{{ t('ui.presets') }}"><option value="">{{ t('ui.presets') }}</option></select></div>
+    </details>
+    {% endif %}
+    <button class="btn primary" type="submit">{{ t('ui.convert') if not w.tool else t('ui.run') }}</button>
+    <p class="small muted">{{ t('ui.privacy') }}</p>
+  </form>
+  <ol class="cv-out" aria-live="polite"></ol>
+  <noscript><p>{{ t('ui.noscript') }} <a href="/app">{{ t('nav.open_app') }}</a></p></noscript>
+</section>
+{% endmacro %}

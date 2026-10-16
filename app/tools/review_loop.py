@@ -271,7 +271,7 @@ def _revisions(scan: dict[str, Any]) -> list[dict[str, Any]]:
             else:
                 text, kind = "".join(x.text or "" for x in el.iter(DT)), "del"
             if text:
-                out.append({"paragraph": i + 1, "type": kind, "author": el.get(q("author")) or "?",
+                out.append({"id": el.get(q("id")), "paragraph": i + 1, "type": kind, "author": el.get(q("author")) or "?",
                             "date": el.get(q("date")), "text": text[:300]})
     return out
 
@@ -280,7 +280,9 @@ def _revisions(scan: dict[str, Any]) -> list[dict[str, Any]]:
 
 _FIX_HINT = ("Fix them in ONE call: wordcraft(file_id, author=<the person's name>, address=[{\"comment\": id, "
              "\"replace\": {\"find\": exact text from the anchor or its paragraph, \"with\": new text} or \"paragraph\": "
-             "full new paragraph text, \"reply\": \"Fixed: …\", \"resolve\": false}, …]).")
+             "full new paragraph text, \"reply\": \"Fixed: …\", \"resolve\": false}, …]). The same list also takes "
+             "{\"new_comment\": …, \"on\": text}, {\"accept\"|\"reject\": id | \"all\" | {\"author\": …}}, "
+             "{\"comment\": id, \"delete\"|\"reopen\": true} and {\"final\": true}.")
 
 
 def worklist(file_id: str, offset: int = 0, max_chars: int = 20_000, include_resolved: bool = False) -> dict[str, Any]:
@@ -697,6 +699,8 @@ def _reply(pkg: _Pkg, body, comments: dict[str, dict[str, Any]], root_id: str, t
         t.text = line
         t.set(XML_SPACE, "preserve")
     pkg.put(_COMMENTS, croot)
+    from app.tools.review_ops import person
+    person(pkg, ctx.author)
     parent_pid = _thread_pid(pkg, comments[root_id], taken)
     _comment_ex(pkg, parent_pid)
     _comment_ex(pkg, pid).set(q("paraIdParent", W15), parent_pid)
@@ -803,11 +807,12 @@ def _address_sync(file_id: str, items: Any, author: str, dry_run: bool = False) 
     t0 = time.time()
     items = _norm_items(items)
     author = (author or "").strip() or "Studio"
+    from app.tools import review_ops
     pkg = _load(file_id)
     body = _body(pkg)
     doc = pkg.xml("word/document.xml")
     comments = _comments(pkg)
-    if not comments:
+    if not comments and any(review_ops.kind(i) == "comment" for i in items):
         raise ValueError("The document has no comments to address.")
     others_before = _others(doc, author)
     ctx = _Ctx(author, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -816,13 +821,40 @@ def _address_sync(file_id: str, items: Any, author: str, dry_run: bool = False) 
     results: list[dict[str, Any]] = []
     touched: set[str] = set()
     for item in items:
+        k = review_ops.kind(item)
+        if k != "comment":                                   # új megjegyzés, változás elfogadása/elutasítása, tiszta példány
+            try:
+                if k == "new_comment":
+                    r = review_ops.new_comment(pkg, body, comments, item, ctx, taken)
+                elif k == "final":
+                    r = review_ops.final(pkg, comments)
+                else:
+                    r = review_ops.decide(pkg, item[k], k == "accept")
+            except _Fail as e:
+                r = {"status": "failed", "error": str(e)}
+            results.append({"action": k, **r})
+            continue
         cid = str(item.get("comment", item.get("id", ""))).strip()
         res: dict[str, Any] = {"comment": cid}
         results.append(res)
         if cid not in comments:
             res.update(status="failed", error=f"no comment with id {cid!r} — ids come from read=\"comments\"")
             continue
+        if item.get("edit") is not None:                     # egy megjegyzés (akár válasz) szövegének átírása
+            review_ops.edit_comment(pkg, comments[cid], unicodedata.normalize("NFC", str(item["edit"])))
+            pkg.put(_COMMENTS, pkg.xml(_COMMENTS))
+            res["status"] = "edited"
+            continue
         root_id = comments[cid]["root"]
+        if item.get("delete"):                               # az egész szál törlése
+            res.update(comment=root_id, status="deleted", removed=review_ops.delete_thread(pkg, comments, root_id))
+            touched.add(root_id)
+            continue
+        if item.get("reopen"):
+            review_ops.reopen(pkg, comments, root_id, taken)
+            res.update(comment=root_id, status="reopened")
+            touched.add(root_id)
+            continue
         res["comment"] = root_id
         touched.add(root_id)
         scan = _scan(body)
@@ -883,21 +915,25 @@ def _address_sync(file_id: str, items: Any, author: str, dry_run: bool = False) 
             res["resolved"] = True
         res["status"] = "fixed" if n_changes else "replied" if item.get("reply") else "resolved"
     open_left = [{"id": c["id"], "author": c["author"], "comment": c["text"][:200]}
-                 for c in comments.values() if c["root"] == c["id"] and not c["done"] and c["id"] not in touched]
+                 for c in comments.values() if c["root"] == c["id"] and not c["done"] and c["id"] not in touched
+                 and c["author"] != author]
     ok = [r for r in results if r["status"] != "failed"]
     out: dict[str, Any] = {"source_file_id": file_id, "author": author, "results": results, "not_addressed": open_left}
     if dry_run or not ok:
         out["file_id"] = None
         return out
     pkg.put("word/document.xml", doc)
+    doc = pkg.xml("word/document.xml")
     others_after = _others(doc, author)
+    decided = any(r.get("action") in ("accept", "reject", "final") and r["status"] != "failed" for r in results)
     out_id = new_file_id("docx")
     pkg.save(output_path(out_id))
     write_meta(out_id, source_file_id=file_id, operation="wordcraft",
                label=f"{result_stem(file_id, 'comments addressed', 'document')}.docx")
     out.update(file_id=out_id, url=public_url(out_id), size_kb=output_path(out_id).stat().st_size // 1024,
                tracked_changes_added=sum(r.get("tracked_changes", 0) for r in results),
-               others_untouched=others_before == others_after, ms_elapsed=int((time.time() - t0) * 1000))
+               others_untouched=None if decided else others_before == others_after,
+               ms_elapsed=int((time.time() - t0) * 1000))
     return out
 
 
@@ -906,11 +942,24 @@ async def address(file_id: str, items: Any, author: str) -> dict[str, Any]:
     res = await asyncio.to_thread(_address_sync, file_id, items, author)
     findings, verified = [], []
     for r in res["results"]:
-        if r["status"] == "failed":
+        if r["status"] == "failed" and not r.get("action"):
             findings.append(f"Comment {r['comment']}: FAILED — {r.get('error')}.")
     fixed = [r for r in res["results"] if r["status"] == "fixed"]
     replied = [r for r in res["results"] if r.get("reply_id")]
     resolved = [r for r in res["results"] if r.get("resolved")]
+    for r in res["results"]:
+        if r.get("action") and r["status"] == "failed":
+            findings.append(f"{r['action']}: FAILED — {r.get('error')}.")
+        elif r.get("status") == "commented":
+            verified.append(f"New comment {r['comment_id']} by {res['author']} on “{r.get('anchor', '')[:60]}” "
+                            f"(paragraph {r['paragraph']}).")
+        elif r.get("status") in ("accepted", "rejected"):
+            verified.append(f"{r['changes']} tracked change(s) {r['status']} ({', '.join(r['authors'])}).")
+        elif r.get("status") == "final":
+            verified.append(f"Clean copy: {r['changes_accepted']} change(s) accepted, {r['comments_removed']} comment(s) "
+                            "removed.")
+        elif r.get("status") in ("deleted", "reopened", "edited"):
+            verified.append(f"Comment {r['comment']} {r['status']}.")
     if fixed:
         verified.append(f"{len(fixed)} comment(s) fixed as tracked changes by {res['author']} "
                         f"({sum(r.get('tracked_changes', 0) for r in fixed)} insertions/deletions); "
@@ -923,7 +972,9 @@ async def address(file_id: str, items: Any, author: str) -> dict[str, Any]:
         findings.append(f"{len(res['not_addressed'])} open comment(s) not addressed: "
                         + "; ".join(f"{c['id']} ({c['author']}: {c['comment'][:60]})" for c in res["not_addressed"][:8]) + ".")
     if res.get("file_id"):
-        if res.get("others_untouched"):
+        if res.get("others_untouched") is None:
+            pass                                           # elfogadás/elutasítás: szándékosan változtak
+        elif res.get("others_untouched"):
             verified.append("The other reviewers' tracked changes are untouched.")
         else:
             findings.append("The other reviewers' tracked changes look different — check them in the Word editor.")

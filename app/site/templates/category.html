@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% from "_macros.html" import links, widget %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+{{ widget(p.widget, [], t, lang) }}
+<section><h2>{{ t('cat.formats_h') }}</h2>
+<dl class="fmts">{% for f in p.formats %}<div><dt><a href="{{ f.url }}">{{ f.label }}</a> <span class="muted">{{ f.name }}</span></dt><dd>{{ f.desc }}</dd></div>{% endfor %}</dl>
+</section>
+<section><h2>{{ t('cat.pairs_h') }}</h2>
+{% for g in p.groups %}<details{% if loop.index <= 6 %} open{% endif %}><summary><a href="{{ g.url }}">{{ g.label }}</a> → </summary>{{ links(g.links, 'chips small') }}</details>{% endfor %}
+</section>
+{% if p.tools %}<section><h2>{{ t('ui.related_tools') }}</h2>{{ links(p.tools) }}</section>{% endif %}
+{% endblock %}

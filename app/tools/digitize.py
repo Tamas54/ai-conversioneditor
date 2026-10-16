@@ -481,6 +481,8 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
             await asyncio.to_thread(pypandoc.convert_file, str(md_path), "docx", outputfile=str(docx_path),
                                     extra_args=["--wrap=none", f"--resource-path={figdir}", f"--reference-doc={ref}",
                                                 "--metadata", f"title-meta={title}"])
+            from app.tools import ooxml_safe
+            await asyncio.to_thread(ooxml_safe.fix, docx_path)        # iPhone/Pages: sémahelyes docx
         for kind in outputs:
             if kind == "md":
                 fid = new_file_id("md"); output_path(fid).write_text(_CENTER.sub(lambda m: m.group(1), md), "utf-8"); files.append((fid, f"{stem}.md"))

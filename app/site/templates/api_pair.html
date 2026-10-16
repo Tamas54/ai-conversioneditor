@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+<section><h2>curl</h2><pre><code>curl -X POST {{ p.base }}/v1/jobs -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{
+  "tasks": {
+    "in":  {"operation": "import/url", "url": "https://example.com/file.{{ p.s }}"},
+    "out": {"operation": "convert", "input": "in", "output_format": "{{ p.d }}"},
+    "url": {"operation": "export/url", "input": "out"}
+  }}'</code></pre></section>
+<section><h2>Python</h2><pre><code>job = c.jobs.create({
+    "in":  {"operation": "import/url", "url": "https://example.com/file.{{ p.s }}"},
+    "out": {"operation": "convert", "input": "in", "output_format": "{{ p.d }}"},
+    "url": {"operation": "export/url", "input": "out"},
+})</code></pre></section>
+<section><h2>JavaScript</h2><pre><code>const job = await c.jobs.create({
+  in:  { operation: "import/url", url: "https://example.com/file.{{ p.s }}" },
+  out: { operation: "convert", input: "in", output_format: "{{ p.d }}" },
+  url: { operation: "export/url", input: "out" },
+});</code></pre></section>
+<section><h2>{{ t('ui.options') }}</h2><p>{% for o in p.options %}<code>{{ o }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+<p><a href="{{ p.web_url }}">{{ t('api.web_link', src=p.src_label, dst=p.dst_label) }}</a> · <a href="{{ p.docs_url }}">{{ t('docs.crumb') }}</a></p></section>
+{% endblock %}

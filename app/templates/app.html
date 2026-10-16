@@ -28,11 +28,13 @@
 <body>
 <header class="topbar">
   <a class="brand" href="/app">{{PRODUCT}}</a>
+  <a class="chip nav-back" id="nav-back" href="/app" hidden title="One step back">← Back</a>
   <nav aria-label="Main">
     <a href="/app" data-nav="home">Make</a>
     <a href="/app/files" data-nav="files">My workspace</a>
     <a href="/app/brand" data-nav="brand">Brand</a>
     <a href="/app/connect" data-nav="connect">Connect your AI</a>
+    <a href="{{AGENTS_URL}}" data-nav="agents">AI agents</a>
   </nav>
   <span class="spacer"></span>
   <a class="chip" id="credits" href="/app/plans" title="Your plan and credits">credits …</a>
@@ -43,6 +45,7 @@
 
 <main id="view"></main>
 {{ABOUT}}
+{{SITE_FOOT}}
 
 <dialog class="merge-dlg" id="merge-dlg" aria-labelledby="merge-title"><button type="button" class="x-close drawer-x" id="merge-x" aria-label="Close" title="Close (Esc)">✕</button><div id="merge-body"></div></dialog>
 <dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><button type="button" class="x-close drawer-x" id="drawer-x" aria-label="Close" title="Close (Esc)">✕</button><form id="make-form" method="dialog"></form></dialog>
@@ -98,6 +101,7 @@
       <button data-try="album"><span>Book · photo album</span>Your photos and a few pages of text → a print-ready album with contents and captions</button>
     </div>
     <p class="muted small connect-note">Use it from your own AI too — Claude, ChatGPT, Cursor: <a href="/app/connect">Connect your AI</a>. Without an account you can try everything that doesn't use AI.</p>
+    <p class="muted small more-note">Every format and tool: <a href="{{CONVERT_URL}}">{{N_FORMATS}} file formats</a> · <a href="{{TOOLS_URL}}">{{N_TOOLS}} file tools</a> · <a href="{{AGENTS_URL}}">what the AI agents do</a> · <a href="{{API_URL}}">REST API</a></p>
   </section>
   <section class="sheet">
     <div class="row-head"><h2>Recent</h2><a class="small" href="/app/files">All files</a></div>
@@ -164,12 +168,16 @@
     <h3 class="sub">Connected apps and keys</h3>
     <p class="muted small" id="keys-empty" style="margin:4px 0 0">Nothing connected yet.</p>
     <ul class="keys" id="keys"></ul>
-    <details class="advanced"><summary>Advanced: use a key instead</summary>
-      <p class="muted small" style="margin:0 0 12px">For scripts and apps that can't sign in. The address then carries the key — keep it private.</p>
+    <details class="advanced"><summary>Advanced: use a key instead (MCP and REST API)</summary>
+      <p class="muted small" style="margin:0 0 12px">For scripts and apps that can't sign in, and for the <a href="{{DOCS_URL}}">REST API</a>. The key works like a password — keep it private.</p>
       <label>Key name<input type="text" id="key-name" placeholder="e.g. Claude on my laptop" maxlength="60"></label>
+      <label class="check-line" style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="key-sandbox" style="width:auto"> Test key (sandbox) — free, files up to 10 MB, results kept for an hour; for building against the API</label>
       <button class="btn" id="key-create" type="button">Create key</button>
       <div id="key-new" hidden style="margin-top:16px">
         <p class="small"><strong>Copy it now</strong> — the key is shown only once.</p>
+        <p class="small" style="margin:0 0 4px">REST API key (<span class="mono">Authorization: Bearer …</span>):</p>
+        <div class="keybox" id="key-raw"></div>
+        <p class="small" style="margin:12px 0 4px">MCP address with the key:</p>
         <div class="keybox" id="key-url"></div>
         <p class="small muted" style="margin-top:10px">Claude Code: <span class="mono" id="key-cc"></span></p>
       </div>
@@ -627,8 +635,8 @@ const views = {
       await api(`/api/account/keys/${id}`, { method: "DELETE" }); toast("Disconnected"); await loadAccount(); drawKeys();
     });
     $("#key-create").addEventListener("click", async () => {
-      const k = await api("/api/account/keys", { method: "POST", body: JSON.stringify({ name: $("#key-name").value }) });
-      $("#key-new").hidden = false; $("#key-url").textContent = k.mcp_url;
+      const k = await api("/api/account/keys", { method: "POST", body: JSON.stringify({ name: $("#key-name").value, sandbox: $("#key-sandbox").checked }) });
+      $("#key-new").hidden = false; $("#key-url").textContent = k.mcp_url; $("#key-raw").textContent = k.key;
       $("#key-cc").textContent = `claude mcp add --transport http ${slug} "${k.mcp_url}"`;
       await loadAccount(); drawKeys();
     });
@@ -745,6 +753,9 @@ async function route() {
   const arg = rest.join("/") + location.search;
   if (name !== "make") { underMaker = here(); if ($("#drawer").open) $("#drawer").close(); baseTitle = VIEW_TITLES[name] || ""; setTitle(baseTitle); }
   if (!["file", "make"].includes(name)) lastPlace = here();
+  const navBack = document.getElementById("nav-back"), siteFoot = document.getElementById("site-foot");
+  if (navBack) navBack.hidden = !name || name === "file";          // a fájlnézetnek saját „← Back” gombja van
+  if (siteFoot) siteFoot.hidden = name === "file";
   document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
   document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
   try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); if (name === "file" && cur?.file_id && location.pathname.includes(cur.file_id)) { baseTitle = cur.label; setTitle(baseTitle); } }
@@ -758,6 +769,8 @@ function nav(url, replace = false) {
   route();
 }
 window.addEventListener("popstate", route);
+// „← Back” a fejlécben: egy lépés vissza az appon belül (mint a böngésző), különben a címlapra
+document.getElementById("nav-back")?.addEventListener("click", e => { if (appSteps > 1) { e.preventDefault(); history.back(); } });
 document.addEventListener("click", e => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const a = e.target.closest("a[href]");
@@ -1457,6 +1470,17 @@ function withNew(kind, m, other, otherLabel, extra = []) {
       return v === "new" ? blankSubmit(kind, fd) : ex(v) ? ex(v).submit(fd, form, opts) : m.submit(fd, form, opts); },
   };
 }
+const CONVERT_GROUPS = { document: "Documents", spreadsheet: "Spreadsheets", presentation: "Presentations", ebook: "E-books", image: "Images",
+  vector: "Vector", video: "Video", audio: "Audio", archive: "Archives", cad: "CAD", font: "Fonts" };
+function convertOptions(targets) {     // a bevált (leggyakoribb) célok elöl, a többi formátum kategóriánként
+  const opt = x => `<option value="${x.fmt}">${esc(x.label)}</option>`;
+  const top = targets.filter(x => x.top !== false), rest = targets.filter(x => x.top === false);
+  if (!rest.length) return top.map(opt).join("");
+  const groups = {};
+  rest.forEach(x => (groups[x.category || "other"] ||= []).push(x));
+  return (top.length ? `<optgroup label="Most used">${top.map(opt).join("")}</optgroup>` : "") + Object.entries(groups).map(([k, xs]) =>
+    `<optgroup label="${esc(CONVERT_GROUPS[k] || "Other")}">${xs.map(opt).join("")}</optgroup>`).join("");
+}
 const blankDocLink = `<p class="blank-alt"><a href="/app/make/document/new">Start a blank document instead <span aria-hidden="true">→</span></a></p>`;
 
 // automata tervező: a választható méretek [kulcs, felirat, alapból bejelölve]
@@ -1673,8 +1697,11 @@ const MAKERS = {
           ${seg("vpicmode", [["stock", "Stock photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}</fieldset>
         ${fileSlot("vpics", { exts: EXT.image, multiple: true, label: "Your pictures (optional — used in order)" })}
         ${fileSlot("vdata", { exts: ["csv", "tsv", "xlsx", "xls"], label: "Data for animated charts (optional — a spreadsheet)" })}
+        <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
+          ${seg("vnarr", [["female", "AI voice — female"], ["male", "AI voice — male"], ["none", "No voice"]], 0)}
+          <p class="muted small" style="margin:6px 0 0">A natural voice reads the captions aloud, in the text's language; each scene lasts as long as its narration.</p></fieldset>
         ${fileSlot("vmusic", { exts: EXT.audio, label: "Music (optional)" })}
-        ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — the video follows its length)" })}
+        ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — replaces the AI voice; the video follows its length)" })}
         ${swatches()}</div>`,
     wire(form, o = {}) {
       wireBlank(form);
@@ -1690,7 +1717,9 @@ const MAKERS = {
     async submit(fd, form) {
       const m = fd.get("vmode");
       if (m === "new") return blankSubmit("video", fd);
-      const body = { mode: m, format: fd.get("vformat"), duration: +fd.get("vlen") || null, pictures: fd.get("vpicmode"), accent: fd.get("accent") };
+      const nv = fd.get("vnarr") || "female";
+      const body = { mode: m, format: fd.get("vformat"), duration: +fd.get("vlen") || null, pictures: fd.get("vpicmode"), accent: fd.get("accent"),
+        narration: nv === "none" ? "none" : "ai", narration_voice: nv === "none" ? null : nv };
       // üres mező (nincs cikk / szöveg / dokumentum) → nem a példát gyártjuk le: üres idővonal a választott
       // formátumban és hosszban, a szerkesztőben (Kommandant 10-12: „ha üresen, egy szerkesztőbe kéne vinnie”)
       const typed = m === "article" ? (fd.get("article") || "").trim() : (fd.get("script") || "").trim();
@@ -1714,6 +1743,7 @@ const MAKERS = {
       [body.voice_file_id = null] = await readSlot(form, "vvoice");
       const job = await api("/api/make/video", { method: "POST", body: JSON.stringify(body) });
       const STAGES = { "reading the source": "Reading it…", "writing the script": "Writing the script…", "finding pictures": "Finding pictures…",
+        "recording the AI narration": "Recording the AI voice…",
         "building the timeline": "Building the timeline…", "rendering the video": "Rendering the video — about a minute…" };
       const r = await pollJob(job, j => STAGES[j.stage] || "Working on it…");
       return { file_id: r.file_id, n: (r.files || []).length, edit: true,
@@ -1906,7 +1936,7 @@ const MAKERS = {
     },
   },
   convert: {
-    cta: form => { const o = form.querySelector("[name=target]")?.selectedOptions[0]; return o?.value ? `Convert to ${o.textContent.replace(/\s*\(.*$/, "")}` : "Convert"; },
+    cta: form => { const o = form.querySelector("[name=target]")?.selectedOptions[0]; return o?.value ? `Convert to ${o.textContent.replace(/\s*[(—].*$/, "")}` : "Convert"; },
     title: "Convert", sub: "Pick a file and the format you need — the result opens in the matching editor. The original stays as it was.",
     fields: () => `${blankDocLink}${fileSlot("file", { label: "File" })}
       <label>Convert to<select name="target" required disabled><option value="">Choose a file first</option></select></label>`,
@@ -1915,8 +1945,8 @@ const MAKERS = {
         if (e.target.dataset?.slot !== "file") return;
         const ext = slotExt(form, "file"), sel = form.querySelector("[name=target]");
         if (!ext) { sel.innerHTML = `<option value="">Choose a file first</option>`; sel.disabled = true; return; }
-        const { targets } = await api(`/api/convert/targets?ext=${encodeURIComponent(ext)}`);
-        sel.innerHTML = targets.length ? targets.map(x => `<option value="${x.fmt}">${esc(x.label)}</option>`).join("") : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
+        const { targets } = await api(`/api/convert/targets?all=1&ext=${encodeURIComponent(ext)}`);
+        sel.innerHTML = targets.length ? convertOptions(targets) : `<option value="">We can't convert .${esc(ext)} files yet</option>`;
         sel.disabled = !targets.length; sel.dispatchEvent(new Event("change", { bubbles: true }));   // a gomb felirata: „Convert to PDF”
       });
     },
@@ -2706,5 +2736,6 @@ const setTop = () => document.documentElement.style.setProperty("--top", $(".top
 addEventListener("resize", setTop); setTop();
 loadAccount().catch(() => {}); route();
 </script>
+<script src="/static/webmcp.js" defer></script>
 </body>
 </html>

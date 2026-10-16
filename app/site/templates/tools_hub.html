@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead">{{ p.lead }}</p>
+{% for g in p.groups %}
+<section><h2 id="{{ g.key }}">{{ g.name }}</h2><p>{{ g.desc }}</p>
+<ul class="cards small">{% for x in g.tools %}<li><a href="{{ x.url }}"><strong>{{ x.name }}</strong></a><p>{{ x.desc }}</p></li>{% endfor %}</ul></section>
+{% endfor %}
+<section><h2>{{ t('thub.ai_h') }}</h2>
+<ul class="cards small">{% for x in p.ai %}<li><a href="{{ x.url }}"><strong>{{ x.name }}</strong></a><p>{{ x.desc }}</p></li>{% endfor %}</ul></section>
+{% endblock %}

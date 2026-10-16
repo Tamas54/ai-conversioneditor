@@ -641,10 +641,22 @@ async def convert(
     engine: Optional[str] = None,
 ) -> dict:
     """
-    Convert a document between formats.
+    Convert a file between formats — 264 formats, 8800+ directions: documents (docx, doc, odt, rtf, md, html,
+    tex, pages, wpd, hwp, xps, djvu, eml, pdf, pdfa…), spreadsheets, slides (pptx → pdf, images or mp4), e-books
+    (epub, mobi, azw3, fb2, cbz…), images (heic, webp, avif, jxl, psd, camera RAW…), vectors (svg, eps, ai, emf,
+    cdr), video (mp4, mov, mkv, webm, avi, gif…), audio (mp3, wav, flac, m4a, ogg, opus…), archives (zip, rar,
+    7z, tar.gz… 43 kinds), CAD (dwg, dxf → pdf/svg/png) and fonts (ttf, otf, woff, woff2, eot).
+    catalog(kind="conversions", source_format=…) lists the targets of a format.
 
-    Pass either `file_id` (already uploaded) or `source_url`. Specify
-    `target_format` (pdf|docx|md|html|odt|pptx|xlsx|txt|rtf).
+    Pass either `file_id` (already uploaded) or `source_url`, and `target_format`.
+
+    options (validated): page_range "1-3,5"; ocr / ocr_language ("hun+eng"); images: width, height, fit,
+    quality 1–100, strip_metadata, dpi, background, grayscale, rotate, flip; video: video_codec (h264, h265,
+    vp9, av1…), audio_codec, resolution ("1080p", "1280x720"), aspect ("9:16") + aspect_mode, fps, crf, preset,
+    video_bitrate, start/end (trim), subtitles (file_id) + subtitles_mode, volume, remove_audio; audio:
+    audio_bitrate, sample_rate, channels, bit_depth; e-books: title, author, cover, output_profile; archives:
+    password, level; advanced: allow-listed ffmpeg/ImageMagick flags (["-tune", "film"]). Several output files
+    (e.g. one JPG per PDF page) come back as one .zip, or separately with options.output = "files".
 
     Set `use_browser=True` for HTML→PDF when JS-rendering or modern CSS
     (flexbox/grid/recharts/d3) is needed. Defaults to WeasyPrint (faster,
@@ -661,6 +673,10 @@ async def convert(
     if file_id and file_id.lower().endswith(".pptx") and target_format.lower().lstrip(".") == "docx":
         from app.tools import deck_handout            # pptx → docx = Word-kiosztmány
         return await deck_handout.build(file_id)
+    if _universal(file_id, source_url, source_format, target_format, options, engine, use_browser):
+        from app.convert import service
+        fid = file_id or await _fetch_source(source_url, source_format)
+        return await service.convert_file(fid, target_format, options or {}, _pool_or_none())
     return await t_convert(
         _pool(),
         file_id=file_id,
@@ -671,6 +687,39 @@ async def convert(
         options=options,
         engine=engine,
     )
+
+
+# a régi (LibreOffice/pandoc/WeasyPrint) út formátumai — ami ezen kívül esik, vagy új opciót kér, az univerzális gráfra megy
+_LEGACY_FMTS = {"pdf", "docx", "doc", "html", "htm", "md", "odt", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "rtf", "txt"}
+_LEGACY_OPTS = {"page_size", "margin", "pandoc_args"}
+
+
+def _universal(file_id, source_url, source_format, target_format, options, engine, use_browser) -> bool:
+    if engine or use_browser:
+        return False
+    tgt = target_format.lower().lstrip(".")
+    src = (source_format or (file_id or source_url or "").split("?", 1)[0].rsplit(".", 1)[-1]).lower()
+    new_opts = bool(options) and not set(options) <= _LEGACY_OPTS
+    return new_opts or tgt not in _LEGACY_FMTS or src not in _LEGACY_FMTS
+
+
+async def _fetch_source(url: Optional[str], fmt: Optional[str]) -> str:
+    if not url:
+        raise ValueError("Either file_id or source_url is required")
+    from app import net
+    from app.api_v1 import operations as O
+    tmp = O._tmpdir() / "src"
+    name, _, _ = await net.download(url, tmp, O.max_bytes(False))
+    if fmt and not name.lower().endswith("." + fmt.lower().lstrip(".")):
+        name = f"{name}.{fmt.lower().lstrip('.')}"
+    return O._save_named(tmp, name)
+
+
+def _pool_or_none():
+    try:
+        return _pool()
+    except RuntimeError:
+        return None
 
 
 @mcp.tool()
@@ -714,6 +763,20 @@ async def wordcraft(
        base_file_id = the version that was sent → per paragraph before /
        after / diff, tracked or untracked (edited with tracking off), new
        comments and replies, resolved threads.
+    More review moves, as items in the same `address` list (mix freely):
+       {"new_comment": "your question", "on": "exact text"} (or
+         "paragraph": n, or both) → a new comment of your own, Word-native;
+       {"accept": "all" | id | [ids] | {"author": "…", "paragraph": n,
+         "type": "ins|del|format|paragraph_mark|row", "not_author": "…"}}
+         and the same for "reject" → tracked changes decided selectively
+         (read="comments" lists them with id, author, paragraph, type);
+       {"comment": id, "edit": "new text"} | {"comment": id, "delete": true}
+         (whole thread) | {"comment": id, "reopen": true};
+       {"final": true} → a clean copy: all changes accepted, all comments
+         removed (send it when the review is over).
+    Threads, resolved state, durable ids, dates and authors stay Word-native
+    (commentsExtended / commentsIds / commentsExtensible / people) — also
+    after `commands`, so the reviewer's Word shows exactly what they sent.
 
     commands: in order, each {"command": id, "params": {...}} or "id={json}".
       [{"command": "review.trackChanges", "params": {"value": true}},
@@ -1591,6 +1654,8 @@ async def video(
     pictures: str = "stock",
     music_file_id: Optional[str] = None,
     voice_file_id: Optional[str] = None,
+    narration: str = "ai",
+    narration_voice: Optional[str] = None,
     accent: Optional[str] = None,
     language: Optional[str] = None,
     file_id: Optional[str] = None,
@@ -1630,8 +1695,11 @@ async def video(
       file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where
       each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
       and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
-      music_file_id / voice_file_id: audio the person gave (upload it first). There is no text-to-speech here —
-      with a voice-over the video follows its length. accent: a hex colour for bars and numbers.
+      narration: "ai" (default) — a natural AI voice reads the title and every scene's caption aloud (offline voices,
+      58 languages, picked from the text or `language`); each scene lasts as long as its narration and music plays
+      under it | "none" — no voice. narration_voice: "female" | "male" | a Piper voice id (e.g. "hu_HU-imre-medium").
+      music_file_id / voice_file_id: audio the person gave (upload it first); a voice_file_id replaces the AI
+      narration and the video follows its length. accent: a hex colour for bars and numbers.
       ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
       | all | off (only a gentle drift).
       Animated graphics for any topic — chart = {"type", "title", "unit", "total"?, "min"?, "max"?, "items": [{"label",
@@ -1680,7 +1748,8 @@ async def video(
       "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
       "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
       fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
-      "voice_file_id"? | "none"}. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
+      "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?}. The AI narration is recorded
+      again from the changed captions. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
       person's words there). video(action="info") shows the scenes; check and preview_url come with the result.
     action="render" with scene="s3": just that scene as a short draft MP4 (a job, seconds) — check a change without
       rendering the whole video. (Without scene: re-render the whole project, e.g. after hand edits.)
@@ -1735,6 +1804,7 @@ async def video(
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
             "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
+            "narration": narration, "narration_voice": narration_voice,
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
             "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle}
     return await make_video(body)
@@ -1801,8 +1871,12 @@ async def chart_redraw(
 # felhasználó SAJÁT, privát munkaterületére mennek, minden módosítás ÚJ változat (az eredeti megmarad).
 # openWorld=true CSAK ott, ahol az eszköz tényleg a nyilvános netre nyúl (URL letöltése, stockkép-/Lottie-/térkép-
 # keresés, cikk-URL) — az OpenAI definíciója szerint egy privát fiók nem „open world” attól, hogy külső szerveren fut.
-_READ_ONLY = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document"}
-_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit", "facts"}
+_READ_ONLY = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document", "catalog", "units"}
+_OPEN_WORLD = {"upload_from_url", "pptx_build", "design", "insert_image", "generate_image", "video", "photo_edit", "facts",
+               "transfer", "jobs", "convert"}
+
+
+from app import mcp_ext  # noqa: E402,F401  (csoportosított bővítő eszközök: file_tools, transfer, jobs, catalog, units)
 
 
 def _annotate_tools() -> None:
