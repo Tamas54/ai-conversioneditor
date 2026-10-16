@@ -48,6 +48,12 @@ class LOWorker:
             "--norestore",
             "--nologo",
             "--nofirststartwizard",
+        ]
+        if input_path.suffix.lower() in (".csv", ".tsv"):
+            # szűrő nélkül a LibreOffice a CSV-t Latin-1-nek olvassa (ő → Å‘): UTF-8 (76) + a fájl saját elválasztója
+            from app.convert.steps import _sniff_delimiter
+            cmd.append(f"--infilter=CSV:{ord(_sniff_delimiter(input_path))},34,76,1")
+        cmd += [
             "--convert-to",
             target_filter,
             "--outdir",
