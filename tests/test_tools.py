@@ -117,6 +117,16 @@ async def test_pdf_pdfa_flatten_images(samples, put_file):
     assert len(r["files"]) >= 2
 
 
+async def test_pdf_to_pdfx(samples, put_file):
+    """Élesben a -dPDFX=3 Ghostscript-rangecheck volt: a PDF/X a logikai -dPDFX kapcsolóval készül."""
+    from app.convert.steps import _icc
+    r = await run("pdf-to-pdfx", [put_file(samples.pdf(pages=2))])
+    with _pdf(r["file_id"]) as d:
+        assert d.page_count == 2
+        if _icc():
+            assert d.xref_get_key(d.pdf_catalog(), "OutputIntents")[0] == "array"
+
+
 async def test_pdf_annotate_edit_redact_numbers_compare(samples, put_file):
     pdf = put_file(samples.pdf())
     r = await run("annotate-pdf", [pdf], annotations=[{"type": "highlight", "text": "tükörfúrógép"},

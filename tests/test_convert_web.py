@@ -34,6 +34,22 @@ def test_convert_run_job_with_options(client, samples, put_file):
         assert im.width == 100
 
 
+def test_convert_run_passes_the_app_pool(client, samples, put_file, monkeypatch):
+    """A webes /api/convert/run és a /v1 nem ad át poolt: a régi útnak a futó app poolja kell — élesben
+    None.acquire_lo() miatt bukott el minden LibreOffice-os irány (txt→docx, xlsx→pdf, pptx→odp …)."""
+    from app.tools import anyconvert
+    seen = {}
+
+    async def fake(pool, file_id, target):
+        seen["pool"] = pool
+        return {"file_id": file_id, "url": ""}
+    monkeypatch.setattr(anyconvert, "convert_any", fake)
+    fid = put_file(samples.txt())
+    job = _poll(client, client.post("/api/convert/run", json={"file_id": fid, "target": "docx"}).json())
+    assert job["status"] == "done", job
+    assert seen["pool"] is not None and seen["pool"] is client.app.state.pool
+
+
 def test_convert_run_validation(client, samples, put_file):
     fid = put_file(samples.png())
     assert client.post("/api/convert/run", json={"file_id": fid}).status_code == 400

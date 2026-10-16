@@ -236,7 +236,8 @@ async def to_pdfx(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path
     for src in inputs:
         dst = out_name(out, src, "-PDFX")
         icc = _icc()
-        args = ["gs", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dSAFER", "-dPDFX=3", "-sDEVICE=pdfwrite",
+        # -dPDFX logikai kapcsoló: a -dPDFX=3 a 9.5x/10.02-es Ghostscriptben rangecheck (.putdeviceprops)
+        args = ["gs", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dSAFER", "-dPDFX", "-sDEVICE=pdfwrite",
                 "-sColorConversionStrategy=RGB", "-dEmbedAllFonts=true", "-dSubsetFonts=true"]
         if icc:
             defs = out / "PDFX_def.ps"
