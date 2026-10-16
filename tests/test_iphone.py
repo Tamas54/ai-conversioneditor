@@ -90,6 +90,8 @@ def test_video_on_a_slide_plays_on_iphone(put_file, tmp_path):
     z = zipfile.ZipFile(output_path(r["file_id"]))
     media = [n for n in z.namelist() if n.startswith("ppt/media/") and n.endswith((".mp4", ".mov"))]
     assert media
+    # a Keynote a tömörített filmet nem játssza le (csak a borítókép marad) — a PowerPoint is STORED-ként írja
+    assert all(z.getinfo(n).compress_type == zipfile.ZIP_STORED for n in media) and z.testzip() is None
     emb = tmp_path / Path(media[0]).name
     emb.write_bytes(z.read(media[0]))
     assert ios_safe.moov_first(emb) is True
@@ -116,9 +118,14 @@ def test_keynote_pass_makes_python_pptx_videos_play(tmp_path):
     p = tmp_path / "v.pptx"
     prs.part.package.save(str(p))
     assert "mediacall" not in zipfile.ZipFile(p).read("ppt/slides/slide1.xml").decode()
-    assert any("video autoplay" in x for x in keynote_safe.fix(p))
-    sld = zipfile.ZipFile(p).read("ppt/slides/slide1.xml").decode()
+    assert zipfile.ZipFile(p).getinfo("ppt/media/media1.mp4").compress_type == zipfile.ZIP_DEFLATED
+    done = keynote_safe.fix(p)
+    assert any("video autoplay" in x for x in done) and any("stored uncompressed" in x for x in done)
+    z = zipfile.ZipFile(p)
+    sld = z.read("ppt/slides/slide1.xml").decode()
     assert "playFrom(0.0)" in sld and 'dur="1000"' in sld
+    assert z.getinfo("ppt/media/media1.mp4").compress_type == zipfile.ZIP_STORED and z.testzip() is None
+    assert z.read("ppt/media/media1.mp4") == clip.read_bytes()
     assert keynote_safe.fix(p) == []
 
 

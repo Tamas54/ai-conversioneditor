@@ -50,6 +50,23 @@ def test_convert_run_passes_the_app_pool(client, samples, put_file, monkeypatch)
     assert seen["pool"] is not None and seen["pool"] is client.app.state.pool
 
 
+def test_csv_through_libreoffice_keeps_accents_and_columns(samples, tmp_path):
+    """Élesben a csv→ods „Å‘”-t adott: a LibreOffice-worker szűrő nélkül Latin-1-nek olvasta a CSV-t
+    (a régi út csv→ods/pdf, és az előnézet is ezen megy)."""
+    import asyncio
+    import shutil
+    import zipfile
+    import pytest
+    if not shutil.which("soffice"):
+        pytest.skip("LibreOffice needed")
+    from app.workers.pool import LOWorker
+    (tmp_path / "out").mkdir()
+    out = asyncio.run(LOWorker(tmp_path / "profile").convert(samples.csv_rows(), tmp_path / "out", "ods"))
+    with zipfile.ZipFile(out) as z:
+        xml = z.read("content.xml").decode()
+    assert ">Kőváry Ödön<" in xml and ">Győr, Fő utca 1.<" in xml and "Å" not in xml   # a ; is oszlophatár
+
+
 def test_convert_run_validation(client, samples, put_file):
     fid = put_file(samples.png())
     assert client.post("/api/convert/run", json={"file_id": fid}).status_code == 400

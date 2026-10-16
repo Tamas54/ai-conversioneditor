@@ -306,7 +306,7 @@ function accountCta(title, alt = "") {     // alt: fiók nélküli következő l
   const form = $("#make-form");
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
     <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>${alt}
-    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn primary" href="/signup?next=/app">Create free account</a></div>`;
+    <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn" href="/login?next=${encodeURIComponent(here())}">Sign in</a><a class="btn primary" href="/signup?next=${encodeURIComponent(here())}">Create free account</a></div>`;
   form.onsubmit = null; if (!$("#drawer").open) $("#drawer").showModal();
 }
 // hosszú munka (job) követése: a státuszsort frissíti, a végén az eredményt adja
@@ -400,7 +400,8 @@ function collapseVersions(list) {
 function renderFiles(el, list) {
   const all = list;
   list = groupFiles(collapseVersions(list));
-  el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — make something above, or upload a file.</div>`;
+  el.innerHTML = list.length ? list.map(fileCard).join("") : `<div class="empty">Nothing here yet — <a href="/app">make something</a>, or <a href="#" data-upload>upload a file</a>.</div>`;
+  el.querySelector("[data-upload]")?.addEventListener("click", e => { e.preventDefault(); pickAndOpen(); });   // a szöveg ígér valamit → vigyen is oda
   el.querySelectorAll(".file").forEach(b => b.addEventListener("click", () => nav("/app/file/" + encodeURIComponent(b.dataset.id))));
   el.querySelectorAll("[data-print]").forEach(b => b.addEventListener("click", () => printFile(b.dataset.print)));
   el.querySelectorAll(".older-toggle").forEach(b => b.addEventListener("click", () => {
@@ -755,6 +756,8 @@ async function route() {
   if (!["file", "make"].includes(name)) lastPlace = here();
   const navBack = document.getElementById("nav-back"), siteFoot = document.getElementById("site-foot");
   if (navBack) navBack.hidden = !name || name === "file";          // a fájlnézetnek saját „← Back” gombja van
+  for (const [id, base] of [["signin", "/login"], ["signup", "/signup"]])   // belépés / új fiók után vissza ugyanide
+    document.getElementById(id)?.setAttribute("href", `${base}?next=${encodeURIComponent(here())}`);
   if (siteFoot) siteFoot.hidden = name === "file";
   document.querySelectorAll("[data-nav]").forEach(a => a.toggleAttribute("aria-current", a.dataset.nav === (name || "home") ));
   document.querySelectorAll("[data-nav]").forEach(a => a.hasAttribute("aria-current") && a.setAttribute("aria-current", "page"));
@@ -825,6 +828,15 @@ window.addEventListener("message", e => {
 async function uploadFile(file) {
   const fd = new FormData(); fd.append("file", file);
   return api("/api/upload", { method: "POST", body: fd });
+}
+function pickAndOpen() {        // fájlválasztó → feltöltés → a fájl megnyílik
+  const inp = Object.assign(document.createElement("input"), { type: "file" });
+  inp.addEventListener("change", async () => {
+    const f = inp.files[0]; if (!f) return;
+    try { const r = await uploadFile(f); toast(`Uploaded ${f.name}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
+    catch (e) { toast(e.message); }
+  });
+  inp.click();
 }
 function imagePicker(name, { allowNone = true, ai = true, label = "Image" } = {}) {
   const opts = [["upload", "Upload"], ["stock", "Stock photo"]].concat(ai ? [["ai", account?.guest ? "AI image · account" : "AI image"]] : []).concat(allowNone ? [["none", "None"]] : []);
@@ -2212,9 +2224,10 @@ async function wireRevise(f) {
   const form = $("#revise"), input = $("#rev-input"), st = $("#rev-status");
   form.hidden = false;
   input.placeholder = `Ask for a change — e.g. ${(ASK_EXAMPLES.find(([exts]) => exts.includes(f.ext)) || ASK_EXAMPLES[0])[1]}`;
-  if (account?.guest) {
-    input.disabled = true; $("#rev-go").disabled = true;
-    input.placeholder = "Asking for changes uses AI — create a free account to try it";
+  if (account?.guest) {           // nem halott mező: kattintásra a belépés / fiók ablak, onnan vissza ide
+    input.readOnly = true;
+    input.placeholder = "Ask for a change — uses AI: sign in or create a free account";
+    input.addEventListener("click", () => accountCta("Ask for a change"));
   }
   const { history } = await api(`/api/revisions?file_id=${encodeURIComponent(f.file_id)}`).catch(() => ({ history: [] }));
   $("#versions").innerHTML = history.length > 1 ? history.map((h, i) => {
@@ -2242,6 +2255,7 @@ async function wireRevise(f) {
   });
   form.onsubmit = async e => {
     e.preventDefault();
+    if (account?.guest) return accountCta("Ask for a change");
     const instruction = input.value.trim(); if (!instruction && !styleId) { input.focus(); return; }
     const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
     const go = $("#rev-go"); go.disabled = true; input.disabled = true;
@@ -2307,7 +2321,7 @@ function wireChecks(f) {
   // ---- futtatás ----
   async function runCheck(facts, snapshot_id = null) {
     if (st.busy) return;
-    if (account?.guest) { say("Checks use AI — create a free account to try them."); return; }
+    if (account?.guest) return accountCta("Check the facts");
     st.busy = true; drawBar();
     try {
       const job = await api("/api/check", { method: "POST", body: JSON.stringify(snapshot_id ? { snapshot_id, facts } : { file_id: cur.file_id, facts }) });
