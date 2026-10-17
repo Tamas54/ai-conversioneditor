@@ -162,6 +162,18 @@ function grower(layer, el) {   // kinövés: a horgony a növekedés kezdő él�
     o.setValueAtTime(el.t0, 0); o.setValueAtTime(el.t0 + el.dur, full);
   }
 }
+function keyed(layer, el) {      // kulcskockák [[t, x, y, szélesség?, átlátszóság?]]: helyzet (téglalapnál a bal széle),
+  var T = tp(layer), P = T.property("ADBE Position"), S = T.property("ADBE Scale"), O = T.property("ADBE Opacity");   // szélesség, láthatóság
+  var w0 = el.k === "rect" ? el.size[0] : 0;
+  if (w0) { try { T.property("ADBE Anchor Point").setValue([-w0 / 2, 0]); } catch (e) {} }
+  for (var i = 0; i < el.keys.length; i++) {
+    var k = el.keys[i];
+    P.setValueAtTime(k[0], [k[1], k[2]]);
+    if (w0 && k[3] !== undefined && k[3] !== null) S.setValueAtTime(k[0], [Math.max(0.1, k[3] / w0 * 100), 100]);
+    if (k[4] !== undefined && k[4] !== null) O.setValueAtTime(k[0], k[4]);
+  }
+  ease(P); if (w0) ease(S);
+}
 function col(v) { return v === "accent" ? D.accent : v; }
 function pathLayer(comp, el) {   // vonal / nyíl / útvonal / sokszög: a pontok KOMPOZÍCIÓ-pixelben (a réteg a [0,0]-ban)
   var s = comp.layers.addShape(); s.name = el.name;
@@ -281,7 +293,7 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
     if (el.k === "rect") {
       var r = rect(c, el.name, el.size, el.pos, col(el.color), el.opacity, el.round, el.stroke ? col(el.stroke) : null, el.stroke_w);
       if (el.rot && el.grow !== "rotate") tp(r).property("ADBE Rotate Z").setValue(el.rot);
-      if (el.grow) grower(r, el); else if (el.anim) animate(r, el);
+      if (el.keys) keyed(r, el); else if (el.grow) grower(r, el); else if (el.anim) animate(r, el);
     } else if (el.k === "path") {
       pathLayer(c, el);
     } else if (el.k === "multipath") {
@@ -291,7 +303,8 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
     } else {
       var tl = textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
         font: F[el.font] || D.font.semibold, color: el.color, leading: el.leading, tracking: el.tracking, shadow: el.shadow });
-      if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
+      if (el.keys) keyed(tl, el);
+      else if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
         tl.inPoint = el.t0 || 0;
         if (el.t1 !== undefined) tl.outPoint = el.t1;
       } else if (el.anim) animate(tl, el); else fadeIn(tl, el.t0 || 0, 0.4, 0);

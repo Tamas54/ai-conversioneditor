@@ -586,34 +586,18 @@ def _chart(slide, s, t):
 
 def _label_sides(points: list, plot_w: float, plot_h: float, size: float = 12.0) -> list[str]:
     """Pontdiagram: minden pont nevének oldala (jobbra / balra / fölé / alá) úgy, hogy ne takarjon másik pontot és
-    korábbi nevet (10-17: a sűrű sarokban a „Hőközpont-automatika” az „Uszoda” nevére íródott). A becslés a rajzterület
-    pontjaiban: a tengely a 0-tól (vagy a legkisebb értéktől) a legnagyobbig fut."""
+    korábbi nevet (10-17: a sűrű sarokban a „Hőközpont-automatika” az „Uszoda” nevére íródott) — a videó pont-
+    diagramjával közös elhelyező (motion_charts.label_sides). A becslés a rajzterület pontjaiban: a tengely a 0-tól
+    (vagy a legkisebb értéktől) a legnagyobbig fut."""
+    from app.tools.motion_charts import label_sides
     xy = [(float(p[0]), float(p[1])) for p in points]
     if not xy:
         return []
     x0, x1 = min(0.0, min(x for x, _ in xy)), max(x for x, _ in xy) or 1.0
     y0, y1 = min(0.0, min(y for _, y in xy)), max(y for _, y in xy) or 1.0
     P = [((x - x0) / ((x1 - x0) or 1) * plot_w, plot_h - (y - y0) / ((y1 - y0) or 1) * plot_h) for x, y in xy]
-    dots = [(px - 5, py - 5, px + 5, py + 5) for px, py in P]
-    placed: list[tuple[float, float, float, float]] = []
-    out = []
-    for k, ((px, py), p) in enumerate(zip(P, points)):
-        name = str(p[2]) if len(p) > 2 else ""
-        w, h = len(name) * 0.56 * size + 4, size * 1.25
-        boxes = {"right": (px + 7, py - h / 2, px + 7 + w, py + h / 2), "left": (px - 7 - w, py - h / 2, px - 7, py + h / 2),
-                 "above": (px - w / 2, py - 7 - h, px + w / 2, py - 7), "below": (px - w / 2, py + 7, px + w / 2, py + 7 + h)}
-        others = [d for j, d in enumerate(dots) if j != k]
-
-        def cost(side: str) -> tuple:
-            b = boxes[side]
-            out_of = b[0] < -40 or b[2] > plot_w + 10 or b[1] < -10 or b[3] > plot_h + 10
-            n = sum(1 for o in others + placed if b[0] < o[2] and o[0] < b[2] and b[1] < o[3] and o[1] < b[3])
-            return (n, out_of, ["right", "left", "above", "below"].index(side))
-        side = min(boxes, key=cost) if name else "right"
-        if name:
-            placed.append(boxes[side])
-        out.append(side)
-    return out
+    return label_sides(P, [str(p[2]) if len(p) > 2 else "" for p in points], (-40, -10, plot_w + 10, plot_h + 10),
+                       0.56 * size, size * 1.25)
 
 
 def _percent_label(dLbl) -> None:

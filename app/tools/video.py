@@ -337,7 +337,7 @@ async def fetch_article(url: str) -> dict[str, Any]:
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
 {"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
-  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote",
+  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|lines|race",
             "title": str, "unit": str, "total": number | null, "min": number | null, "max": number | null,
             "items": [{"label": str, "value": number | null, "text": str}]} | null}],
  "end": {"title": str, "subtitle": str}}
@@ -366,7 +366,12 @@ Rules:
     gauge — ONE value on a scale (min/max given in the source, or 0–100%), e.g. a risk level or a score;
     funnel — 3–6 shrinking stages of a process (applicants → interviewed → hired);
     proscons — arguments for (label "+") and against (label "-"), each a short text; labels? = the two headings;
-    quote — ONE striking sentence quoted WORD FOR WORD from the source (text = the quote, label = who said it).
+    quote — ONE striking sentence quoted WORD FOR WORD from the source (text = the quote, label = who said it);
+    waterfall — a starting amount and what added to / took from it (items: the start first, then the changes with
+      their sign, e.g. -7); the end is computed;
+    slope — the same 2–6 things at two moments: "labels": [the two dates], items [{"label", "from", "to"}];
+    lines — 2–4 series over the same periods (e.g. scenarios): "labels": [periods], "series": [{"name", "values"}];
+    race — 3–10 things ranked over 3–12 periods: "labels": [periods], "items": [{"label", "values"}].
   Copy every number and date EXACTLY from the source (value = a plain number, no unit); unit = "%" or a short unit
   ("$", "km", "bn") or ""; item labels ≤ 18 characters (ring/icons: ≤ 60); at most 3 chart scenes (4 for 80 s or longer) and never two of the
   same type in a row; a scene has a stat OR a chart, never both; headline = what the graphic shows.
@@ -564,7 +569,8 @@ def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Opti
 
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
                 "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script",
-                "decision_tree", "swimlane", "network")
+                "decision_tree", "swimlane", "network",
+                "waterfall", "slope", "scatter", "band", "lines", "race")     # az utóbbi hat: app/tools/motion_charts.py
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -573,10 +579,13 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
     számai) — különben az ábra kimarad. A modell nem talál ki számot."""
     if not isinstance(c, dict):
         return None, None
-    from app.tools import diagrams
-    typ = diagrams.ALIASES.get(str(c.get("type") or "column").lower(), str(c.get("type") or "column").lower())
+    from app.tools import diagrams, motion_charts
+    typ = str(c.get("type") or "column").lower()
+    typ = diagrams.ALIASES.get(typ, motion_charts.ALIASES.get(typ, typ))
     if typ not in _CHART_TYPES:
         return None, None
+    if typ in motion_charts.TYPES:     # vízesés, előtte→utána, pont, sáv, több vonal, verseny: saját alakjuk van
+        return motion_charts.parse(typ, c, source)
     if typ in diagrams.TYPES:          # magyarázó ábra: a leírása marad a jelenetben, a rajzolás a graphic elemeivel
         nums = _text_numbers(source)
         return diagrams.from_plan({**c, "type": typ}, lambda t: [x for x in _text_numbers(t) if x not in nums], _clean)
@@ -860,8 +869,8 @@ def _scene_seconds(s: dict[str, Any]) -> Optional[float]:
     """A jelenet kért hossza: a megadott, vagy — ha nincs — egy kifejezett tempójú (pace) ábra-kibontás igénye."""
     if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0:
         return float(s["duration"])
-    from app.tools import diagrams
-    return diagrams.seconds_needed(s.get("chart"))
+    from app.tools import diagrams, motion_charts
+    return diagrams.seconds_needed(s.get("chart")) or motion_charts.seconds_needed(s.get("chart") or {})
 
 
 def _chunks(text: str, max_chars: int) -> list[str]:
@@ -1136,9 +1145,11 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
     alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
     if ch["type"] == "script":           # a jelenetet az ügynök szkriptje rajzolja (builder: runScript)
         return []
-    from app.tools import diagrams
+    from app.tools import diagrams, motion_charts
     if ch["type"] in diagrams.TYPES:     # magyarázó ábra → a saját grafika elemei, a képkocka arányára rendezve
         return _graphic_elements({"elements": diagrams.to_graphic(ch, W, H, accent, dur, lang)}, W, H, accent or _rgb(None))
+    if ch["type"] in motion_charts.TYPES:
+        return motion_charts.elements(ch, W, H, lang, accent or _rgb(None), dur)
     m, vertical = min(W, H), H > W * 1.2
     items = ch["items"]
     n, vals = len(items), [float(i["value"]) if i.get("value") is not None else 0.0 for i in items]
@@ -3461,6 +3472,9 @@ def _video_text(story: dict[str, Any]) -> str:
         if ch.get("nodes"):                        # magyarázó ábra: a dobozok, az élcímkék, a sávok neve
             from app.tools import diagrams
             parts += diagrams.texts(ch)
+        from app.tools import motion_charts
+        if ch.get("type") in motion_charts.TYPES:
+            parts += motion_charts.numbers(ch)
         for it in ch.get("items") or []:
             parts += [str(it.get("label") or ""), str(it.get("text") or ""), str(it.get("value") if it.get("value") is not None else "")]
         if ch.get("total"):
@@ -3954,8 +3968,10 @@ _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json obj
  "add_layers": [{"at": seconds, "dur": seconds, "type": "lower_third|title|chapter|source|stat|quote|chart|fullscreen|split", …}]}
 Layers are time-coded graphics over the video (listed below with their ids); change them by id. A video of the person's
 own footage has only layers: change or add layers there, never scenes.
-<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
+<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|scatter|band|lines|race", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
            "items": [{"label": str, "value": number|null, "text": str}]}
+(waterfall, slope, scatter, band, lines and race have their own fields — labels, series, from/to, x/y/size, low/high;
+to change one, send a chart WITHOUT "type" with only the fields that change.)
 A scene with a diagram (decision_tree | swimlane | network, listed with its node ids): to change it send a chart WITHOUT
 "type" holding only what changes — {"nodes": [{"id", "text"?, "kind"?, "remove"?: true} | a new node],
 "edges": [{"from", "to", "kind"?, "certainty"?: "certain|uncertain|disputed", "label"?, "remove"?: true}], "pace"?: seconds

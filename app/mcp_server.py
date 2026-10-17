@@ -1798,7 +1798,15 @@ async def video(
       icons ("1 in 4", x of 100) | counter (one number counting up) | compare (2–3 numbers side by side) | progress
       (separate %s) | gauge (one value on a min–max scale) | funnel (shrinking stages) | timeline (dated events: label =
       date) | steps (how-to) | proscons (label "+"/"-", text) | quote (text word for word from the source, label =
-      who). Every number, date and quote is checked against the source — one that isn't there drops the graphic.
+      who). With their own shape: waterfall (a start, then + / − changes; the end is computed and checked against
+      "total"? — {"items": [{"label", "value"}…], "total_label"?}) | slope (before → after per item — {"labels": [before,
+      after], "items": [{"label", "from", "to"}]}) | scatter (points, bubble when "size" — {"x_title", "y_title" (what
+      each axis measures, with the unit), "items": [{"label", "x", "y", "size"?}]}) | band (a line with its low–high
+      range, the forecast part dashed — {"items": [{"label": period, "value", "low"?, "high"?}], "forecast_from"?: the
+      first forecast period}) | lines (2–4 series over the same periods, e.g. scenarios, named at their ends —
+      {"labels": [periods], "series": [{"name", "values"}]}) | race (a ranking re-ordering period by period, the bars
+      gliding into place — {"labels": [periods], "items": [{"label", "values"}]}, 3–10 items, 3–12 periods).
+      Every number, date and quote is checked against the source — one that isn't there drops the graphic.
       graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
       {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
       {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie | map, x, y (centre, 0–1 of
