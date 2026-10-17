@@ -1,5 +1,5 @@
 """Új mozgógrafikák a videóban (app/tools/motion_charts.py): vízesés, előtte → utána, pont/buborék, sáv-előrejelzés,
-több vonal, rangsor-verseny — a számok a forrásból, a kiszámolt vég ellenőrizve, a terv újra beolvasva ugyanaz
+több vonal, rangsor-verseny, sankey — a számok a forrásból, a kiszámolt vég ellenőrizve, a terv újra beolvasva ugyanaz
 (szerkesztés), és minden elem a képkockán belül marad mindhárom formátumban."""
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ SRC = ("A költségvetés 2025-ben 120 milliárd forint volt. Az adóbevétel 18
        "Gáz 2022: 62, 2023: 58, 2024: 55; 2025: 47 (44–50), 2026: 43 (38–48). "
        "CO2 2026: 100; gyors 2027: 85, 2028: 72; lassú 2027: 96, 2028: 93. "
        "Részarány 2020: gáz 80, geotermia 12, biomassza 6; 2022: gáz 72, geotermia 18, biomassza 7; "
-       "2024: gáz 60, geotermia 27, biomassza 8.")
+       "2024: gáz 60, geotermia 27, biomassza 8. "
+       "Klímaalap: uniós pénz 70, ebből energetika 45, közlekedés 25; állami pénz 35: energetika 20, parkok 15; "
+       "az energetikából távhő 40, napelem 25.")
 CHARTS = {
     "waterfall": {"type": "waterfall", "title": "Költségvetés", "unit": "Mrd Ft",
                   "items": [{"label": "2025", "value": 120}, {"label": "Adó", "value": 18}, {"label": "Támogatás", "value": -7},
@@ -31,6 +33,10 @@ CHARTS = {
     "race": {"type": "race", "title": "Részarány", "unit": "%", "labels": ["2020", "2022", "2024"],
              "items": [{"label": "Gáz", "values": [80, 72, 60]}, {"label": "Geotermia", "values": [12, 18, 27]},
                        {"label": "Biomassza", "values": [6, 7, 8]}]},
+    "sankey": {"type": "sankey", "title": "Klímaalap", "unit": "Mrd Ft",
+               "flows": [{"from": "Uniós", "to": "Energetika", "value": 45}, {"from": "Uniós", "to": "Közlekedés", "value": 25},
+                         {"from": "Állami", "to": "Energetika", "value": 20}, {"from": "Állami", "to": "Parkok", "value": 15},
+                         {"from": "Energetika", "to": "Távhő", "value": 40}, {"from": "Energetika", "to": "Napelem", "value": 25}]},
 }
 
 
@@ -46,7 +52,7 @@ def test_numbers_come_from_the_source_and_the_plan_reads_back_the_same(typ):
     again, _ = video._chart_from_plan(ch, SRC)                  # szerkesztéskor a tárolt terv újra átmegy az ellenőrzésen
     assert again == ch
     bad = {**CHARTS[typ]}
-    key = "items" if typ != "lines" else "series"
+    key = next(k for k in ("items", "series", "flows") if k in bad)
     first = dict(bad[key][0])
     for k in ("value", "from", "x"):
         if k in first:
@@ -112,3 +118,62 @@ def test_on_screen_numbers_count_for_coverage():
     ch, _ = video._chart_from_plan(CHARTS["race"], SRC)
     txt = video._video_text({"scenes": [{"headline": "", "caption": "", "chart": ch}], "layers": []})
     assert "27" in txt and "2024" in txt
+
+
+def test_sankey_refuses_loops_and_says_why():
+    from app.tools import video
+    loop = {**CHARTS["sankey"], "flows": CHARTS["sankey"]["flows"] + [{"from": "Távhő", "to": "Uniós", "value": 15}]}
+    gone, why = video._chart_from_plan(loop, SRC)
+    assert gone is None and why.startswith("⚠") and "circle" in why and "Uniós → Energetika → Távhő → Uniós" in why
+    gone, why = video._chart_from_plan({**CHARTS["sankey"], "flows": [{"from": "Uniós", "to": "uniós", "value": 70},
+                                                                      {"from": "Uniós", "to": "Parkok", "value": 15}]}, SRC)
+    assert gone is None and "itself" in why                                    # önmagába (kis-nagybetű mindegy)
+    gone, why = video._chart_from_plan({**CHARTS["sankey"], "flows": CHARTS["sankey"]["flows"][:1]}, SRC)
+    assert gone is None and "two flows" in why
+
+
+def test_sankey_nodes_keep_order_and_colour_and_totals_are_computed():
+    from app.tools import motion_charts, video
+    ch, note = video._chart_from_plan({**CHARTS["sankey"], "nodes": [{"name": "állami", "color": "#3366cc"}, "Nincs ilyen"]}, SRC)
+    assert ch["nodes"] == [{"name": "Állami", "color": "#3366CC"}] and video._chart_from_plan(ch, SRC)[0] == ch
+    assert "computed" in note and "3 stages" in note
+    g = motion_charts._sankey_graph(ch["flows"])
+    assert g["total"]["Energetika"] == 65 and g["total"]["Uniós"] == 70 and g["depth"]["Távhő"] == 2
+    els = video.chart_elements(ch, 1920, 1080, "hu", [0.95, 0.65, 0.25], dur=8)
+    assert next(e for e in els if e["name"] == "Node – Állami")["color"] == [0.2, 0.4, 0.8]
+    assert next(e for e in els if e["name"] == "Node – Uniós")["color"] == [0.95, 0.65, 0.25]    # az első: az akcentus
+    assert next(e for e in els if e["name"] == "Value – Energetika")["str"] == "65 Mrd Ft"
+    txt = video._video_text({"scenes": [{"headline": "", "caption": "", "chart": ch}], "layers": []})
+    assert "Energetika" in txt and "65" in txt
+
+
+@pytest.mark.parametrize("fmt", ["landscape", "vertical", "square"])
+def test_sankey_ribbons_start_and_end_at_their_nodes_and_never_cross_a_node(fmt):
+    from app.tools import video
+    W, H = video.FORMATS[fmt]
+    skip = {**CHARTS["sankey"], "flows": CHARTS["sankey"]["flows"] + [{"from": "Uniós", "to": "Távhő", "value": 15}]}
+    ch, _ = video._chart_from_plan(skip, SRC)                   # az Uniós → Távhő két oszlopot ugrik át
+    els = video.chart_elements(ch, W, H, "hu", [0.95, 0.65, 0.25], dur=8)
+    box = {e["name"][7:]: (e["pos"][0] - e["size"][0] / 2, e["pos"][1] - e["size"][1] / 2,
+                           e["pos"][0] + e["size"][0] / 2, e["pos"][1] + e["size"][1] / 2) for e in els if e["name"].startswith("Node – ")}
+
+    def on_edge(p, b):
+        x, y = p
+        inside = b[0] - 1.5 <= x <= b[2] + 1.5 and b[1] - 1.5 <= y <= b[3] + 1.5
+        return inside and min(abs(x - b[0]), abs(x - b[2]), abs(y - b[1]), abs(y - b[3])) <= 1.5
+    ribbons = [e for e in els if e["name"].startswith("Flow – ")]
+    assert len(ribbons) == 7 and all(e["k"] == "path" and e["closed"] and e["opacity"] < 60 for e in ribbons)
+    for e in ribbons:
+        a, b = e["name"][7:].split(" → ")
+        pts, n = e["points"], len(e["points"]) // 2
+        assert on_edge(pts[0], box[a]) and on_edge(pts[-1], box[a]), (e["name"], pts[0], box[a])        # a forrás széléről
+        assert on_edge(pts[n - 1], box[b]) and on_edge(pts[n], box[b]), (e["name"], pts[n - 1], box[b])  # a cél szélére
+        for x, y in pts:                                         # dobozon nem fut át (az átugró folyam sem)
+            assert not any(b_[0] + 2 < x < b_[2] - 2 and b_[1] + 2 < y < b_[3] - 2 for b_ in box.values()), (e["name"], x, y)
+    src, dst = box["Uniós"], box["Távhő"]
+    if fmt == "vertical":                                      # állóban lefelé folyik (ott nagyobb a betű / hosszabb a szalag)
+        assert src[3] < dst[1]
+    else:
+        assert src[2] < dst[0]
+    t = {e["name"]: e["t0"] for e in els if "t0" in e}
+    assert t["Node – Uniós"] < t["Flow – Uniós → Energetika"] < t["Node – Energetika"] < t["Flow – Energetika → Távhő"]
