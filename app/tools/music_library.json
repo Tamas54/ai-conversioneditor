@@ -1,0 +1,518 @@
+{
+ "about": "Background music for videos. Original CC0-1.0 works made for the open-source Doory project (github.com/shaongitbd/doory, backend/data/audio) — public-domain dedication, no attribution required. Only these audio files and this list (also CC0) are used; none of Doory's code.",
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+ },
+ "source": {
+  "repo": "https://github.com/shaongitbd/doory",
+  "commit": "cc28508374d57181af4559020b8734e255ad4e4b",
+  "base_url": "https://raw.githubusercontent.com/shaongitbd/doory/cc28508374d57181af4559020b8734e255ad4e4b/backend/data/audio/"
+ },
+ "tracks": [
+  {
+   "id": "sunrise-run",
+   "title": "Sunrise Run",
+   "mood": "upbeat",
+   "genre": "pop",
+   "tags": [
+    "happy",
+    "energetic",
+    "intro",
+    "summer"
+   ],
+   "bpm": 124,
+   "key": "C major",
+   "loop": true,
+   "durationMs": 30968,
+   "lufs": -16,
+   "peakDb": -2.5,
+   "file": "music/sunrise-run.ogg",
+   "bytes": 230118,
+   "sha256": "61dbf4dd1b1567de77e9a8fd4508da630e5eeba2a95ea6edf85836030170fff3"
+  },
+  {
+   "id": "good-morning-energy",
+   "title": "Good Morning Energy",
+   "mood": "upbeat",
+   "genre": "pop",
+   "tags": [
+    "positive",
+    "bright",
+    "vlog",
+    "morning"
+   ],
+   "bpm": 120,
+   "key": "G major",
+   "loop": true,
+   "durationMs": 32000,
+   "lufs": -16,
+   "peakDb": -2.7,
+   "file": "music/good-morning-energy.ogg",
+   "bytes": 240424,
+   "sha256": "73856c64799220327cf10d917b76b89a8c4770f4fdcdfaffb2d87e27aa4d9a34"
+  },
+  {
+   "id": "bright-side",
+   "title": "Bright Side",
+   "mood": "upbeat",
+   "genre": "dance",
+   "tags": [
+    "feel good",
+    "party",
+    "dance",
+    "promo"
+   ],
+   "bpm": 128,
+   "key": "D major",
+   "loop": true,
+   "durationMs": 30000,
+   "lufs": -16,
+   "peakDb": -3.2,
+   "file": "music/bright-side.ogg",
+   "bytes": 228508,
+   "sha256": "8b2e7a56032ba22535380e5ac2ad6fdabb261fb26855334a94179b0ce14082da"
+  },
+  {
+   "id": "still-water",
+   "title": "Still Water",
+   "mood": "calm",
+   "genre": "ambient",
+   "tags": [
+    "peaceful",
+    "piano",
+    "relax",
+    "meditation"
+   ],
+   "bpm": 68,
+   "key": "C major",
+   "loop": true,
+   "durationMs": 42353,
+   "lufs": -16,
+   "peakDb": -5.1,
+   "file": "music/still-water.ogg",
+   "bytes": 241399,
+   "sha256": "817d4bc15543ec3864cd83e148dc21330cece79999e87108921b4fd3d3c90415"
+  },
+  {
+   "id": "morning-mist",
+   "title": "Morning Mist",
+   "mood": "calm",
+   "genre": "ambient",
+   "tags": [
+    "soft",
+    "dreamy",
+    "wellness",
+    "slow"
+   ],
+   "bpm": 72,
+   "key": "F lydian",
+   "loop": true,
+   "durationMs": 40000,
+   "lufs": -16,
+   "peakDb": -3.3,
+   "file": "music/morning-mist.ogg",
+   "bytes": 217832,
+   "sha256": "ab71314cfe0789e799aed50abdb623d7367ce2ebf0c9947909adfa828045069b"
+  },
+  {
+   "id": "gentle-tide",
+   "title": "Gentle Tide",
+   "mood": "calm",
+   "genre": "ambient",
+   "tags": [
+    "harp",
+    "gentle",
+    "spa",
+    "sleep"
+   ],
+   "bpm": 64,
+   "key": "A minor",
+   "loop": true,
+   "durationMs": 45000,
+   "lufs": -16,
+   "peakDb": -3.4,
+   "file": "music/gentle-tide.ogg",
+   "bytes": 279559,
+   "sha256": "62e6c10a76ba9f5345b21303d51f47ac6c6174f7280646ac3a63029504cb31c1"
+  },
+  {
+   "id": "rising-horizon",
+   "title": "Rising Horizon",
+   "mood": "cinematic",
+   "genre": "orchestral",
+   "tags": [
+    "epic",
+    "trailer",
+    "drums",
+    "build"
+   ],
+   "bpm": 90,
+   "key": "D minor",
+   "loop": true,
+   "durationMs": 42667,
+   "lufs": -16,
+   "peakDb": -2.1,
+   "file": "music/rising-horizon.ogg",
+   "bytes": 257871,
+   "sha256": "8809e508461793a580484d11311118abc18fe36c4f73b90e50c2c9ba9ff7e7d7"
+  },
+  {
+   "id": "epic-journey",
+   "title": "Epic Journey",
+   "mood": "cinematic",
+   "genre": "orchestral",
+   "tags": [
+    "adventure",
+    "heroic",
+    "film",
+    "bells"
+   ],
+   "bpm": 100,
+   "key": "E minor",
+   "loop": true,
+   "durationMs": 38400,
+   "lufs": -16,
+   "peakDb": -3.8,
+   "file": "music/epic-journey.ogg",
+   "bytes": 235289,
+   "sha256": "ceaa95c8b1e8f183b4d868b3120ebd18bff3c26d7c70eb2abbdb79bc36890d5f"
+  },
+  {
+   "id": "vast-skies",
+   "title": "Vast Skies",
+   "mood": "cinematic",
+   "genre": "ambient",
+   "tags": [
+    "atmospheric",
+    "documentary",
+    "wide",
+    "slow"
+   ],
+   "bpm": 80,
+   "key": "A dorian",
+   "loop": true,
+   "durationMs": 48000,
+   "lufs": -16,
+   "peakDb": -3.9,
+   "file": "music/vast-skies.ogg",
+   "bytes": 294249,
+   "sha256": "392a7fd9a051daf021091abcb14911a44ef1144255be9b65713d9e13a5d2ddc3"
+  },
+  {
+   "id": "rainy-window",
+   "title": "Rainy Window",
+   "mood": "lofi",
+   "genre": "lo-fi hip hop",
+   "tags": [
+    "chill",
+    "study",
+    "jazzy",
+    "vinyl"
+   ],
+   "bpm": 76,
+   "key": "C major",
+   "loop": true,
+   "durationMs": 50526,
+   "lufs": -16,
+   "peakDb": -1.7,
+   "file": "music/rainy-window.ogg",
+   "bytes": 296031,
+   "sha256": "b3979aef236232ed7958f154d821f22d2aa14ff56ba258379c38123f6f7f865e"
+  },
+  {
+   "id": "late-night-study",
+   "title": "Late Night Study",
+   "mood": "lofi",
+   "genre": "lo-fi hip hop",
+   "tags": [
+    "focus",
+    "guitar",
+    "night",
+    "mellow"
+   ],
+   "bpm": 82,
+   "key": "F major",
+   "loop": true,
+   "durationMs": 46829,
+   "lufs": -16,
+   "peakDb": -1.6,
+   "file": "music/late-night-study.ogg",
+   "bytes": 254862,
+   "sha256": "807de5502fd0303e64a1d6386feb8d84a58a4090509d7881fa18fc047554ae7a"
+  },
+  {
+   "id": "coffee-break",
+   "title": "Coffee Break",
+   "mood": "lofi",
+   "genre": "lo-fi jazz",
+   "tags": [
+    "cafe",
+    "relaxed",
+    "warm",
+    "tape"
+   ],
+   "bpm": 88,
+   "key": "Eb major",
+   "loop": true,
+   "durationMs": 43636,
+   "lufs": -16,
+   "peakDb": -2.3,
+   "file": "music/coffee-break.ogg",
+   "bytes": 260889,
+   "sha256": "fde9cc6017a7e7a3e96593f0f95cc92c3e34c2401e7c505c845d3b6520032f25"
+  },
+  {
+   "id": "forward-motion",
+   "title": "Forward Motion",
+   "mood": "corporate",
+   "genre": "corporate pop",
+   "tags": [
+    "business",
+    "presentation",
+    "success",
+    "positive"
+   ],
+   "bpm": 108,
+   "key": "C major",
+   "loop": true,
+   "durationMs": 35556,
+   "lufs": -16,
+   "peakDb": -3,
+   "file": "music/forward-motion.ogg",
+   "bytes": 250829,
+   "sha256": "be76358d341551f00f7eea5b2831733947ad6ef4ff4f2f654935afc3f8c2f880"
+  },
+  {
+   "id": "clear-vision",
+   "title": "Clear Vision",
+   "mood": "corporate",
+   "genre": "tech",
+   "tags": [
+    "technology",
+    "innovation",
+    "startup",
+    "clean"
+   ],
+   "bpm": 100,
+   "key": "E major",
+   "loop": true,
+   "durationMs": 38400,
+   "lufs": -16,
+   "peakDb": -1.9,
+   "file": "music/clear-vision.ogg",
+   "bytes": 265790,
+   "sha256": "350203a885a8424701118b81917e6f2322d614fc16b043c29a64d1c588416e23"
+  },
+  {
+   "id": "team-spirit",
+   "title": "Team Spirit",
+   "mood": "corporate",
+   "genre": "acoustic pop",
+   "tags": [
+    "teamwork",
+    "inspiring",
+    "piano",
+    "explainer"
+   ],
+   "bpm": 112,
+   "key": "Bb major",
+   "loop": true,
+   "durationMs": 34286,
+   "lufs": -16,
+   "peakDb": -3.8,
+   "file": "music/team-spirit.ogg",
+   "bytes": 240831,
+   "sha256": "a7aaf327430e6eef2ad85a973867bead75edeb3d79ba196b32d43b84c7da10b0"
+  },
+  {
+   "id": "jelly-bounce",
+   "title": "Jelly Bounce",
+   "mood": "playful",
+   "genre": "quirky",
+   "tags": [
+    "fun",
+    "kids",
+    "cartoon",
+    "bouncy"
+   ],
+   "bpm": 116,
+   "key": "C major",
+   "loop": true,
+   "durationMs": 33103,
+   "lufs": -16.1,
+   "peakDb": -1.4,
+   "file": "music/jelly-bounce.ogg",
+   "bytes": 262391,
+   "sha256": "28be35ae4cec239c0a134b4e4105e23ae0227423723a0ac9f237cd0a92f8a030"
+  },
+  {
+   "id": "pogo-parade",
+   "title": "Pogo Parade",
+   "mood": "playful",
+   "genre": "quirky",
+   "tags": [
+    "happy",
+    "toys",
+    "upbeat",
+    "cheeky"
+   ],
+   "bpm": 126,
+   "key": "F major",
+   "loop": true,
+   "durationMs": 30476,
+   "lufs": -16.1,
+   "peakDb": -1.4,
+   "file": "music/pogo-parade.ogg",
+   "bytes": 234608,
+   "sha256": "f0daa248009ddad30f9e7e80443e78690d70d6d7a9e2cc1a763199ea15299563"
+  },
+  {
+   "id": "tiny-circus",
+   "title": "Tiny Circus",
+   "mood": "playful",
+   "genre": "polka",
+   "tags": [
+    "circus",
+    "silly",
+    "comedy",
+    "march"
+   ],
+   "bpm": 132,
+   "key": "G major",
+   "loop": true,
+   "durationMs": 36364,
+   "lufs": -16,
+   "peakDb": -1.4,
+   "file": "music/tiny-circus.ogg",
+   "bytes": 286242,
+   "sha256": "1e0e744c34a86927c440d041a399872d2e21508f6f8df4956248f90d52844ce8"
+  },
+  {
+   "id": "candlelight",
+   "title": "Candlelight",
+   "mood": "romantic",
+   "genre": "ballad",
+   "tags": [
+    "love",
+    "wedding",
+    "piano",
+    "tender"
+   ],
+   "bpm": 66,
+   "key": "F major",
+   "loop": true,
+   "durationMs": 43636,
+   "lufs": -16,
+   "peakDb": -5.5,
+   "file": "music/candlelight.ogg",
+   "bytes": 246723,
+   "sha256": "ba582410766e6f1786a6c15616cbedeff5c79b517396a63b75a4fca140691c0a"
+  },
+  {
+   "id": "slow-dance",
+   "title": "Slow Dance",
+   "mood": "romantic",
+   "genre": "soul",
+   "tags": [
+    "smooth",
+    "evening",
+    "warm",
+    "anniversary"
+   ],
+   "bpm": 72,
+   "key": "Eb major",
+   "loop": true,
+   "durationMs": 40000,
+   "lufs": -16,
+   "peakDb": -5.6,
+   "file": "music/slow-dance.ogg",
+   "bytes": 215994,
+   "sha256": "a5a36865c8c0661c32017454001b49e2c0148a82e7e5db2d90d77d2ec334d566"
+  },
+  {
+   "id": "first-kiss",
+   "title": "First Kiss",
+   "mood": "romantic",
+   "genre": "cinematic romance",
+   "tags": [
+    "harp",
+    "sweet",
+    "dreamy",
+    "slow"
+   ],
+   "bpm": 60,
+   "key": "D major",
+   "loop": true,
+   "durationMs": 48000,
+   "lufs": -16,
+   "peakDb": -4.2,
+   "file": "music/first-kiss.ogg",
+   "bytes": 298707,
+   "sha256": "4931366441f786837a65e8b60bad75d8b8e598a40a046f9f66c2f58115284b5a"
+  },
+  {
+   "id": "tension-rising",
+   "title": "Tension Rising",
+   "mood": "dramatic",
+   "genre": "thriller",
+   "tags": [
+    "suspense",
+    "urgent",
+    "trailer",
+    "strings"
+   ],
+   "bpm": 110,
+   "key": "C harmonicMinor",
+   "loop": true,
+   "durationMs": 34909,
+   "lufs": -16.1,
+   "peakDb": -3.3,
+   "file": "music/tension-rising.ogg",
+   "bytes": 218528,
+   "sha256": "2832f91b22f88d4a7b8b88cd0278dbf838d9a0d4742064d920192f6df73ead8f"
+  },
+  {
+   "id": "final-stand",
+   "title": "Final Stand",
+   "mood": "dramatic",
+   "genre": "action",
+   "tags": [
+    "battle",
+    "intense",
+    "drums",
+    "power"
+   ],
+   "bpm": 120,
+   "key": "A minor",
+   "loop": true,
+   "durationMs": 32000,
+   "lufs": -16.1,
+   "peakDb": -3.8,
+   "file": "music/final-stand.ogg",
+   "bytes": 198972,
+   "sha256": "1c390cce02b405160857fac42d4f2c08e437f64577617d2b0e52ca899b3d504c"
+  },
+  {
+   "id": "dark-pulse",
+   "title": "Dark Pulse",
+   "mood": "dramatic",
+   "genre": "dark electronic",
+   "tags": [
+    "mystery",
+    "night",
+    "tech",
+    "heavy"
+   ],
+   "bpm": 100,
+   "key": "F# minor",
+   "loop": true,
+   "durationMs": 38400,
+   "lufs": -16,
+   "peakDb": -3.9,
+   "file": "music/dark-pulse.ogg",
+   "bytes": 238702,
+   "sha256": "433ef33e4442670ae2c6681c091fcbf5e8c2e1338b44c276d1d1ecfa2278f01a"
+  }
+ ]
+}

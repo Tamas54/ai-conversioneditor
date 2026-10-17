@@ -245,6 +245,13 @@ ENV PHOTOCRAFT_CLI=/opt/photocraft/bin/photocraft-cli \
 
 WORKDIR /app
 
+# --- Háttérzene a videókhoz: 24 CC0 darab (a doory projekt eredeti művei, rögzített commit), fájlonként SHA256 ---
+# Külön réteg: csak a lista változásakor tölt újra (a kód többi része nem érinti).
+COPY app/tools/music_library.json /app/app/tools/music_library.json
+COPY scripts/fetch_music.py /app/scripts/fetch_music.py
+RUN python3 /app/scripts/fetch_music.py /opt/music
+ENV MUSIC_DIR=/opt/music
+
 # --- Python deps ---
 COPY requirements.txt constraints.txt /app/
 RUN pip install --no-cache-dir -r /app/requirements.txt -c /app/constraints.txt
