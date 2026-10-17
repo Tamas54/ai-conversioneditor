@@ -381,10 +381,17 @@ _NUM_IN_TEXT = re.compile(r"(?<![\d.,])-?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]
 
 
 _NUM_WORDS = {w: i for i, ws in enumerate((
-    (), ("one", "egy"), ("two", "kettő", "két"), ("three", "három"), ("four", "négy"), ("five", "öt"), ("six",), ("seven",),
-    ("eight", "nyolc"), ("nine", "kilenc"), ("ten", "tíz"), ("eleven", "tizenegy"), ("twelve", "tizenkettő"),
-    ("thirteen",), ("fourteen",), ("fifteen",), ("sixteen",), ("seventeen",), ("eighteen",), ("nineteen",),
-    ("twenty", "húsz"))) for w in ws}
+    (), ("one", "egy"), ("two", "kettő", "két"), ("three", "három"), ("four", "négy"), ("five", "öt"), ("six", "hat"),
+    ("seven", "hét"), ("eight", "nyolc"), ("nine", "kilenc"), ("ten", "tíz"), ("eleven", "tizenegy"), ("twelve", "tizenkettő"),
+    ("thirteen", "tizenhárom"), ("fourteen", "tizennégy"), ("fifteen", "tizenöt"), ("sixteen", "tizenhat"),
+    ("seventeen", "tizenhét"), ("eighteen", "tizennyolc"), ("nineteen", "tizenkilenc"), ("twenty", "húsz"))) for w in ws}
+# a „hat” / „hét” többértelmű (ige, illetve a hét nap) — mégis számít: egy jó ábra ne essen ki, mert a forrás betűvel
+# írja („hat hónapon belül” → 6), a laza egyezés legfeljebb egy 6-ost enged át (10-17)
+_NUM_WORDS.update({**{f"huszon{w}": 20 + v for w, v in (("egy", 1), ("kettő", 2), ("két", 2), ("három", 3), ("négy", 4),
+                                                         ("öt", 5), ("hat", 6), ("hét", 7), ("nyolc", 8), ("kilenc", 9))},
+                   "thirty": 30, "harminc": 30, "forty": 40, "negyven": 40, "fifty": 50, "ötven": 50, "sixty": 60,
+                   "hatvan": 60, "seventy": 70, "hetven": 70, "eighty": 80, "nyolcvan": 80, "ninety": 90, "kilencven": 90,
+                   "hundred": 100, "száz": 100, "thousand": 1000, "ezer": 1000})
 _NUM_WORD_RE = re.compile(r"\b(" + "|".join(sorted(_NUM_WORDS, key=len, reverse=True)) + r")\b", re.I)
 
 

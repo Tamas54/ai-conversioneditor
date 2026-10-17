@@ -295,3 +295,10 @@ def test_make_video_takes_layers_and_hits_the_fixed_length(put_file):
     assert label.startswith("L1 (lower_third") and 4 < t < 7
     info = video.info(res["file_id"])
     assert info["layers"] and info["scenes"] and info["video"]["duration_mode"] == "fixed"
+
+
+def test_numbers_written_as_words_count_as_in_the_source():
+    """„hat hónapon belül” a forrásban → a „6 hónap” az ábrán nem esik ki (élő próba 10-17: a diagram kimaradt)."""
+    from app.tools.video import _text_numbers
+    assert {6.0, 30.0, 25.0, 100.0} <= _text_numbers("hat hónapon belül, harminc napon belül, huszonöt fő, száz forint")
+    assert {7.0, 40.0} <= _text_numbers("seven of the forty members")
