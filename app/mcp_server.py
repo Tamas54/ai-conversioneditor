@@ -50,8 +50,24 @@ log = logging.getLogger("aice.mcp")
 # domain (Railway, Fly, Render, etc.) that wasn't explicitly whitelisted.
 # We're publicly hosted with our own auth (or none, deliberately), so the
 # DNS-rebinding protection is irrelevant and only breaks things.
+def _icons() -> dict[str, Any]:
+    """A kliensek (ChatGPT bővítménylista, Claude connector-lista) a szerver ikonját a serverInfo `icons`-ából veszik —
+    enélkül a hoszt faviconját keresik, és a 32 px-es ICO helyett üres „@” jelet mutattak (10-17). Ugyanaz a recept,
+    ami az Echolotnál bevált: PNG 512/192 + SVG, belépés nélkül elérhető címen, és website_url."""
+    try:
+        from mcp.types import Icon
+    except Exception:                  # régebbi SDK: ikon nélkül indul
+        return {}
+    base = settings.PUBLIC_BASE_URL.rstrip("/")
+    return {"website_url": f"{base}/app",
+            "icons": [Icon(src=f"{base}/icon-512.png", mimeType="image/png", sizes=["512x512"]),
+                      Icon(src=f"{base}/icon-192.png", mimeType="image/png", sizes=["192x192"]),
+                      Icon(src=f"{base}/static/favicon.svg", mimeType="image/svg+xml", sizes=["any"])]}
+
+
 mcp = FastMCP(
     "ai-conversioneditor",
+    **_icons(),
     instructions=(
         "Make and edit real files (Word, PowerPoint, PDF, images/PSD, designs). This is the person's own Studio "
         "workspace, which they connected: files sent here are stored privately in their account (kept "

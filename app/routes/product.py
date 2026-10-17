@@ -6,7 +6,7 @@ import hashlib
 import html
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.config import settings
@@ -37,11 +37,21 @@ async def root():
     return RedirectResponse("/app", status_code=301)
 
 
-@router.get("/favicon.ico", include_in_schema=False)
-async def favicon():
+_ICONS = {"/favicon.ico": "icon-192.png", "/apple-touch-icon.png": "apple-touch-icon.png",
+          "/apple-touch-icon-precomposed.png": "apple-touch-icon.png", "/icon-192.png": "icon-192.png",
+          "/icon-512.png": "icon-512.png"}
+
+
+async def _icon(request: Request):
+    """Ikonok a hoszt gyökerén, belépés és átirányítás nélkül: a bővítmény-/connector-listák ikongyűjtője ezeket kéri
+    (a /favicon.ico PNG — a 16/32 px-es ICO-ból nem lett ikon, 10-17)."""
     from fastapi.responses import FileResponse
-    return FileResponse(Path(__file__).parent.parent / "static" / "favicon.ico", media_type="image/x-icon",
+    return FileResponse(Path(__file__).parent.parent / "static" / _ICONS[request.url.path], media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+for _path in _ICONS:
+    router.add_api_route(_path, _icon, methods=["GET", "HEAD"], include_in_schema=False)
 
 
 @router.get("/app", include_in_schema=False)
