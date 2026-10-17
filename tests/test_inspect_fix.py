@@ -93,6 +93,8 @@ async def test_inspect_lists_shapes_without_a_new_file(put_file, tmp_path):
     assert {s["id"] for s in r["slides"][0]["shapes"]} == ids                  # DeckCraft id = a pptx alakzat-azonosítója
     one = await crafts.office_read("deck", "inspect", file_id=fid, slide=1, shape_id=min(ids))
     assert one["shape"]["id"] == min(ids)
+    from app.tools import checks                                               # MCP-n: a nézés nem kap „nothing changed” ítéletet
+    assert await checks.run("office", {"app": "deck", "file_id": fid, "read": "inspect", "slide": 1}, r) == (None, None)
     # ugyanez parancsként (ahogy a ChatGPT hívta): nincs új fájl, nincs „nothing changed” hiba, ott az objektumlista
     run = await crafts.office_run("deck", file_id=fid, commands=[{"command": "slide.inspect", "params": {"index": 0}}])
     assert run["file_id"] == fid and run["read_only"] and run["check"]["status"] == "ok" and _outputs() == before
@@ -143,3 +145,37 @@ async def test_auto_growing_box_is_not_an_overflow(put_file, tmp_path):
     prs.save(str(p))
     c, _ = await checks.check_deck(input_path(put_file(p)), None, "pptx_build", {})
     assert not any("past its box" in f for f in c["findings"]), c
+
+
+async def test_repeated_labels_are_measured_at_their_own_box_and_text_on_text_is_an_error(put_file, tmp_path):
+    """10-17: a döntési fa „igen”/„nem” címkéit a gép a dia első „igen”-jéhez mérte (231 pt téves túllógás), a címlapon
+    viszont a felső sor a címre íródott, és nem vette észre. Most: a saját dobozához legközelebbi előfordulás az övé;
+    két egymásra írt szöveg hiba, kész paranccsal, ami a kisebb dobozt elteszi."""
+    _deckcraft()
+    if shutil.which("soffice") is None:
+        pytest.skip("LibreOffice not installed")
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+    from app.tools import validate
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+
+    def box(x, y, w, h, text, size):
+        b = s.shapes.add_textbox(Pt(x), Pt(y), Pt(w), Pt(h))
+        b.text_frame.word_wrap = True
+        b.text_frame.text = text
+        b.text_frame.paragraphs[0].runs[0].font.size = Pt(size)
+        return b
+    for x, y, t in ((600, 60, "igen"), (600, 160, "nem"), (760, 300, "igen"), (760, 420, "nem")):
+        box(x, y, 60, 26, t, 14)
+    title = box(40, 200, 480, 200, "Szeged energiaátállása 2027–2030", 44)
+    kicker = box(40, 205, 400, 26, "KÖZGYŰLÉSI ELŐTERJESZTÉS", 14)
+    p = tmp_path / "d.pptx"
+    prs.save(str(p))
+    info, _ = await validate.validate(put_file(p))
+    kinds = [i["kind"] for i in info["issues"]]
+    assert "text_overflow" not in kinds, info["issues"]
+    hit = [i for i in info["issues"] if i["kind"] == "text_collision"]
+    assert len(hit) == 1 and hit[0]["severity"] == "error" and hit[0]["shape_id"] == kicker.shape_id
+    assert '"shape.setBounds"' in hit[0]["fix"] and title.shape_id != kicker.shape_id

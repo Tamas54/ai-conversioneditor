@@ -868,7 +868,16 @@ def _swimlane(spec: dict[str, Any], horizontal: bool, wrap_em: float, cw: float,
         seen[key] = seen.get(key, 0) + 1
     nslots = acc
     W = max(max(b["w"] for b in B.values()), 5.5)
-    _rewrap(B, W, cw)
+    colw: list[float] = []
+    if horizontal:
+        # fekvőben oszloponként a saját legszélesebb doboza szabja a szélességet: egy hosszú szavú döntés ne
+        # tegye az összes lépést ugyanolyan szélessé (10-17: 7 lépés, 4 sáv 16:9-ben 8 pt-os betűt adott)
+        for k in range(nslots):
+            ids = [i for i in B if slot[i] == k]
+            colw.append(max(max(B[i]["w"] for i in ids), 4.5))
+            _rewrap({i: B[i] for i in ids}, colw[-1], cw)
+    else:
+        _rewrap(B, W, cw)
     H = max(b["h"] for b in B.values())
     for b in B.values():
         b["h"] = H
@@ -901,12 +910,12 @@ def _swimlane(spec: dict[str, Any], horizontal: bool, wrap_em: float, cw: float,
         extra = back_lab + 0.2 if back_lab else 0.0
         lane_h = H + 1.5 + extra
         x0 = head_w + 0.9
-        xs = [x0 + W / 2]
-        for g in gaps:
-            xs.append(xs[-1] + W + g)
+        xs = [x0 + colw[0] / 2]
+        for k, g in enumerate(gaps):
+            xs.append(xs[-1] + colw[k] / 2 + g + colw[k + 1] / 2)
         for i in B:
             B[i]["x"], B[i]["y"] = xs[slot[i]], lane_of[i] * lane_h + 0.75 + H / 2
-        total_w = xs[-1] + W / 2 + 0.9
+        total_w = xs[-1] + colw[-1] / 2 + 0.9
         for k, ln in enumerate(lanes):
             lanes_out.append({"name": ln, "lines": heads[k][0], "band": [total_w / 2, k * lane_h + lane_h / 2, total_w, lane_h],
                               "head": [head_w / 2, k * lane_h + lane_h / 2, head_w, lane_h]})
@@ -961,7 +970,7 @@ def _swimlane(spec: dict[str, Any], horizontal: bool, wrap_em: float, cw: float,
         else:                                           # visszalépés (pl. „visszaküldi”): a sávok szélén vissza
             if horizontal:                              # alulról be a cél aljába; ha útban van valami, oldalról
                 yb = A["y"] + H / 2 + 0.45 + back_lab / 2
-                xg = Bb["x"] - W / 2 - (gaps[sb - 1] if sb > 0 else 2.2) * 0.35
+                xg = Bb["x"] - Bb["w"] / 2 - (gaps[sb - 1] if sb > 0 else 2.2) * 0.35
                 cands.append([_side(A, "bottom"), [A["x"], yb], [Bb["x"], yb], _side(Bb, "bottom" if Bb["y"] < yb else "top")])
                 cands.append([_side(A, "bottom"), [A["x"], yb], [xg, yb], [xg, Bb["y"]], _side(Bb, "left")])
             else:
@@ -1580,6 +1589,11 @@ def to_pptx(slide, spec: dict[str, Any], t: dict[str, str], box: tuple[float, fl
         textframe(hd, ln["lines"], s * HEAD, readable(col, mix(col, bg, 0.9)), True)
     # csúcsok előbb (az összekötő ezekhez kötődik), az élek utánuk kerülnek alájuk a z-sorrendben
     node_shp = {}
+    step_of = _order(spec)                            # a kibontás lépései — ugyanaz, mint a videóban
+    steps: dict[int, list[tuple[int, bool]]] = {}
+
+    def on_step(k: int, shp, has_text: bool) -> None:
+        steps.setdefault(k, []).append((shp.shape_id, has_text))
     for n in spec["nodes"]:
         b = lay["nodes"][n["id"]]
         fill, stroke, tcol = _node_colors(b, actors, acc, bg, True)
@@ -1588,6 +1602,7 @@ def to_pptx(slide, spec: dict[str, Any], t: dict[str, str], box: tuple[float, fl
                    radius=b["h"] / 2 if b["shape"] == "pill" else 0.35 * s)
         textframe(shp, b["lines"], s * b["font"], tcol, b["bold"])
         node_shp[n["id"]] = shp
+        on_step(step_of[n["id"]], shp, True)
     sites = {"top": 0, "left": 1, "bottom": 2, "right": 3}
     edge_shapes = []
     for e in lay["edges"]:
@@ -1614,16 +1629,20 @@ def to_pptx(slide, spec: dict[str, Any], t: dict[str, str], box: tuple[float, fl
         ends(c.line._get_or_add_ln(), st["head"])
         edge_shapes.append(c)
         shapes.append(c)
+        k = max(step_of[e["from"]], step_of[e["to"]])     # az él a később megjelenő végével együtt jön
+        on_step(k, c, False)
         lb = e.get("label")
         fs = s * LAB
         if lb:
             sh = rect(f"Label – {e['from']}→{e['to']}", lb["x"], lb["y"], lb["w"], lb["h"], bg, st["light"], 0.75, radius=lb["h"] / 2)
             textframe(sh, lb["lines"], fs, readable(st["light"], bg), False, wrap=False)
+            on_step(k, sh, True)
         if e["certainty"] == "disputed":
             r = 0.55 * s
             c_ = [lb["x"] - lb["w"] / 2 - r * 0.55, lb["y"] - lb["h"] / 2 + r * 0.3] if lb else _along(pts, 0.5)
             bd = rect(f"Disputed – {e['from']}→{e['to']}", c_[0], c_[1], 2 * r, 2 * r, BADGE, None, shape=MSO_SHAPE.OVAL)
             textframe(bd, ["?"], r * 1.2, "#16181D", True, wrap=False)
+            on_step(k, bd, True)
     # az élek a csúcsok alá (z-sorrend): a spTree-ben a sávok után, a csúcsok elé
     tree = slide.shapes._spTree
     first_node = node_shp[spec["nodes"][0]["id"]]._element if spec["nodes"] else None
@@ -1657,4 +1676,8 @@ def to_pptx(slide, spec: dict[str, Any], t: dict[str, str], box: tuple[float, fl
         tw = len(it["text"]) * 0.58 * fs + 0.6 * s
         tb = rect(f"Legend text – {it['key']}", tx + tw / 2, y, tw, fs * 1.5, None, None, shape=MSO_SHAPE.RECTANGLE)
         textframe(tb, [it["text"]], fs, "#" + t.get("muted", "#6B7280").lstrip("#"), False, "left", wrap=False)
+    if spec.get("reveal") != "all" and len(steps) > 1:
+        # vetítésben lépésenként épül fel, mint a videóban: az első lépés a diával jön, a többi kattintásra áttűnik
+        from app.tools import pptx_media
+        pptx_media.reveal(slide._element, [steps[k] for k in sorted(steps)][1:])
     return shapes

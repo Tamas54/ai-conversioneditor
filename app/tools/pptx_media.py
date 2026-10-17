@@ -1,4 +1,6 @@
-"""Videó a dián: a PowerPoint saját időzítése, hogy a Keynote (iPhone, Mac) és a PowerPoint le is játssza.
+"""A dia időzítése (p:timing): videó, ami magától indul, és lépésenkénti felépülés (magyarázó ábra).
+
+Videó a dián: a PowerPoint saját időzítése, hogy a Keynote (iPhone, Mac) és a PowerPoint le is játssza.
 
 A python-pptx csak egy „várakozó” médiacsomópontot ír (`delay="indefinite"`, kattintás-sorozat nélkül): a dián
 ott a videó, de semmi nem indítja el — iPhone-on a Keynote a borítóképét mutatja, lejátszó nélkül. Itt azt írjuk,
@@ -49,8 +51,56 @@ def timing_xml(spid: int, dur_ms: int, vol: int = 80000) -> etree._Element:
 
 def autoplay(sld, spid: int, dur_ms: int, vol: int = 80000) -> None:
     """A dia (p:sld elem) időzítése: a megadott videó magától indul, koppintásra megáll/folytatódik."""
+    _put(sld, timing_xml(spid, dur_ms, vol))
+
+
+# Lépésenkénti felépülés: a PowerPoint „Megjelenés: áttűnés” (fade) belépő effektusa kattintásonként egy lépésre — az
+# első lépés a diával együtt látszik, a többi kattintásra jön (mint a videóban a kibontás). A PDF és a képek a kész
+# állapotot mutatják (a rejtett alakzat is rajta van), a szerkesztőben minden alakzat szerkeszthető marad.
+_EFFECT = ('<p:par><p:cTn id="{id}" presetID="10" presetClass="entr" presetSubtype="0" fill="hold"{grp} nodeType="{node}">'
+           '<p:stCondLst><p:cond delay="{delay}"/></p:stCondLst><p:childTnLst>'
+           '<p:set><p:cBhvr><p:cTn id="{id1}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>'
+           '<p:tgtEl><p:spTgt spid="{spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst>'
+           '</p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>'
+           '<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="{id2}" dur="{dur}"/><p:tgtEl><p:spTgt spid="{spid}"/>'
+           '</p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>')
+
+
+def reveal_xml(steps: list[list[tuple[int, bool]]], dur_ms: int = 450) -> etree._Element:
+    """steps: kattintásonként az alakzatok [(spid, van-e szövege)] — a lépésen belül együtt (withEffect) tűnnek fel."""
+    ids = iter(range(3, 100000))
+    clicks, bld = [], []
+    for step in steps:
+        effects = []
+        for k, (spid, has_text) in enumerate(step):
+            effects.append(_EFFECT.format(id=next(ids), id1=next(ids), id2=next(ids), spid=int(spid), dur=int(dur_ms),
+                                          node="clickEffect" if k == 0 else "withEffect", delay=0,
+                                          grp=' grpId="0"' if has_text else ""))
+            if has_text:
+                bld.append(f'<p:bldP spid="{int(spid)}" grpId="0" animBg="1"/>')
+        outer, inner = next(ids), next(ids)
+        clicks.append(f'<p:par><p:cTn id="{outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>'
+                      f'<p:par><p:cTn id="{inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>'
+                      + "".join(effects) + '</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>')
+    xml = (f'<p:timing {_NS}><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>'
+           '<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>'
+           + "".join(clicks) + '</p:childTnLst></p:cTn>'
+           '<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>'
+           '<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>'
+           '</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>'
+           + (f'<p:bldLst>{"".join(dict.fromkeys(bld))}</p:bldLst>' if bld else "") + '</p:timing>')
+    return etree.fromstring(xml)
+
+
+def reveal(sld, steps: list[list[tuple[int, bool]]]) -> None:
+    """A dia alakzatai kattintásonként, lépésenként tűnnek fel (üres lépés kimarad)."""
+    steps = [st for st in steps if st]
+    if steps:
+        _put(sld, reveal_xml(steps))
+
+
+def _put(sld, new) -> None:
     old = sld.find(f"{{{_P}}}timing")
-    new = timing_xml(spid, dur_ms, vol)
     if old is not None:
         old.addprevious(new)
         sld.remove(old)

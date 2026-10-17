@@ -377,7 +377,7 @@ def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any], 
         # ugyanaz az ítélet, mint a validate_document-é: hiba → failed (javítani kell), figyelmeztetés → needs_check
         return make("failed" if errors else "needs_check", findings + [LOOK], verified), first_changed
     if src is None or first_changed:
-        return make("ok", [], verified + ["No slide has text overflowing, anything off the slide, or empty placeholders."]), first_changed
+        return make("ok", [], verified + ["No slide has text overflowing, text drawn over other text, anything off the slide, or empty placeholders."]), first_changed
     return make("needs_check", [LOOK], verified), first_changed
 
 
@@ -658,7 +658,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
             deck, page = await check_deck(out, None, tool, args)
             return merge_checks(own, deck), page
         return own, None
-    if tool in _NO_CHECK or (tool == "wordcraft" and args.get("read")):    # olvasás: nincs új fájl, nincs mit ellenőrizni
+    if tool in _NO_CHECK or args.get("read") or res.get("read_only"):    # olvasás (bármely motor): nincs új fájl, nincs mit ellenőrizni
         return None, None
     # háttérmunka: a kész eredményen (digitize / restore / photo_edit — a hívás job_id-val jön vissza)
     if res.get("status") in ("running", "failed", "cancelled") and "kind" in res:

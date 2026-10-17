@@ -270,6 +270,34 @@ def test_deck_diagram_is_native_editable_shapes(tmp_path):
     assert lanes and reg["Ügyfél"]["color"]
 
 
+def test_deck_diagram_builds_up_click_by_click_like_the_video(tmp_path):
+    """Vetítésben ugyanazokban a lépésekben épül fel, mint a videóban: az első lépés a diával együtt látszik, a többi
+    kattintásra tűnik fel (az él a később megjelenő végével, a címkéjével együtt); reveal="all" → nincs animáció."""
+    from pptx import Presentation
+    from app.tools import diagrams, pptx_deck
+    spec = pptx_deck.diagram_slides({"slides": [{"layout": "diagram", "title": "Fa", "diagram": TREE},
+                                                {"layout": "diagram", "title": "Fa", "diagram": {**TREE, "reveal": "all"}}]})
+    reg = pptx_deck.diagram_actors(spec, "#FCA311")
+    prs = Presentation()
+    for s in spec["slides"]:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        pptx_deck._diagram(slide, s, dict(pptx_deck.DEFAULT_THEME), {k: reg[k] for k in diagrams.actor_names(s["diagram"])})
+    p = tmp_path / "d.pptx"
+    prs.save(str(p))
+    prs = Presentation(str(p))
+    P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    sl, d = prs.slides[0], spec["slides"][0]["diagram"]
+    order = diagrams._order(d)
+    clicks = [c for c in sl._element.iter(f"{P}cTn") if c.get("nodeType") == "clickEffect"]
+    assert len(clicks) == max(order.values())                                     # lépésenként egy kattintás
+    sid = {sh.name: sh.shape_id for sh in sl.shapes}
+    animated = {int(x.get("spid")) for x in sl._element.iter(f"{P}spTgt")}
+    assert all((sid[f"Node – {i}"] in animated) == (k > 0) for i, k in order.items())
+    for e in d["edges"]:
+        assert sid[f"Edge – {e['from']}→{e['to']}"] in animated and sid[f"Label – {e['from']}→{e['to']}"] in animated
+    assert prs.slides[1]._element.find(f"{P}timing") is None
+
+
 @pytest.mark.engines
 async def test_video_with_a_diagram_and_a_targeted_edit_changes_only_that_scene():
     """Valódi építés (render nélkül): a jelenet leírása a projektben marad; a célzott szerkesztés csak azt a jelenetet

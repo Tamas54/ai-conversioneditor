@@ -2237,6 +2237,14 @@ async def _probe_duration(workdir: Path, name: str) -> Optional[float]:
         return None
 
 
+def _lost_picture(i: int, story: dict[str, Any]) -> str:
+    where = "the title card" if i == 0 else f"scene {story['scenes'][i - 1].get('id') or i}"
+    fix = ('changes={"title_image": …}' if i == 0 else
+           f'changes={{"scenes": [{{"id": "{story["scenes"][i - 1].get("id")}", "image": …}}]}}')
+    return (f"The picture for {where} couldn't be downloaded (the picture site refused or timed out), so it shows without "
+            f"one — give it again with action=edit, {fix} (a file_id, a URL or {{\"stock\": \"words\"}}).")
+
+
 async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
                               parent: Optional[str] = None) -> tuple[list[Optional[str]], list[str], list[Optional[str]]]:
     """Képleírások (file_id / {url} / {stock} / {generate}, vagy {"asset": név} = a szülőprojekt meglévő képe, letöltés
@@ -2923,6 +2931,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
     try:
         names, credit_list, per_credit = await _materialize_images(specs, fmt, work, parent)
         map_credits, gfx_findings = await _place_on_maps(story, (W, H, _caption_top(W, H)))
+        # a kért, de le nem töltött kép (pl. a forrás 429-cel elutasította) nem lehet „ok”: megnevezzük a helyét
+        gfx_findings = [_lost_picture(i, story) for i, (sp, nm) in enumerate(zip(specs, names)) if sp and not nm] + gfx_findings
         gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
         credit_list = credit_list + [c for c in gfx_credits + map_credits if c not in credit_list]
         voice = music = None

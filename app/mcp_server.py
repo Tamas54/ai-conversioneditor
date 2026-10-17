@@ -873,7 +873,10 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
       stats {title, stats:[{value, label}] ≤4}     chart {title, chart_type: column | bar | line |
                                                          pie | doughnut | area | scatter, categories,
                                                          series [{name, values}] — scatter: series
-                                                         [{name, points: [[x, y]…]}]}
+                                                         [{name, points: [[x, y, "name"?]…]}] (the name
+                                                         labels the dot), x_title?, y_title? (axis
+                                                         titles with the unit — a scatter needs both),
+                                                         data_labels? (pie/doughnut: % on by default)}
       table {title, headers, rows}                 gallery {title, images[≤4], captions?}
       diagram {title, diagram: {type: decision_tree | swimlane | network, nodes, edges, …}} — the same object as
               a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the
@@ -1538,7 +1541,7 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
     It finds: empty list items; odd numbering (repeated, skipped, restarting, continuing under a new heading, typed
     numbers, heading numbers); table rows split across pages and tables continuing without their header row; headings
     left as the last line of a page; captions apart from their picture; text, tables or pictures off the page or into
-    the margin; empty pages. Decks: text overflowing its box (as rendered), things off the slide, empty placeholders.
+    the margin; empty pages. Decks: text overflowing its box (as rendered), text drawn over other text, things off the slide, empty placeholders.
     block = the paragraph number in wordcraft(read="inspect"); edit.goto {"paragraph": block + 1} puts the caret there,
     and each issue's `fix` says what to do. Decks: shape_id is the shape's id on that slide, and `fix` is a ready
     office(app="deck") call that changes just that shape (text.set / format.size / shape.setBounds with "on_slide") —
@@ -1898,7 +1901,8 @@ async def video(
       file_id, scene="L2") (its finished moment) or + frames=6 (in → out).
     brand: the person's saved brand (name, "mine") colours the video; left out, their default brand is used; "none" = off.
     action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a
-      slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster).
+      slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster). For a
+      deck, make the video in the deck's colours (accent = the deck's accent colour, or the same brand) so it fits in.
     action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
       draft=true renders half size, fast.
     action="info": a project's compositions, length, scenes, layers, media files and last render (file_id).

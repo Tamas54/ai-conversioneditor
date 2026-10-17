@@ -52,17 +52,24 @@ def _size_for(aspect: Optional[float]) -> str:
 
 
 async def _get(url: str, **kw) -> httpx.Response:
-    """GET egy újrapróbálással: átmeneti DNS-/kapcsolati hiba ne döntse el a teljes paklit."""
-    for attempt in (1, 2):
+    """GET újrapróbálással: átmeneti DNS-/kapcsolati hiba ne döntse el a teljes paklit; a „túl sok kérés” (429/503 —
+    10-17: a Wikimedia a párhuzamos letöltésekre 429-et adott, és a videó két képe csendben kimaradt) után vár (a
+    Retry-After szerint, legfeljebb 8 s) és újra kéri."""
+    for attempt in (1, 2, 3):
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True, headers={"User-Agent": _UA}) as c:
                 r = await c.get(url, **kw)
                 r.raise_for_status()
                 return r
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
-            if attempt == 2:
+            if attempt == 3:
                 raise
             await asyncio.sleep(1.5)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code not in (429, 503) or attempt == 3:
+                raise
+            ra = e.response.headers.get("Retry-After", "")
+            await asyncio.sleep(min(8.0, float(ra)) if ra.replace(".", "", 1).isdigit() else 2.0 * attempt + 1)
     raise RuntimeError("unreachable")
 
 
@@ -214,15 +221,27 @@ def _cand_key(c: dict[str, Any]) -> str:
     return url
 
 
+def _tries(query: str) -> list[str]:
+    """A keresés változatai: a teljes kifejezés, majd rövidítve (a fő szó a végén). A tulajdonnév (hely, személy,
+    intézmény — nagybetűs szó) minden rövidítésben marad: „Szeged city aerial” ne „city aerial” legyen (10-17: egy
+    jeruzsálemi légifotó lett a szegedi pakli címlapja)."""
+    words = query.split()
+    names = [w for w in words if w[:1].isupper()]
+
+    def keep(part: list[str]) -> str:
+        return " ".join([w for w in names if w not in part] + part)
+    return list(dict.fromkeys([query] + [keep(words[-k:]) for k in (3, 2) if len(words) > k]
+                              + [keep(words[:k]) for k in (4, 3, 2) if len(words) > k]
+                              + ([" ".join(names)] if names and len(names) < len(words) else [])))
+
+
 async def search(query: str, n: int = 12) -> list[dict[str, Any]]:
     """Stock-jelöltek a választóhoz, letöltés nélkül: [{thumb_url, url, credit, title, width, height, source}].
     Commons + Openverse; kevés találatnál a rövidített keresés (a fő szó a végén, ld. _stock_progressive) tölti fel."""
     query = " ".join(query.split())[:120]
     if not query:
         return []
-    words = query.split()
-    tries = list(dict.fromkeys([query] + [" ".join(words[-k:]) for k in (3, 2) if len(words) > k]
-                               + [" ".join(words[:k]) for k in (4, 3, 2) if len(words) > k]))
+    tries = _tries(query)
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for q in tries:
@@ -298,7 +317,7 @@ async def resolve_many(items: list[tuple[ImageSpec, Optional[float]]], concurren
 PICK_N = 6
 
 
-def judge_prompt(query: str, context: str, medium: str = "video") -> str:
+def judge_prompt(query: str, context: str, medium: str = "video", titles: Optional[list[str]] = None) -> str:
     """Képenkénti, külön kérdések (10-13, mérve: egyetlen összesített sorrendben a modell a „Lorem Ipsum” mockupot és egy
     Zabbix-képernyőt tette előre; képenként kérdezve a szöveget és a mockupot jól jelöli) — a sorrendet mi számoljuk."""
     head = (f'A slide of a presentation, titled "{context}". Its picture should show: "{query}". ' if medium == "slide" else
@@ -306,7 +325,10 @@ def judge_prompt(query: str, context: str, medium: str = "video") -> str:
     return (head + 'For EACH numbered picture answer: "text": does it show readable words, numbers, labels, a stamp, a logo '
             'or a watermark? (true/false); "mockup": is it a software screenshot, a template, a mock-up, a diagram, a map or '
             'an old document? (true/false); "fit": 0-10, how well it is a clear, real photo of that subject. '
-            'Return JSON only: {"pictures": [{"n": 1, "text": false, "mockup": false, "fit": 7}, ...]}')
+            + ('The pictures\' file names: ' + "; ".join(f"{k + 1}: {t[:70]}" for k, t in enumerate(titles))
+               + '. If the subject names a place, a person or a thing, a picture whose file name names a DIFFERENT one gets '
+               'fit 2 or less, however good it looks. ' if titles else '')
+            + 'Return JSON only: {"pictures": [{"n": 1, "text": false, "mockup": false, "fit": 7}, ...]}')
 
 
 def contact_sheet(thumbs: list[bytes]) -> str:
@@ -344,7 +366,7 @@ async def rank(query: str, context: str, cands: list[dict[str, Any]], prompt: Op
     if len(ok) < 2:
         return list(range(len(cands)))
     judged = prompt is None                      # saját prompt (Lottie): a régi {"ranking": […]} alak
-    prompt = prompt or judge_prompt(query, context or query, medium)
+    prompt = prompt or judge_prompt(query, context or query, medium, [str(cands[i].get("title") or "") for i, _ in ok])
     msgs = [{"role": "user", "content": [{"type": "text", "text": prompt},
                                          {"type": "image_url", "image_url": {"url": contact_sheet([b for _, b in ok])}}]}]
     for model, tmo in ((settings.LLM_MODEL_VISION, 40), (settings.LLM_MODEL_VISION_FALLBACK, 60)):

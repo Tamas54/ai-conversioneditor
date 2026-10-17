@@ -350,6 +350,13 @@ def _title_size(text: str, big: int = 36) -> int:
     return big if n <= 32 else big - 6 if n <= 55 else big - 10
 
 
+def _fit(text: str, size: int, w_in: float, h_in: float) -> int:
+    """A cím betűmérete úgy, hogy tördelve beférjen a dobozába (a videó szövegillesztője, pontban) — a lent horgonyzott
+    cím így nem nő fel a fölötte lévő sorra (10-17: a címlap háromsoros címe ráírt a felső sorra)."""
+    from app.tools.video import _fit_size
+    return _fit_size(text, size, w_in * 72, h_in * 72)
+
+
 def _bullet_size(items: list) -> int:
     longest = max((len(str(i)) for i in items), default=0)
     if len(items) <= 4 and longest <= 70:
@@ -359,7 +366,7 @@ def _bullet_size(items: list) -> int:
 
 def _heading(slide, s, t, x=M_IN, w=W_IN - 2 * M_IN):
     title = s.get("title") or ""
-    _text(slide, x, 0.55, w, 1.0, title, size=_title_size(title), font=t["font_heading"], color=t["primary"],
+    _text(slide, x, 0.55, w, 1.0, title, size=_fit(title, _title_size(title), w, 1.1), font=t["font_heading"], color=t["primary"],
           bold=True, anchor="bottom")
     _rect(slide, x, 1.68, 0.9, 0.07, t["accent"])
 
@@ -377,8 +384,9 @@ def _cover(slide, s, t, img):
     _rect(slide, M_IN + 0.05, 4.05, 1.2, 0.09, t["accent"])
     title = s.get("title") or ""
     text_w = (W_IN * 0.62 - M_IN - 0.35) if img else (W_IN - 2 * M_IN)      # képes címdián a sötét panel szélessége
-    _text(slide, M_IN, 1.6, text_w, 2.35, title, size=_title_size(title, 54), font=t["font_heading"],
-          color="#FFFFFF", bold=True, anchor="bottom", spacing=1.0)
+    top = 2.2 if s.get("kicker") else 1.6                                    # a felső sor (kicker) a cím fölött marad
+    _text(slide, M_IN, top, text_w, 3.95 - top, title, size=_fit(title, _title_size(title, 54), text_w, 3.95 - top),
+          font=t["font_heading"], color="#FFFFFF", bold=True, anchor="bottom", spacing=1.0)
     if s.get("subtitle"):
         _text(slide, M_IN, 4.35, text_w if img else W_IN - 2.5 * M_IN, 1.4, s["subtitle"], size=22, font=t["font_body"],
               color="#F1F1F1")
@@ -396,7 +404,8 @@ def _section(slide, s, t, img, closing=False):
         _text(slide, M_IN, 1.5, 4, 1.4, f"{int(s['number']):02d}", size=72, font=t["font_heading"],
               color=t["accent"], bold=True)
     title = s.get("title") or ("Thank you!" if closing else "")
-    _text(slide, M_IN, 2.9, W_IN - 2 * M_IN, 1.6, title, size=_title_size(title, 46), font=t["font_heading"],
+    _text(slide, M_IN, 2.9, W_IN - 2 * M_IN, 1.6, title, size=_fit(title, _title_size(title, 46), W_IN - 2 * M_IN, 1.6),
+          font=t["font_heading"],
           color="#FFFFFF", bold=True, anchor="bottom", align="center" if closing else "left")
     if s.get("subtitle"):
         _text(slide, M_IN, 4.7, W_IN - 2 * M_IN, 1.2, s["subtitle"], size=20, font=t["font_body"], color="#E8E8E8",
@@ -490,7 +499,7 @@ def _wrap_categories(cats: list[Any], kind) -> list[str]:
 
 def _chart(slide, s, t):
     from pptx.chart.data import CategoryChartData, XyChartData
-    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
     from pptx.util import Inches, Pt
     _heading(slide, s, t)
     kind = {"column": XL_CHART_TYPE.COLUMN_CLUSTERED, "bar": XL_CHART_TYPE.BAR_CLUSTERED, "line": XL_CHART_TYPE.LINE_MARKERS,
@@ -501,8 +510,8 @@ def _chart(slide, s, t):
         data = XyChartData()
         for se in series:
             ser = data.add_series(se.get("name", "Sorozat"))
-            for x, y in se.get("points") or []:
-                ser.add_data_point(float(x), float(y))
+            for pt in se.get("points") or []:
+                ser.add_data_point(float(pt[0]), float(pt[1]))
     else:
         data = CategoryChartData()
         data.categories = _wrap_categories(s.get("categories") or [], kind)
@@ -526,9 +535,40 @@ def _chart(slide, s, t):
     pal = [t["primary"], t["accent"], "#2E7D6B", "#8E44AD", "#C0392B", "#7F8C8D"]
     plot = ch.plots[0]
     if kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT):
+        # a szelet aránya számmal is (egy kördiagram számok nélkül csak becslésre jó); a felirat színe a szelethez illik
+        show = s.get("data_labels", True)
+        if show:
+            plot.has_data_labels = True
+            dl = plot.data_labels
+            dl.show_percentage, dl.show_value, dl.show_category_name = True, False, False
+            dl.number_format, dl.number_format_is_linked = "0%", False
+            dl.font.size, dl.font.bold = Pt(16), True
         for k, pt in enumerate(plot.series[0].points if plot.series else []):
-            pt.format.fill.solid(); pt.format.fill.fore_color.rgb = _rgb(pal[k % len(pal)])
+            col = pal[k % len(pal)]
+            pt.format.fill.solid(); pt.format.fill.fore_color.rgb = _rgb(col)
+            if show:
+                pt.data_label.font.size, pt.data_label.font.bold = Pt(16), True
+                pt.data_label.font.color.rgb = _rgb("#FFFFFF" if contrast("#FFFFFF", col) >= contrast("#1B1F24", col) else "#1B1F24")
+                _percent_label(pt.data_label._dLbl)
         return
+    _axis_titles(ch, s, kind)
+    if s.get("data_labels"):
+        plot.has_data_labels = True
+        plot.data_labels.font.size = Pt(12)
+    if kind == XL_CHART_TYPE.XY_SCATTER:
+        # pont-feliratok: [x, y, "név"] — melyik pont melyik projekt / ország (név nélkül a pontfelhő kitalálós)
+        sides = _label_sides([pt for se in series for pt in se.get("points") or []], (W_IN - 2 * M_IN - 1.2) * 72, 5.0 * 72 - 90)
+        pos = {"right": XL_LABEL_POSITION.RIGHT, "left": XL_LABEL_POSITION.LEFT, "above": XL_LABEL_POSITION.ABOVE,
+               "below": XL_LABEL_POSITION.BELOW}
+        n = 0
+        for ser, se in zip(plot.series, series):
+            for k, pt in enumerate(se.get("points") or []):
+                if len(pt) > 2 and str(pt[2]).strip():
+                    tf = ser.points[k].data_label.text_frame
+                    tf.text = str(pt[2])
+                    tf.paragraphs[0].runs[0].font.size = Pt(12)
+                    ser.points[k].data_label.position = pos[sides[n]]
+                n += 1
     for k, ser in enumerate(plot.series):
         c = _rgb(pal[k % len(pal)])
         if kind in (XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.XY_SCATTER):
@@ -544,15 +584,108 @@ def _chart(slide, s, t):
             ser.format.fill.solid(); ser.format.fill.fore_color.rgb = c
 
 
+def _label_sides(points: list, plot_w: float, plot_h: float, size: float = 12.0) -> list[str]:
+    """Pontdiagram: minden pont nevének oldala (jobbra / balra / fölé / alá) úgy, hogy ne takarjon másik pontot és
+    korábbi nevet (10-17: a sűrű sarokban a „Hőközpont-automatika” az „Uszoda” nevére íródott). A becslés a rajzterület
+    pontjaiban: a tengely a 0-tól (vagy a legkisebb értéktől) a legnagyobbig fut."""
+    xy = [(float(p[0]), float(p[1])) for p in points]
+    if not xy:
+        return []
+    x0, x1 = min(0.0, min(x for x, _ in xy)), max(x for x, _ in xy) or 1.0
+    y0, y1 = min(0.0, min(y for _, y in xy)), max(y for _, y in xy) or 1.0
+    P = [((x - x0) / ((x1 - x0) or 1) * plot_w, plot_h - (y - y0) / ((y1 - y0) or 1) * plot_h) for x, y in xy]
+    dots = [(px - 5, py - 5, px + 5, py + 5) for px, py in P]
+    placed: list[tuple[float, float, float, float]] = []
+    out = []
+    for k, ((px, py), p) in enumerate(zip(P, points)):
+        name = str(p[2]) if len(p) > 2 else ""
+        w, h = len(name) * 0.56 * size + 4, size * 1.25
+        boxes = {"right": (px + 7, py - h / 2, px + 7 + w, py + h / 2), "left": (px - 7 - w, py - h / 2, px - 7, py + h / 2),
+                 "above": (px - w / 2, py - 7 - h, px + w / 2, py - 7), "below": (px - w / 2, py + 7, px + w / 2, py + 7 + h)}
+        others = [d for j, d in enumerate(dots) if j != k]
+
+        def cost(side: str) -> tuple:
+            b = boxes[side]
+            out_of = b[0] < -40 or b[2] > plot_w + 10 or b[1] < -10 or b[3] > plot_h + 10
+            n = sum(1 for o in others + placed if b[0] < o[2] and o[0] < b[2] and b[1] < o[3] and o[1] < b[3])
+            return (n, out_of, ["right", "left", "above", "below"].index(side))
+        side = min(boxes, key=cost) if name else "right"
+        if name:
+            placed.append(boxes[side])
+        out.append(side)
+    return out
+
+
+def _percent_label(dLbl) -> None:
+    """A szeletenkénti felirat (a saját színe miatt kell) a python-pptx alapján az ÉRTÉKET mutatná (showVal=1), nem az
+    arányt — itt is százalék, egész számra."""
+    from lxml import etree
+    from pptx.oxml.ns import qn
+    for tag, val in (("c:showVal", "0"), ("c:showPercent", "1"), ("c:showCatName", "0"), ("c:showSerName", "0")):
+        el = dLbl.find(qn(tag))
+        if el is not None:
+            el.set("val", val)
+    if dLbl.find(qn("c:numFmt")) is None:
+        nf = etree.SubElement(dLbl, qn("c:numFmt"))
+        nf.set("formatCode", "0%"); nf.set("sourceLinked", "0")
+        anchor = next((dLbl.find(qn(t)) for t in ("c:tx", "c:layout", "c:idx") if dLbl.find(qn(t)) is not None), None)
+        anchor.addnext(nf)                                   # a séma sorrendje: idx, layout?, tx?, numFmt, spPr?, txPr?…
+
+
+def _axis_titles(ch, s: dict, kind) -> None:
+    """Tengelycímek (x_title / y_title, pl. „Beruházás, Mrd Ft”) — pontdiagramnál nélkülük nem tudni, mi a két tengely."""
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Pt
+    for key, axis in (("x_title", "category_axis"), ("y_title", "value_axis")):
+        text = str(s.get(key) or "").strip()
+        if not text:
+            continue
+        ax = getattr(ch, axis)
+        if kind == XL_CHART_TYPE.BAR_CLUSTERED:          # vízszintes sávnál a kategória függőleges, az érték vízszintes
+            ax = ch.value_axis if axis == "category_axis" else ch.category_axis
+        ax.has_title = True
+        ax.axis_title.text_frame.text = text
+        r = ax.axis_title.text_frame.paragraphs[0].runs[0]
+        r.font.size, r.font.bold = Pt(13), False
+
+
+def _table_layout(headers: list, rows: list, ncols: int, width_in: float, height_in: float) -> tuple[list[float], int, list[float]]:
+    """Oszlopszélesség a tartalomhoz (a hosszú szöveges oszlop széles, a számoszlop keskeny), betűméret és sormagasság úgy,
+    hogy a táblázat a cím és a lábléc közé férjen (10-17: egyforma oszlopokban a projektnevek három sorra törtek és a
+    LibreOffice a sorokat nem növelte — a szöveg a következő sorra csúszott)."""
+    from app.tools.video import _wrap
+    cells = [[str(r[c]) if c < len(r) else "" for c in range(ncols)] for r in ([headers] if headers else []) + rows]
+    want = []
+    for c in range(ncols):
+        col = [r[c] for r in cells]
+        longest_word = max((len(w) for x in col for w in x.split()), default=1) + 1.5   # számjegy, kötőjel: szélesebb a becslésnél
+        want.append(max(longest_word, min(max((len(x) for x in col), default=1), 34), 4))
+    tot = sum(want)
+    widths = [width_in * w / tot for w in want]
+    pad = 0.1 * 2                                                  # a cella alapértelmezett felső + alsó margója (in)
+
+    def heights(size: int) -> list[float]:
+        return [max(_wrap(x, size, widths[c] * 72 - 14)[0] for c, x in enumerate(r)) * size * 1.2 / 72 + pad for r in cells]
+    for size in (16, 15, 14, 13, 12, 11):
+        hs = heights(size)
+        if sum(hs) <= height_in:
+            break
+    return widths, size, hs
+
+
 def _table(slide, s, t):
     from pptx.util import Inches, Pt
     _heading(slide, s, t)
     headers, rows = s.get("headers") or [], s.get("rows") or []
     ncols = max([len(headers)] + [len(r) for r in rows] + [1])
+    widths, size, hs = _table_layout(headers, rows, ncols, W_IN - 2 * M_IN, H_IN - 2.1 - 0.75)
     shape = slide.shapes.add_table(len(rows) + (1 if headers else 0), ncols, Inches(M_IN), Inches(2.1),
-                                   Inches(W_IN - 2 * M_IN), Inches(0.5 * (len(rows) + 1)))
+                                   Inches(W_IN - 2 * M_IN), Inches(sum(hs)))
     tbl = shape.table
-    size = 16 if len(rows) <= 8 else 13
+    for c, w in enumerate(widths):
+        tbl.columns[c].width = Inches(w)
+    for r, h in enumerate(hs):
+        tbl.rows[r].height = Inches(h)
     all_rows = ([headers] if headers else []) + rows
     for r, row in enumerate(all_rows):
         for c in range(ncols):
