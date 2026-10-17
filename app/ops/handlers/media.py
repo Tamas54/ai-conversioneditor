@@ -272,8 +272,11 @@ async def subtitles(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Pa
     local = out / f"subs{sub.suffix.lower()}"
     shutil.copy(sub, local)
     if o.get("burn", True):
-        style = "force_style='FontName=DejaVu Sans,FontSize=22'"
-        await _video(src, dst, vf=[f"subtitles={local.name}:{style}" if local.suffix != ".ass" else f"subtitles={local.name}"])
+        # a Studio feliratstílusa (a videók feliratsávja: Inter, sötét áttetsző sáv) — az .ass a saját stílusát viszi
+        from app.tools.video import subtitle_force_style
+        st = next((x for x in (await probe(src)).get("streams") or [] if x.get("codec_type") == "video"), {})
+        style = subtitle_force_style(int(st.get("width") or 1920), int(st.get("height") or 1080))
+        await _video(src, dst, vf=[f"subtitles={local.name}:force_style='{style}'" if local.suffix != ".ass" else f"subtitles={local.name}"])
     else:
         fmt = _fmt(dst)
         sc = "mov_text" if fmt in ("mp4", "m4v", "mov") else "srt" if fmt == "mkv" else "webvtt"
