@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "studio": {
+      "type": "http",
+      "url": "https://ai-conversioneditor-production.up.railway.app/mcp"
+    }
+  }
+}
