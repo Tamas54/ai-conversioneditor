@@ -1886,6 +1886,14 @@ async def video(
       what to fix. Change one with action=edit {"chart": {…}} WITHOUT "type": only the nodes (by id) and edges (by
       from + to) you send change — e.g. {"edges": [{"from": "a", "to": "b", "certainty": "uncertain"}]}, {"nodes": [{"id":
       "n3", "branches": [{"label", "text"}]}]} adds branches, {"remove": true} deletes, {"pace": 1.5} slows the build-up.
+      threejs — a 3D scene you write in three.js (r170): {"type": "threejs", "title"?, "transparent"? (default true:
+      it floats over the scene's picture or background), "code": "…"} — a function body that gets THREE, renderer, W,
+      H (px), dur (s), accent (THREE.Color) and label(text, {size, height, color, bg}) (a text sprite in the Studio
+      font) and returns {scene, camera, update(t)}. update(t) runs for every frame (t = 0…dur, 30 fps) — animate from
+      t, never from the clock; Math.random is seeded. Rendered with software WebGL in a sandbox (no network, nothing
+      to load: build textures with canvases); keep it light (~10 s of 1080p renders in a minute or two). Works as a
+      scene chart and as a layer chart (on footage, split screen); a code error comes back in the check — fix it
+      with action=edit {"chart": {"code": "…"}}. Text you draw in 3D is not checked against the source.
       script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
       comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
       {"type": "script", "title"?, "backdrop"?, "code": "…"}; the code gets comp (the scene composition), W, H, dur
