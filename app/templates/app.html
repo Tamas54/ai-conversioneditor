@@ -1765,7 +1765,7 @@ const MAKERS = {
         "building the timeline": "Building the timeline…", "rendering the video": "Rendering the video — about a minute…" };
       const r = await pollJob(job, j => STAGES[j.stage] || "Working on it…");
       return { file_id: r.file_id, n: (r.files || []).length, edit: true,
-        msg: `Your ${Math.round(r.duration)}-second video is open on the timeline; the MP4 is in your workspace` };
+        msg: `Your ${Math.round(r.duration?.actual ?? r.duration)}-second video is open on the timeline; the MP4 is in your workspace` };
     },
   },
   photo: {

@@ -5,12 +5,20 @@
 //   egymásba csúsztatva; fölöttük a feliratok (Caption …, sávval); alul a zene / a saját hang.
 //   Jelenet: kép Ken Burns-mozgással (vagy színátmenet, ha nincs kép) · sötét átmenet alul · akcentus-csík ·
 //   cím (beúszik) · opcionális nagy szám (stat).
+//   D.base (overlay): a felhasználó felvétele az alapsáv a jelenetek helyett. D.layers: időkódos rétegek (rétegenként egy
+//   „Layer L1 – …” kompozíció) abszolút időben a fő idővonalon — a make- és az overlay-videón ugyanígy.
+//   D.alpha: csak a grafika (felvétel, képek, sötétítés, hang nélkül) — az átlátszó (rgba) renderhez.
 
 function tp(layer) { return layer.property("ADBE Transform Group"); }
 function ease(prop) {   // lágy indulás/érkezés minden kulcskockán (ha a motor nem tudja, marad lineáris)
   try {
     for (var k = 1; k <= prop.numKeys; k++)
       prop.setTemporalEaseAtKey(k, [new KeyframeEase(0, 60)], [new KeyframeEase(0, 60)]);
+  } catch (e) {}
+  // a helyzet EGYENES úton: az automatikus térbeli ív két azonos kulcs közt is elkanyarodik (10-17: az osztott képen
+  // a felvétel kitartás közben 26 px-t vándorolt)
+  try {
+    if (prop.isSpatial) for (var q = 1; q <= prop.numKeys; q++) prop.setSpatialTangentsAtKey(q, [0, 0, 0], [0, 0, 0]);
   } catch (e) {}
 }
 function textLayer(comp, box, str, o) {
@@ -60,6 +68,7 @@ function fadeIn(layer, t0, dur, rise) {     // átlátszóság 0→100 (és opci
 }
 var FOOT = {};
 function background(comp, sc, dur) {
+  if (D.alpha) return;                     // átlátszó változat: a kép / háttér kimarad
   if (sc.image) {
     var f = FOOT[sc.image] || (FOOT[sc.image] = app.project.importFile(new ImportOptions(new File(sc.image))));
     var L = comp.layers.add(f); L.name = "Picture";
@@ -94,6 +103,7 @@ function background(comp, sc, dur) {
 }
 var SHADES = {};
 function shade(comp, dur, kind) {   // alul sötétedő átmenet: előre megrajzolt PNG (olcsó); „even” = egyenletes sötétítés
+  if (D.alpha) return null;
   if (kind === "even" || !D.shade || !D.shade[kind]) {
     var s = comp.layers.addSolid([0, 0, 0], "Shade", D.W, D.H, 1, dur);
     tp(s).property("ADBE Opacity").setValue(kind === "even" ? 70 : 60);
@@ -267,7 +277,7 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
       mediaLayer(c, el);
     } else {
       var tl = textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
-        font: F[el.font] || D.font.semibold, color: el.color });
+        font: F[el.font] || D.font.semibold, color: el.color, leading: el.leading, tracking: el.tracking, shadow: el.shadow });
       if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
         tl.inPoint = el.t0 || 0;
         if (el.t1 !== undefined) tl.outPoint = el.t1;
@@ -277,7 +287,7 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
 }
 function runScript(c, sc) {      // az ügynök saját kódja a jelenetre: comp, W, H, dur, accent, D (+ a fenti segédfüggvények)
   try {
-    (new Function("comp", "W", "H", "dur", "accent", "D", sc.chart.code))(c, D.W, D.H, sc.dur, D.accent, D);
+    (new Function("comp", "W", "H", "dur", "accent", "D", sc.chart.code))(c, c.width, c.height, sc.dur, D.accent, D);
   } catch (e) { writeLn("SCRIPT_ERROR " + sc.chart.id + ": " + (e && e.message ? e.message : String(e))); }
   var texts = [];                 // a szövegek számait a Python ellenőrzi a forráson
   for (var i = 1; i <= c.numLayers; i++) {
@@ -293,7 +303,7 @@ function contentScene(sc, i) {
     shade(c, sc.dur, "even");
     // + egyenletes sötét fátyol: zsúfolt képen (10-12: EEG-görbe az idővonal mögött) is olvasható maradjon az ábra
     var bd = sc.chart.backdrop === undefined || sc.chart.backdrop === null ? 58 : Math.round(sc.chart.backdrop * 100);
-    if (bd > 0) rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
+    if (bd > 0 && !D.alpha) rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
     var cs = Math.round(Math.min(D.W, D.H) * 0.052);
     chartLayers(c, sc.chart);
     if (sc.chart.code) runScript(c, sc);
@@ -332,18 +342,59 @@ function endScene(sc) {
   return c;
 }
 
+// időkódos réteg: saját kompozíció (a Python számolta elemekkel) a fő idővonalon at-tól dur-ig, be/ki úsztatva;
+// osztott képnél az alapsáv (felvétel vagy jelenetek) a fél képre zsugorodik, a végén vissza
+function splitBase(Lb, ly) {
+  var T = tp(Lb), S = T.property("ADBE Scale"), P = T.property("ADBE Position"), s = ly.split;
+  var a = ly.at, b = ly.at + ly.dur, d = Math.min(0.5, ly.dur / 4), k = s.scale * 100, p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
+  S.setValueAtTime(a, s0); S.setValueAtTime(a + d, [k, k]); S.setValueAtTime(b - d, [k, k]); S.setValueAtTime(b, s0);
+  P.setValueAtTime(a, p0); P.setValueAtTime(a + d, s.to); P.setValueAtTime(b - d, s.to); P.setValueAtTime(b, p0);
+  ease(S); ease(P);
+}
+function overlayLayers(main, base) {
+  for (var i = 0; i < (D.layers || []).length; i++) {
+    var ly = D.layers[i];
+    var c = app.project.items.addComp(ly.name, ly.w, ly.h, 1, ly.dur, D.fps);
+    chartLayers(c, ly);
+    if (ly.code) runScript(c, { chart: { code: ly.code, id: ly.id }, dur: ly.dur });
+    var L = main.layers.add(c); L.name = ly.name; L.startTime = ly.at;
+    var T = tp(L), P = T.property("ADBE Position"), O = T.property("ADBE Opacity"), S = T.property("ADBE Scale");
+    var a = ly.at, b = ly.at + ly.dur, di = Math.min(0.45, ly.dur / 4), dq = Math.min(0.35, ly.dur / 4);
+    var ai = ly.anim["in"], ao = ly.anim["out"], off = [ly.pos[0] + ly.slide[0], ly.pos[1] + ly.slide[1]];
+    P.setValue(ly.pos);
+    if (ai !== "none") { O.setValueAtTime(a, 0); O.setValueAtTime(a + di, 100); }
+    if (ao !== "none") { O.setValueAtTime(b - dq, 100); O.setValueAtTime(b, 0); }
+    if (ai === "slide") { P.setValueAtTime(a, off); P.setValueAtTime(a + di, ly.pos); }
+    if (ao === "slide") { P.setValueAtTime(b - dq, ly.pos); P.setValueAtTime(b, off); }
+    if (ai === "pop") { S.setValueAtTime(a, [86, 86]); S.setValueAtTime(a + di, [100, 100]); }
+    if (ao === "pop") { S.setValueAtTime(b - dq, [100, 100]); S.setValueAtTime(b, [86, 86]); }
+    ease(O); ease(P); ease(S);
+    if (ly.split) for (var j = 0; j < base.length; j++) splitBase(base[j], ly);
+  }
+}
+
 var main = app.project.items.addComp("Video", D.W, D.H, 1, D.total, D.fps);
 main.bgColor = D.dark;
-var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;
-for (var i = 0; i < D.scenes.length; i++) { order.push(contentScene(D.scenes[i], i + 1)); starts.push(t); t += D.scenes[i].dur - D.xfade; }
-order.push(endScene(D.end)); starts.push(t);
-for (var j = 0; j < order.length; j++) {    // alulról fölfelé: a későbbi jelenet a korábbi FÖLÉ kerül, és beúszik
-  var L = main.layers.add(order[j]);
-  L.startTime = starts[j];
-  if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
+var baseLayers = [];
+if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja) az alapsáv
+  if (!D.alpha) {
+    var fb = main.layers.add(app.project.importFile(new ImportOptions(new File(D.base.file))));
+    fb.name = D.base.label || "Footage"; baseLayers.push(fb);
+  }
+} else {
+  var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;
+  for (var i = 0; i < D.scenes.length; i++) { order.push(contentScene(D.scenes[i], i + 1)); starts.push(t); t += D.scenes[i].dur - D.xfade; }
+  order.push(endScene(D.end)); starts.push(t);
+  for (var j = 0; j < order.length; j++) {    // alulról fölfelé: a későbbi jelenet a korábbi FÖLÉ kerül, és beúszik
+    var L = main.layers.add(order[j]);
+    L.startTime = starts[j];
+    if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
+    baseLayers.push(L);
+  }
 }
+overlayLayers(main, baseLayers);      // a rétegek a jelenetek / a felvétel fölött, a feliratok alatt
 // feliratok: sáv + szöveg, a jelenetek fölött (a szerkesztőben egyenként átírhatók)
-for (var k = 0; k < D.captions.length; k++) {
+for (var k = 0; k < (D.captions || []).length; k++) {
   var cp = D.captions[k], Lc = D.L;
   var bar = rect(main, "Caption box " + (k + 1), [Lc.capW + Lc.capPad * 2, cp.lines * Lc.capSize * 1.28 + Lc.capPad * 1.4],
     [D.W / 2, Lc.capY], [0.04, 0.045, 0.06], 72, Lc.capPad * 0.7);
@@ -352,12 +403,13 @@ for (var k = 0; k < D.captions.length; k++) {
   var lays = [bar, tx];
   for (var q = 0; q < 2; q++) { lays[q].inPoint = cp.t0; lays[q].outPoint = cp.t1; }
 }
-// hang: saját hang teljes hangerőn, a zene alá keverve, a végén elhalkul
-if (D.audio.voice) { var v = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.voice)))); v.name = "Voice-over"; }
-if (D.audio.music) {
+// hang: saját hang teljes hangerőn, a zene alá keverve, a végén elhalkul (az átlátszó változatban nincs hang)
+if (D.audio && D.audio.voice && !D.alpha) { var v = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.voice)))); v.name = "Voice-over"; }
+if (D.audio && D.audio.music && !D.alpha) {
   var mu = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.music)))); mu.name = "Music";
   var lv = mu.property("ADBE Audio Group").property("ADBE Audio Levels"), g = D.audio.musicDb;
   lv.setValueAtTime(0, [g, g]); lv.setValueAtTime(Math.max(0, D.total - 2.5), [g, g]); lv.setValueAtTime(D.total, [-48, -48]);
 }
 main.openInViewer && main.openInViewer();
-writeLn(JSON.stringify({ comps: app.project.numItems, scenes: D.scenes.length, captions: D.captions.length, total: D.total }));
+writeLn(JSON.stringify({ comps: app.project.numItems, scenes: (D.scenes || []).length, layers: (D.layers || []).length,
+  captions: (D.captions || []).length, total: D.total }));

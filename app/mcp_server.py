@@ -13,7 +13,7 @@ import base64
 import logging
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request
 from mcp.server.fastmcp import FastMCP
@@ -397,8 +397,8 @@ async def files(
       Give the person its edit_url — it opens the blank file in the matching editor.
       title names the file (and the deck's first slide).
     action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id (a video: scene =
-      "s3" | its number | "title" | "end" — that scene at its end, when the animation has played; + frames=6 for a
-      filmstrip of the scene's motion — or scene="all" for every scene on one sheet, or at=seconds), so you can
+      "s3" | its number | "title" | "end" | a layer "L2" — that scene / layer at its end, when the animation has played;
+      + frames=6 for a filmstrip of its motion — or scene="all" for every scene and layer on one sheet, or at=seconds), so you can
       check your own result (text overflow, a missing object, a wrong crop) before calling it done. A Word document,
       deck or PDF: validate_document checks it for you (pictures + a machine-checked list of problems).
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
@@ -1728,8 +1728,12 @@ async def video(
     end_subtitle: Optional[str] = None,
     scene: Optional[str] = None,
     brand: Optional[str] = None,
+    layers: Optional[list] = None,
+    alpha: Union[bool, str, None] = None,
+    duration_mode: Optional[str] = None,
 ) -> dict:
-    """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
+    """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
+    text, or graphics on the person's OWN footage (action="overlay").
 
     YOUR OWN SCENE PLAN (most reliable): action="make" with scenes=[{"headline", "caption", "image"? (file_id | URL
       — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo), "stat"?
@@ -1745,15 +1749,21 @@ async def video(
       MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
       (result.project / result.video, each with edit_url) or "failed".
       format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds
-      (default 60; with keep_wording and no duration the reading pace sets it). images: pictures in order —
+      (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
+      when you give duration — the video is that long: scenes hold longer, the narration is read up to 1.2× faster;
+      what still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
+      length). Every result has duration = {requested, actual, mode}; a gap beyond a second or so is a check finding
+      ("Asked for 24 s, it is 17 s (…)"), never "ok". images: pictures in order —
       file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where
       each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
       and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
-      narration: "ai" (default) — a natural AI voice reads the title and every scene's caption aloud (offline voices,
-      58 languages, picked from the text or `language`); each scene lasts as long as its narration and music plays
-      under it | "none" — no voice. narration_voice: "female" | "male" | a Piper voice id (e.g. "hu_HU-imre-medium").
+      AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked
+      from the text or `language`) reads the title and every scene's caption aloud; music plays under it.
+      narration="none" turns it off (captions only). narration_voice: "female" | "male" | a Piper voice id (e.g.
+      "hu_HU-imre-medium", "en_US-ryan-medium").
       music_file_id / voice_file_id: audio the person gave (upload it first); a voice_file_id replaces the AI
-      narration and the video follows its length. accent: a hex colour for bars and numbers.
+      narration; the video follows its length (with duration in fixed mode: at least that long). accent: a hex colour
+      for bars and numbers.
       ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
       | all | off (only a gentle drift).
       Animated graphics for any topic — chart = {"type", "title", "unit", "total"?, "min"?, "max"?, "items": [{"label",
@@ -1794,6 +1804,29 @@ async def video(
       The result's check also reports COVERAGE (which source sentences and numbers made it in — `coverage` lists the
       missing ones), shortened texts, and where your pictures went. See it scene by scene: files(action="preview",
       file_id, scene="all") or scene="s3".
+      layers=[…] (see below) put time-coded graphics on the made video too, at absolute times on its timeline.
+    action="overlay": graphics on the person's OWN video. file_id = their uploaded mp4 | mov | webm | m4v — it stays
+      the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); layers=[…] go on top
+      → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status). text = the source: numbers,
+      dates and quotes in the layers are checked against it (one that isn't there drops that layer, said in the
+      check); without text they are kept and the check says "not checked against a source". title, accent, brand as
+      for make. The result's duration is the footage's (mode "footage").
+    layers (overlay; make and edit too): [{"id"? ("L1", "L2"… given when left out — stable across edits), "at":
+      seconds | "MM:SS" | "HH:MM:SS.ms", "dur": seconds | "until": time, "type", "position"?: auto | top | bottom | left |
+      right | center | [x, y, w, h] (centre and size, 0–1 of the frame), "anim"?: fade | slide | pop | none (or
+      {"in", "out"})}]. Types: lower_third {name, role?, side?: left|right} · title {text, subtitle?, kicker?} (a band
+      across the frame) · chapter {text, subtitle?, kicker?} · source {text} (a small credit) · stat {value, label} ·
+      quote {text, author} (word for word from the source) · chart {chart: any chart above (column … quote, graphic
+      with map / lottie / image, script), panel?: false = no dark panel} — type may be the chart type itself, e.g.
+      {"type": "column", "title", "unit", "items"}; a graphic without position covers the frame transparently (an
+      arrow or a label on the footage) · fullscreen {chart | image | text (+ subtitle, kicker)}: covers the picture,
+      the sound goes on · split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base
+      shrinks to the other half. A lower third or source caption without position goes where nothing else is (other
+      layers, a made video's headlines and charts). Overlaps that remain, a layer past the end, a dropped number all
+      come back in the check's findings.
+    alpha (make, overlay, edit): true = also a transparent, graphics-only video: ProRes 4444 .mov (yuva444p12le — for
+      Premiere, Resolve, Final Cut) | "webm" (WebM VP9 with alpha — for the web; slower to render) | "both". It has
+      no base (footage, pictures, darkening) and no sound; the check proves the alpha (pixel format + a decoded frame).
     action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
       changes = {"scenes": [{"id": "s3" (stable — info lists the ids; or "scene": n, 1 = first after the title card), "headline"?, "caption"?,
       "image"? (file_id | URL — e.g. a picture you made with your own image tool | {"stock": "words"} | "none"),
@@ -1802,18 +1835,24 @@ async def video(
       "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
       "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
       fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
-      "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?}. The AI narration is recorded
-      again from the changed captions. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
-      person's words there). video(action="info") shows the scenes; check and preview_url come with the result.
+      "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?, "duration_mode"?,
+      "layers"?: [{"id": "L2", …only the fields that change} | {"id": "L2", "remove": true}] (a "chart" without "type" fixes
+      just those chart fields), "add_layers"?: [new layers]}. Untouched layers stay as they are. The AI narration is
+      recorded again from the changed captions. Numbers in a new chart or stat must be in the video's source or in
+      `text` (pass the person's words there). An overlay project takes only layers, add_layers, accent and title.
+      alpha=… renders the transparent version again (it is kept from the previous version otherwise).
+      video(action="info") shows the scenes and layers (id, at, dur, type, text); check and preview_url come with the result.
     action="render" with scene="s3": just that scene as a short draft MP4 (a job, seconds) — check a change without
-      rendering the whole video. (Without scene: re-render the whole project, e.g. after hand edits.)
+      rendering the whole video; scene="L2" (a layer): the video's span of that layer, with what is under it.
+      (Without scene: re-render the whole project, e.g. after hand edits.) See a layer: files(action="preview",
+      file_id, scene="L2") (its finished moment) or + frames=6 (in → out).
     brand: the person's saved brand (name, "mine") colours the video; left out, their default brand is used; "none" = off.
     action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a
       slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster).
     action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
       draft=true renders half size, fast.
-    action="info": a project's compositions, length, media files and last render (file_id).
-    action="status": a make/render job (job_id).
+    action="info": a project's compositions, length, scenes, layers, media files and last render (file_id).
+    action="status": a make / overlay / edit / render job (job_id).
     """
     from app import jobs
     from app.tools import video as vid
@@ -1839,7 +1878,11 @@ async def video(
         return await render_video({"file_id": file_id or "", "draft": draft})
     if act == "edit":
         from app.routes.video import edit_video
-        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or ""})
+        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha})
+    if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
+        from app.routes.video import overlay_video
+        return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
+                                    "accent": accent, "brand": brand, "alpha": alpha})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
@@ -1853,14 +1896,15 @@ async def video(
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
     if act != "make":
-        raise ValueError('action: "make" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
+        raise ValueError('action: "make" | "overlay" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
             "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
             "narration": narration, "narration_voice": narration_voice,
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
-            "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle}
+            "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle,
+            "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode}
     return await make_video(body)
 
 
