@@ -134,3 +134,26 @@ def test_own_landscape_photo_in_a_vertical_video_is_shown_whole(tmp_path):
     D = video.compose(story, fmt="vertical", total=None, images=[None, "own.jpg"], accent=None, credits="", voice=None,
                       voice_s=None, music=None, fits=fits)
     assert D["scenes"][0]["fit"] == "cover"                                   # a jelenet kifejezett kérése nyer
+
+
+async def test_title_card_gets_no_random_stock_photo_when_nothing_asks_for_a_picture(monkeypatch):
+    """10-17 élesben: minden jelenet kép nélküli háttér volt, a címkártya a puszta címre („Éles próba”) keresett
+    stockot, és egy idegen ember fotója lett — most a címkártya is kép nélküli; keresőszóval marad a stock."""
+    from app.tools import video
+    got = {}
+
+    async def assemble(story, specs, opts, **kw):
+        got["specs"] = specs
+        return {"ok": True}
+
+    async def choose(jobs):
+        return {}
+    monkeypatch.setattr(video, "_assemble", assemble)
+    monkeypatch.setattr(video, "_choose_stock", choose)
+    plan = {"mode": "text", "format": "landscape", "narration": "none", "title": "Éles próba",
+            "scenes": [{"headline": "A", "caption": "Egy.", "background": "motion"}, {"headline": "B", "caption": "Kettő.", "background": "dark"}]}
+    await video.make(plan)
+    assert got["specs"][0] is None
+    plan["scenes"][1] = {"headline": "B", "caption": "Kettő.", "image_query": "river at dawn"}
+    await video.make(plan)
+    assert got["specs"][0] == {"stock": "river at dawn"}
