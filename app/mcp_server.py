@@ -1769,10 +1769,10 @@ async def video(
       — the scene's backgrounds one after another, crossfading, each moving; "motion": how the picture moves —
       zoom_in | zoom_out (toward / away from its subject, Ken Burns) | pan_left | pan_right | pan_up | pan_down |
       still | auto, "focus"?: [x, y] 0–1 (the point on the picture to move toward; found automatically otherwise),
-      "zoom"?: 1.03–1.8 (how far); "camera": the WHOLE scene's camera, graphics and title included — "push_in" |
+      "zoom"?: 1.03–1.8 (how far); "camera": a camera on the scene's picture AND graphic together — "push_in" |
       "pull_out" | "drift" | [{"at": seconds, "zoom": 1–3 (1 = the whole frame again), "to"?: [x, y] 0–1 of the
-      frame, "dur"?: seconds}] (e.g. zoom to the forecast part of a chart at 3 s, back out at 6 s); captions stay
-      put. "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
+      frame, "dur"?: seconds}] (e.g. punch in on a detail of the photo at 1 s, or on the forecast part of a chart at
+      3 s, back out at 6 s); the scene's title, big number and captions stay put. "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
       title shows the headline) — put what should be on screen into the chart title. Put the source in text too: chart numbers are checked against it (without it, against your scenes).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words

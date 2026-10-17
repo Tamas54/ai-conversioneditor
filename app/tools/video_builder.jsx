@@ -365,16 +365,24 @@ function runScript(c, sc) {      // az ügynök saját kódja a jelenetre: comp,
 }
 function contentScene(sc, i) {
   var c = app.project.items.addComp("Scene " + i + " – " + sc.headline.substring(0, 32), D.W, D.H, 1, sc.dur, D.fps);
-  background(c, sc, sc.dur);
+  // kamera: a kép és az ábra egy belső kompozícióban mozog (legalul), a feliratok (cím, nagy szám) a helyükön maradnak
+  // — 10-17: a mezre közelítéskor a jelenet címe kicsúszott a képből
+  var host = c;
+  if (sc.camera) {
+    host = app.project.items.addComp("Scene " + i + " – camera", D.W, D.H, 1, sc.dur, D.fps);
+    var Lc = c.layers.add(host); Lc.name = "Camera";
+    camera(Lc, sc.camera, 0);
+  }
+  background(host, sc, sc.dur);
   var L = D.L;
   if (sc.chart) {        // mozgó grafikon: sötétített kép, fent a cím, alatta a grafikon
-    shade(c, sc.dur, "even");
+    shade(host, sc.dur, "even");
     // + egyenletes sötét fátyol: zsúfolt képen (10-12: EEG-görbe az idővonal mögött) is olvasható maradjon az ábra
     var bd = sc.chart.backdrop === undefined || sc.chart.backdrop === null ? 58 : Math.round(sc.chart.backdrop * 100);
-    if (bd > 0 && !D.alpha) rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
+    if (bd > 0 && !D.alpha) rect(host, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
     var cs = Math.round(Math.min(D.W, D.H) * 0.052);
-    chartLayers(c, sc.chart);
-    if (sc.chart.code) runScript(c, sc);
+    chartLayers(host, sc.chart);
+    if (sc.chart.code) runScript(host, sc);
     // a cím az ábra FÖLÖTT (10-12: a teljes képes térkép útjai átfutottak rajta)
     if (sc.chart.title) fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
       leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
@@ -458,7 +466,6 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
     var L = main.layers.add(order[j]);
     L.startTime = starts[j];
     if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
-    if (j > 0 && j <= D.scenes.length && D.scenes[j - 1].camera) camera(L, D.scenes[j - 1].camera, starts[j]);
     baseLayers.push(L);
   }
 }

@@ -3827,9 +3827,10 @@ def _slots(sp: Any) -> list[Any]:
 
 
 # ---------- kép- és kameramozgás, háttér (10-17, Kommandant: „a kameramozgás (Ken Burns), zoom, a hátterek is cserélődhetnek”) ----------
-# motion: a jelenet KÉPÉNEK mozgása (a régi ken_burns választás jelenetenként felülírható); camera: a TELJES jelenet
-# (kép + ábra + cím) virtuális kamerája — egy pillanatra ráközelít egy részletre, aztán vissza; background: kép nélküli
-# jelenet háttere. A felirat a fő idővonalon van, a kamera nem mozgatja.
+# motion: a jelenet KÉPÉNEK mozgása (a régi ken_burns választás jelenetenként felülírható); camera: a jelenet képének
+# ÉS ábrájának közös virtuális kamerája — egy pillanatra ráközelít egy részletre, aztán vissza; a jelenet címe, nagy
+# száma és a feliratok a helyükön maradnak (10-17: a mezre közelítéskor a cím kicsúszott); background: kép nélküli
+# jelenet háttere.
 MOTIONS = {"auto": None, "zoom_in": "kb-in", "zoom_out": "kb-out", "pan_left": "left", "pan_right": "right", "pan_up": "up",
            "pan_down": "down", "still": "still", "ken_burns": "kb-in", "ken_burns_out": "kb-out", "gentle": "in"}
 CAMERA_PRESETS = ("push_in", "pull_out", "drift")
