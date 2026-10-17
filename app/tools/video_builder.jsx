@@ -67,39 +67,81 @@ function fadeIn(layer, t0, dur, rise) {     // átlátszóság 0→100 (és opci
   }
 }
 var FOOT = {};
+function picture(comp, file, mo, t0, t1, fadeIn) {   // egy háttérkép a [t0, t1] szakaszra, a saját mozgásával
+  var f = FOOT[file] || (FOOT[file] = app.project.importFile(new ImportOptions(new File(file))));
+  var L = comp.layers.add(f); L.name = "Picture";
+  if (t0 > 0 || t1 < comp.duration) { L.inPoint = t0; L.outPoint = t1; }
+  var s = Math.max(D.W / f.width, D.H / f.height) * 100, zf = mo.zoom || 0, z = s * (zf || 1.12);
+  var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
+  var m = mo.motion || "in";
+  if (m === "kb-in" || m === "kb-out") {
+    // Ken Burns: közelítés ÉS úsztatás egyszerre, a kép érdekes pontja (focus, 0–1) a keret közepe felé;
+    // a pozíció úgy korlátozva, hogy a kép végig kitöltse a keretet (lineáris skála + lineáris út → közben is)
+    var Z = s * (zf || 1.28), fo = mo.focus || [0.5, 0.45], hw = f.width * Z / 200, hh = f.height * Z / 200;
+    var px = D.W / 2 - (fo[0] * f.width - f.width / 2) * Z / 100, py = D.H / 2 - (fo[1] * f.height - f.height / 2) * Z / 100;
+    px = Math.min(hw, Math.max(D.W - hw, px)); py = Math.min(hh, Math.max(D.H - hh, py));
+    var a = [[s, s], [D.W / 2, D.H / 2]], b = [[Z, Z], [px, py]];
+    if (m === "kb-out") { var tmp = a; a = b; b = tmp; }
+    S.setValueAtTime(t0, a[0]); S.setValueAtTime(t1, b[0]); P.setValueAtTime(t0, a[1]); P.setValueAtTime(t1, b[1]);
+  } else if (m === "out") { S.setValueAtTime(t0, [z, z]); S.setValueAtTime(t1, [s, s]); }
+  else if (m === "left" || m === "right" || m === "up" || m === "down") {
+    // úsztatás: annyira nagyítva, hogy az út végig kitöltse a keretet (a nagyítás erőssége = az út hossza)
+    var k = s * (zf || 1.1), sign = m === "left" || m === "up" ? 1 : -1, horiz = m === "left" || m === "right";
+    var room = horiz ? (f.width * k / 100 - D.W) / 2 : (f.height * k / 100 - D.H) / 2, d = Math.max(0, room * 0.9);
+    S.setValue([k, k]);
+    if (horiz) { P.setValueAtTime(t0, [D.W / 2 + sign * d, D.H / 2]); P.setValueAtTime(t1, [D.W / 2 - sign * d, D.H / 2]); }
+    else { P.setValueAtTime(t0, [D.W / 2, D.H / 2 + sign * d]); P.setValueAtTime(t1, [D.W / 2, D.H / 2 - sign * d]); }
+  } else if (m === "still") { S.setValue([s, s]); }
+  else { S.setValueAtTime(t0, [s, s]); S.setValueAtTime(t1, [z, z]); }
+  if (fadeIn) { var O = tp(L).property("ADBE Opacity"); O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + fadeIn, 100); }
+  return L;
+}
 function background(comp, sc, dur) {
   if (D.alpha) return;                     // átlátszó változat: a kép / háttér kimarad
-  if (sc.image) {
-    var f = FOOT[sc.image] || (FOOT[sc.image] = app.project.importFile(new ImportOptions(new File(sc.image))));
-    var L = comp.layers.add(f); L.name = "Picture";
-    var s = Math.max(D.W / f.width, D.H / f.height) * 100, z = s * 1.12;
-    var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
-    var m = sc.motion || "in", dx = D.W * 0.035;
-    if (m === "kb-in" || m === "kb-out") {
-      // Ken Burns: közelítés ÉS úsztatás egyszerre, a kép érdekes pontja (sc.focus, 0–1) a keret közepe felé;
-      // a pozíció úgy korlátozva, hogy a kép végig kitöltse a keretet (lineáris skála + lineáris út → közben is)
-      var Z = s * 1.28, fo = sc.focus || [0.5, 0.45], hw = f.width * Z / 200, hh = f.height * Z / 200;
-      var px = D.W / 2 - (fo[0] * f.width - f.width / 2) * Z / 100, py = D.H / 2 - (fo[1] * f.height - f.height / 2) * Z / 100;
-      px = Math.min(hw, Math.max(D.W - hw, px)); py = Math.min(hh, Math.max(D.H - hh, py));
-      var a = [[s, s], [D.W / 2, D.H / 2]], b = [[Z, Z], [px, py]];
-      if (m === "kb-out") { var tmp = a; a = b; b = tmp; }
-      S.setValueAtTime(0, a[0]); S.setValueAtTime(dur, b[0]); P.setValueAtTime(0, a[1]); P.setValueAtTime(dur, b[1]);
-    } else if (m === "out") { S.setValueAtTime(0, [z, z]); S.setValueAtTime(dur, [s, s]); }
-    else if (m === "left" || m === "right") {
-      var k = s * 1.09, sign = m === "left" ? 1 : -1;
-      S.setValue([k, k]);
-      P.setValueAtTime(0, [D.W / 2 + sign * dx, D.H / 2]); P.setValueAtTime(dur, [D.W / 2 - sign * dx, D.H / 2]);
-    } else { S.setValueAtTime(0, [s, s]); S.setValueAtTime(dur, [z, z]); }
-    if (sc.blur) {
-      var b = L.property("ADBE Effect Parade").addProperty("Gaussian Blur");
-      b.property("Blurriness").setValue(sc.blur); b.property("Repeat Edge Pixels").setValue(1);
+  if (sc.pics && sc.pics.length > 1) {     // képsor: a jelenet hátterei egymás után, áttűnéssel, mindegyik a saját mozgásával
+    var n = sc.pics.length, sl = dur / n, xf = Math.min(0.7, sl * 0.3);
+    for (var k = 0; k < n; k++) {
+      var a0 = k === 0 ? 0 : k * sl - xf / 2, a1 = k === n - 1 ? dur : (k + 1) * sl + xf / 2;
+      var L = picture(comp, sc.pics[k].file, { motion: sc.pics[k].motion, focus: sc.pics[k].focus, zoom: sc.zoom }, a0, a1, k ? xf : 0);
+      if (sc.blur) blurred(L, sc.blur);
     }
-  } else {   // nincs kép: két akcentus-tónusú lágy színátmenet
+  } else if (sc.image) {
+    var L1 = picture(comp, sc.image, { motion: sc.motion, focus: sc.focus, zoom: sc.zoom }, 0, dur, 0);
+    if (sc.blur) blurred(L1, sc.blur);
+  } else if (sc.bg === "dark" || (sc.bg && sc.bg.charAt(0) === "#")) {   // egyszínű háttér
+    var c = sc.bg === "dark" ? D.dark : [parseInt(sc.bg.substr(1, 2), 16) / 255, parseInt(sc.bg.substr(3, 2), 16) / 255, parseInt(sc.bg.substr(5, 2), 16) / 255];
+    comp.layers.addSolid(c, "Background", D.W, D.H, 1, dur);
+  } else {   // nincs kép: két akcentus-tónusú lágy színátmenet („motion”: a fény lassan vándorol, két elmosott folt úszik)
     var g = comp.layers.addSolid(D.dark, "Background", D.W, D.H, 1, dur);
     var fx = g.property("ADBE Effect Parade").addProperty("Gradient Ramp");
-    fx.property("Start of Ramp").setValue([0, 0]); fx.property("Start Color").setValue([D.accent[0] * 0.55, D.accent[1] * 0.55, D.accent[2] * 0.55]);
-    fx.property("End of Ramp").setValue([D.W, D.H]); fx.property("End Color").setValue(D.dark);
+    var st = fx.property("Start of Ramp"), en = fx.property("End of Ramp");
+    st.setValue([0, 0]); fx.property("Start Color").setValue([D.accent[0] * 0.55, D.accent[1] * 0.55, D.accent[2] * 0.55]);
+    en.setValue([D.W, D.H]); fx.property("End Color").setValue(D.dark);
+    if (sc.bg === "motion") {
+      st.setValueAtTime(0, [0, 0]); st.setValueAtTime(dur, [D.W * 0.35, D.H * 0.2]);
+      en.setValueAtTime(0, [D.W, D.H]); en.setValueAtTime(dur, [D.W * 0.75, D.H]);
+      var mm = Math.min(D.W, D.H);
+      for (var b = 0; b < 2; b++) {
+        var r = mm * (b ? 0.55 : 0.75), blob = rect(comp, "Glow " + (b + 1), [r, r], [D.W * (b ? 0.78 : 0.22), D.H * (b ? 0.7 : 0.3)],
+          b ? [D.accent[0] * 0.6, D.accent[1] * 0.6, D.accent[2] * 0.6] : D.accent, b ? 16 : 12, r / 2);
+        blurred(blob, mm * 0.12);
+        var BP = tp(blob).property("ADBE Position"), p0 = BP.value;
+        BP.setValueAtTime(0, p0); BP.setValueAtTime(dur, [p0[0] + (b ? -1 : 1) * D.W * 0.12, p0[1] + (b ? -1 : 1) * D.H * 0.06]);
+      }
+    }
   }
+}
+function blurred(L, amount) {
+  var b = L.property("ADBE Effect Parade").addProperty("Gaussian Blur");
+  b.property("Blurriness").setValue(amount); b.property("Repeat Edge Pixels").setValue(1);
+}
+function camera(L, keys, t0) {   // a jelenet (vagy a saját felvétel) virtuális kamerája: [[t, nagyítás, x, y]]
+  var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    S.setValueAtTime(t0 + k[0], [k[1] * 100, k[1] * 100]); P.setValueAtTime(t0 + k[0], [k[2], k[3]]);
+  }
+  ease(S); ease(P);
 }
 var SHADES = {};
 function shade(comp, dur, kind) {   // alul sötétedő átmenet: előre megrajzolt PNG (olcsó); „even” = egyenletes sötétítés
@@ -406,6 +448,7 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
   if (!D.alpha) {
     var fb = main.layers.add(app.project.importFile(new ImportOptions(new File(D.base.file))));
     fb.name = D.base.label || "Footage"; baseLayers.push(fb);
+    if (D.camera) camera(fb, D.camera, 0);      // ráközelítés a felvételre (punch-in), abszolút időben
   }
 } else {
   var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;
@@ -415,6 +458,7 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
     var L = main.layers.add(order[j]);
     L.startTime = starts[j];
     if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
+    if (j > 0 && j <= D.scenes.length && D.scenes[j - 1].camera) camera(L, D.scenes[j - 1].camera, starts[j]);
     baseLayers.push(L);
   }
 }

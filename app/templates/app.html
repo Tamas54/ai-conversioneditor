@@ -1713,7 +1713,8 @@ const MAKERS = {
         <label>Length<select name="vlen"><option value="">Automatic</option><option value="15">15 seconds</option><option value="30" selected>30 seconds</option>
           <option value="60">1 minute</option><option value="90">1½ minutes</option></select></label>
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
-          ${seg("vpicmode", [["stock", "Stock photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}</fieldset>
+          ${seg("vpicmode", [["stock", "Stock photos"], ["ai", "AI photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}
+          <p class="muted small" data-vpic-ai hidden style="margin:6px 0 0">${account?.guest ? "AI photos need a free account." : `A new photo for every scene, made from its subject — ${account?.image_credit_cost ?? 1} credit each (about one per 5 seconds of video).`}</p></fieldset>
         ${fileSlot("vpics", { exts: EXT.image, multiple: true, label: "Your pictures (optional — used in order)" })}
         ${fileSlot("vdata", { exts: ["csv", "tsv", "xlsx", "xls"], label: "Data for animated charts (optional — a spreadsheet)" })}
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
@@ -1729,6 +1730,8 @@ const MAKERS = {
         form.querySelector("[data-vmode-make]").hidden = m === "new";
         if (m === "text" && form.querySelector("[name=vlen]").value === "30") form.querySelector("[name=vlen]").value = ""; };
       form.querySelectorAll("[name=vmode]").forEach(r => r.addEventListener("change", sync));
+      const picNote = () => { form.querySelector("[data-vpic-ai]").hidden = form.querySelector("[name=vpicmode]:checked")?.value !== "ai"; };
+      form.querySelectorAll("[name=vpicmode]").forEach(r => r.addEventListener("change", picNote)); picNote();
       const start = o.mode || (account?.guest ? "new" : "article");
       form.querySelector(`[name=vmode][value=${start}]`).checked = true; sync();
       leaveNewOnFile(form, "vmode", "article");

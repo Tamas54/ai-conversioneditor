@@ -1565,8 +1565,16 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
                      "elements": chart_elements(chart, W, H, lang, _rgb(accent), dur=d),
                      **({"backdrop": chart["backdrop"]} if chart.get("backdrop") is not None else {}),
                      **({"code": chart["code"], "id": s.get("id") or f"s{i + 1}"} if chart["type"] == "script" else {})}
-        d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
-                         "motion": motions[i], "focus": (focus or {}).get(images[i + 1] if i + 1 < len(images) else "") or [0.5, 0.45],
+        slot = _slots(images[i + 1] if i + 1 < len(images) else None)
+        mv = MOTIONS.get(s.get("motion") or "auto") or motions[i]
+        # képsor: a megadott mozgás mindegyikre; különben váltakozva (közelít, úszik, távolodik…), hogy legyen ritmusa
+        pics = [{"file": f, "motion": mv if k == 0 or s.get("motion") else ("kb-in", "left", "kb-out", "right")[k % 4],
+                 "focus": s.get("focus") or (focus or {}).get(f) or [0.5, 0.45]} for k, f in enumerate(slot) if f]
+        d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": pics[0]["file"] if pics else None,
+                         "motion": pics[0]["motion"] if pics else mv, "focus": pics[0]["focus"] if pics else [0.5, 0.45],
+                         **({"pics": pics} if len(pics) > 1 else {}), **({"zoom": s["zoom"]} if s.get("zoom") else {}),
+                         **({"camera": _camera_keys(s["camera"], d, W, H)} if s.get("camera") else {}),
+                         **({"bg": s["background"]} if s.get("background") else {}),
                          "size": _size_for(head, m * (0.066 if fmt != "landscape" else 0.058), 34, m * 0.046)})
         t += d - X
     title = story.get("title") or ""
@@ -1590,11 +1598,13 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         "font": FONT,
         "L": {**L, "titleH": m * 0.44, "headH": m * 0.36,
               "kickerY": L["kickerTop"] + L["kickerSize"] * 0.8, "titleY": L["titleTop"] + m * 0.22, "headY": L["headTop"] + m * 0.18},
-        "title": {"text": title, "kicker": story.get("kicker") or "", "image": images[0] if images else None, "dur": Tt,
-                  "motion": "in", "size": _size_for(title, m * (0.088 if fmt != "landscape" else 0.075), 26, m * 0.056)},
+        "title": {"text": title, "kicker": story.get("kicker") or "", "image": _slots(images[0])[0] if images else None, "dur": Tt,
+                  "motion": "in", "size": _size_for(title, m * (0.088 if fmt != "landscape" else 0.075), 26, m * 0.056),
+                  **({"pics": [{"file": f, "motion": ("in", "left", "out", "right")[k % 4], "focus": (focus or {}).get(f) or [0.5, 0.45]}
+                               for k, f in enumerate(_slots(images[0])) if f]} if images and isinstance(images[0], list) else {})},
         "scenes": d_scenes,
         "end": {"title": end_title, "subtitle": end.get("subtitle") or "", "credits": credits, "dur": Te,
-                "image": images[0] if images else None, "size": end_size},
+                "image": _slots(images[0])[0] if images else None, "size": end_size},
         "captions": captions,
         "audio": {"voice": voice, "music": music, "musicDb": -20 if voice else -10},
     }
@@ -1618,7 +1628,11 @@ _LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
 _LAYER_Z = {"fullscreen": 0, "split": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4, "source": 5}
 _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
                 "splitscreen": "split", "credit": "source"}
-_CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels")
+# a rövidített réteg ({"type": "race", …}) ezeket viszi át az ábrába — a saját alakú ábrák mezői is (10-17: a „series”,
+# az „x_title”, a magyarázó ábrák „nodes”/„edges” mezője eddig elveszett a rövidítésben)
+_CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "series", "x_title",
+               "y_title", "forecast_from", "total_label", "flows", "nodes", "edges", "root", "branches", "steps", "lanes",
+               "actors", "reveal", "pace", "direction", "center", "focus")
 _PANEL = [0.035, 0.04, 0.055]
 
 
@@ -2290,12 +2304,26 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
     async def guarded(i, s):
         async with sem:
             return await one(i, s)
-    res = await asyncio.gather(*(guarded(i, s) for i, s in enumerate(specs)))
-    for name, credit in res:
-        names.append(name)
-        per.append(credit if name else None)
+    # a képsor (lista) elemei külön fájlok: picture-02.jpg, picture-02b.jpg… — a hely maga lista marad
+    flat = [(i, j, sp) for i, slot in enumerate(specs) for j, sp in enumerate(_slots(slot))]
+    res = await asyncio.gather(*(guarded(i if j == 0 else 1000 * (j + 1) + i, sp) for i, j, sp in flat))
+    by_slot: dict[int, list[tuple[Optional[str], Optional[str]]]] = {}
+    for (i, j, _), (name, credit) in zip(flat, res):
+        if name and j:
+            new = f"picture-{i + 1:02d}{chr(ord('a') + j)}{Path(name).suffix}"
+            shutil.move(str(workdir / name), workdir / new)
+            name = new
+        by_slot.setdefault(i, []).append((name, credit))
         if credit and credit not in credits:
             credits.append(credit)
+    for i in range(len(specs)):
+        got = [(nm, cr) for nm, cr in by_slot.get(i, []) if nm]
+        if isinstance(specs[i], list) and len(got) > 1:
+            names.append([nm for nm, _ in got])
+            per.append([cr for _, cr in got])
+        else:
+            names.append(got[0][0] if got else None)
+            per.append(got[0][1] if got else None)
     return names, credits, per
 
 
@@ -2306,6 +2334,19 @@ from app.tools.images import PICK_N as _PICK_N, contact_sheet as _contact_sheet,
 async def _choose_stock(jobs: list[tuple[int, str, str]]) -> dict[int, dict[str, Any]]:
     from app.tools import images as imgs
     return await imgs.choose_stock(jobs, medium="video")
+
+
+async def _pick_stock(specs: list[Any], ctx: Callable[[int], str]) -> None:
+    """A stock-keresések jelöltjeiből a látómodell választ (egy kép nem kerül két helyre) — a képsorok elemeire is."""
+    jobs = [((i, j), sp["stock"], ctx(i)) for i, slot in enumerate(specs) for j, sp in enumerate(_slots(slot))
+            if isinstance(sp, dict) and sp.get("stock")]
+    if not jobs:
+        return
+    for (i, j), chosen in (await _choose_stock(jobs)).items():
+        if isinstance(specs[i], list):
+            specs[i][j] = chosen
+        else:
+            specs[i] = chosen
 
 
 def _title_stem(title: str) -> str:
@@ -2386,6 +2427,10 @@ async def _brand_accent(body: dict[str, Any]) -> Optional[str]:
 async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, mode: str, text: str, title_hint: str,
                      og_image: Optional[str], site: str, doc_pics: list[str]) -> dict[str, Any]:
     pictures = (body.get("pictures") or "stock").lower()
+    if pictures == "ai":
+        from app import tenancy
+        if tenancy.client_makes_images.get():
+            raise ValueError(tenancy.CLIENT_IMAGE_MSG)
     body = {**body, "accent": await _brand_accent(body)}
     pre_v: list[str] = []
     pre_f: list[str] = []
@@ -2434,6 +2479,9 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
             specs.append(mine[i % len(mine)])
         elif i == 0 and og_image:
             specs.append({"url": og_image, "credit": site or None})
+        elif pictures == "ai":                     # AI-fotó a jelenet keresőszavaiból (webes felület, kreditért)
+            specs.append(_ai_photo((_clean(story.get("image_query"), 60) or story["scenes"][-1]["image_query"]) if i == 0
+                                   else story["scenes"][i - 1]["image_query"] or story["scenes"][i - 1]["headline"]))
         elif pictures != "mine":
             # a címkártya saját képet kap (ne az 1. jelenetét); ha a terv nem adott, az utolsó jelenet keresőszava
             q = (_clean(story.get("image_query"), 60) or story["scenes"][-1]["image_query"]) if i == 0 \
@@ -2453,11 +2501,7 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
                          "(title card + scenes). Use scenes=[…] with an image per scene, or fewer pictures.")
 
     # a stock-keresések jelöltjeiből a látómodell választ (és egy kép nem kerül két jelenetbe)
-    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
-                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
-    if stock_jobs:
-        for i, chosen in (await _choose_stock(stock_jobs)).items():
-            specs[i] = chosen
+    await _pick_stock(specs, lambda i: story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
 
     story["layers"] = layers
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
@@ -2489,7 +2533,9 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
     pre_v = [f"Your scene plan: {len(scenes)} scenes ({', '.join(sc['id'] for sc in scenes)}), used as given."]
     step(2, 5, "finding pictures")
     specs: list[Any] = [None] * (len(scenes) + 1)
-    need = [k for k, s in enumerate(raw) if not s.get("image") and pictures != "none"]
+    # a saját hátteret („background”) kérő jelenet kép nélkül marad — annak nem kell keresőszó sem
+    need = [k for k, s in enumerate(raw) if not (s.get("image") or s.get("images") or s.get("background"))
+            and pictures not in ("none", "ai")]
     pre_f: list[str] = []
     if need and any(not scenes[k].get("image_query") for k in need):
         from app import tenancy
@@ -2504,23 +2550,27 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
             for k, q in zip(need, qs):
                 scenes[k]["image_query"] = scenes[k].get("image_query") or q
     for k, s in enumerate(raw):
-        if s.get("image") and pictures != "none":
-            specs[k + 1] = _img_spec(s["image"])
+        if (s.get("images") or s.get("image")) and pictures != "none":
+            specs[k + 1] = _img_spec(s.get("images") or s["image"])        # a lista: a jelenet hátterei egymás után
+        elif s.get("background"):
+            specs[k + 1] = None
+        elif pictures == "ai":
+            specs[k + 1] = _ai_photo(scenes[k].get("image_query") or scenes[k]["headline"])
         elif pictures not in ("none", "mine"):
             specs[k + 1] = {"stock": scenes[k].get("image_query") or scenes[k]["headline"]}
     if body.get("title_image") and pictures != "none":
         specs[0] = _img_spec(body["title_image"])
+    elif pictures == "ai":
+        specs[0] = _ai_photo(scenes[0].get("image_query") or story["title"])
     elif pictures != "none":
-        specs[0] = specs[1] if specs[1] and not (isinstance(specs[1], dict) and specs[1].get("stock")) else \
+        specs[0] = _slots(specs[1])[0] if specs[1] and not (isinstance(specs[1], dict) and specs[1].get("stock")) else \
             {"stock": scenes[0].get("image_query") or story["title"]}
-    pre_v.append("Pictures: title card ← " + ("your title_image" if body.get("title_image") else "scene s1's picture" if specs[0] is specs[1] else "stock")
-                 + "; " + ", ".join(f"{sc['id']} ← {'yours' if raw[k].get('image') else 'stock' if specs[k + 1] else 'none'}"
-                                    for k, sc in enumerate(scenes)))
-    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else scenes[i - 1]["headline"])
-                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
-    if stock_jobs:
-        for i, chosen in (await _choose_stock(stock_jobs)).items():
-            specs[i] = chosen
+    kind_of = lambda k: ("yours" if (raw[k].get("image") or raw[k].get("images")) else "AI photo" if pictures == "ai"   # noqa: E731
+                         else "stock" if specs[k + 1] else "none") + (f" ×{len(specs[k + 1])}" if isinstance(specs[k + 1], list) else "")
+    pre_v.append("Pictures: title card ← " + ("your title_image" if body.get("title_image") else "AI photo" if pictures == "ai"
+                                              else "scene s1's picture" if specs[0] is _slots(specs[1])[0] else "stock")
+                 + "; " + ", ".join(f"{sc['id']} ← {kind_of(k)}" for k, sc in enumerate(scenes)))
+    await _pick_stock(specs, lambda i: story["title"] if i == 0 else scenes[i - 1]["headline"])
     dur = body.get("duration")
     total = float(min(max(float(dur), 10), 180)) if dur else None
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
@@ -2944,6 +2994,10 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         map_credits, gfx_findings = await _place_on_maps(story, (W, H, _caption_top(W, H)))
         # a kért, de le nem töltött kép (pl. a forrás 429-cel elutasította) nem lehet „ok”: megnevezzük a helyét
         gfx_findings = [_lost_picture(i, story) for i, (sp, nm) in enumerate(zip(specs, names)) if sp and not nm] + gfx_findings
+        gfx_findings += [f"{len(_slots(sp)) - len(nm)} of the {len(_slots(sp))} pictures for "
+                         f"{'the title card' if i == 0 else 'scene ' + str(story['scenes'][i - 1].get('id'))} couldn't be downloaded — "
+                         "the others are shown." for i, (sp, nm) in enumerate(zip(specs, names))
+                         if isinstance(sp, list) and isinstance(nm, list) and len(nm) < len(sp)]
         gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
         credit_list = credit_list + [c for c in gfx_credits + map_credits if c not in credit_list]
         voice = music = None
@@ -3009,7 +3063,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         on_screen = (label + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
         kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
-        focus = {nm: await asyncio.to_thread(_focus, work / nm) for nm in names if nm} if kb != "off" else {}
+        focus = {nm: await asyncio.to_thread(_focus, work / nm) for slot in names for nm in _slots(slot) if nm}
         D = compose(story_c, fmt=fmt, total=c_total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
                     voice=voice, voice_s=c_voice, music=music)
         if narr_clips:                   # a darabok a jelenetek elejére, egy sávban, a videó teljes hosszára
@@ -3039,7 +3093,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         _shade_png(work / "shade-scene.png", W, H, 0.34, 0.84, 0.90)
         extra = ["shade-title.png", "shade-scene.png"]
         if names and names[0]:
-            _blurred(work / names[0], work / "end-blur.jpg", max(W, H) * 0.018)
+            _blurred(work / _slots(names[0])[0], work / "end-blur.jpg", max(W, H) * 0.018)
             D["end"]["image"] = "end-blur.jpg"
             extra.append("end-blur.jpg")
         D["shade"] = {"title": "shade-title.png", "scene": "shade-scene.png"}
@@ -3059,8 +3113,12 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         def _src(sp: Any) -> Any:
             sp = sp.get("src") if isinstance(sp, dict) and sp.get("asset") else sp
             return sp if isinstance(sp, (str, dict)) else None
-        spec = {"story": _without_runtime(story), "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
-                                              for nm, cr, sp in zip(names, per_credit, specs)],
+        def _pic(nm: Any, cr: Any, sp: Any) -> Any:
+            if isinstance(nm, list):              # képsor: elemenként (a forrás a listából, ha ugyanannyi)
+                sps = _slots(sp) if isinstance(sp, list) and len(sp) == len(nm) else [None] * len(nm)
+                return [{"asset": a, "credit": c, "src": _src(x)} for a, c, x in zip(nm, cr, sps)]
+            return {"asset": nm, "credit": cr, "src": _src(sp)} if nm else None
+        spec = {"story": _without_runtime(story), "pictures": [_pic(nm, cr, sp) for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
                          "music_asset": music, "music": opts.get("music") if _builtin_music(opts) else None,
                          "keep_wording": bool(opts.get("keep_wording")),
@@ -3073,7 +3131,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 "timeline": D.get("timeline"), "layer_timeline": layer_rows}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
                    extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
-        for name in [x for x in names if x] + list(dict.fromkeys(x for x in (voice, music, track) if x)) + extra + gfx_names:
+        for name in [x for slot in names for x in _slots(slot) if x] + list(dict.fromkeys(x for x in (voice, music, track) if x)) + extra + gfx_names:
             add_asset(pid, name, work / name)
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": fmt,
                                   "duration": {"requested": requested, "actual": D["total"], "mode": mode},
@@ -3195,7 +3253,8 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
             base["media_id"], base["asset"] = await _upright(crafts.existing(fid)), "footage.mp4"
             base["rotated"] = int(info["rotation"])
         opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": body.get("music"),
-                "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title")}
+                "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
+                "camera": _footage_camera(body.get("camera"))}
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
                                        render=body.get("render", True))
@@ -3347,6 +3406,16 @@ async def _upright(src: Path) -> str:
     return fid
 
 
+def _footage_camera(cam: Any) -> Any:
+    """A saját felvétel kamerája (ráközelítés egy pillanatra — „punch-in”): ugyanaz a leírás, mint a jelenet kamerája,
+    abszolút időben (másodperc vagy időkód)."""
+    if cam in (None, "", "none", False):
+        return None
+    tmp: dict[str, Any] = {}
+    _scene_motion({"camera": cam}, tmp)
+    return tmp.get("camera")
+
+
 async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], opts: dict[str, Any], *, source: str,
                             layer_notes: list[str], step: Callable[..., None], label_stem: str, operation: str,
                             parent: Optional[str] = None, render: bool = True) -> dict[str, Any]:
@@ -3374,6 +3443,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         acc = _rgb(opts.get("accent"))
         D: dict[str, Any] = {"W": W, "H": H, "fps": fps, "total": total, "accent": acc, "dark": [0.055, 0.06, 0.08], "font": FONT,
                              "base": {"file": base["asset"], "label": "Footage"}, "scenes": [], "captions": [], "audio": {}}
+        if opts.get("camera"):
+            D["camera"] = _camera_keys(opts["camera"], total, W, H)
         D["layers"], rows, problems = layer_comps(layers, W, H, total, lang, acc, safe)
         m_v, m_f, track = [], [], None
         if _builtin_music(opts):                              # zene a felvétel saját hangja alá (ahol beszélnek, halkul)
@@ -3399,7 +3470,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                 "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
-                         "music": opts.get("music") if _builtin_music(opts) else None},
+                         "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera")},
                 "source": (source or "")[:30000], "layer_source": (source or "")[:30000],
                 "layer_notes": [n for n in layer_notes if not n.startswith("⚠ ")], "timeline": [], "layer_timeline": rows}
         write_meta(pid, label=f"{label_stem}.ecproj", operation=operation, source_file_id=parent or base["file_id"],
@@ -3626,7 +3697,7 @@ def info(file_id: str) -> dict[str, Any]:
                "headline": sc.get("headline"), "caption": sc.get("caption"),
                **({"chart": sc["chart"]} if sc.get("chart") else {}),
                **({"stat": sc["stat"]} if sc.get("stat") else {}),
-               "picture": ((pics[i] or {}).get("credit") or "yes") if i < len(pics) and pics[i] else None}
+               "picture": _pic_credit(pics[i]) if i < len(pics) and pics[i] else None}
               for i, sc in enumerate((spec.get("story") or {}).get("scenes") or [], 1)]
     rows = {x["id"]: x for x in spec.get("layer_timeline") or []}
     layers = [{**x, **({"on_timeline": f"{_tc(rows[x['id']]['start'])}–{_tc(rows[x['id']]['end'])}"} if x["id"] in rows
@@ -3717,15 +3788,126 @@ def project_of(file_id: str) -> str:
 
 def _img_spec(x: Any) -> Any:
     """Kép a szerkesztéshez: file_id | {"file_id"} | {"url"} (pl. a kliens saját generált képe) | {"stock": szavak}
-    | None / "none" (kép nélkül)."""
+    | {"generate": leírás} (AI-fotó: a webes felületen a mi FLUX-unk, kreditért; MCP-n a kliens a saját képeszközével
+    készíti — 10-12 elv) | None / "none" (kép nélkül). Lista (legfeljebb 4): a jelenet hátterei egymás után, áttűnéssel."""
     if x in (None, "", "none", False):
         return None
+    if isinstance(x, list):
+        out = [y for y in (_img_spec(v) for v in x[:4]) if y]
+        return out if len(out) > 1 else (out[0] if out else None)
     if isinstance(x, str):
         return {"url": x} if x.startswith("http") else x
+    if isinstance(x, dict) and x.get("generate"):
+        from app import tenancy
+        if tenancy.client_makes_images.get():
+            raise ValueError(tenancy.CLIENT_IMAGE_MSG)
+        return {"generate": _clean(x["generate"], 400)}
     if isinstance(x, dict) and (x.get("file_id") or x.get("url") or x.get("stock")):
         return x.get("file_id") or ({"url": x["url"], **({"credit": x["credit"]} if x.get("credit") else {})} if x.get("url")
                                     else {"stock": _clean(x["stock"], 60)})
-    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}} or none — not {x!r}")
+    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}}, {{\"generate\": \"a description\"}}, a list "
+                     f"of up to 4 of these, or none — not {x!r}")
+
+
+def _pic_credit(pic: Any) -> str:
+    """Egy képhely forrása szövegben (képsornál: hány kép, és a forrásaik)."""
+    if isinstance(pic, list):
+        return f"{len(pic)} pictures: " + " · ".join((x or {}).get("credit") or "yes" for x in pic)
+    return (pic or {}).get("credit") or "yes"
+
+
+def _ai_photo(words: str) -> dict[str, str]:
+    """AI-fotó leírása egy jelenet képkereső szavaiból (fotószerű, szöveg és logó nélkül — a cím úgyis rákerül)."""
+    return {"generate": f"{words}, realistic photograph, natural light, no text, no logo, no watermark"}
+
+
+def _slots(sp: Any) -> list[Any]:
+    """Egy képhely: egy kép vagy egy képsor (a jelenet hátterei) — mindig listaként."""
+    return list(sp) if isinstance(sp, list) else [sp]
+
+
+# ---------- kép- és kameramozgás, háttér (10-17, Kommandant: „a kameramozgás (Ken Burns), zoom, a hátterek is cserélődhetnek”) ----------
+# motion: a jelenet KÉPÉNEK mozgása (a régi ken_burns választás jelenetenként felülírható); camera: a TELJES jelenet
+# (kép + ábra + cím) virtuális kamerája — egy pillanatra ráközelít egy részletre, aztán vissza; background: kép nélküli
+# jelenet háttere. A felirat a fő idővonalon van, a kamera nem mozgatja.
+MOTIONS = {"auto": None, "zoom_in": "kb-in", "zoom_out": "kb-out", "pan_left": "left", "pan_right": "right", "pan_up": "up",
+           "pan_down": "down", "still": "still", "ken_burns": "kb-in", "ken_burns_out": "kb-out", "gentle": "in"}
+CAMERA_PRESETS = ("push_in", "pull_out", "drift")
+BACKGROUNDS = ("gradient", "motion", "dark")
+
+
+def _xy01(v: Any) -> Optional[list[float]]:
+    if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(c, (int, float)) for c in v):
+        return [round(min(1.0, max(0.0, float(c))), 3) for c in v]
+    return None
+
+
+def _scene_motion(ch: dict[str, Any], sc: dict[str, Any]) -> None:
+    if "motion" in ch:
+        m = str(ch.get("motion") or "auto").lower().replace("-", "_").replace(" ", "_")
+        if m not in MOTIONS:
+            raise ValueError(f"motion: {' | '.join(MOTIONS)}")
+        sc["motion"] = None if m == "auto" else m
+    if "focus" in ch:
+        sc["focus"] = _xy01(ch.get("focus"))
+    if "zoom" in ch:
+        try:
+            sc["zoom"] = round(min(1.8, max(1.03, float(ch["zoom"]))), 3) if ch["zoom"] not in (None, "") else None
+        except (TypeError, ValueError):
+            raise ValueError("zoom: a number from 1.03 to 1.8 (how far the picture moves in)") from None
+    if "camera" in ch:
+        cam = ch.get("camera")
+        if cam in (None, "", "none", False):
+            sc["camera"] = None
+        elif isinstance(cam, str) and cam.lower() in CAMERA_PRESETS:
+            sc["camera"] = cam.lower()
+        elif isinstance(cam, list):
+            moves = []
+            for mv in cam[:8]:
+                if not isinstance(mv, dict):
+                    continue
+                at = timecode(mv.get("at", 0), "camera at")
+                try:
+                    z, d = float(mv.get("zoom", 1)), float(mv.get("dur", 0.8))
+                except (TypeError, ValueError):
+                    raise ValueError('camera: [{"at": seconds, "zoom": 1–3 (1 = the whole frame), "to"?: [x, y] 0–1, "dur"?: s}]') from None
+                moves.append({"at": round(max(0.0, at), 2), "zoom": round(min(3.0, max(1.0, z)), 3), "dur": round(min(4.0, max(0.2, d)), 2),
+                              **({"to": _xy01(mv.get("to"))} if _xy01(mv.get("to")) else {})})
+            sc["camera"] = sorted(moves, key=lambda x: x["at"]) or None
+        else:
+            raise ValueError(f'camera: {" | ".join(CAMERA_PRESETS)} | [{{"at", "zoom", "to"?, "dur"?}}] | "none"')
+    if "background" in ch:
+        bg = str(ch.get("background") or "gradient").lower()
+        if bg not in BACKGROUNDS and not re.fullmatch(r"#?[0-9a-f]{6}", bg):
+            raise ValueError(f"background (a scene without a picture): {' | '.join(BACKGROUNDS)} | \"#RRGGBB\"")
+        sc["background"] = bg
+
+
+def _camera_keys(cam: Any, dur: float, W: int, H: int) -> Optional[list[list[float]]]:
+    """A jelenet virtuális kamerája → kulcskockák [[t, nagyítás, x, y]] (a jelenet-réteg helye a fő kompozícióban).
+    A nagyított kép mindig kitölti a keretet (a hely úgy korlátozva), így szél soha nem látszik."""
+    if not cam:
+        return None
+
+    def state(z: float, to: Optional[list[float]]) -> list[float]:
+        fx, fy = (to or [0.5, 0.5])
+        px, py = W / 2 - (fx * W - W / 2) * z, H / 2 - (fy * H - H / 2) * z
+        lx, ly = W * (z - 1) / 2, H * (z - 1) / 2
+        return [round(z, 4), round(min(W / 2 + lx, max(W / 2 - lx, px)), 1), round(min(H / 2 + ly, max(H / 2 - ly, py)), 1)]
+    if cam == "push_in":
+        return [[0.0, *state(1.0, None)], [round(dur, 3), *state(1.1, None)]]
+    if cam == "pull_out":
+        return [[0.0, *state(1.1, None)], [round(dur, 3), *state(1.0, None)]]
+    if cam == "drift":
+        return [[0.0, *state(1.06, [0.47, 0.5])], [round(dur, 3), *state(1.06, [0.53, 0.5])]]
+    keys, cur = [[0.0, *state(1.0, None)]], state(1.0, None)
+    for mv in cam:
+        a = min(mv["at"], max(0.0, dur - 0.3))
+        b = min(dur, a + mv["dur"])
+        keys.append([round(a, 3), *cur])
+        cur = state(mv["zoom"], mv.get("to"))
+        keys.append([round(b, 3), *cur])
+    return keys
 
 
 def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -3745,6 +3927,7 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
             sc["duration"] = min(30.0, max(2.0, float(ch["duration"]))) if ch["duration"] not in (None, "", "auto") else None
         except (TypeError, ValueError):
             pass
+    _scene_motion(ch, sc)
     if "stat" in ch:
         st = ch["stat"]
         sc["stat"] = ({"value": _clean(st.get("value"), 10, "Stat value"), "label": _clean(st.get("label"), 48, "Stat label")}
@@ -3819,7 +4002,8 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     opts = dict(spec.get("opts") or {})
     source = (spec.get("source") or "") + "\n" + (extra_source or "")
     notes: list[str] = []
-    keep = lambda pic: ({"asset": pic["asset"], "credit": pic.get("credit"), "src": pic.get("src")} if pic else None)
+    keep1 = lambda pic: ({"asset": pic["asset"], "credit": pic.get("credit"), "src": pic.get("src")} if pic else None)   # noqa: E731
+    keep = lambda pic: [keep1(x) for x in pic if x] if isinstance(pic, list) else keep1(pic)   # noqa: E731
 
     for key, lim in (("title", 70), ("kicker", 28)):
         if key in changes:
@@ -3852,7 +4036,9 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
             e["remove"] = True
             continue
         e["scene"] = _scene_from(ch, source, notes, e["scene"])
-        if "image" in ch:
+        if "images" in ch:
+            e["pic"] = _img_spec(ch["images"])
+        elif "image" in ch:
             e["pic"] = _img_spec(ch["image"])
         elif ch.get("image_query"):
             e["pic"] = {"stock": _clean(ch["image_query"], 60)}
@@ -3863,7 +4049,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
         sc = _scene_from(a, source, notes)
         # keresőszó híján a videó (angol) keresőszava — a magyar cím a képtárban mellényúl („Mit tehetsz a méhekért?”)
         near = next((e["scene"].get("image_query") for e in entries[max(0, after - 1):] if e["scene"].get("image_query")), "")
-        pic = _img_spec(a["image"]) if a.get("image") else {"stock": _clean(a.get("image_query") or near or story.get("image_query")
+        pic = _img_spec(a.get("images") or a["image"]) if (a.get("image") or a.get("images")) else {"stock": _clean(a.get("image_query") or near or story.get("image_query")
                                                                             or sc["headline"] or story["title"], 60)}
         adds.setdefault(after, []).append({"scene": sc, "pic": pic, "remove": False})
     final = list(adds.get(0, []))
@@ -3907,13 +4093,11 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     specs: list[Any] = [title_pic] + [e["pic"] for e in final]
     reshape = opts["fmt"] != (spec.get("opts") or {}).get("fmt")
     if reshape:          # más képarány: a képeket az eredeti forrásból újra (különben nagyítva, elmosódva)
-        specs = [(sp.get("src") or sp) if isinstance(sp, dict) and sp.get("asset") else sp for sp in specs]
-    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
-                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
-    if stock_jobs:
+        src_of = lambda sp: (sp.get("src") or sp) if isinstance(sp, dict) and sp.get("asset") else sp   # noqa: E731
+        specs = [[src_of(x) for x in sp] if isinstance(sp, list) else src_of(sp) for sp in specs]
+    if any(isinstance(sp, dict) and sp.get("stock") for slot in specs for sp in _slots(slot)):
         step(1, 5, "finding pictures")
-        for i, chosen in (await _choose_stock(stock_jobs)).items():
-            specs[i] = chosen
+    await _pick_stock(specs, lambda i: story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
     from app.storage.naming import result_stem
     opts["layer_source"] = layer_src
     res = await _assemble(story, specs, opts, chart_notes=_kept_chart_notes(spec, story) + notes, source_text=source,
@@ -3929,13 +4113,15 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
-    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music"}
+    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
                          f"changes.add_layers), accent or title — not {', '.join(other)}. To recut the footage itself, use "
                          "file_tools (trim-video…) and run overlay again.")
     opts = dict(spec.get("opts") or {})
+    if "camera" in changes:
+        opts["camera"] = _footage_camera(changes["camera"])
     for k in ("accent", "title", "music"):
         if k in changes:
             opts[k] = changes[k]
@@ -4001,7 +4187,7 @@ def _describe(spec: dict[str, Any]) -> str:
             from app.tools import diagrams
             what += " — " + diagrams.describe(sc["chart"])
         lines.append(f"{i}. {sc.get('headline')} — caption: {sc.get('caption')}" + (f" — {what}" if what else "")
-                     + (f" — picture: {(pic or {}).get('credit') or 'yes'}" if pic else " — no picture"))
+                     + (f" — picture: {_pic_credit(pic)}" if pic else " — no picture"))
     if st.get("scenes"):
         lines.append(f"end: {(st.get('end') or {}).get('title')} / {(st.get('end') or {}).get('subtitle')}")
     return "\n".join(lines)

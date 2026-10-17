@@ -1755,6 +1755,7 @@ async def video(
     layers: Optional[list] = None,
     alpha: Union[bool, str, None] = None,
     duration_mode: Optional[str] = None,
+    camera: Optional[Any] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
     text, or graphics on the person's OWN footage (action="overlay").
@@ -1763,7 +1764,15 @@ async def video(
       — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo — give it for every scene without an image: without it the search uses the headline), "stat"?
       {value, label}, "chart"? (see below), "duration"? seconds, "id"? }] + title, kicker?, title_image?, end_title?,
       end_subtitle?, format, duration (total; scenes without one share the rest). It is made exactly as given (no
-      re-planning). A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
+      re-planning).
+      MOVEMENT AND BACKGROUNDS, per scene (in scenes=[…] and in edit changes.scenes): "images": [up to 4 pictures]
+      — the scene's backgrounds one after another, crossfading, each moving; "motion": how the picture moves —
+      zoom_in | zoom_out (toward / away from its subject, Ken Burns) | pan_left | pan_right | pan_up | pan_down |
+      still | auto, "focus"?: [x, y] 0–1 (the point on the picture to move toward; found automatically otherwise),
+      "zoom"?: 1.03–1.8 (how far); "camera": the WHOLE scene's camera, graphics and title included — "push_in" |
+      "pull_out" | "drift" | [{"at": seconds, "zoom": 1–3 (1 = the whole frame again), "to"?: [x, y] 0–1 of the
+      frame, "dur"?: seconds}] (e.g. zoom to the forecast part of a chart at 3 s, back out at 6 s); captions stay
+      put. "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
       title shows the headline) — put what should be on screen into the chart title. Put the source in text too: chart numbers are checked against it (without it, against your scenes).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
@@ -1780,7 +1789,8 @@ async def video(
       ("Asked for 24 s, it is 17 s (…)"), never "ok". images: pictures in order —
       file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where
       each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
-      and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
+      and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none (| ai: AI
+      photos — only in the Studio web app, for credits; here, make them yourself and pass them as images).
       AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked
       from the text or `language`) reads the title and every scene's caption aloud.
       narration="none" turns it off (captions only). narration_voice: "female" | "male" | a Piper voice id (e.g.
@@ -1859,7 +1869,9 @@ async def video(
       file_id, scene="all") or scene="s3".
       layers=[…] (see below) put time-coded graphics on the made video too, at absolute times on its timeline.
     action="overlay": graphics on the person's OWN video. file_id = their uploaded mp4 | mov | webm | m4v — it stays
-      the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); layers=[…] go on top
+      the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); camera=[{"at": time,
+      "zoom", "to"?, "dur"?}] punches in on the footage (and back out with zoom 1), changes.camera in an edit;
+      layers=[…] go on top
       → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status). text = the source: numbers,
       dates and quotes in the layers are checked against it (one that isn't there drops that layer, said in the
       check); without text they are kept and the check says "not checked against a source". title, accent, brand,
@@ -1947,7 +1959,7 @@ async def video(
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
-                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music})
+                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
