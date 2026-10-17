@@ -7,7 +7,8 @@
     }
 
 Elrendezések: cover · section · bullets (+image) · image_left · image_right · full_image · quote (+image)
-· stats · chart · table · gallery · closing. Minden diához "notes" (előadói jegyzet) adható; a stockképek
+· stats · chart · table · gallery · diagram (döntési fa / sávos folyamat / kapcsolati háló, natív alakzatokkal —
+ugyanaz a leírás és elrendezés, mint a videó ábrájáé: app/tools/diagrams.py) · closing. Minden diához "notes" (előadói jegyzet) adható; a stockképek
 forrásmegjelölése automatikusan a jegyzetbe kerül.
 
 A betűk alapból Cambria / Calibri: a PowerPointban megvannak, a szerveren a metrikailag egyező
@@ -24,7 +25,7 @@ from app.storage.files import new_file_id
 from app.tools import images
 
 LAYOUTS = {"cover", "section", "bullets", "image_left", "image_right", "full_image", "quote",
-           "stats", "chart", "table", "gallery", "closing"}
+           "stats", "chart", "table", "gallery", "diagram", "closing"}
 DEFAULT_THEME = {
     "primary": "#14213D", "accent": "#FCA311", "bg": "#FFFFFF", "panel": "#F4F5F7",
     "text": "#1E2430", "muted": "#6B7280", "font_heading": "Cambria", "font_body": "Calibri",
@@ -211,15 +212,23 @@ def bg_color(slide) -> Optional[str]:
     return None
 
 
-def theme_text_color(prs) -> Optional[str]:
+def _theme_slot(prs, slot: str) -> Optional[str]:
     from pptx.opc.constants import RELATIONSHIP_TYPE as RT
     try:
         import re as _re
         xml = prs.slide_master.part.part_related_by(RT.THEME).blob.decode("utf-8", "replace")
-        m = _re.search(r"<a:dk1>.*?(?:val|lastClr)=\"([0-9A-Fa-f]{6})\"", xml, _re.S)
+        m = _re.search(rf"<a:{slot}>.*?(?:val|lastClr)=\"([0-9A-Fa-f]{{6}})\"", xml, _re.S)
         return m.group(1) if m else None
     except Exception:
         return None
+
+
+def theme_text_color(prs) -> Optional[str]:
+    return _theme_slot(prs, "dk1")
+
+
+def theme_accent(prs) -> Optional[str]:
+    return _theme_slot(prs, "accent1")
 
 
 def readable(color: Optional[str], slide, prs) -> Optional[str]:
@@ -572,6 +581,44 @@ def _gallery(slide, s, t, imgs):
             _text(slide, x, 2.3 + h, w, 0.7, caps[k], size=14, font=t["font_body"], color=t["muted"])
 
 
+def _diagram(slide, s, t, actors: dict[str, Any]) -> None:
+    """Magyarázó ábra a cím alatt: natív, szerkeszthető alakzatok (a videóéval azonos elrendezés és stílus)."""
+    from app.tools import diagrams
+    _heading(slide, {**s, "title": s.get("title") or s["diagram"].get("title") or ""}, t)
+    diagrams.to_pptx(slide, s["diagram"], t, (M_IN, 1.95, W_IN - 2 * M_IN, H_IN - 1.95 - 0.62), actors)
+
+
+def diagram_slides(spec: dict[str, Any]) -> dict[str, Any]:
+    """A diagram-diák leírása ellenőrizve és tárolható alakban (azonosítókkal) — építés ELŐTT, hogy a hiba gyorsan
+    és érthetően jöjjön (melyik dia, mit kell javítani)."""
+    from app.tools import diagrams
+    out = []
+    for i, s in enumerate(spec.get("slides") or [], 1):
+        if isinstance(s, dict) and s.get("layout") == "diagram":
+            d = s.get("diagram")
+            if not isinstance(d, dict) or not d.get("type"):
+                raise ValueError(f"Slide {i} (diagram): give diagram = {{\"type\": \"decision_tree\" | \"swimlane\" | "
+                                 "\"network\", \"nodes\": […], \"edges\": […]} — the same object as a video chart.")
+            try:
+                norm, _ = diagrams.from_plan(d)
+            except ValueError as e:
+                raise ValueError(f"Slide {i}: {e}") from None
+            s = {**s, "diagram": norm}
+        out.append(s)
+    return {**spec, "slides": out}
+
+
+def diagram_actors(spec: dict[str, Any], seed: Optional[str]) -> dict[str, Any]:
+    """A pakli szereplő-regisztere: diánként sorban, a megadott szín nyer, a többi az akcentusból — ugyanaz a
+    szereplő minden dián ugyanazt a színt kapja (a mentett leírásban is: spec["actors"])."""
+    from app.tools import diagrams
+    reg = dict(spec.get("actors") or {})
+    for s in spec.get("slides") or []:
+        if isinstance(s, dict) and s.get("layout") == "diagram":
+            reg = diagrams.register(s["diagram"], reg, seed)
+    return reg
+
+
 def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float = M_IN, right: float = W_IN - M_IN):
     """left–right: a lábléc sávja a dia szabad részén (10-13: image_left-nél a 8" széles szöveg lelógott a diáról,
     jobb oldali képnél az oldalszám a fotóra került)."""
@@ -634,6 +681,7 @@ def _persist_spec(spec: dict[str, Any], by_slot: dict) -> dict[str, Any]:
 
 
 async def build(spec: dict[str, Any]) -> dict[str, Any]:
+    spec = diagram_slides(spec)
     if spec.get("template_file_id"):          # a minta-pptx TELJES sablonként (mesterdiák, elrendezés, háttér, logó)
         from app.tools import pptx_template
         from app.tools.crafts import existing
@@ -652,6 +700,9 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Unknown layout: {bad} (choose from {', '.join(sorted(LAYOUTS))})")
     spec, kit = await _brand_kit(spec)
     t = _theme(spec, kit)
+    actors = diagram_actors(spec, t["accent"])
+    if actors:
+        spec = {**spec, "actors": actors}
 
     reqs = await _pick_stock(_requests(slides), slides)
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
@@ -687,6 +738,9 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
                 _table(slide, s, t)
             elif lay == "gallery":
                 _gallery(slide, s, t, [by_slot[(i, j)] for j in range(len((s.get("images") or [])[:4]))])
+            elif lay == "diagram":
+                from app.tools import diagrams
+                _diagram(slide, s, t, {k: actors[k] for k in diagrams.actor_names(s["diagram"])})
             if lay not in ("cover",):
                 # bal oldali képnél a lábléc a kép mellé kerül (ne a fotóra)
                 left = (W_IN / 2 if lay == "image_left" else 4.6 if lay == "quote" and img else 0) + M_IN

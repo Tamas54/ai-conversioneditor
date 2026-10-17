@@ -354,7 +354,7 @@ def _plan(prs, slides: list[dict[str, Any]], L: dict[str, Any]) -> list[tuple[An
         layout = {"cover": L["title"], "section": L["section"], "closing": L["section"], "quote": L["content"],
                   "bullets": L["two"] if s.get("image") else L["content"], "image_left": L["two"], "image_right": L["two"],
                   "full_image": L["picture"] or L["title_only"], "stats": L["title_only"], "chart": L["title_only"],
-                  "table": L["title_only"], "gallery": L["title_only"]}.get(lay, L["content"])
+                  "table": L["title_only"], "gallery": L["title_only"], "diagram": L["title_only"]}.get(lay, L["content"])
         need = []
         if lay == "gallery":
             for img in (s.get("images") or [])[:4]:
@@ -499,6 +499,14 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
                     _chart(slide, s, rect)
                 elif lay == "table":
                     _table(slide, s, rect)
+                elif lay == "diagram":            # magyarázó ábra natív alakzatokkal, a sablon hátterén és betűivel
+                    from app.tools import diagrams, pptx_deck
+                    acc = pptx_deck.theme_accent(prs)
+                    t_ = {"bg": "#" + (pptx_deck.bg_color(slide) or "FFFFFF"), "text": "#" + (pptx_deck.theme_text_color(prs) or "1E2430"),
+                          "accent": "#" + (acc or "2F6FDE"), "muted": "#6B7280", "font_body": None}
+                    reg = pptx_deck.diagram_actors(spec, t_["accent"])
+                    diagrams.to_pptx(slide, s["diagram"], t_, tuple(v / 914400 for v in rect),
+                                     {k: reg[k] for k in diagrams.actor_names(s["diagram"])})
                 elif lay == "gallery" and imgs:
                     x, y, w, h = rect
                     n = len(imgs)

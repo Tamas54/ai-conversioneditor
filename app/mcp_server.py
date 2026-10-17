@@ -863,6 +863,9 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
                                                          series [{name, values}] — scatter: series
                                                          [{name, points: [[x, y]…]}]}
       table {title, headers, rows}                 gallery {title, images[≤4], captions?}
+      diagram {title, diagram: {type: decision_tree | swimlane | network, nodes, edges, …}} — the same object as
+              a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the
+              boxes, the legend); the same actor keeps its colour on every slide
       closing {title?, subtitle?}
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).

@@ -230,6 +230,46 @@ def test_targeted_edit_changes_only_what_is_sent():
     assert kids == ["n1.1.1", "n1.1.2"] and len(split["chart"]["nodes"]) == len(tree["chart"]["nodes"]) + 2
 
 
+def test_deck_diagram_is_native_editable_shapes(tmp_path):
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from app.tools import diagrams, pptx_deck
+    spec = pptx_deck.diagram_slides({"slides": [{"layout": "diagram", "title": "Háló", "diagram": NET},
+                                                {"layout": "diagram", "title": "Folyamat", "diagram": SWIM}]})
+    reg = pptx_deck.diagram_actors(spec, "#FCA311")
+    prs = Presentation()
+    t = dict(pptx_deck.DEFAULT_THEME)
+    for s in spec["slides"]:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        pptx_deck._diagram(slide, s, t, {k: reg[k] for k in diagrams.actor_names(s["diagram"])})
+    p = tmp_path / "d.pptx"
+    prs.save(str(p))
+    prs = Presentation(str(p))
+    for slide, s in zip(prs.slides, spec["slides"]):
+        kinds = {sh.shape_type for sh in slide.shapes}
+        assert MSO_SHAPE_TYPE.PICTURE not in kinds
+        nodes = [sh for sh in slide.shapes if sh.name.startswith("Node – ")]
+        assert len(nodes) == len(s["diagram"]["nodes"]) and all(sh.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE for sh in nodes)
+        texts = {sh.name[7:]: sh.text_frame.text.replace("\n", " ") for sh in nodes}
+        assert texts == {n["id"]: n["text"] for n in s["diagram"]["nodes"]}               # a szöveg a dobozban, szerkeszthetően
+        edges = [sh for sh in slide.shapes if sh.name.startswith("Edge – ")]
+        assert len(edges) == len(s["diagram"]["edges"])
+        bound = [sh for sh in edges if sh._element.tag.endswith("cxnSp")
+                 and (sh._element.find(".//{*}stCxn") is not None or sh._element.find(".//{*}endCxn") is not None)]
+        assert bound                                                                  # az egyenes él a dobozokhoz kötött
+        for sh in edges:
+            ln = sh._element.find(".//{http://schemas.openxmlformats.org/drawingml/2006/main}ln")
+            tail = ln.find("{http://schemas.openxmlformats.org/drawingml/2006/main}tailEnd")
+            kind = next(e.get("kind") or diagrams.default_kind(s["diagram"]["type"]) for e in s["diagram"]["edges"]
+                        if sh.name == f"Edge – {e['from']}→{e['to']}")
+            if kind == "correlation":
+                assert tail is None or tail.get("type") == "oval"                     # együttmozgás: nincs nyílhegy
+            elif diagrams.STYLE[kind]["head"] == "triangle":
+                assert tail is not None and tail.get("type") == "triangle"
+    lanes = [sh.fill.fore_color.rgb for sh in prs.slides[1].shapes if sh.name.startswith("Lane – Ügyfél")]
+    assert lanes and reg["Ügyfél"]["color"]
+
+
 @pytest.mark.engines
 async def test_video_with_a_diagram_and_a_targeted_edit_changes_only_that_scene():
     """Valódi építés (render nélkül): a jelenet leírása a projektben marad; a célzott szerkesztés csak azt a jelenetet

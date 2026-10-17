@@ -5,6 +5,7 @@
     merge()       célzott javítás: csak a megadott csúcsok / élek / beállítások változnak (id, illetve from+to szerint)
     layout()      determinisztikus elrendezés em-egységben (rendezett fa, sávrács, gyűrűs háló), tiszta Python
     to_graphic()  → a videó MEGLÉVŐ „graphic” elemei (rect/text/line/arrow/path/circle, 0–1 koordináták, anim/at/dur)
+    to_pptx()     → natív, szerkeszthető PowerPoint-alakzatok (lekerekített téglalap, szöveg, összekötő, jelmagyarázat)
 
 Szemantikus nyilak: minden élfajtának EGY rögzített stílusa van (szín, vastagság, nyílhegy), a bizonyosság a vonal
 mintája (szaggatott = bizonytalan, pontozott + „?” = vitatott). Az együttmozgás (correlation) SOHA nem néz ki
@@ -1473,3 +1474,185 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
                     "weight": "semibold", "align": "left", "color": "#C9CDD6", "anim": "appear",
                     "at": round(t_l + 0.1, 3), "dur": 0.3})
     return out
+
+
+# ---------- pakli: natív PowerPoint-alakzatok ----------
+
+def to_pptx(slide, spec: dict[str, Any], t: dict[str, str], box: tuple[float, float, float, float],
+            actors: Optional[dict[str, Any]] = None) -> list[Any]:
+    """Ugyanaz az elrendezés natív, szerkeszthető alakzatokkal (box: x, y, w, h hüvelykben). A csúcs egy lekerekített
+    téglalap a saját szövegével; az egyenes él a két dobozhoz KÖTÖTT összekötő (a doboz mozgatásakor követi), a
+    törött él szerkeszthető vonal; a stílusok a videóéval azonosak (világos változat), a jelmagyarázat is natív."""
+    from lxml import etree
+    from pptx.dml.color import RGBColor
+    from pptx.enum.dml import MSO_LINE_DASH_STYLE
+    from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
+    from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
+    from pptx.oxml.ns import qn
+    from pptx.util import Emu, Pt
+
+    X0, Y0, BW, BH = (v * 72 for v in box)                # hüvelyk → pont
+    bg = "#" + t.get("bg", "#FFFFFF").lstrip("#")
+    acc = "#" + t.get("accent", "#FCA311").lstrip("#")
+    actors = actors or register(spec, {}, acc)
+    lang = lang_of(spec)
+    lay = layout(spec, (BW, BH), cw=0.56, s_max=16.0, s_min=9.5, lang=lang, actors=actors)
+    s = lay["s"]
+    E = lambda v: Emu(int(round(v * 12700)))          # noqa: E731
+    rgb = lambda h: RGBColor.from_string(h.lstrip("#").upper())   # noqa: E731
+    shapes: list[Any] = []
+    font = t.get("font_body", "Calibri")            # sablonnál None: a téma betűje öröklődik
+    text_col = "#" + t.get("text", "#1E2430").lstrip("#")
+
+    def textframe(shp, lines: list[str], size: float, color: str, bold: bool, align: str = "center", wrap: bool = True) -> None:
+        """Soronként egy bekezdés (a mi tördelésünk: minden motor ugyanígy rajzolja); a rövid címke nem tördel."""
+        tf = shp.text_frame
+        tf.word_wrap = wrap
+        tf.auto_size = MSO_AUTO_SIZE.NONE
+        tf.margin_left = tf.margin_right = E(0.12 * size)
+        tf.margin_top = tf.margin_bottom = E(0.04 * size)
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        for k, line in enumerate(lines):
+            p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
+            p.alignment = {"center": PP_ALIGN.CENTER, "left": PP_ALIGN.LEFT}[align]
+            r = p.add_run()
+            r.text = line
+            f = r.font
+            f.size, f.bold = Pt(round(size, 1)), bold
+            if font:
+                f.name = font
+            f.color.rgb = rgb(color)
+
+    def plain(shp) -> None:
+        """Saját stílus: a témából semmi (árnyék, alapvonal) — a kitöltés és a vonal kifejezetten megadva."""
+        st = shp._element.find(qn("p:style"))
+        if st is not None:
+            shp._element.remove(st)
+
+    def rect(name: str, cx: float, cy: float, w: float, h: float, fill: Optional[str], line: Optional[str], lw: float = 1.25,
+             shape=MSO_SHAPE.ROUNDED_RECTANGLE, radius: Optional[float] = None):
+        shp = slide.shapes.add_shape(shape, E(X0 + cx - w / 2), E(Y0 + cy - h / 2), E(w), E(h))
+        shp.name = name
+        if fill:
+            shp.fill.solid()
+            shp.fill.fore_color.rgb = rgb(fill)
+        else:
+            shp.fill.background()
+        if line:
+            shp.line.color.rgb = rgb(line)
+            shp.line.width = Pt(lw)
+        else:
+            shp.line.fill.background()
+        plain(shp)
+        if radius is not None and shape == MSO_SHAPE.ROUNDED_RECTANGLE:
+            shp.adjustments[0] = max(0.0, min(0.5, radius / max(min(w, h), 1e-6)))
+        shapes.append(shp)
+        return shp
+
+    def ends(ln_el, head: Optional[str], tail_too: bool = False) -> None:
+        for tag, kind in (("a:headEnd", "oval" if head == "dots" else None), ("a:tailEnd", {"triangle": "triangle", "chevron": "arrow", "dots": "oval"}.get(head or ""))):
+            if kind:
+                el = ln_el.find(qn(tag))
+                if el is None:
+                    el = etree.SubElement(ln_el, qn(tag))
+                el.set("type", kind)
+                el.set("w", "med")
+                el.set("len", "med")
+
+    def style_line(line_fmt, kind: str, cert: str) -> None:
+        st = STYLE[kind]
+        line_fmt.color.rgb = rgb(st["light"])
+        line_fmt.width = Pt(round(st["width"] * 0.5, 2))
+        if cert == "uncertain":
+            line_fmt.dash_style = MSO_LINE_DASH_STYLE.DASH
+        elif cert == "disputed":
+            line_fmt.dash_style = MSO_LINE_DASH_STYLE.ROUND_DOT
+
+    # sávok
+    for i, ln in enumerate(lay["lanes"]):
+        col = (actors.get(ln["name"]) or {}).get("color") or acc
+        bx, by, bw, bh = ln["band"]
+        rect(f"Lane – {ln['name']}", bx, by, bw, bh, mix(col, bg, 0.9 if i % 2 == 0 else 0.94), None, shape=MSO_SHAPE.RECTANGLE)
+        hx, hy, hw, hh = ln["head"]
+        hd = rect(f"Lane header – {ln['name']}", hx, hy, hw, hh, None, None, shape=MSO_SHAPE.RECTANGLE)
+        textframe(hd, ln["lines"], s * HEAD, readable(col, mix(col, bg, 0.9)), True)
+    # csúcsok előbb (az összekötő ezekhez kötődik), az élek utánuk kerülnek alájuk a z-sorrendben
+    node_shp = {}
+    for n in spec["nodes"]:
+        b = lay["nodes"][n["id"]]
+        fill, stroke, tcol = _node_colors(b, actors, acc, bg, True)
+        shape = MSO_SHAPE.HEXAGON if b["shape"] == "hex" else MSO_SHAPE.ROUNDED_RECTANGLE
+        shp = rect(f"Node – {n['id']}", b["x"], b["y"], b["w"], b["h"], fill, stroke, 2.0 if b["bold"] else 1.25, shape=shape,
+                   radius=b["h"] / 2 if b["shape"] == "pill" else 0.35 * s)
+        textframe(shp, b["lines"], s * b["font"], tcol, b["bold"])
+        node_shp[n["id"]] = shp
+    sites = {"top": 0, "left": 1, "bottom": 2, "right": 3}
+    edge_shapes = []
+    for e in lay["edges"]:
+        st = STYLE[e["kind"]]
+        pts = e["pts"]
+        name = f"Edge – {e['from']}→{e['to']}"
+        if len(pts) == 2:
+            c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, E(X0 + pts[0][0]), E(Y0 + pts[0][1]), E(X0 + pts[1][0]), E(Y0 + pts[1][1]))
+            for which, p, nid in (("begin", pts[0], e["from"]), ("end", pts[1], e["to"])):
+                b = lay["nodes"][nid]
+                side = min(sites, key=lambda sd: math.dist(_side(b, sd), p))
+                if b["shape"] != "hex":
+                    (c.begin_connect if which == "begin" else c.end_connect)(node_shp[nid], sites[side])
+        else:
+            fb = slide.shapes.build_freeform(E(X0 + pts[0][0]), E(Y0 + pts[0][1]), scale=1.0)
+            fb.add_line_segments([(E(X0 + p[0]), E(Y0 + p[1])) for p in pts[1:]], close=False)
+            c = fb.convert_to_shape()
+            c.fill.background()
+            for path in c._element.iter(qn("a:path")):    # nyitott vonal: kitöltés nélkül (a DeckCraft is így rajzolja)
+                path.set("fill", "none")
+        c.name = name
+        plain(c)
+        style_line(c.line, e["kind"], e["certainty"])
+        ends(c.line._get_or_add_ln(), st["head"])
+        edge_shapes.append(c)
+        shapes.append(c)
+        lb = e.get("label")
+        fs = s * LAB
+        if lb:
+            sh = rect(f"Label – {e['from']}→{e['to']}", lb["x"], lb["y"], lb["w"], lb["h"], bg, st["light"], 0.75, radius=lb["h"] / 2)
+            textframe(sh, lb["lines"], fs, readable(st["light"], bg), False, wrap=False)
+        if e["certainty"] == "disputed":
+            r = 0.55 * s
+            c_ = [lb["x"] - lb["w"] / 2 - r * 0.55, lb["y"] - lb["h"] / 2 + r * 0.3] if lb else _along(pts, 0.5)
+            bd = rect(f"Disputed – {e['from']}→{e['to']}", c_[0], c_[1], 2 * r, 2 * r, BADGE, None, shape=MSO_SHAPE.OVAL)
+            textframe(bd, ["?"], r * 1.2, "#16181D", True, wrap=False)
+    # az élek a csúcsok alá (z-sorrend): a spTree-ben a sávok után, a csúcsok elé
+    tree = slide.shapes._spTree
+    first_node = node_shp[spec["nodes"][0]["id"]]._element if spec["nodes"] else None
+    for c in edge_shapes:
+        if first_node is not None:
+            tree.remove(c._element)
+            first_node.addprevious(c._element)
+    # jelmagyarázat
+    fs = max(s * LEG, 9.0)
+    for it in lay["legend"]:
+        x, y = it["x"], it["y"]
+        if it["what"] == "group":
+            col = it.get("color") or acc
+            rect(f"Legend – {it['key']}", x + 0.5 * s, y, 0.9 * s, 0.9 * s, mix(col, bg, 0.75), col, 1.0, radius=0.2 * s)
+            tx = x + 1.7 * s
+        else:
+            kind = it["key"] if it["what"] == "kind" else "link"
+            c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, E(X0 + x), E(Y0 + y), E(X0 + x + 2.6 * s), E(Y0 + y))
+            c.name = f"Legend – {it['key']}"
+            plain(c)
+            style_line(c.line, kind, it["key"] if it["what"] == "cert" else "certain")
+            if it["what"] == "cert":
+                c.line.color.rgb = rgb(text_col)
+            ends(c.line._get_or_add_ln(), STYLE[kind]["head"] if it["what"] == "kind" else None)
+            shapes.append(c)
+            if it["what"] == "cert" and it["key"] == "disputed":
+                r = 0.42 * s
+                bd = rect("Legend – disputed mark", x + 1.3 * s, y, 2 * r, 2 * r, BADGE, None, shape=MSO_SHAPE.OVAL)
+                textframe(bd, ["?"], r * 1.2, "#16181D", True, wrap=False)
+            tx = x + 3.1 * s
+        tw = len(it["text"]) * 0.58 * fs + 0.6 * s
+        tb = rect(f"Legend text – {it['key']}", tx + tw / 2, y, tw, fs * 1.5, None, None, shape=MSO_SHAPE.RECTANGLE)
+        textframe(tb, [it["text"]], fs, "#" + t.get("muted", "#6B7280").lstrip("#"), False, "left", wrap=False)
+    return shapes
