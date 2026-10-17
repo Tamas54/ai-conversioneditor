@@ -2582,12 +2582,17 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
     elif pictures == "ai":
         specs[0] = _ai_photo(scenes[0].get("image_query") or story["title"])
     elif pictures != "none":
+        # a címkártya stockképe csak értelmes keresőszóból: a puszta címre (10-17: „Éles próba”) egy idegen ember
+        # fotója jött — ha egyik jelenetnek sincs képe és keresőszava, a címkártya is kép nélküli háttér
+        query = next((sc.get("image_query") for sc in scenes if sc.get("image_query")), "")
+        has_pic = any(specs[1:])
         specs[0] = _slots(specs[1])[0] if specs[1] and not (isinstance(specs[1], dict) and specs[1].get("stock")) else \
-            {"stock": scenes[0].get("image_query") or story["title"]}
+            ({"stock": query or story["title"]} if (query or has_pic) else None)
     kind_of = lambda k: ("yours" if (raw[k].get("image") or raw[k].get("images")) else "AI photo" if pictures == "ai"   # noqa: E731
                          else "stock" if specs[k + 1] else "none") + (f" ×{len(specs[k + 1])}" if isinstance(specs[k + 1], list) else "")
     pre_v.append("Pictures: title card ← " + ("your title_image" if body.get("title_image") else "AI photo" if pictures == "ai"
-                                              else "scene s1's picture" if specs[0] is _slots(specs[1])[0] else "stock")
+                                              else "none" if specs[0] is None else "scene s1's picture" if specs[0] is _slots(specs[1])[0]
+                                              else "stock")
                  + "; " + ", ".join(f"{sc['id']} ← {kind_of(k)}" for k, sc in enumerate(scenes)))
     await _pick_stock(specs, lambda i: story["title"] if i == 0 else scenes[i - 1]["headline"])
     dur = body.get("duration")
