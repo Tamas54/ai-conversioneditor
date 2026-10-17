@@ -1761,7 +1761,8 @@ async def video(
       (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
       color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity,
       anim: appear | pop | grow | draw (lines and outlines draw themselves) | slide-left | slide-right | slide-up |
-      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there),
+      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there), dash (line, arrow,
+      path: "dashed" | "dotted" | [dash, gap] px), dim [[from, to] seconds] (faded while something else is shown),
       image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
       {"search": "bicycle"} — the server picks a free LottieFiles animation and credits it; it loops unless
       loop=false)}]}. video(action="lottie", text="bicycle") lists animations with previews, to choose one yourself.

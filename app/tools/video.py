@@ -402,6 +402,12 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         for k in ("size", "width", "radius", "at", "dur", "opacity"):
             if num(e.get(k)) is not None:
                 el[k] = float(e[k])
+        dash = {"dashed": [16, 11], "dotted": [0.5, 11]}.get(e["dash"]) if isinstance(e.get("dash"), str) else e.get("dash")
+        if isinstance(dash, (list, tuple)) and len(dash) == 2 and all(num(v) is not None for v in dash):   # szaggatott vonal
+            el["dash"] = [max(0.1, min(200.0, float(dash[0]))), max(1.0, min(200.0, float(dash[1])))]
+        if isinstance(e.get("dim"), list):        # irányított figyelem: ezekben a szakaszokban [tól, ig] mp halványabb
+            el["dim"] = [[float(w[0]), float(w[1])] for w in e["dim"][:8] if isinstance(w, (list, tuple)) and len(w) == 2
+                         and all(num(v) is not None for v in w) and w[1] > w[0]]
         for k in ("from", "to", "move_to"):
             if pt(e.get(k)):
                 el[k] = pt(e[k])
@@ -942,6 +948,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
         anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
         if e.get("move_to"):
             anim["move_to"] = px(e["move_to"])
+        if e.get("dim"):                  # irányított figyelem: a rétegre (és a nyílhegyére) is
+            anim["dim"] = [[round(a, 3), round(b, 3)] for a, b in e["dim"]]
         op = int(max(5, min(100, e.get("opacity", 100))))
         if sh in ("rect", "circle", "pin"):
             if sh == "rect":
@@ -972,6 +980,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                   "fill": _gfx_color(e.get("fill"), acc, "accent" if sh == "polygon" else "none"),
                   "stroke": _gfx_color(e.get("stroke"), acc, "none" if sh == "polygon" and e.get("fill") else "accent"),
                   "stroke_w": round(e.get("width", 8) * k, 1), "opacity": op, **anim}
+            if e.get("dash"):
+                el["dash"] = [round(e["dash"][0] * k, 2), round(e["dash"][1] * k, 2)]
             if sh == "arrow":           # nyílhegy: kis háromszög a végpontnál, a vonal irányába fordítva
                 (ax, ay), (bx, by) = px(pts[0]), px(pts[1])
                 ang = math.atan2(by - ay, bx - ax)
@@ -982,7 +992,7 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                 out.append(el)
                 out.append({"k": "path", "name": f"Arrowhead {i + 1}", "points": [[round(v, 1) for v in tip], [round(v, 1) for v in l], [round(v, 1) for v in r_]],
                             "closed": True, "fill": el["stroke"] if el["stroke"] else "accent", "stroke": None, "stroke_w": 0, "opacity": op,
-                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2})
+                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2, **({"dim": anim["dim"]} if anim.get("dim") else {})})
                 continue
             out.append(el)
         elif sh == "text":

@@ -169,13 +169,25 @@ function pathLayer(comp, el) {   // vonal / nyíl / útvonal / sokszög: a ponto
     st.property("ADBE Vector Stroke Color").setValue([sc_[0], sc_[1], sc_[2], 1]);
     st.property("ADBE Vector Stroke Width").setValue(el.stroke_w || 6);
     try { st.property("ADBE Vector Stroke Line Cap").setValue(2); st.property("ADBE Vector Stroke Line Join").setValue(2); } catch (e) {}
+    if (el.dash) {                 // szaggatott / pontozott (kerek véggel a rövid vonás pötty): [vonás, köz] px
+      try { var ds = st.property("ADBE Vector Stroke Dashes"); ds.property(1).setValue(el.dash[0]); ds.property(2).setValue(el.dash[1]); } catch (e) {}
+    }
   }
   if (el.opacity !== undefined && el.opacity !== 100) tp(s).property("ADBE Opacity").setValue(el.opacity);
   if (el.anim === "draw") {        // kirajzolódik: Trim Paths vége 0 → 100
     var tr = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Filter - Trim");
     var e_ = tr.property("ADBE Vector Trim End"); e_.setValueAtTime(el.t0, 0); e_.setValueAtTime(el.t0 + el.dur, 100); ease(e_);
+    dims(s, el);
   } else animate(s, el);
   return s;
+}
+function dims(layer, el) {       // irányított figyelem: a megadott szakaszokban [tól, ig] halványabb, utána vissza
+  if (!el.dim || !el.dim.length) return;
+  var O = tp(layer).property("ADBE Opacity"), full = el.opacity || 100, lo = full * 0.32;
+  for (var i = 0; i < el.dim.length; i++) {
+    var a = el.dim[i][0], b = el.dim[i][1];
+    O.setValueAtTime(a, full); O.setValueAtTime(a + 0.25, lo); O.setValueAtTime(b, lo); O.setValueAtTime(b + 0.35, full);
+  }
 }
 function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | grow | slide-* | pulse | none (+ move_to)
   var T = tp(layer), a = el.anim || "appear", t0 = el.t0 || 0, d = el.dur || 0.6, full = el.opacity || 100;
@@ -196,6 +208,7 @@ function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | g
     var p0 = P.value, tm = t0 + d + 0.2;
     P.setValueAtTime(tm, p0); P.setValueAtTime(tm + Math.max(0.8, d * 2), el.move_to); ease(P);
   }
+  dims(layer, el);
 }
 function multiPath(comp, el) {   // sok útvonal egy rétegen, csoportonként közös vonallal / kitöltéssel (térkép)
   var s = comp.layers.addShape(); s.name = el.name;
