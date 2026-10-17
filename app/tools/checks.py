@@ -520,9 +520,15 @@ async def generic(out: Path) -> dict[str, Any]:
     return make("needs_check", ["No automatic check for this kind of change. " + LOOK], v)
 
 
+_LENGTH_BY = {"narration": "narration mode: the voice sets the length", "fixed": "fixed mode",
+              "footage": "the footage sets the length"}
+
+
 def check_video(p: Path, want_s: Optional[float] = None, want_wh: Optional[tuple[int, int]] = None,
-                draft: bool = False) -> dict[str, Any]:
-    """Kész videó: dekódolható-e (5 mintakocka), a hossza és a mérete a kért-e, nem fekete-e."""
+                draft: bool = False, requested: Optional[float] = None, mode: Optional[str] = None,
+                why: Optional[str] = None) -> dict[str, Any]:
+    """Kész videó: dekódolható-e (5 mintakocka), a renderelt hossz az idővonalé-e (want_s), a KÉRT hossz (requested)
+    teljesült-e — eltérésnél kimondva, miért (mode / why) —, a mérete a vártnak megfelelő-e, nem fekete-e."""
     import cv2
     c = cv2.VideoCapture(str(p))
     try:
@@ -542,9 +548,18 @@ def check_video(p: Path, want_s: Optional[float] = None, want_wh: Optional[tuple
     dur = n / fps
     findings, verified = [], [f"Plays: {good} of 5 sample frames decode; {dur:.1f} s at {fps:.0f} fps, {w}×{h}."]
     if want_s and abs(dur - want_s) > max(1.0, 0.1 * want_s):
-        findings.append(f"It is {dur:.1f} s long — {want_s:.0f} s was asked for.")
-    elif want_s:
-        verified.append(f"Length as asked ({want_s:.0f} s).")
+        findings.append(f"It is {dur:.1f} s long, but its timeline is {want_s:.1f} s — the render may have stopped early; "
+                        "render it again (video action=render).")
+    if requested:                     # a kért hossz: eltérés soha nem „teljesült” (10-17: 24 s kérve, 17 s lett, mégis ok)
+        if abs(dur - requested) > max(1.0, 0.05 * requested):
+            reason = why or _LENGTH_BY.get(mode or "", "")
+            findings.append(f"Asked for {requested:.0f} s, it is {dur:.0f} s" + (f" ({reason})" if reason else "") + ".")
+        else:
+            verified.append(f"Length as asked: {requested:.0f} s (it is {dur:.1f} s" + (f", {mode} mode" if mode else "") + ").")
+    elif mode == "footage":
+        verified.append(f"The length is the footage's: {dur:.1f} s.")
+    elif mode:
+        verified.append(f"No length was asked: the narration (or, without a voice, the scenes' reading time) sets it — {dur:.1f} s.")
     if want_wh and not draft and (w, h) != tuple(want_wh):
         findings.append(f"It is {w}×{h} — {want_wh[0]}×{want_wh[1]} was expected.")
     if good < 5:
