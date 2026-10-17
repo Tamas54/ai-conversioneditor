@@ -2592,17 +2592,31 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
         prs = Presentation()
         prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)          # 16:9
     SW, SH = int(prs.slide_width), int(prs.slide_height)
-    layout = min(prs.slide_layouts, key=lambda lo: (len(lo.placeholders), "blank" not in lo.name.lower()))
+    from app.tools import pptx_deck
+    n_before = len(prs.slides)
+    # a minta: az a dia, ami után az új jön (alapból az utolsó) — annak hátterét és címstílusát kapja az új dia
+    ref_i = int(after_slide) - 1 if after_slide is not None else n_before - 1
+    ref = list(prs.slides)[max(0, min(n_before - 1, ref_i))] if n_before else None
+    layout = ref.slide_layout if ref is not None else \
+        min(prs.slide_layouts, key=lambda lo: (len(lo.placeholders), "blank" not in lo.name.lower()))
     slide = prs.slides.add_slide(layout)
     for ph in list(slide.placeholders):                     # üres helyőrző ne maradjon a dián
         ph._element.getparent().remove(ph._element)
+    took_bg = pptx_deck.inherit_look(slide, ref)
     top_room = 0
     if title and title.strip():
         top_room = int(SH * 0.16)
+        st = pptx_deck.title_style(ref) if ref is not None else {}
         tb = slide.shapes.add_textbox(int(SW * 0.06), int(SH * 0.04), int(SW * 0.88), int(SH * 0.1))
         tb.text_frame.text = title.strip()[:120]
-        tb.text_frame.paragraphs[0].runs[0].font.size = Pt(28)
-        tb.text_frame.paragraphs[0].runs[0].font.bold = True
+        run = tb.text_frame.paragraphs[0].runs[0]
+        run.font.size = Pt(min(32, st.get("size") or 28))
+        run.font.bold = True if st.get("bold") is None else st["bold"]
+        if st.get("font"):
+            run.font.name = st["font"]
+        color = pptx_deck.readable(st.get("color"), slide, prs)
+        if color:
+            run.font.color.rgb = pptx_deck._rgb(color)
     pad = 0 if (not deck_file_id and not top_room and vw / vh >= SW / SH * 0.98) else int(min(SW, SH) * 0.04)
     box_w, box_h = SW - 2 * pad, SH - top_room - 2 * pad
     k = min(box_w / vw, box_h / vh)
@@ -2638,8 +2652,10 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     # ellenőrzés (közös check-szerződés): a mentett fájlban tényleg ott a videó, a megadott dián
     chk_prs = Presentation(str(output_path(out)))
     media = [sh for sh in chk_prs.slides[pos].shapes if sh.shape_type == 16]       # MSO_SHAPE_TYPE.MEDIA
+    look = ([f"The new slide has the deck's look: {'background' if took_bg else 'layout'}{' and title style' if title else ''} "
+             "from the slide next to it."] if ref is not None else [])
     check = ({"status": "ok", "findings": [], "verified": [f"The MP4 ({secs:.0f} s) is embedded on slide {pos + 1} of {len(chk_prs.slides)}, "
-                                                          "with the title card as its poster."]}
+                                                          "with the title card as its poster.", *look]}
              if media else {"status": "failed", "findings": ["The video didn't end up on the slide."], "verified": []})
     return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid, "check": check,
             "note": "The video is embedded and starts by itself when the slide shows (tap or click pauses it) in "

@@ -87,7 +87,14 @@ class Doc:
 
 def _theme(data: dict[str, Any], theme: Optional[dict], brand: Optional[Any]) -> dict[str, str]:
     """A sablon színei/betűi: alap → arculat (a katalógus neve, vagy a felhasználó arculata dictként) → kézi téma."""
-    t = dict(DEFAULT_THEME)
+    t = apply_brand(dict(DEFAULT_THEME), brand)
+    t.update({k: v for k, v in (theme or {}).items() if k in DEFAULT_THEME and v})
+    return t
+
+
+def apply_brand(t: dict[str, str], brand: Optional[Any]) -> dict[str, str]:
+    """Egy téma (primary, accent, bg, panel, text, muted, font_heading, font_body) az arculat szerint — KÖZÖS a dizájn,
+    a pakli, az album és az infografika között. brand: a katalógus neve, vagy a felhasználó arculata dictként."""
     if isinstance(brand, str) and brand:
         from app.brands import get_brand
         b = get_brand(brand)
@@ -108,7 +115,6 @@ def _theme(data: dict[str, Any], theme: Optional[dict], brand: Optional[Any]) ->
             t["font_heading"] = font_family(f["heading"]) or t["font_heading"]
         if f.get("body"):
             t["font_body"] = font_family(f["body"], body=True) or t["font_body"]
-    t.update({k: v for k, v in (theme or {}).items() if k in DEFAULT_THEME and v})
     return t
 
 

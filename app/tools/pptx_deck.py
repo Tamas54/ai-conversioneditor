@@ -16,6 +16,7 @@ Caladea / Carlito rajzolja az előnézetet, így a tördelés mindkét helyen ug
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from app.storage import output_path, public_url, write_meta
@@ -32,25 +33,40 @@ W_IN, H_IN, M_IN = 13.333, 7.5, 0.6
 _FULL = W_IN / H_IN
 
 
-def _theme(spec: dict[str, Any]) -> dict[str, str]:
-    t = dict(DEFAULT_THEME)
+async def _brand_kit(spec: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """→ (spec, a pakli arculata). Ugyanaz a feloldás, mint a dizájnnál és a videónál (app.brands.user.resolve): a
+    felhasználó mentett arculata név/„mine” szerint, az alapértelmezett automatikusan (ha be van kapcsolva),
+    "none" = ki; a beépített katalógus a tartalék."""
     theme = spec.get("theme")
-    if isinstance(theme, str):                       # „theme": "executive" — név, nem színek: brandként próbáljuk
-        from app.brands import get_brand
-        if get_brand(theme) is None or spec.get("brand"):
+    if isinstance(theme, str):                       # „theme": "executive" — név, nem színek: arculatként próbáljuk
+        if spec.get("brand"):
             raise ValueError(f'"theme" is an object of colors, e.g. {{"primary": "#1F3A5F", "accent": "#D9822B"}} '
                              f'(keys: {", ".join(DEFAULT_THEME)}); for a saved brand use "brand": "<name>"')
         spec = {**spec, "brand": theme, "theme": None}
     elif theme is not None and not isinstance(theme, dict):
         raise ValueError('"theme" must be an object of colors, e.g. {"primary": "#1F3A5F", "accent": "#D9822B"}')
-    if spec.get("brand"):
+    from app.brands import user as user_brands
+    try:
+        kit = await user_brands.resolve(spec.get("brand"))
+    except ValueError:
+        if isinstance(theme, str):
+            raise ValueError(f'"theme": {theme!r} is not a brand — give colors, e.g. {{"primary": "#1F3A5F", '
+                             f'"accent": "#D9822B"}} (keys: {", ".join(DEFAULT_THEME)})') from None
+        raise
+    return spec, kit
+
+
+def _theme(spec: dict[str, Any], kit: Optional[dict[str, Any]] = None) -> dict[str, str]:
+    t = dict(DEFAULT_THEME)
+    if kit and kit.get("_registry"):                 # beépített katalógus-arculat: a pontos színei és betűi
         from app.brands import get_brand
-        b = get_brand(spec["brand"])
-        if b is None:
-            raise ValueError(f"Unknown brand: {spec['brand']}")
+        b = get_brand(kit["_registry"])
         t.update(primary=b.colors.primary, accent=b.colors.accent, bg=b.colors.body_bg, panel=b.colors.panel_bg,
                  text=b.colors.text_primary, muted=b.colors.text_muted,
                  font_heading=b.fonts.heading, font_body=b.fonts.body)
+    elif kit:                                        # a felhasználó mentett arculata — ugyanúgy, mint a dizájnon
+        from app.tools.design import apply_brand
+        t = apply_brand(t, kit)
     t.update({k: v for k, v in (spec.get("theme") or {}).items() if k in DEFAULT_THEME and v})
     return t
 
@@ -98,6 +114,169 @@ def _rgb(hexstr: str):
     from pptx.dml.color import RGBColor
     h = hexstr.lstrip("#")
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+# ---------- a pakli arculata a fájlban: ami később kerül bele, az örökli ----------
+# A ChatGPT-teszt (10-17): zöld–krém paklihoz adott videós dia FEHÉR lett — a háttér diánként volt festve, az új dia
+# az elrendezés (fehér) hátterét és a Calibrit kapta. Két általános javítás: (1) a pptx_build a mesterdiára és a
+# témába is beírja a hátteret, a betűket és a színeket — így a PowerPointban/DeckCraftban/nálunk később hozzáadott
+# dia is ilyen; (2) egy MEGLÉVŐ (bárki által készített) paklihoz adott dia a szomszédja hátterét és címstílusát kapja.
+
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def bake_theme(prs, t: dict[str, str]) -> None:
+    """A téma (háttér, címsor- és szövegbetű, szöveg-/akcentusszín) a mesterdián és a theme1.xml-ben."""
+    from lxml import etree
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    m = prs.slide_master
+    m.background.fill.solid()
+    m.background.fill.fore_color.rgb = _rgb(t["bg"])
+    try:
+        tp = m.part.part_related_by(RT.THEME)
+        root = etree.fromstring(tp.blob)
+        for tag, font in (("majorFont", t["font_heading"]), ("minorFont", t["font_body"])):
+            el = root.find(f".//{{{_A}}}fontScheme/{{{_A}}}{tag}/{{{_A}}}latin")
+            if el is not None and font:
+                el.set("typeface", font)
+        for slot, hexv in (("dk1", t["text"]), ("dk2", t["primary"]), ("accent1", t["accent"]), ("accent2", t["primary"])):
+            el = root.find(f".//{{{_A}}}clrScheme/{{{_A}}}{slot}")
+            if el is not None and hexv:
+                for ch in list(el):
+                    el.remove(ch)
+                etree.SubElement(el, f"{{{_A}}}srgbClr", val=hexv.lstrip("#").upper())
+        tp._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    except Exception:          # a téma kényelmi — a háttér a mesterdián így is megvan
+        pass
+
+
+def _bg(slide):
+    return slide._element.find(".//{http://schemas.openxmlformats.org/presentationml/2006/main}bg")
+
+
+def inherit_look(slide, ref) -> bool:
+    """Az új dia (saját háttér nélkül) a ref dia hátterét kapja — a képes háttér képével együtt. → átvette-e."""
+    from copy import deepcopy
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    if ref is None or _bg(slide) is not None or _bg(ref) is None:
+        return False
+    bg = deepcopy(_bg(ref))
+    r_embed = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+    for blip in bg.iter(f"{{{_A}}}blip"):
+        rid = blip.get(r_embed)
+        if rid:
+            blip.set(r_embed, slide.part.relate_to(ref.part.related_part(rid), RT.IMAGE))
+    slide._element.cSld.insert(0, bg)
+    return True
+
+
+def title_style(ref) -> dict[str, Any]:
+    """A ref dia címének stílusa (a legnagyobb betűs szöveg): betű, méret, szín, félkövér — az új dia címéhez."""
+    best: dict[str, Any] = {}
+    for shp in getattr(ref, "shapes", []):
+        if not shp.has_text_frame:
+            continue
+        for para in shp.text_frame.paragraphs:
+            for r in para.runs:
+                size = r.font.size.pt if r.font.size else None
+                if r.text.strip() and size and size > best.get("size", 0):
+                    color = None
+                    try:
+                        color = str(r.font.color.rgb) if r.font.color is not None and r.font.color.type is not None else None
+                    except Exception:
+                        pass
+                    best = {"size": size, "font": r.font.name, "color": color, "bold": r.font.bold}
+    return best
+
+
+def _lum(hexv: str) -> float:
+    h = hexv.lstrip("#")
+    c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def contrast(a: str, b: str) -> float:
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def bg_color(slide) -> Optional[str]:
+    """A dia tényleges egyszínű háttere (saját → elrendezés → mesterdia), ha egyszínű."""
+    for el in (slide, getattr(slide, "slide_layout", None), getattr(getattr(slide, "slide_layout", None), "slide_master", None)):
+        bg = _bg(el) if el is not None else None
+        if bg is not None:
+            clr = bg.find(f".//{{{_A}}}solidFill/{{{_A}}}srgbClr")
+            return clr.get("val") if clr is not None else None
+    return None
+
+
+def theme_text_color(prs) -> Optional[str]:
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    try:
+        import re as _re
+        xml = prs.slide_master.part.part_related_by(RT.THEME).blob.decode("utf-8", "replace")
+        m = _re.search(r"<a:dk1>.*?(?:val|lastClr)=\"([0-9A-Fa-f]{6})\"", xml, _re.S)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def readable(color: Optional[str], slide, prs) -> Optional[str]:
+    """A cím színe csak akkor öröklődik, ha az új dia hátterén olvasható (≥ 3:1); különben a téma szövegszíne,
+    végső esetben fekete/fehér — fehér cím krém háttéren nem maradhat."""
+    bg = bg_color(slide) or "FFFFFF"
+    if color and contrast(color, bg) >= 3:
+        return color
+    dk = theme_text_color(prs)
+    if dk and contrast(dk, bg) >= 3:
+        return dk
+    return "000000" if _lum(bg) > 0.4 else "FFFFFF"
+
+
+def neighbour(prs, pos: int):
+    """A pakli „tartalmi” mintadiája az új dia mellett: előbb a pos előtti, különben az utáni."""
+    slides = list(prs.slides)
+    for i in [pos - 1, pos + 1, *range(len(slides) - 1, -1, -1)]:
+        if 0 <= i < len(slides) and i != pos:
+            return slides[i]
+    return None
+
+
+def inherit_new_slides(before: Optional[Path], after: Path) -> int:
+    """Szerkesztés után (DeckCraft slide.new…): a BESZÚRT diák, amelyeknek nincs saját hátterük, a szomszédjukét
+    kapják. Beszúrt = a két dia-sorrend összevetésében új (a módosított meglévő dia nem; annak háttere marad).
+    → hány dia kapott hátteret."""
+    import difflib
+    import hashlib
+    from pptx import Presentation
+    from app.tools import content_digest
+    if before is None or before.suffix.lower() != ".pptx":
+        return 0
+    try:
+        a = [hashlib.sha1(repr(x).encode()).hexdigest() for x in content_digest._pptx(before)[1]]
+        b = [hashlib.sha1(repr(x).encode()).hexdigest() for x in content_digest._pptx(after)[1]]
+    except Exception:
+        return 0
+    added = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "insert":
+            added += range(j1, j2)
+        elif op == "replace" and j2 - j1 > i2 - i1:
+            added += range(j1 + (i2 - i1), j2)
+    if not added:
+        return 0
+    prs = Presentation(str(after))
+    slides = list(prs.slides)
+    if len(slides) != len(b):
+        return 0
+    n = 0
+    for i in added:
+        if inherit_look(slides[i], neighbour(prs, i)):
+            n += 1
+    if n:
+        prs.save(str(after))
+    return n
 
 
 def _rect(slide, x, y, w, h, color: str, alpha: Optional[float] = None):
@@ -471,7 +650,8 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
     bad = [s.get("layout") for s in slides if s.get("layout") not in LAYOUTS]
     if bad:
         raise ValueError(f"Unknown layout: {bad} (choose from {', '.join(sorted(LAYOUTS))})")
-    t = _theme(spec)
+    spec, kit = await _brand_kit(spec)
+    t = _theme(spec, kit)
 
     reqs = await _pick_stock(_requests(slides), slides)
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
@@ -517,6 +697,7 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
             notes = "\n".join(filter(None, [s.get("notes"), *credits]))
             if notes:
                 slide.notes_slide.notes_text_frame.text = notes
+        bake_theme(prs, t)
         fid = new_file_id("pptx")
         prs.save(str(output_path(fid)))
         saved = _persist_spec(spec, by_slot)
@@ -532,4 +713,5 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
         "images": [{"slot": f"s{i + 1}" + (f".{j + 1}" if j >= 0 else ""), "file_id": x.source_file_id,
                     "credit": x.attribution} for ((i, j), x) in by_slot.items()],
         "ms_elapsed": int((time.time() - t0) * 1000),
+        **({"brand": kit.get("name")} if kit and kit.get("name") else {}),
     }
