@@ -298,7 +298,7 @@ const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
   social: ["start", { new: "new", design: "design" }],
   print: ["start", { new: "new", template: "from-template", rebuild: "rebuild-from-picture" }],
   book: ["start", { new: "new", manuscript: "from-manuscript", album: "photo-album" }],
-  video: ["vmode", { new: "new", article: "from-article", text: "from-text" }],
+  video: ["vmode", { new: "new", article: "from-article", text: "from-text", subs: "subtitles" }],
   pdf: ["action", { new: "new", open: "open", merge: "merge", compress: "compress", to_word: "to-word", page_numbers: "page-numbers",
     watermark: "watermark", redact: "black-out", protect: "lock", ocr: "make-searchable", compare: "compare", make_fillable: "make-fillable" }],
 };
@@ -1024,6 +1024,7 @@ const EXT = {
   doc: ["docx", "doc", "odt", "rtf", "md", "txt", "html", "htm"],
   slides: ["pptx", "potx", "ppt", "odp"], pdf: ["pdf"],
   audio: ["mp3", "wav", "m4a", "aac", "ogg", "flac", "aiff", "opus"],
+  video: ["mp4", "mov", "webm", "m4v"],
 };
 const extOf = n => (String(n).split(/[?#]/)[0].split(".").pop() || "").toLowerCase();
 // Saját ejtőzóna: a natív <input type=file> rejtve (a böngésző nyelvén írna, és nem tudna a „From your workspace”-ról);
@@ -1173,7 +1174,7 @@ const TAKES = {
   infographic: [["data", ["csv", "tsv", "xlsx", ...EXT.image], null]],
   photo: [["photos", EXT.image, null]],
   book: [["manuscript", ["docx"], null], ["cover-file", EXT.image, null], ["album-photos", EXT.image, "album"], ["album-text", ["docx", "md", "txt"], "album"]],
-  video: [["vsource", [...EXT.doc, "pdf"], "article"], ["vpics", EXT.image, null], ["vdata", ["csv", "tsv", "xlsx", "xls"], null], ["vmusic", EXT.audio, null]],
+  video: [["vsource", [...EXT.doc, "pdf"], "article"], ["vsubvideo", EXT.video, "subs"], ["vpics", EXT.image, null], ["vdata", ["csv", "tsv", "xlsx", "xls"], null], ["vmusic", EXT.audio, null]],
   scan: [["pages", [...EXT.image, "pdf"], null]],
   pdf: [["pdfs", ["pdf"], null]],
   convert: [["file", null, null]],
@@ -1195,6 +1196,7 @@ const USES = [   // a fájlnézet „Use in…” menüje: [eszköz, mód, fájl
   ["book", null, "cover-file", EXT.image, "Book — as the cover picture"],
   ["video", "article", "vsource", [...EXT.doc, "pdf"], "Video — a short video from this"],
   ["video", "text", "vpics", EXT.image, "Video — a short video with this picture"],
+  ["video", "subs", "vsubvideo", EXT.video, "Subtitles — listen, check the text, put them on"],
   ["scan", null, "pages", [...EXT.image, "pdf"], "Scan to text — read the text"],
   ["pdf", null, "pdfs", ["pdf"], "PDF tools — merge, compress, black out…"],
 ];
@@ -1526,6 +1528,50 @@ function chooseVariant(form, r) {
 }
 
 // ---------- készítők ----------
+// Feliratozó (10-18): 1. meghallgatás (átirat) → a sorok a űrlapon, szerkeszthetően; 2. ráteszi a Studio feliratstílusában
+// (a saját felvétel + feliratsáv: szerkeszthető projekt, MP4, .srt) — vagy kikapcsolható felirat + .srt.
+function subRows(form, sentences) {
+  const box = form.querySelector(".sub-rows");
+  box.innerHTML = sentences.map((x, i) => `<div class="sub-row"><input class="sub-time" name="sub_a_${i}" value="${esc(x.at)}" aria-label="Starts at" title="Starts (minutes:seconds)">
+    <input class="sub-time" name="sub_b_${i}" value="${esc(x.until)}" aria-label="Ends at" title="Ends (minutes:seconds)">
+    <textarea name="sub_x_${i}" rows="2" aria-label="Subtitle text">${esc(x.text)}</textarea>
+    <button type="button" class="sub-del" title="Remove this line" aria-label="Remove this line">✕</button></div>`).join("");
+  box.querySelectorAll(".sub-del").forEach(b => b.addEventListener("click", () => b.closest(".sub-row").remove()));
+  form.querySelector("[data-subs]").hidden = false;
+}
+const subCues = form => [...form.querySelectorAll(".sub-row")].map(r => ({ start: r.querySelector("[name^=sub_a]").value.trim(),
+  end: r.querySelector("[name^=sub_b]").value.trim(), text: r.querySelector("textarea").value.trim() })).filter(c => c.text);
+async function subtitleSubmit(fd, form) {
+  if (account?.guest) throw needAccount();
+  const [vid] = await readSlot(form, "vsubvideo", "a video");
+  const language = fd.get("vsublang") || null;
+  const inp = slotEl(form, "vsubvideo").querySelector("input[type=file]");
+  if (inp.files.length) {      // a most feltöltött videó a munkaterület fájlja lesz a mezőben: a 2. lépés nem tölti fel újra
+    if (form.dataset.subsFor && form.dataset.subsFor !== vid) delete form.dataset.subsFor;
+    inp.value = ""; presetSlot(form, "vsubvideo", [vid]);
+  }
+  if (form.dataset.subsFor !== vid) {
+    const job = await api("/api/video/transcript", { method: "POST", body: JSON.stringify({ file_id: vid, language }) });
+    const t = await pollJob(job, () => "Listening to the video — about a minute for every few minutes of speech…");
+    if (!(t.sentences || []).length) throw new Error("No speech was found in this video.");
+    form.dataset.subsFor = vid; subRows(form, t.sentences);
+    form.dispatchEvent(new Event("change"));
+    throw new Error(`${t.sentences.length} line${t.sentences.length > 1 ? "s" : ""} heard — check them below, then press “Add the subtitles”.`);
+  }
+  const cues = subCues(form);
+  if (!cues.length) throw new Error("No subtitle lines are left — choose the video again to listen to it again.");
+  if (fd.get("vsubburn")) {
+    const job = await api("/api/video/overlay", { method: "POST", body: JSON.stringify({ file_id: vid, layers: [], subtitles: cues, language }) });
+    const r = await pollJob(job, j => ({ "rendering the video": "Putting the subtitles on — it takes about as long as the video…" })[j.stage] || "Working on it…");
+    return { file_id: r.video?.file_id || r.file_id, n: (r.files || []).length, edit: false,
+      msg: "Subtitled — the MP4, the .srt and an editable project (timeline editor) are in your workspace" };
+  }
+  const srt = await api("/api/video/srt", { method: "POST", body: JSON.stringify({ cues, source_file_id: vid }) });
+  const job = await api("/api/tools/run", { method: "POST", body: JSON.stringify({ tool: "add-subtitles", file_ids: [vid, srt.file_id], options: { burn: false, language } }) });
+  const r = await pollJob(job, () => "Adding the subtitle track…");
+  return { file_id: (r.files || [])[0]?.file_id || r.file_id, n: 2, edit: false, msg: "Done — the video with switchable subtitles and the .srt are in your workspace" };
+}
+
 const MAKERS = {
   doc: {
     cta: form => { const m = form.querySelector("[name=dmode]:checked")?.value;
@@ -1693,12 +1739,13 @@ const MAKERS = {
     cta: form => {      // üres mezővel a gomb is megmondja, hova visz
       const m = form.querySelector("[name=vmode]:checked")?.value;
       if (m === "new") return BLANK.video.cta;
+      if (m === "subs") return form.querySelector("[data-subs]")?.hidden ? "Listen to the video" : "Add the subtitles";
       const t = (form.querySelector(m === "text" ? "[name=script]" : "[name=article]")?.value || "").trim();
       const doc = m === "article" && form.querySelector("[data-slot=vsource] .slot-chips")?.children.length;
       return t || doc ? "Make the video" : "Open an empty timeline";
     },
     title: "Video", sub: "An article, a document or your own words as a short video — titles, pictures in motion, animated charts, timed captions. It opens on a timeline in the video editor (like After Effects) so you can change anything; the MP4 is in your workspace too.",
-    fields: () => `${seg("vmode", [["new", "New"], ["article", "From an article"], ["text", "From my text"]], 1)}
+    fields: () => `${seg("vmode", [["new", "New"], ["article", "From an article"], ["text", "From my text"], ["subs", "Subtitle a video"]], 1)}
       <div data-vmode="new" hidden>${blankFields("video")}</div>
       <div data-vmode="article">
         <label>Article link or text <em class="ai-badge">AI</em><textarea name="article" placeholder="e.g. Community solar lets neighbours share one solar farm instead of putting panels on every roof. Each household buys or rents a few panels and gets the savings on its electricity bill. Renters and people with shady roofs can join too. A typical 1 MW project powers about 200 homes and pays for itself in 8 to 10 years."></textarea></label>
@@ -1707,6 +1754,15 @@ const MAKERS = {
       <div data-vmode="text" hidden>
         <label>Your text <em class="ai-badge">AI</em><textarea name="script" placeholder="e.g. Our bakery opened in 1987 with one oven and a lot of hope.&#10;&#10;Today we bake 2,000 loaves a day — still by hand, still before sunrise.&#10;&#10;Come and taste the difference. Open every day from 6 am."></textarea></label>
         <p class="muted small" style="margin:-6px 0 12px">Your words become the captions — one scene per paragraph. We add the headlines and pictures.</p></div>
+      <div data-vmode="subs" hidden>
+        ${fileSlot("vsubvideo", { exts: EXT.video, label: "Your video" })}
+        <label>Spoken language<select name="vsublang"><option value="">Find it out</option><option value="hu">Hungarian</option><option value="en">English</option>
+          <option value="de">German</option><option value="fr">French</option><option value="es">Spanish</option><option value="it">Italian</option>
+          <option value="pl">Polish</option><option value="ro">Romanian</option><option value="sk">Slovak</option><option value="cs">Czech</option></select></label>
+        <p class="muted small" style="margin:-6px 0 12px">First the video is listened to. Then you check every line — fix a misheard name or number, change a time, remove a line — and the subtitles go on in the Studio caption style.</p>
+        <div data-subs hidden><p class="small" style="margin:0 0 8px;font-weight:600">The subtitles — check them</p><div class="sub-rows"></div>
+          <div class="checks"><label><input type="checkbox" name="vsubburn" checked> Burn them into the picture (Studio caption style)</label></div>
+          <p class="muted small" style="margin:6px 0 0">Unticked: a video with switchable subtitles, plus the .srt file.</p></div></div>
       <div data-vmode-make>
         <label>Format<select name="vformat"><option value="vertical">Vertical 9:16 — Reels, TikTok, Shorts</option>
           <option value="landscape">Landscape 16:9 — YouTube, websites</option><option value="square">Square 1:1 — feeds</option></select></label>
@@ -1727,9 +1783,13 @@ const MAKERS = {
       wireBlank(form);
       const sync = () => { const m = form.querySelector("[name=vmode]:checked").value;
         form.querySelectorAll("[data-vmode]").forEach(d => d.hidden = d.dataset.vmode !== m);
-        form.querySelector("[data-vmode-make]").hidden = m === "new";
+        form.querySelector("[data-vmode-make]").hidden = m === "new" || m === "subs";
         if (m === "text" && form.querySelector("[name=vlen]").value === "30") form.querySelector("[name=vlen]").value = ""; };
       form.querySelectorAll("[name=vmode]").forEach(r => r.addEventListener("change", sync));
+      slotEl(form, "vsubvideo")?.addEventListener("slotchange", () => {   // másik videó: a régi feliratok nem érvényesek
+        const sl = slotEl(form, "vsubvideo");
+        if (!sl.querySelector("input[type=file]").files.length && slotPicked(form, "vsubvideo")[0] === form.dataset.subsFor) return;
+        form.querySelector("[data-subs]").hidden = true; form.querySelector(".sub-rows").innerHTML = ""; delete form.dataset.subsFor; });
       const picNote = () => { form.querySelector("[data-vpic-ai]").hidden = form.querySelector("[name=vpicmode]:checked")?.value !== "ai"; };
       form.querySelectorAll("[name=vpicmode]").forEach(r => r.addEventListener("change", picNote)); picNote();
       const start = o.mode || (account?.guest ? "new" : "article");
@@ -1739,6 +1799,7 @@ const MAKERS = {
     async submit(fd, form) {
       const m = fd.get("vmode");
       if (m === "new") return blankSubmit("video", fd);
+      if (m === "subs") return subtitleSubmit(fd, form);
       const nv = fd.get("vnarr") || "female";
       const body = { mode: m, format: fd.get("vformat"), duration: +fd.get("vlen") || null, pictures: fd.get("vpicmode"), accent: fd.get("accent"),
         narration: nv === "none" ? "none" : "ai", narration_voice: nv === "none" ? null : nv };
@@ -2717,7 +2778,7 @@ function openMaker(kind, opts = {}) {
       toast(r.msg || (edit && ed ? `Opening the ${EDITOR_NAMES[ed[0]]}…${more}` : r.n > 1 ? `Done — ${r.n} files are in your workspace` : "Done"));
       nav("/app/file/" + encodeURIComponent(r.file_id) + (edit && ed ? "/edit" : ""));
     } catch (err) {
-      go.disabled = false; if (alt) alt.disabled = false;
+      go.disabled = false; if (alt) alt.disabled = false; label();      // a gomb felirata a mostani állapothoz
       if (err.cta) return accountCta(m.title);                 // vendég AI-n: a fiók-ajánlat (nem zsákutca)
       $("#make-status").textContent = err.message;
       if (err.slot) {                                          // hiányzó fájl: amint kiválasztja, magától folytatja

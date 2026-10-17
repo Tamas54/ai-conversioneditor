@@ -1779,6 +1779,7 @@ async def video(
     alpha: Union[bool, str, None] = None,
     duration_mode: Optional[str] = None,
     camera: Optional[Any] = None,
+    subtitles: Optional[Any] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
     text, or graphics on the person's OWN footage (action="overlay").
@@ -1900,6 +1901,10 @@ async def video(
     action="overlay": graphics on the person's OWN video. file_id = their uploaded mp4 | mov | webm | m4v — it stays
       the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); camera=[{"at": time,
       "zoom", "to"?, "dur"?}] punches in on the footage (and back out with zoom 1), changes.camera in an edit;
+      SUBTITLES in the Studio caption style (the dark caption bar of made videos): subtitles=[{"start", "end", "text"}]
+      (seconds or "MM:SS" — e.g. the transcript's sentences, corrected with the person) or "auto" (the transcript as
+      heard — show it to the person first when names or numbers matter); an .srt comes with the result;
+      changes.subtitles in an edit replaces them. Layers are optional when there are subtitles;
       layers=[…] go on top
       → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status). text = the source: numbers,
       dates and quotes in the layers are checked against it (one that isn't there drops that layer, said in the
@@ -1988,7 +1993,8 @@ async def video(
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
-                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera})
+                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera,
+                                    "subtitles": subtitles, "language": language})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,

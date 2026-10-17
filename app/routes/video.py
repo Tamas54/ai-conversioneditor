@@ -181,6 +181,30 @@ async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
     return jobs.start("video", work)
 
 
+@router.post("/api/video/srt")
+async def video_srt(body: dict[str, Any]) -> dict[str, Any]:
+    """{cues: [{start, end, text}], source_file_id?} → a (javított) feliratok .srt-fájlként (a kikapcsolható felirathoz)."""
+    from app.storage import display_label, output_path, write_meta
+    from app.storage.files import new_file_id
+    from app.storage.naming import root_name
+    from app.tools import video
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    try:
+        cues = video.subtitle_cues(body.get("cues"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not cues:
+        raise HTTPException(400, "No subtitle lines — give cues with start, end and text.")
+    src = body.get("source_file_id")
+    sid = new_file_id("srt")
+    output_path(sid).write_text(video._srt_text(cues), "utf-8")
+    stem = root_name(display_label(src), "subtitles") if src else "subtitles"
+    write_meta(sid, label=f"{stem}.srt", operation="subtitles", source_file_id=src)
+    return video._file_entry(sid)
+
+
 @router.post("/api/video/to-pptx")
 async def video_to_pptx(body: dict[str, Any]) -> dict[str, Any]:
     """{file_id: videó vagy projekt, deck_file_id?, after_slide?, title?} → az új pptx."""

@@ -655,3 +655,15 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
 .site-foot p { margin: 18px auto 0; }
 .nav-back { cursor: pointer; }
 .more-note a { color: inherit; }
+
+/* feliratozó: soronként idő (tól–ig) + szöveg + törlés; keskeny képernyőn az idők a szöveg fölé kerülnek */
+.sub-rows { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; margin: 0 0 12px; padding-right: 4px; }
+.sub-row { display: grid; grid-template-columns: 76px 76px 1fr 32px; gap: 6px; align-items: start; }
+.sub-row .sub-time { font-family: var(--f-mono); font-size: 13px; padding: 7px 6px; margin: 0; }
+.sub-row textarea { min-height: 0; margin: 0; resize: vertical; font-size: 14px; }
+.sub-row .sub-del { border: 1px solid var(--rule); background: var(--card); color: var(--graphite); border-radius: 8px; height: 34px; cursor: pointer; }
+.sub-row .sub-del:hover { color: var(--err); border-color: var(--err); }
+@media (max-width: 560px) {
+  .sub-row { grid-template-columns: 1fr 1fr 32px; }
+  .sub-row textarea { grid-column: 1 / -1; grid-row: 2; }
+}

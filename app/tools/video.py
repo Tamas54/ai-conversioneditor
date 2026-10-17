@@ -3242,10 +3242,13 @@ def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
                          + (f" (not .{ext})" if ext else "") + ". To make a video from a text, use action=\"make\".")
     crafts.existing(fid)
     alpha_kinds(body.get("alpha"))
-    if not body.get("layers"):
-        raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
-                         "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}].")
+    if not body.get("layers") and not body.get("subtitles"):
+        raise ValueError("overlay needs layers=[…] and/or subtitles=[…] (or \"auto\"), e.g. [{\"at\": \"00:02\", \"type\": "
+                         "\"lower_third\", \"name\": \"Anna Kovács\", \"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, "
+                         "\"type\": \"chart\", \"chart\": {…}}].")
     layers_from(_unsaid(body.get("layers")), body.get("text") or "", [])   # szerkezeti hiba (típus, idő, hely) most derüljön ki
+    if body.get("subtitles") != "auto":
+        subtitle_cues(body.get("subtitles"))                                   # a feliratok formája is
     return fid, ext
 
 
@@ -3266,7 +3269,9 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         notes: list[str] = []
         raw = await said_to_times(body.get("layers"), crafts.existing(fid), notes, step, body.get("language"), new_ids=True)
         layers = layers_from(raw, body.get("text") or "", notes)
-        if not layers:
+        subs = await _auto_subtitles(fid, body.get("language"), step) if body.get("subtitles") == "auto" \
+            else subtitle_cues(body.get("subtitles"))
+        if not layers and not subs:
             raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
                              "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}]"
                              + (" — every layer given was left out: " + "; ".join(n[2:] for n in notes if n.startswith("⚠ ")) if notes else "") + ".")
@@ -3280,7 +3285,7 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
             base["rotated"] = int(info["rotation"])
         opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": body.get("music"),
                 "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
-                "camera": _footage_camera(body.get("camera"))}
+                "camera": _footage_camera(body.get("camera")), "subtitles": subs}
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
                                        render=body.get("render", True))
@@ -3432,6 +3437,78 @@ async def _upright(src: Path) -> str:
     return fid
 
 
+# ---------- feliratok a saját felvételen (10-17, Kommandant: „webes feliratozó, szövegjavítással és a saját stílusunkkal”) ----------
+# A felirat a make-videó feliratsávja (sötét, lekerekített sáv, a saját betűnk, a keret aljának közepén) — a builder ugyanazzal
+# a kóddal rajzolja; a szöveg a személy (vagy a kliens) javított átirata. A .srt is elkészül (a lejátszók feliratfájlja).
+
+def subtitle_cues(raw: Any) -> list[dict[str, Any]]:
+    """Feliratok: [{start, end, text}] (az átirat „at”/„until” időkódja is jó) → időrendben, átfedés nélkül, üres nélkül."""
+    if raw in (None, "", [], False):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError('subtitles: a list of {"start", "end", "text"} (seconds or "MM:SS"), or "auto"')
+    out = []
+    for c in raw[:3000]:
+        if not isinstance(c, dict):
+            continue
+        txt = re.sub(r"\s+", " ", str(c.get("text") or "")).strip()[:300]
+        if not txt:
+            continue
+        a = timecode(c.get("start", c.get("at", 0)), "subtitle start")
+        b = c.get("end", c.get("until"))
+        b = timecode(b, "subtitle end") if b not in (None, "") else a + max(1.5, len(txt) / 15)
+        out.append({"start": round(a, 3), "end": round(max(b, a + 0.4), 3), "text": txt})
+    out.sort(key=lambda x: x["start"])
+    for x, y in zip(out, out[1:]):                       # egyszerre egy felirat látszik
+        x["end"] = round(min(x["end"], y["start"]), 3)
+    return [x for x in out if x["end"] - x["start"] >= 0.2]
+
+
+def caption_track(cues: list[dict[str, Any]], W: int, H: int, total: float) -> list[dict[str, Any]]:
+    """A feliratok a make-videó feliratsávjának méretében: legfeljebb két sor, a hosszú mondat darabokra (mondat- és
+    tagmondathatáron), a darabok a mondat idején belül a hosszuk arányában."""
+    L = _layout(W, H)
+    cpl = L["capW"] / (0.53 * L["capSize"])
+    out = []
+    for c in cues:
+        a, b = max(0.0, c["start"]), min(total, c["end"])
+        if b - a < 0.2:
+            continue
+        parts = _chunks(c["text"], int(cpl * 2 * 0.9)) or [c["text"]]
+        tot, cur = sum(len(x) for x in parts) or 1, a
+        for x in parts:
+            span = (b - a) * len(x) / tot
+            out.append({"t0": round(cur, 3), "t1": round(cur + span, 3), "text": x, "lines": 1 if len(x) <= cpl * 0.95 else 2})
+            cur += span
+    return out
+
+
+def subtitle_force_style(W: int, H: int) -> str:
+    """A gyors ráégetés (ffmpeg/libass) stílusa a videók feliratsávjához igazítva: Inter, fehér betű sötét, áttetsző
+    sávon, alul középen, a make-videó méretében. A libass a .srt-t 384×288-as vásznon méretezi — ehhez arányítunk."""
+    L = _layout(W, H)
+    k = 288 / H
+    size = max(6, round(L["capSize"] * k))
+    margin_v = max(4, round((H - L["capY"]) * k - size * 0.55))
+    side = max(4, round((W - L["capW"]) / 2 / W * 384 * (W / H) / (4 / 3)))
+    box = "&H470F0B0A"                       # ~72% fedő, sötét (#0A0B0F) — a feliratsáv színe; ASS: &HAABBGGRR
+    return (f"FontName=Inter,Bold=1,FontSize={size},PrimaryColour=&H00FFFFFF,OutlineColour={box},BackColour={box},"
+            f"BorderStyle=3,Outline={max(1, round(size * 0.35))},Shadow=0,Alignment=2,MarginV={margin_v},MarginL={side},MarginR={side}")
+
+
+def _srt_text(cues: list[dict[str, Any]]) -> str:
+    from app.tools import transcript
+    return transcript.srt({"sentences": cues})
+
+
+async def _auto_subtitles(fid: str, language: Optional[str], step: Callable[..., None]) -> list[dict[str, Any]]:
+    """subtitles="auto": a felvétel átirata, javítás nélkül (a webes feliratozó előbb megmutatja és javíttatja)."""
+    from app.tools import transcript
+    step(1, 4, "listening (transcript)")
+    tr = await transcript.transcribe(crafts.existing(fid), transcript_lang(language))
+    return subtitle_cues(tr.get("sentences") or [])
+
+
 def _footage_camera(cam: Any) -> Any:
     """A saját felvétel kamerája (ráközelítés egy pillanatra — „punch-in”): ugyanaz a leírás, mint a jelenet kamerája,
     abszolút időben (másodperc vagy időkód)."""
@@ -3460,8 +3537,11 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             os.symlink(src, work / base["asset"])
         except OSError:
             shutil.copyfile(src, work / base["asset"])
-        story = {"title": opts.get("title") or "Video", "layers": layers}
+        subs = opts.get("subtitles") or []
+        story = {"title": opts.get("title") or "Video", "layers": layers, **({"subtitles": subs} if subs else {})}
         safe = H - round(min(W, H) * 0.05) * 1.2
+        if subs:                                              # a rétegek a feliratsáv fölött maradnak
+            safe = min(safe, _caption_top(W, H))
         map_credits, gfx_findings = await _place_on_maps(story, (W, H, safe))
         gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
         credit_list = list(dict.fromkeys(gfx_credits + map_credits))
@@ -3471,6 +3551,10 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                              "base": {"file": base["asset"], "label": "Footage"}, "scenes": [], "captions": [], "audio": {}}
         if opts.get("camera"):
             D["camera"] = _camera_keys(opts["camera"], total, W, H)
+        if subs:                                              # a make-videó feliratsávja: ugyanaz a builder-kód rajzolja
+            Lc = _layout(W, H)
+            D["L"] = {k: Lc[k] for k in ("capW", "capSize", "capY", "capPad")}
+            D["captions"] = caption_track(subs, W, H, total)
         D["layers"], rows, problems = layer_comps(layers, W, H, total, lang, acc, safe)
         m_v, m_f, track = [], [], None
         if _builtin_music(opts):                              # zene a felvétel saját hangja alá (ahol beszélnek, halkul)
@@ -3496,7 +3580,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                 "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
-                         "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera")},
+                         "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera"),
+                         "subtitles": subs or None},
                 "source": (source or "")[:30000], "layer_source": (source or "")[:30000],
                 "layer_notes": [n for n in layer_notes if not n.startswith("⚠ ")], "timeline": [], "layer_timeline": rows}
         write_meta(pid, label=f"{label_stem}.ecproj", operation=operation, source_file_id=parent or base["file_id"],
@@ -3514,6 +3599,13 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                   "width": W, "height": H, "fps": fps,
                                   "duration": {"requested": None, "actual": total, "mode": "footage"},
                                   "layers": layer_listing([ly for ly in layers if ly["id"] in placed]), "credits": credits or None}
+        srt_entry = None
+        if subs:                                              # a javított feliratok fájlként is (lejátszók, YouTube)
+            sid = new_file_id("srt")
+            output_path(sid).write_text(_srt_text(subs), "utf-8")
+            write_meta(sid, label=f"{label_stem}.srt", operation="subtitles", source_file_id=pid, extra={"group": group})
+            srt_entry = _file_entry(sid)
+            result["subtitles"] = {"count": len(subs), "srt": srt_entry}
         if not render:
             result["files"] = [result["project"]]
             return result
@@ -3531,7 +3623,10 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         chk["findings"] = chk.get("findings", []) + lay_f + problems + gfx_findings + script_findings + \
             [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]]
         result["video"] = vid
-        result["files"] = [result["project"], vid]
+        result["files"] = [result["project"], vid] + ([srt_entry] if srt_entry else [])
+        if subs:
+            chk["verified"].append(f"{len(subs)} subtitle(s) in the Studio caption style, {len(D['captions'])} on screen "
+                                   f"(long ones in two-line parts); the .srt is in the files.")
         if kinds:
             step(3, 4, "rendering the transparent graphics")
             a_files, a_v, a_f = await _render_alpha(D, work, lotties, pid, label_stem, group, kinds, _probe_time(D, rows))
@@ -3796,8 +3891,9 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
             "sentences": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}
                           for x in tr["sentences"]],
             "how": 'Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …} — it starts as they are said and '
-                   'stays to the end of that sentence (or give dur / until). The .srt can go on the video as subtitles: '
-                   'file_tools add-subtitles.',
+                   'stays to the end of that sentence (or give dur / until). Subtitles in the Studio caption style: show the '
+                   'person these sentences, correct them together, then video(action="overlay", file_id, subtitles=[{"start", '
+                   '"end", "text"}…]) — or quickly, as heard: file_tools add-subtitles with this .srt.',
             "check": check}
 
 
@@ -4175,7 +4271,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
-    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera"}
+    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera", "subtitles"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
@@ -4184,6 +4280,8 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     opts = dict(spec.get("opts") or {})
     if "camera" in changes:
         opts["camera"] = _footage_camera(changes["camera"])
+    opts["subtitles"] = subtitle_cues(changes["subtitles"]) if "subtitles" in changes else \
+        ((spec.get("story") or {}).get("subtitles") or [])
     for k in ("accent", "title", "music"):
         if k in changes:
             opts[k] = changes[k]
@@ -4197,8 +4295,8 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
         changes = {**changes, "layers": await said_to_times(changes.get("layers"), footage, notes, step),
                    "add_layers": await said_to_times(changes.get("add_layers"), footage, notes, step)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
-    if not layers:
-        raise ValueError("That would leave no layers — keep at least one, or use the original video as it is.")
+    if not layers and not opts["subtitles"]:
+        raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
     return await _assemble_overlay(dict(spec["base"]), layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
                                    label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid)
