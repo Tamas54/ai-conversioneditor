@@ -863,6 +863,9 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
                                                          series [{name, values}] — scatter: series
                                                          [{name, points: [[x, y]…]}]}
       table {title, headers, rows}                 gallery {title, images[≤4], captions?}
+      diagram {title, diagram: {type: decision_tree | swimlane | network, nodes, edges, …}} — the same object as
+              a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the
+              boxes, the legend); the same actor keeps its colour on every slide
       closing {title?, subtitle?}
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).
@@ -1783,7 +1786,8 @@ async def video(
       (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
       color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity,
       anim: appear | pop | grow | draw (lines and outlines draw themselves) | slide-left | slide-right | slide-up |
-      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there),
+      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there), dash (line, arrow,
+      path: "dashed" | "dotted" | [dash, gap] px), dim [[from, to] seconds] (faded while something else is shown),
       image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
       {"search": "bicycle"} — the server picks a free LottieFiles animation and credits it; it loops unless
       loop=false)}]}. video(action="lottie", text="bicycle") lists animations with previews, to choose one yourself.
@@ -1797,6 +1801,23 @@ async def video(
       The map widens to show every placed element. Anything left out of a graphic (unknown shape, no position, a
       number not in the source) is listed in the check's findings. Up to 80 elements, each its own layer (editable by hand); a text
       with a number that isn't in the source is left out (the check says which).
+      Explainer diagrams — give the relationship, the server lays it out (9:16, 16:9 and 1:1 each their own way) and builds
+      it up step by step: {"type": "decision_tree" | "swimlane" | "network", "title"?, "nodes": [{"id", "text" (≤ 70
+      characters), "kind"? (tree: question|condition|outcome · swimlane: start|step|decision|end), "actor"? (swimlane: its
+      lane) | "group"? (network colour + legend), "order"? (swimlane: same order = same column), "size"? 1–3, "at"? (seconds:
+      when it appears)}], "edges": [{"from", "to", "label"? ("yes", "if …", an amount), "kind"? sequence (then — the default)
+      | hierarchy (is above) | money (money/goods flow, thicker) | cause | correlation (moves together: never drawn as a
+      cause, no arrowhead) | link, "certainty"? certain | uncertain (dashed) | disputed (dotted + ?)}], "actors"? {"Name":
+      {"color"?, "short"?}} (the same actor keeps its colour in every scene and edit), "reveal"? steps (default: tree root
+      then branch by branch, swimlane in order, network centre then rings — the new part bright, the rest faded) | all,
+      "pace"? seconds per step (the scene lengthens to fit), "focus"? false (no fading), "direction"? auto | down | right |
+      outline (tree as indented rows), "center"? (network node id)}. Shorthands: tree "root" + nested "branches": [{"label",
+      "text", "kind"?, "branches"?}]; swimlane "steps" (= nodes; without edges they follow in order); network edges alone
+      (names as from/to). The legend lists the arrow kinds used. Numbers in boxes and labels are checked against the
+      source (a label without one is left out, a box without one drops the diagram); a broken diagram is refused with
+      what to fix. Change one with action=edit {"chart": {…}} WITHOUT "type": only the nodes (by id) and edges (by
+      from + to) you send change — e.g. {"edges": [{"from": "a", "to": "b", "certainty": "uncertain"}]}, {"nodes": [{"id":
+      "n3", "branches": [{"label", "text"}]}]} adds branches, {"remove": true} deletes, {"pace": 1.5} slows the build-up.
       script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
       comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
       {"type": "script", "title"?, "backdrop"?, "code": "…"}; the code gets comp (the scene composition), W, H, dur

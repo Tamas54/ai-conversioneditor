@@ -467,6 +467,12 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         for k in ("size", "width", "radius", "at", "dur", "opacity"):
             if num(e.get(k)) is not None:
                 el[k] = float(e[k])
+        dash = {"dashed": [16, 11], "dotted": [0.5, 11]}.get(e["dash"]) if isinstance(e.get("dash"), str) else e.get("dash")
+        if isinstance(dash, (list, tuple)) and len(dash) == 2 and all(num(v) is not None for v in dash):   # szaggatott vonal
+            el["dash"] = [max(0.1, min(200.0, float(dash[0]))), max(1.0, min(200.0, float(dash[1])))]
+        if isinstance(e.get("dim"), list):        # irányított figyelem: ezekben a szakaszokban [tól, ig] mp halványabb
+            el["dim"] = [[float(w[0]), float(w[1])] for w in e["dim"][:8] if isinstance(w, (list, tuple)) and len(w) == 2
+                         and all(num(v) is not None for v in w) and w[1] > w[0]]
         for k in ("from", "to", "move_to"):
             if pt(e.get(k)):
                 el[k] = pt(e[k])
@@ -550,7 +556,8 @@ def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Opti
 
 
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
-                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script")
+                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script",
+                "decision_tree", "swimlane", "network")
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -559,9 +566,13 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
     számai) — különben az ábra kimarad. A modell nem talál ki számot."""
     if not isinstance(c, dict):
         return None, None
-    typ = str(c.get("type") or "column").lower()
+    from app.tools import diagrams
+    typ = diagrams.ALIASES.get(str(c.get("type") or "column").lower(), str(c.get("type") or "column").lower())
     if typ not in _CHART_TYPES:
         return None, None
+    if typ in diagrams.TYPES:          # magyarázó ábra: a leírása marad a jelenetben, a rajzolás a graphic elemeivel
+        nums = _text_numbers(source)
+        return diagrams.from_plan({**c, "type": typ}, lambda t: [x for x in _text_numbers(t) if x not in nums], _clean)
     if typ == "graphic":
         return _graphic_from_plan(c, source)
     if typ == "script":
@@ -838,6 +849,14 @@ def _size_for(text: str, base: float, ref: int, floor: float) -> int:
     return round(max(floor, base * min(1.0, math.sqrt(ref / max(len(text), 1)))))
 
 
+def _scene_seconds(s: dict[str, Any]) -> Optional[float]:
+    """A jelenet kért hossza: a megadott, vagy — ha nincs — egy kifejezett tempójú (pace) ábra-kibontás igénye."""
+    if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0:
+        return float(s["duration"])
+    from app.tools import diagrams
+    return diagrams.seconds_needed(s.get("chart"))
+
+
 def _chunks(text: str, max_chars: int) -> list[str]:
     """Felirat-darabok: mondathatáron törünk (a rövid mondatok egy darabba kerülnek); a túl hosszú mondat
     tagmondathatáron (, ; : —), végső esetben szóhatáron. (10-12: a puszta karakterszámos bontás mondat
@@ -1012,6 +1031,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
         anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
         if e.get("move_to"):
             anim["move_to"] = px(e["move_to"])
+        if e.get("dim"):                  # irányított figyelem: a rétegre (és a nyílhegyére) is
+            anim["dim"] = [[round(a, 3), round(b, 3)] for a, b in e["dim"]]
         op = int(max(5, min(100, e.get("opacity", 100))))
         if sh in ("rect", "circle", "pin"):
             if sh == "rect":
@@ -1042,6 +1063,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                   "fill": _gfx_color(e.get("fill"), acc, "accent" if sh == "polygon" else "none"),
                   "stroke": _gfx_color(e.get("stroke"), acc, "none" if sh == "polygon" and e.get("fill") else "accent"),
                   "stroke_w": round(e.get("width", 8) * k, 1), "opacity": op, **anim}
+            if e.get("dash"):
+                el["dash"] = [round(e["dash"][0] * k, 2), round(e["dash"][1] * k, 2)]
             if sh == "arrow":           # nyílhegy: kis háromszög a végpontnál, a vonal irányába fordítva
                 (ax, ay), (bx, by) = px(pts[0]), px(pts[1])
                 ang = math.atan2(by - ay, bx - ax)
@@ -1052,7 +1075,7 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                 out.append(el)
                 out.append({"k": "path", "name": f"Arrowhead {i + 1}", "points": [[round(v, 1) for v in tip], [round(v, 1) for v in l], [round(v, 1) for v in r_]],
                             "closed": True, "fill": el["stroke"] if el["stroke"] else "accent", "stroke": None, "stroke_w": 0, "opacity": op,
-                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2})
+                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2, **({"dim": anim["dim"]} if anim.get("dim") else {})})
                 continue
             out.append(el)
         elif sh == "text":
@@ -1100,11 +1123,15 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
     return out
 
 
-def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Optional[list[float]] = None) -> list[dict[str, Any]]:
+def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Optional[list[float]] = None,
+                   dur: Optional[float] = None) -> list[dict[str, Any]]:
     """Egy mozgó grafikon rétegei (a builder csak lerakja): oszlop / sáv / vonal, értékcímkék, kategóriacímkék,
     alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
     if ch["type"] == "script":           # a jelenetet az ügynök szkriptje rajzolja (builder: runScript)
         return []
+    from app.tools import diagrams
+    if ch["type"] in diagrams.TYPES:     # magyarázó ábra → a saját grafika elemei, a képkocka arányára rendezve
+        return _graphic_elements({"elements": diagrams.to_graphic(ch, W, H, accent, dur, lang)}, W, H, accent or _rgb(None))
     m, vertical = min(W, H), H > W * 1.2
     items = ch["items"]
     n, vals = len(items), [float(i["value"]) if i.get("value") is not None else 0.0 for i in items]
@@ -1475,7 +1502,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     Tt, Te = _cards(total)
     weights = [max(len(s.get("caption") or s.get("headline") or ""), 45) for s in scenes]
     # a jelenetterv (scenes) adhat fix hosszt jelenetenként; a többi a maradékon osztozik a felirat hossza szerint
-    fixed = [float(s["duration"]) if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0 else None for s in scenes]
+    fixed = [_scene_seconds(s) for s in scenes]
     if total is None:                        # saját szöveg, hossz nélkül: olvasási tempó (~14 karakter/s)
         durs = [f or max(3.5, w / 14 + 1.0) for f, w in zip(fixed, weights)]
         total = Tt + sum(durs) + Te - X * (n + 1)
@@ -1517,7 +1544,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
             # cím nélküli graphic/script is a jelenet címét kapja (10-13: a headline nyomtalanul elveszett — az ábrás
             # jelenet a headline-t nem rajzolja, csak az ábra címét)
             chart = {"title": chart.get("title") or head,
-                     "elements": chart_elements(chart, W, H, lang, _rgb(accent)),
+                     "elements": chart_elements(chart, W, H, lang, _rgb(accent), dur=d),
                      **({"backdrop": chart["backdrop"]} if chart.get("backdrop") is not None else {}),
                      **({"code": chart["code"], "id": s.get("id") or f"s{i + 1}"} if chart["type"] == "script" else {})}
         d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
@@ -2869,6 +2896,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                     scene_plan: bool = False, layer_notes: Optional[list[str]] = None) -> dict[str, Any]:
     """Forgatókönyv + képleírások → .ecproj (+ MP4). A make és az edit közös útja; parent = a szerkesztett projekt
     (a képei és a hangja {"asset": név} hivatkozással, letöltés nélkül jönnek át)."""
+    from app.tools import diagrams
+    diagrams.prepare(story, opts.get("accent"))       # szereplő → szín: a projekt regisztere (story["actors"])
     fmt, total = opts["fmt"], opts.get("total")
     W, H = FORMATS[fmt]
     requested = opts.get("requested")
@@ -3403,6 +3432,9 @@ def _video_text(story: dict[str, Any]) -> str:
             parts += [sc["stat"].get("value") or "", sc["stat"].get("label") or ""]
         ch = sc.get("chart") or {}
         parts.append(ch.get("title") or "")
+        if ch.get("nodes"):                        # magyarázó ábra: a dobozok, az élcímkék, a sávok neve
+            from app.tools import diagrams
+            parts += diagrams.texts(ch)
         for it in ch.get("items") or []:
             parts += [str(it.get("label") or ""), str(it.get("text") or ""), str(it.get("value") if it.get("value") is not None else "")]
         if ch.get("total"):
@@ -3682,7 +3714,8 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
     if "chart" in ch:
         cc = ch["chart"]
         if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
-            cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a mértékegység)
+            from app.tools import diagrams        # ábránál a csúcsok / élek id (from+to) szerint frissülnek
+            cc = diagrams.merge(base["chart"], cc) if base["chart"].get("type") in diagrams.TYPES else {**base["chart"], **cc}
         chart, note = _chart_from_plan(cc, source) if cc else (None, None)
         for n in (note if isinstance(note, list) else [note] if note else []):
             # ⚠ = figyelmeztetés (a check findings-be): ami kimaradt, nem mehet el csendben (10-12: a térkép tűi kiestek,
@@ -3695,6 +3728,11 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
         sc["chart"] = chart
         if chart:
             sc["stat"] = None
+    if (sc.get("chart") or {}).get("nodes") and ("chart" in ch or "duration" in ch):
+        from app.tools import diagrams
+        n_ = diagrams.duration_note(sc["chart"], sc.get("duration"))
+        if n_:
+            notes.append(n_)
     return sc
 
 
@@ -3892,6 +3930,10 @@ Layers are time-coded graphics over the video (listed below with their ids); cha
 own footage has only layers: change or add layers there, never scenes.
 <chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
            "items": [{"label": str, "value": number|null, "text": str}]}
+A scene with a diagram (decision_tree | swimlane | network, listed with its node ids): to change it send a chart WITHOUT
+"type" holding only what changes — {"nodes": [{"id", "text"?, "kind"?, "remove"?: true} | a new node],
+"edges": [{"from", "to", "kind"?, "certainty"?: "certain|uncertain|disputed", "label"?, "remove"?: true}], "pace"?: seconds
+per reveal step}; nodes match by id, edges by from+to; new ones are added.
 Scene numbers are the ones listed below (1 = the first scene after the title card). Numbers in charts and stats must
 come from the video's source or from the request itself — never invent them. Keep the language of the video.
 
@@ -3913,6 +3955,9 @@ def _describe(spec: dict[str, Any]) -> str:
     for i, sc in enumerate(st.get("scenes") or [], 1):
         pic = pics[i] if i < len(pics) else None
         what = f"chart {sc['chart']['type']} “{sc['chart']['title']}”" if sc.get("chart") else (f"stat {sc['stat']['value']}" if sc.get("stat") else "")
+        if (sc.get("chart") or {}).get("nodes"):
+            from app.tools import diagrams
+            what += " — " + diagrams.describe(sc["chart"])
         lines.append(f"{i}. {sc.get('headline')} — caption: {sc.get('caption')}" + (f" — {what}" if what else "")
                      + (f" — picture: {(pic or {}).get('credit') or 'yes'}" if pic else " — no picture"))
     if st.get("scenes"):
