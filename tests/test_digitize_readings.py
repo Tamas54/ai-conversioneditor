@@ -61,3 +61,11 @@ def test_review_pdf_puts_page_and_transcript_side_by_side(tmp_path):
     notes = [a.info.get("content") for a in doc[0].annots()]
     assert any("Kolozsvan" in n for n in notes) and any("Illegible" in n for n in notes)
     assert "Kolozsvár" in doc[0].get_text() and "[[" not in doc[0].get_text()
+
+
+def test_partial_and_empty_marks_from_the_real_model():
+    """Valódi DeepSeek-válaszok (10-17, foltos tesztlap): csak a kétes betűket jelölte, vagy üres jelölést adott."""
+    from app.tools import digitize as dz
+    _, items = dz.number_uncertain(["[[FIGURE other 1 2 3 4 | folt]]\n\nA mint Koloz[[?svárra|svárra]] a szekér, és Koloz[[?]] felől."])
+    assert items[0]["word"] == "Kolozsvárra" and items[0]["reading"] == "svárra" and items[0]["also"] == []
+    assert items[1]["kind"] == "illegible" and "FIGURE" not in items[0]["context"]

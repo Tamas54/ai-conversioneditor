@@ -59,7 +59,8 @@ Step 2 — transcribe the page:
 - Footnotes go after the page text, each on its own line as "[^1]: text"; mark the place in the text as [^1].
 - A table becomes a Markdown table.
 - A word you can read only with doubt (faded, damaged, blotted, an unusual letter form): write your best reading
-  as [[?reading]], or [[?reading|other possible reading]] when another reading is also possible. Never guess
+  of the WHOLE word as [[?reading]], or [[?reading|other possible reading]] when another reading is also possible
+  — also when only part of the word is covered (a stain over the end of a name: [[?Kolozsvárról]]). Never guess
   silently, and do not mark words you read clearly. A word you cannot read at all becomes [?].
 - Put each [[FIGURE …]] line from step 1 where the picture stands in the text (before the text that follows it).
 - If the page has no text and no pictures, reply with nothing.
@@ -188,16 +189,21 @@ def number_uncertain(pages: list[str]) -> tuple[list[str], list[dict[str, Any]]]
             items.append({"page": n, "reading": "", "also": [], "kind": "illegible"})
             return f"[[?#{len(items) - 1}:?]]"
         first = len(items)
+        page = re.sub(r"\[\[\?\s*(?:\|[^\]]*)?\]\]", "[?]", page)        # üres kétes jelölés = olvashatatlan
         page = _ILL.sub(ill, _UNC.sub(unc, page))
         for m in _UNC.finditer(page):
             k = int(m.group(1))
             if k < first:
                 continue
-            flat = lambda t: re.sub(r"\s+", " ", re.sub(r"(?m)^#{1,6}\s+", "", best_reading(t, items)))  # noqa: E731
+            flat = lambda t: re.sub(r"\s+", " ", re.sub(r"(?m)^#{1,6}\s+", "", best_reading(_FIG.sub("", t), items)))  # noqa: E731
             left, right = flat(page[:m.start()])[-50:], flat(page[m.end():])[:50]
+            # a modell néha csak a kétes betűket jelöli („Koloz[[?svárra]]”): a teljes szó a megjegyzésbe
+            pre, post = re.search(r"[\w’'-]*$", left).group(0), re.match(r"[\w’'-]*", right).group(0)
+            if items[k]["reading"] and (pre or post):
+                items[k]["word"] = pre + items[k]["reading"] + post
             left = left.split(" ", 1)[-1] if len(left) == 50 and " " in left else left
             right = right.rsplit(" ", 1)[0] if len(right) == 50 and " " in right else right
-            items[k]["context"] = f"…{left}{items[k]['reading'] or '[?]'}{right}…"
+            items[k]["context"] = f"…{left}{items[k]['reading'] or '[?]'}{right}…".replace("… ", "…")
         out.append(page)
     return out, items
 
@@ -245,7 +251,8 @@ def mark_docx(path: Path, items: list[dict[str, Any]], keep: bool) -> int:
                 else:
                     d.highlight(para, a, b, "yellow")
                     also = (" — also possible: " + ", ".join(f"“{x}”" for x in it["also"])) if it["also"] else ""
-                    d.comment(para, a, b, f"Uncertain reading on page {it['page']}: “{it['reading']}”{also}. "
+                    part = f" (the doubtful letters: “{it['reading']}”)" if it.get("word") else ""
+                    d.comment(para, a, b, f"Uncertain reading on page {it['page']}: “{it.get('word') or it['reading']}”{part}{also}. "
                                           "Check it against the page image.")
                 done += 1
             except docx_marks.RevisionError:
@@ -259,7 +266,7 @@ def uncertain_summary(items: list[dict[str, Any]], limit: int = 100) -> dict[str
     unc = [i for i in items if i["kind"] == "uncertain"]
     ill = [i for i in items if i["kind"] == "illegible"]
     return {"uncertain": len(unc), "illegible": len(ill), "pages": sorted({i["page"] for i in items}),
-            "items": [{k: i[k] for k in ("page", "kind", "reading", "also", "context") if i.get(k) not in (None, "", [])}
+            "items": [{k: i[k] for k in ("page", "kind", "word", "reading", "also", "context") if i.get(k) not in (None, "", [])}
                       for i in items[:limit]]}
 
 
@@ -336,7 +343,7 @@ def _review_pdf(pages: list[Path], texts: list[str], items: list[dict[str, Any]]
             elif it:
                 a.set_colors(stroke=(1, 0.88, 0.4))
                 also = (" — also possible: " + ", ".join(it["also"])) if it["also"] else ""
-                a.set_info(content=f"Uncertain reading on page {n}: {it['reading']}{also}")
+                a.set_info(content=f"Uncertain reading on page {n}: {it.get('word') or it['reading']}{also}")
             a.update()
     out.save(str(dst), garbage=3, deflate=True)
     out.close()
