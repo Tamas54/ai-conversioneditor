@@ -572,7 +572,8 @@ def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Opti
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
                 "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script",
                 "decision_tree", "swimlane", "network",
-                "waterfall", "slope", "scatter", "band", "lines", "race", "sankey")     # az utóbbi hét: app/tools/motion_charts.py
+                "waterfall", "slope", "scatter", "band", "lines", "race", "sankey",
+                "threejs")                                                     # a kliens three.js-jelenete: app/tools/threejs.py     # az utóbbi hét: app/tools/motion_charts.py
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -595,6 +596,9 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
         return _graphic_from_plan(c, source)
     if typ == "script":
         return _script_from_plan(c)
+    if typ == "threejs":
+        from app.tools import threejs
+        return threejs.from_plan(c, _clean)
     title = _clean(c.get("title"), 60, "Chart title")
     nums = _text_numbers(source)
     src = re.sub(r"\s+", " ", source or "").lower()
@@ -1152,6 +1156,9 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
     alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
     if ch["type"] == "script":           # a jelenetet az ügynök szkriptje rajzolja (builder: runScript)
         return []
+    if ch["type"] == "threejs":          # 3D: a klip a render után kerül a helyére (_render_3d), addig jelölő elem
+        return [{"k": "threejs", "name": "3D scene", "code": ch["code"], "transparent": ch.get("transparent", True),
+                 "size": [W, H], "pos": [round(W / 2, 1), round(H / 2, 1)]}]
     from app.tools import diagrams, motion_charts
     if ch["type"] in diagrams.TYPES:     # magyarázó ábra → a saját grafika elemei, a képkocka arányára rendezve
         return _graphic_elements({"elements": diagrams.to_graphic(ch, W, H, accent, dur, lang)}, W, H, accent or _rgb(None))
@@ -3123,6 +3130,12 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             D["end"]["image"] = "end-blur.jpg"
             extra.append("end-blur.jpg")
         D["shade"] = {"title": "shade-title.png", "scene": "shade-scene.png"}
+        if _has_3d(D):                                        # three.js-jelenetek: a végleges hosszukban, a build előtt
+            step(3, 5, "rendering the 3D scenes")
+            three_names, three_notes = await _render_3d(D, work, D["accent"])
+            extra += three_names
+            pre_verified += [n for n in three_notes if not n.startswith("⚠ ")]
+            pre_findings += [n[2:] for n in three_notes if n.startswith("⚠ ")]
         step(3, 5, "building the timeline")
         out = await _build(D, work, lotties)
         scripted = any(((x.get("chart") or {}).get("type") == "script") for x in (story.get("scenes") or []) + (story.get("layers") or []))
@@ -3509,6 +3522,35 @@ async def _auto_subtitles(fid: str, language: Optional[str], step: Callable[...,
     return subtitle_cues(tr.get("sentences") or [])
 
 
+def _has_3d(D: dict[str, Any]) -> bool:
+    return any(el.get("k") == "threejs" for sc in D.get("scenes") or [] for el in ((sc.get("chart") or {}).get("elements") or [])) \
+        or any(el.get("k") == "threejs" for ly in D.get("layers") or [] for el in ly.get("elements") or [])
+
+
+async def _render_3d(D: dict[str, Any], work: Path, accent: list[float]) -> tuple[list[str], list[str]]:
+    """A three.js-jelölők (jelenetek, rétegek) helyére a lerenderelt klip — a jelenet / réteg hosszában és méretében.
+    → (a klipek fájlnevei a projekt médiájához, megjegyzések)."""
+    from app.tools import threejs
+    jobs = [(el, float(sc["dur"])) for sc in D.get("scenes") or [] for el in ((sc.get("chart") or {}).get("elements") or [])
+            if el.get("k") == "threejs"]
+    jobs += [(el, float(ly["dur"])) for ly in D.get("layers") or [] for el in ly.get("elements") or [] if el.get("k") == "threejs"]
+    names, notes = [], []
+    for el, dur in jobs:
+        w, h = el["size"]
+        clip, n_ = await threejs.render(el["code"], int(w), int(h), dur, transparent=el.get("transparent", True),
+                                        accent=accent, dest=work)
+        notes += n_
+        if clip is None:                     # a hiba a check-ben; a jelenet a háttérrel és a címmel megy tovább
+            el.clear()
+            el.update({"k": "rect", "name": "3D scene (failed)", "size": [2, 2], "pos": [0, 0], "opacity": 0})
+            continue
+        names.append(clip.name)
+        pos = el["pos"]
+        el.clear()
+        el.update({"k": "image", "name": "3D scene", "file": clip.name, "size": [w, h], "pos": pos, "fit": "contain", "t0": 0})
+    return names, notes
+
+
 def _footage_camera(cam: Any) -> Any:
     """A saját felvétel kamerája (ráközelítés egy pillanatra — „punch-in”): ugyanaz a leírás, mint a jelenet kamerája,
     abszolút időben (másodperc vagy időkód)."""
@@ -3566,6 +3608,12 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             if track:
                 D["audio"] = {"music": track, "musicDb": 0 if speech else -10}
         problems = problems + m_f
+        if _has_3d(D):                                        # three.js-rétegek: a réteg hosszában és méretében
+            step(2, 4, "rendering the 3D scenes")
+            three_names, three_notes = await _render_3d(D, work, acc)
+            gfx_names = gfx_names + three_names
+            m_v = m_v + [n for n in three_notes if not n.startswith("⚠ ")]
+            problems = problems + [n[2:] for n in three_notes if n.startswith("⚠ ")]
         step(2, 4, "building the timeline")
         out = await _build(D, work, lotties)
         scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
