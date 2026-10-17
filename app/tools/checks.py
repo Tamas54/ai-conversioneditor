@@ -296,9 +296,48 @@ def pptx_problems(p: Path) -> tuple[list[str], dict[str, Any]]:
     return out, stats
 
 
-def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) -> tuple[dict[str, Any], Optional[int]]:
-    problems, stats = pptx_problems(out)
+async def check_deck(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) -> tuple[dict[str, Any], Optional[int]]:
+    """A pakli ellenőrzése a készítés/szerkesztés végén: UGYANAZ a renderelt elemző, mint a validate_document-é
+    (a szerkesztő és a PowerPoint/LibreOffice tördelése) — a ChatGPT-teszt 10-17: a készítő „rendben”-t mondott,
+    a külön validátor túllógó szöveget talált. A két út ítélete így nem térhet el; a PDF-ek gyorsítótárban
+    maradnak, a rákövetkező validate_document nem rendereli újra."""
+    from app.tools import validate
+    rendered, note = None, None
+    try:
+        layouts, notes = await validate._layouts(out, "deck", want_file=True)
+        try:
+            if layouts:
+                rendered = await asyncio.to_thread(validate.deck_issues, out, layouts)
+                note = f"Rendered and checked like validate_document: " + "; ".join(
+                    f"{validate.view_name(L)} — {_plural(L.pages, 'slide')}" for L in layouts) + "."
+            notes and log.info("pakli-ellenőrzés: %s", notes)
+        finally:
+            for L in layouts:
+                L.close()
+    except Exception as e:
+        log.info("renderelt pakli-ellenőrzés kimaradt: %s", e)
+        note = f"The rendered check could not run ({str(e)[:100]}) — text overflow was only estimated."
+    return await asyncio.to_thread(check_pptx, out, src, tool, args, rendered, note)
+
+
+def _deck_finding(it: dict[str, Any]) -> str:
+    fix = f" Fix: {it['fix']}" if it.get("fix") else ""
+    return f"{it['id']} ({it['severity']}) — {it['message']}{fix}"
+
+
+def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any], rendered: Optional[list[dict[str, Any]]] = None,
+               note: Optional[str] = None) -> tuple[dict[str, Any], Optional[int]]:
+    from app.tools.validate import ERROR
+    if rendered is not None:
+        _, stats = pptx_problems(out)
+        problems = [_deck_finding(i) for i in rendered]
+        errors = any(i["severity"] == ERROR for i in rendered)
+    else:
+        problems, stats = pptx_problems(out)
+        errors = False
     verified, findings, first_changed = [f"{_plural(stats['slides'], 'slide')}, {_plural(stats['pictures'], 'picture')}."], [], None
+    if note:
+        verified.append(note)
     if stats["slides"] == 0:
         return make("failed", ["The deck has no slides."], []), None
     if src is not None and _ext(src) == "pptx":
@@ -329,9 +368,11 @@ def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) 
             findings.append(f"“{pat}” still appears in the deck.")
         elif pat and not args.get("regex"):
             verified.append(f"“{pat}” no longer appears in the deck.")
-    findings += problems[:12]
+    findings += problems[:12] + ([f"…and {len(problems) - 12} more — validate_document(file_id) lists them all."]
+                                 if len(problems) > 12 else [])
     if findings:
-        return make("needs_check", findings + [LOOK], verified), first_changed
+        # ugyanaz az ítélet, mint a validate_document-é: hiba → failed (javítani kell), figyelmeztetés → needs_check
+        return make("failed" if errors else "needs_check", findings + [LOOK], verified), first_changed
     if src is None or first_changed:
         return make("ok", [], verified + ["No slide has text overflowing, anything off the slide, or empty placeholders."]), first_changed
     return make("needs_check", [LOOK], verified), first_changed
@@ -581,9 +622,23 @@ async def run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Opt
         return None, None
 
 
+def merge_checks(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """Két ellenőrzés egyben: a rosszabb státusz, mindkét lista (ismétlés nélkül)."""
+    rank = {"ok": 0, "needs_check": 1, "failed": 2}
+    status = max(a["status"], b["status"], key=lambda x: rank.get(x, 1))
+    uniq = lambda xs: list(dict.fromkeys(xs))  # noqa: E731
+    findings = uniq([f for f in a["findings"] + b["findings"] if f != LOOK]) + ([LOOK] if LOOK in a["findings"] + b["findings"] else [])
+    return make(status, findings, uniq(a["verified"] + b["verified"]))
+
+
 async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[int]]:
     own = normalize(res.get("check"))
     if own is not None:
+        out = _path(main_file(res))
+        if out is not None and _ext(out) == "pptx" and not res.get("read_only"):
+            # saját ellenőrzés + a renderelt pakli-ellenőrzés: minden pptx-kimenet ugyanazon az elemzőn megy át
+            deck, page = await check_deck(out, None, tool, args)
+            return merge_checks(own, deck), page
         return own, None
     if tool in _NO_CHECK or (tool == "wordcraft" and args.get("read")):    # olvasás: nincs új fájl, nincs mit ellenőrizni
         return None, None
@@ -642,7 +697,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
         removed = len(_parse_page_range(str(args.get("page_range") or ""), before))
         return await check_pages_math(out, before - removed, f"{removed} of {before} pages removed"), None
     if ext == "pptx":
-        return await asyncio.to_thread(check_pptx, out, src, tool, args)
+        return await check_deck(out, src, tool, args)
     if ext == "docx":
         return await with_layout(await asyncio.to_thread(check_docx, out, src, tool, args), out), None
     if tool in ("photocraft", "photo_edit") or (ext in ("psd", "png", "jpg", "jpeg", "webp") and tool not in ("design", "vectorcraft")):

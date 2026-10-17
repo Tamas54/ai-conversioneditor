@@ -51,11 +51,75 @@ def steps(commands: list[tuple[str, Optional[dict]]], results: list[Any]) -> lis
 
 
 def engine_results(log_text: str) -> list[Any]:
-    """A photocraft/vectorcraft `run` kimenetéből a parancsonkénti eredmények (export/mentés sorai nélkül)."""
+    """A photocraft/vectorcraft/gridcraft `run` kimenetéből a parancsonkénti eredmények (export/mentés sorai nélkül)."""
     out = []
     for v in json_stream(log_text):
         if isinstance(v, dict) and "command" in v and v.get("step", "cmd") == "cmd":
             out.append(v.get("result"))
+    return out
+
+
+_PRINTED = re.compile(r"^([A-Za-z]\w*(?:\.\w+)+)(?: → |: )(.*)$")
+
+
+def arrow_results(log_text: str) -> list[Any]:
+    """A `run --print` kimenete: parancsonként egy sor — deckcraft „id → json”, wordcraft „id: json”."""
+    out = []
+    for line in log_text.splitlines():
+        m = _PRINTED.match(line.strip())
+        if not m:
+            continue
+        try:
+            out.append(json.loads(m.group(2)))
+        except ValueError:
+            out.append(m.group(2).strip() or None)
+    return out
+
+
+# Csak olvasó parancsok: lekérdezés, vizsgálat, navigáció, kijelölés — a dokumentum NEM változik tőlük.
+# Ha egy futtatásban csak ilyenek vannak, nincs új fájl és nincs új változat (a ChatGPT-teszt 10-17: a
+# `slide.inspect` új fájlt mentett, „nem változott semmi” hibával, és az objektumlista elveszett).
+_RO_TAIL = re.compile(r"\.(inspect|get|list|info|state|presets|themes|sites|entries|fields|links|structure|tags|words|"
+                      r"formats|styles|json|getData|selectionAttrs|models)$")
+_RO_IDS = {"find.find", "edit.find", "find.objects", "object.findByLabel", "review.accessibility", "review.spelling",
+           "spelling.check", "preflight.run", "edit.copy", "xml.validate", "commands.list", "document.preferences"}
+_NAV = re.compile(r"^(slide\.(go|next|previous|first|last|selectSlides)|edit\.(select|selectAll|deselect)|"
+                  r"text\.(edit|exit|move|select\w*)|table\.selectCells|select\.\w+|page\.(go|next|previous|first|last)|"
+                  r"view\.\w+|zoom\.\w+|selection\.set|cell\.select|sheet\.(go|activate))$")
+
+
+def read_only(cid: str) -> bool:
+    return bool(_RO_TAIL.search(cid) or cid in _RO_IDS or _NAV.match(cid))
+
+
+def only_reads(commands: list[tuple[str, Optional[dict]]]) -> bool:
+    """Minden parancs csak olvas, és legalább egy ténylegesen lekérdez (a puszta navigáció nem kérdés)."""
+    return bool(commands) and all(read_only(c) for c, _ in commands) and any(not _NAV.match(c) for c, _ in commands)
+
+
+def _no_paths(v: Any) -> Any:
+    """A szerver fájlrendszere nem tartozik a válaszba: abszolút "path" → csak a fájlnév."""
+    if isinstance(v, dict):
+        return {k: (Path(x).name if k == "path" and isinstance(x, str) and x.startswith("/") else _no_paths(x))
+                for k, x in v.items()}
+    if isinstance(v, list):
+        return [_no_paths(x) for x in v]
+    return v
+
+
+def full_results(commands: list[tuple[str, Optional[dict]]], results: list[Any], max_chars: int = 60_000) -> list[dict[str, Any]]:
+    """Csak olvasó futtatás: parancsonként a TELJES eredmény (nem rövidítve) — ez maga a válasz."""
+    out, size = [], 0
+    for i, (cid, params) in enumerate(commands):
+        row: dict[str, Any] = {"n": i + 1, "command": cid}
+        if params:
+            row["params"] = _no_paths(params)
+        if i < len(results):
+            r = _no_paths(results[i])
+            n = len(json.dumps(r, ensure_ascii=False))
+            row["result"] = r if size + n <= max_chars else _short(r, max(200, max_chars - size))
+            size += n
+        out.append(row)
     return out
 
 

@@ -1066,16 +1066,53 @@ def _pptx_shapes(path: Path) -> tuple[list[list[dict]], float, float]:
                 pic = getattr(shp, "image", None) is not None
             except Exception:
                 pic = True
-            items.append({"name": shp.name or "shape", "box": [shp.left / 12700, shp.top / 12700,
-                                                              (shp.left + shp.width) / 12700, (shp.top + shp.height) / 12700],
+            size, grows = None, False
+            if shp.has_text_frame:
+                from pptx.enum.text import MSO_AUTO_SIZE
+                size = max((r.font.size.pt for p in shp.text_frame.paragraphs for r in p.runs if r.font.size), default=None)
+                grows = shp.text_frame.auto_size == MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+            # id = a pptx saját alakzat-azonosítója — a DeckCraft is ezt használja (office text.set / edit.select)
+            items.append({"id": shp.shape_id, "name": shp.name or "shape",
+                          "box": [shp.left / 12700, shp.top / 12700, (shp.left + shp.width) / 12700, (shp.top + shp.height) / 12700],
                           "text": shp.text_frame.text if shp.has_text_frame else "", "placeholder": shp.is_placeholder,
-                          "picture": pic, "table": getattr(shp, "has_table", False)})
+                          "picture": pic, "table": getattr(shp, "has_table", False), "size": size, "grows": grows})
         slides.append(items)
     return slides, sw, sh
 
 
 def _overlap(a: list[float], b: list[float], pad: float = 2) -> bool:
     return a[0] < b[2] - pad and b[0] < a[2] - pad and a[1] < b[3] - pad and b[1] < a[3] - pad
+
+
+def _cmd(c: str, **params) -> str:
+    return json.dumps({"command": c, "params": params}, ensure_ascii=False)
+
+
+def _deck_obj(n: int, it: dict) -> dict:
+    """A hibás alakzat azonosítása úgy, hogy a következő hívás közvetlenül javíthassa (dia + shape id)."""
+    return {"object": f"slide {n}, shape {it['id']} “{it['name']}”", "slide": n, "shape_id": it["id"], "_key": (n, it["id"])}
+
+
+def _deck_fix(kind: str, n: int, it: dict, sw: float, sh: float, over: float = 0) -> str:
+    """Kész javító parancs(ok) az office eszközhöz — csak ez az alakzat változik, a pakli többi része nem."""
+    sel = _cmd("edit.select", on_slide=n, ids=[it["id"]])
+    if kind == "text_overflow":
+        h = it["box"][3] - it["box"][1]
+        size = it.get("size")
+        # a tördelt szöveg magassága ~ betűméret² → a beférő méret ~ gyök(arány); 0,95 tartalék, egész pontra
+        smaller = max(8, int((size or 18) * ((h / (h + over)) ** 0.5 if h > 0 else 0.8) * 0.95))
+        return (f'office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<shorter text>")}]) '
+                f'— or a smaller font: commands=[{sel}, {_cmd("format.size", size=smaller)}]'
+                + (f" (now {size:g} pt)" if size else "") + " — or a bigger box: shape.setBounds after the select.")
+    if kind == "off_slide":
+        b = it["box"]
+        w, h = min(b[2] - b[0], sw * 0.96), min(b[3] - b[1], sh * 0.96)
+        x, y = min(max(b[0], 0), sw - w), min(max(b[1], 0), sh - h)
+        return f'office(app="deck", file_id, commands=[{sel}, {_cmd("shape.setBounds", x=round(x, 1), y=round(y, 1), w=round(w, 1), h=round(h, 1))}])'
+    if kind == "empty_placeholder":
+        return (f'office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="…")}]) '
+                f'— or remove it: commands=[{sel}, {_cmd("edit.delete")}]')
+    return ""
 
 
 def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
@@ -1085,12 +1122,12 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
         for it in items:
             b = it["box"]
             if b[0] < -0.02 * sw or b[1] < -0.02 * sh or b[2] > 1.02 * sw or b[3] > 1.02 * sh:
-                issues.append({**_issue("off_slide", WARNING, f"Slide {n}: “{it['name']}” reaches outside the slide.", None, n),
-                               "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
+                issues.append({**_issue("off_slide", WARNING, f"Slide {n}: “{it['name']}” reaches outside the slide.", None, n,
+                                        fix=_deck_fix("off_slide", n, it, sw, sh)), **_deck_obj(n, it)})
             if it["placeholder"] and not it["text"].strip() and not it["picture"] and not it["table"]:
                 issues.append({**_issue("empty_placeholder", WARNING,
-                                        f"Slide {n}: empty placeholder “{it['name']}” (shows “Click to add text” in PowerPoint).", None, n),
-                               "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
+                                        f"Slide {n}: empty placeholder “{it['name']}” (shows “Click to add text” in PowerPoint).", None, n,
+                                        fix=_deck_fix("empty_placeholder", n, it, sw, sh)), **_deck_obj(n, it)})
     for L in layouts:
         if not L.pages:
             continue
@@ -1126,21 +1163,25 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
                 reg = [(n, (max(0, min(box[0], tb[0]) - 30), max(0, min(box[1], tb[1]) - 30),
                             min(w, max(box[2], tb[2]) + 30), min(h, max(box[3], tb[3]) + 30)))]
                 if tb[3] > h + 1 or tb[2] > w + 1:
+                    over = max(tb[3] - h, tb[2] - w) / sc if sc else 0
                     issues.append({**_issue("off_page", ERROR, f"Slide {n}: text of “{it['name']}” runs off the slide.",
-                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)]),
-                                   "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
+                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)],
+                                            fix=_deck_fix("text_overflow", n, it, sw, sh, over)), **_deck_obj(n, it)})
                 elif tb[3] > box[3] + 6 or tb[2] > box[2] + 6:
                     by = max(tb[3] - box[3], tb[2] - box[2])
                     # más szövegre rálóg → hiba; csak a saját dobozán nyúlik túl (pl. a kártyán belül) → figyelmeztetés
                     hits = [o["name"] for o in items if o is not it and o["text"].strip() and _overlap(tb, [v * sc for v in o["box"]])]
                     big = by > max(24, 0.25 * (box[3] - box[1]))
+                    if it["grows"] and not hits:
+                        # „méret a szöveghez” doboz: PowerPointban a doboz nő a szöveggel — a két motor betűmérése
+                        # tér el, nem hiba; csak ha másra rácsúszik (vagy lelóg a diáról: fent, off_page)
+                        continue
                     issues.append({**_issue("text_overflow", ERROR if (hits or big) else WARNING,
                                             f"Slide {n}: the text of “{it['name']}” runs {by:.0f} pt past its box"
                                             + (f" and over “{hits[0]}”." if hits else "." if big else
                                                " (it stays on the slide and covers nothing)."),
-                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)]),
-                                   "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"]),
-                                   "fix": "shorten the text, make the box bigger, or a smaller font size"})
+                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)],
+                                            fix=_deck_fix("text_overflow", n, it, sw, sh, by / sc if sc else by)), **_deck_obj(n, it)})
         for n in range(1, L.pages + 1):
             if not L.inked[n - 1]:
                 issues.append({**_issue("blank_page", WARNING, f"Slide {n} is empty.", L.view, n,

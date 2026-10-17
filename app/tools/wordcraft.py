@@ -114,13 +114,26 @@ async def run(
     cmd_args = [_cmd_arg(c) for c in (commands or [])]
     for a in cmd_args:
         args += ["--cmd", a]
+    args.append("--print")                      # parancsonként „id: eredmény” — a jelentésbe (és az olvasás válasza)
+
+    from app.tools import run_report
+    parsed = [(a.partition("=")[0], _json_or_none(a.partition("=")[2])) for a in cmd_args]
+    if file_id and save_format.lower().lstrip(".") == "docx" and run_report.only_reads(parsed):
+        # csak olvasó parancsok (document.inspect, edit.find, styles.list…): nincs mentés, nincs új változat
+        from app.tools.crafts import read_only_result
+        try:
+            printed = await _cli(*args)
+        except RuntimeError as e:
+            if "unknown command" in str(e) or "step" in str(e):
+                ids = [c["id"] for c in json.loads(await _cli("commands", "--json"))]
+                raise ValueError(run_report.failure("wordcraft", str(e), "", parsed, ids)) from None
+            raise
+        return read_only_result(file_id, parsed, run_report.arrow_results(printed), t0)
 
     out_id = new_file_id(fmt)
     args += ["--save", str(output_path(out_id))]
-    from app.tools import run_report
-    parsed = [(a.partition("=")[0], _json_or_none(a.partition("=")[2])) for a in cmd_args]
     try:
-        await _cli(*args)
+        printed = await _cli(*args)
     except RuntimeError as e:
         if "unknown command" in str(e) or "step" in str(e):
             ids = [c["id"] for c in json.loads(await _cli("commands", "--json"))]
@@ -141,7 +154,7 @@ async def run(
         "url": public_url(out_id),
         "size_kb": output_path(out_id).stat().st_size // 1024,
         "commands_run": len(cmd_args),
-        "steps": run_report.steps(parsed, []),
+        "steps": run_report.steps(parsed, run_report.arrow_results(printed)),
         "author": author,
         "ms_elapsed": int((time.time() - t0) * 1000),
     }

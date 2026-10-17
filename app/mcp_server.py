@@ -77,8 +77,9 @@ mcp = FastMCP(
         "shows a document's branches and merges two of them idea by idea, as tracked changes. "
         "To SEE any other result call files(action=\"preview\", file_id, page) — the picture comes back in the "
         "tool result (pages of a document, slides, a video's frames: page 1–3); every file result also has `preview_url` "
-        "(the same PNG as a link, for the person) and `check` = {status: ok | needs_check | failed, "
-        "findings, verified}. A file existing is not the task done: if status is needs_check, look at the preview; "
+        "(the same PNG as a link, for the person), and results that make or change a file carry `check` = {status: ok | "
+        "needs_check | failed, findings, verified} (decks: the same rendered check as validate_document, each problem "
+        "with its slide, shape id and a ready fix). Commands that only read (inspect, *.get, *.list) make no new file. A file existing is not the task done: if status is needs_check, look at the preview; "
         "if failed or a finding says something is missing, fix it before telling the person it's done. "
         "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared."
     ),
@@ -741,6 +742,8 @@ async def wordcraft(
     Edit a document with the WordCraft Word engine: the same ~460 commands
     that drive Word's ribbon (styles, tables, track changes, comments, TOC,
     footnotes…), run headless. The result is a NEW file_id; the source stays.
+    Each command's result is in `steps`. Commands that only read (document.inspect, edit.find, styles.list,
+    format.state…) save nothing: the same file_id comes back with `results` and no new version.
 
     REVIEW COMMENTS (someone commented a .docx in Word, e.g. a boss):
     1. read="comments" → each open comment thread: id, author, comment,
@@ -841,6 +844,13 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
     revise a document, then from_document, then pptx revisions.
     spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
             text, muted, font_heading, font_body}, "slides": [...]}
+    "brand": the person's saved brand by name, or "mine"; left out, their
+            default brand is used when it is set to apply automatically;
+            "none" = off (the result says which brand it used). "theme"
+            colours go on top. The deck keeps its look inside the file
+            (slide master + theme fonts/colours), so slides added later — in
+            PowerPoint, by office(app="deck"), or video(action="to_pptx") —
+            get the same background and fonts.
     "template_file_id": an uploaded .pptx/.potx used as the FULL template —
             its slide masters, layouts, backgrounds, logo, fonts and colours;
             the slides go into the template's own layouts (theme is ignored).
@@ -848,13 +858,18 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
       cover {title, subtitle?, kicker?, image?}   section {title, subtitle?, number?, image?}
       bullets {title, bullets[], text?, image?}    image_left|image_right {title, bullets[]|text, image}
       full_image {image, title?, caption?}         quote {quote, author?, image?}
-      stats {title, stats:[{value, label}] ≤4}     chart {title, chart_type, categories, series}
+      stats {title, stats:[{value, label}] ≤4}     chart {title, chart_type: column | bar | line |
+                                                         pie | doughnut | area | scatter, categories,
+                                                         series [{name, values}] — scatter: series
+                                                         [{name, points: [[x, y]…]}]}
       table {title, headers, rows}                 gallery {title, images[≤4], captions?}
       closing {title?, subtitle?}
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).
     Images are cropped to their frame; FLUX images generate in parallel.
-    Check the result with validate_document (slides as pictures + overflow and off-slide problems).
+    The result's `check` is the rendered check validate_document runs (both layouts): each problem names the
+    slide and shape id with a ready office(app="deck") fix for just that shape — no rebuild. See the slides as
+    pictures with validate_document.
     """
     if from_document:
         from app.routes.make import make_deck
@@ -1081,6 +1096,7 @@ async def photocraft(
     image.autoTone, image.imageSize {width, height}, image.crop, type.create
     {x, y, text, size, color}, filter.blur.gaussianBlur {radius},
     image.adjustments.photoFilter, layers… Result is a NEW file_id.
+    Commands that only read (document.inspect, *.get, *.list…) save nothing: the same file_id comes back with `results`.
 
     remove_background=true cuts the subject out with a neural net (keeps
     hair, thin objects and EVERY person). background_file_id puts that image
@@ -1133,7 +1149,7 @@ async def vectorcraft(
     commands): posters, flyers, brochures, multi-page PDFs, SVG. Opens
     file_id (svg/pdf/ai/eps/.vectorcraft) or starts empty; exports every
     format in `export` (default ["pdf"]; also svg, png, jpg, webp, eps,
-    vectorcraft) as new file_ids.
+    vectorcraft) as new file_ids. Commands that only read (document.inspect, *.get, *.list…) save nothing: the same file_id comes back with `results`.
 
     Typical: file.new {width:"210 mm", height:"297 mm"} → shape.rectangle
     {x,y,width,height} → text.create {x, y, text, size, font, color,
@@ -1165,13 +1181,32 @@ async def office(
     query: Optional[str] = None,
     offset: int = 0,
     max_chars: int = 20000,
+    slide: Optional[int] = None,
+    shape_id: Optional[int] = None,
 ) -> dict:
     """
     Office engines, one tool. app = "deck" (PowerPoint-like, pptx) |
     "pdf" (Acrobat-like) | "layout" (InDesign-like, .designcraft/.idml) |
     "sheet" (Excel-like, xlsx/csv). Opens file_id (or starts empty),
     runs `commands`, saves a NEW file_id in save_format (default: the
-    source format; deck → pptx, layout → pdf, sheet → xlsx).
+    source format; deck → pptx, layout → pdf, sheet → xlsx). Every
+    command's result comes back in `steps`. Commands that only READ
+    (*.inspect, *.get, *.list, format.state, cell.get, edit.find, the PDF
+    tools marked read-only…, plus navigation/selection) save nothing: the
+    same file_id comes back with `results` and no new version.
+
+    LOOK, THEN FIX ONE THING (decks): read="inspect" (+ slide=n) lists each
+    slide's shapes — id, name, kind, box [x, y, w, h] pt, text, fill — with
+    no new file; slide + shape_id gives one shape in full (fonts,
+    paragraphs, effective box). Then change only that shape, in place:
+    {"command": "text.set", "params": {"on_slide": n, "id": <shape id>,
+    "text": …}} (keeps the text's formatting), or {"command":
+    "edit.select", "params": {"on_slide": n, "ids": [id]}} followed by
+    format.size {size} / format.bold / shape.setBounds {x, y, w, h} /
+    shape.fill {color}. "on_slide" (1 = first slide) goes to that slide
+    first. The result's `check` renders the deck again (the same check as
+    validate_document) and names any remaining problem with its shape id
+    and a ready fix.
 
     deck: [{"command": "file.new", "params": {"blank": true}} (no empty
       first slide), {"command": "slide.new", …},
@@ -1191,12 +1226,15 @@ async def office(
       the document is opened and saved for you.
     layout: page layout commands (file.new {preset: "A4", pages,
       facingPages, margins, bleed}…) → pdf/png/designcraft.
-    read: "info" | "text" (pdf text, sheet csv) | "commands" (ids; pass
-    `query` for params and descriptions — always look before guessing).
+    read: "inspect" (the objects, no new file — deck: per slide, see
+    above; sheet/layout/pdf: the document's structure) | "info" | "text"
+    (pdf text, sheet csv) | "commands" (ids; pass `query` for params and
+    descriptions — always look before guessing).
     """
     from app.tools import crafts
     if read:
-        return await crafts.office_read(app, read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
+        return await crafts.office_read(app, read, file_id=file_id, query=query, offset=offset, max_chars=max_chars,
+                                        slide=slide, shape_id=shape_id)
     return await crafts.office_run(app, file_id=file_id, commands=commands, save_format=save_format)
 
 
@@ -1326,7 +1364,8 @@ async def restore_photos(
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:
-    """Replace a string (or regex) in a DOCX/MD/HTML/TXT file."""
+    """Replace a string (or regex) everywhere in a DOCX, PPTX (every slide's text), PDF (literal text only, no
+    regex), MD, HTML or TXT file — a new version. For one text box on a slide, office(app="deck") text.set is exact."""
     return await t_find_replace(file_id, pattern, replacement, regex)
 
 
@@ -1335,29 +1374,30 @@ async def find_replace(
 async def delete_section(
     file_id: str, heading: str, level: Optional[int] = None
 ) -> dict:
-    """Delete a section by heading title (DOCX or MD). Removes content
-    until the next same- or higher-level heading."""
+    """Delete a section by heading title (DOCX or MD: content until the next same- or higher-level heading;
+    PPTX: the slides whose title is that heading)."""
     return await t_delete_section(file_id, heading, level)
 
 
 @mcp.tool()
 @linked
 async def insert_after(file_id: str, anchor: str, content: str) -> dict:
-    """Insert content after a heading (DOCX) or after a line (MD)."""
+    """Insert content after a heading (DOCX), after a line (MD), or as new lines at the end of the body text of
+    the slide with that title (PPTX)."""
     return await t_insert_after(file_id, anchor, content)
 
 
 @mcp.tool()
 @linked
 async def replace_heading(file_id: str, old_title: str, new_title: str) -> dict:
-    """Replace a heading's text while preserving its level."""
+    """Replace a heading's text while preserving its level (DOCX, MD; PPTX: a slide title)."""
     return await t_replace_heading(file_id, old_title, new_title)
 
 
 @mcp.tool()
 @linked
 async def delete_pages(file_id: str, page_range: str) -> dict:
-    """Delete pages from a PDF. Range examples: '3', '1-5', '1,3,5-7'."""
+    """Delete pages from a PDF, or slides from a PPTX. page_range examples: '3', '1-5', '1,3,5-7'."""
     return await t_delete_pages(file_id, page_range)
 
 
@@ -1371,7 +1411,8 @@ async def merge(file_ids: list[str], target_format: str = "pdf") -> dict:
 @mcp.tool()
 @linked
 async def extract(file_id: str, mode: str = "text") -> dict:
-    """Extract text or tables from a PDF/DOCX. modes: 'text'|'tables'."""
+    """Extract text (PDF, DOCX, PPTX, MD, TXT, HTML) or tables (PDF, DOCX) — reads only, no new file.
+    mode: 'text' | 'tables'."""
     return await t_extract(file_id, mode)
 
 
@@ -1429,7 +1470,9 @@ async def facts(
             source = {"kind": "indicator", "country": "HU", "indicator": "cpi"} (cpi, core_cpi, policy_rate,
             unemployment, gdp_growth, gov_debt, bond_yield_10y, …) or {"kind": "fx", "currency": "EUR"} (MNB rate).
             Every `stat`/`fx` claim from check already carries the source to use. → a new version.
-      action="list" + file_id → the linked numbers: text in the document, newest figure, period, source, up_to_date.
+      action="list" + file_id → the linked numbers: text in the document, the figure saved at the last bind/refresh
+        (checked_at), period, source, up_to_date (= the document still shows that figure). It does not fetch; for
+        the newest figures call action="refresh".
       action="refresh" + file_id → every linked number set to its newest figure in the document's own number format,
             and only the words around it adjusted (period, direction, endings), all as tracked changes, with a comment
             where a conclusion may no longer hold → a new version (or "all up to date", no new file).
@@ -1464,7 +1507,7 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
     result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
 
     Returns status (ok | needs_check | failed), summary ("3 errors, 2 warnings"), issues [{id (E1…, W1…), severity,
-    kind, page, object, block, message, fix}], and pictures: every page small (problem pages framed red/orange), a
+    kind, page, object, block | slide + shape_id, message, fix}], and pictures: every page small (problem pages framed red/orange), a
     cut-out of each problem with it marked, and the pages with errors in full. A Word document is laid out twice — in
     the built-in editor and the way the downloaded file looks in Word — and the two are compared.
     It finds: empty list items; odd numbering (repeated, skipped, restarting, continuing under a new heading, typed
@@ -1472,8 +1515,11 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
     left as the last line of a page; captions apart from their picture; text, tables or pictures off the page or into
     the margin; empty pages. Decks: text overflowing its box (as rendered), things off the slide, empty placeholders.
     block = the paragraph number in wordcraft(read="inspect"); edit.goto {"paragraph": block + 1} puts the caret there,
-    and each issue's `fix` says what to do. Fix every error, then call validate_document again — a file that saved is
-    not proof that the layout is right.
+    and each issue's `fix` says what to do. Decks: shape_id is the shape's id on that slide, and `fix` is a ready
+    office(app="deck") call that changes just that shape (text.set / format.size / shape.setBounds with "on_slide") —
+    no rebuild. pptx_build and every deck edit already end with this same rendered check (their `check`), so the
+    verdicts agree. Fix every error, then call validate_document again — a file that saved is not proof that the
+    layout is right.
 
     Args:
       file_id: the .docx (or .odt/.rtf/.md), .pptx or .pdf to check.
@@ -1852,7 +1898,8 @@ async def chart_redraw(
 ) -> dict:
     """Read an existing chart from an image via AI vision (extracts
     type, axes, categories, series, values), and re-render via matplotlib
-    with a new palette/brand. Returns new image_file_id. Pass also_svg=true
+    with a new palette or brand (the person's saved brand by name, or "mine"; palette = hex colours wins).
+    Returns new image_file_id. Pass also_svg=true
     for a vector copy (use with insert_image's svg_file_id for vector
     charts in DOCX/PDF)."""
     return await chart_redraw_mod.chart_redraw(

@@ -248,6 +248,12 @@ async def photo_run(
         steps += [split_command(c) for c in commands or []]
         for cid, params in steps:
             args += ["--cmd", cid] + (["--params", json.dumps(params, ensure_ascii=False)] if params else [])
+        if file_id and src == existing(file_id) and save_format is None and run_report.only_reads(steps):
+            try:                                    # csak olvasó parancsok: nincs --out, nincs új változat
+                log_lines = await run_cli(photo_cli(), "photocraft-cli", *args)
+            except CliError as e:
+                raise ValueError(await _explain(e, "photo", steps)) from None
+            return read_only_result(file_id, steps, run_report.engine_results(log_lines), t0)
         fid, out = _new_output(fmt, file_id, "photocraft", "")
         args += ["--out", str(out)]
         if quality:
@@ -305,6 +311,15 @@ async def vector_run(
     if bad:
         raise ValueError(f"export: {bad} (choose from {', '.join(sorted(VECTOR_SAVE))})")
     args = ["run"] + (["--in", str(existing(file_id))] if file_id else [])
+    if file_id and export is None and run_report.only_reads([split_command(c) for c in commands or []]):
+        parsed = [split_command(c) for c in commands or []]
+        for cid, params in parsed:
+            args += ["--cmd", cid] + (["--params", json.dumps(params, ensure_ascii=False)] if params else [])
+        try:
+            log_lines = await run_cli(vector_cli(), "vectorcraft-cli", *args)
+        except CliError as e:
+            raise ValueError(await _explain(e, "vector", parsed)) from None
+        return read_only_result(file_id, parsed, run_report.engine_results(log_lines), t0)
     for c in commands or []:
         cid, params = split_command(c)
         if cid == "file.place" and isinstance(params, dict) and "link" not in params:
@@ -410,8 +425,16 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
     fmt = (save_format or (src.suffix.lstrip(".") if src else {"deck": "pptx", "pdf": "pdf", "layout": "pdf", "sheet": "xlsx"}[app])).lower()
     if fmt not in spec["save"]:
         raise ValueError(f"save_format: {fmt} (choose from {', '.join(sorted(spec['save']))})")
-    fid, out = _new_output(fmt, file_id, app, "")
     exe, name = office_cli(app), f"{spec['exe']}-cli"
+    parsed: list[tuple[str, Optional[dict[str, Any]]]] = []
+    if app != "pdf":
+        parsed = [split_command(c) for c in commands or []]
+        if app == "deck":
+            parsed = _on_slide(parsed)
+    # csak olvasó futtatás (inspect, text.get, cell.get, doc_info…): az eredmény maga a válasz, nincs új fájl/változat
+    if src and save_format is None and await _only_reads(app, parsed, commands):
+        return await _office_read_run(app, file_id, src, parsed, commands, t0)
+    fid, out = _new_output(fmt, file_id, app, "")
     if app == "pdf":
         if not src:
             raise ValueError("pdf needs a file_id")
@@ -422,12 +445,9 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
         except CliError as e:
             raise ValueError(await _explain(e, "pdf", [(st["tool"], st["args"]) for st in steps], offset=1)) from None
     else:
-        args = ["run"] + (["--in", str(src)] if src else [])
-        parsed = [split_command(c) for c in commands or []]
-        for cid, params in parsed:
-            args += ["--cmd", f"{cid}={json.dumps(params, ensure_ascii=False)}" if params else cid]
+        args = _office_args(app, src, parsed)
         if app == "sheet":
-            args += ["--out", str(out), "--quiet"]
+            args += ["--out", str(out)]
         elif app == "deck" and fmt in ("pptx", "deckcraft"):
             args += ["--save", str(out)]
         elif app == "layout" and fmt == "designcraft":
@@ -440,23 +460,127 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
             raise ValueError(await _explain(e, app, parsed)) from None
     if not out.exists():
         raise RuntimeError(f"{name}: no output was produced ({log_lines[-300:]})")
+    inherited = 0
+    if app == "deck" and fmt == "pptx" and src is not None:
+        from app.tools import pptx_deck                   # új dia a pakli hátterével (nem az elrendezés fehérjével)
+        inherited = await asyncio.to_thread(pptx_deck.inherit_new_slides, src, out)
     from app.tools import ios_safe
     await ios_safe.finalize(out)                          # iPhone: Keynote-biztos pptx, sémahelyes xlsx
     res = _finish(fid, file_id, app, _stem(file_id, _office_what(app, commands), _OFFICE_NEW[app]))
     res.update({"steps_run": len(commands or []), "ms_elapsed": int((time.time() - t0) * 1000)})
+    if inherited:
+        res["note"] = f"{inherited} new slide{'s' if inherited > 1 else ''} took the deck's background from the slide next to it."
     try:
         if app == "pdf":
             res["steps"] = run_report.pdf_step_report(log_lines, steps)
             if fmt == "pdf":
                 res["before_after"] = {"before": run_report.pdf_summary(src), "after": run_report.pdf_summary(out)}
         else:
-            res["steps"] = run_report.steps(parsed, [])
+            res["steps"] = run_report.steps(parsed, _office_results(app, log_lines, parsed)[0])
             if app == "deck" and fmt == "pptx":
                 ba = {"before": run_report.deck_summary(src)} if src and src.suffix.lower() == ".pptx" else {}
                 res["before_after"] = {**ba, "after": run_report.deck_summary(out)}
     except Exception as e:  # a jelentés kényelmi — a kész fájlt nem buktatja
         res["report_error"] = str(e)[:200]
     return res
+
+
+def read_only_result(file_id: str, parsed: list[tuple[str, Optional[dict[str, Any]]]], results: list[Any],
+                     t0: float, extra: Optional[list[Any]] = None) -> dict[str, Any]:
+    """Csak olvasó futtatás eredménye (minden Craft-motorra ugyanaz): a parancsok teljes válasza, új fájl nélkül."""
+    res: dict[str, Any] = {
+        "file_id": file_id, "name": display_label(file_id), "read_only": True,
+        "results": run_report.full_results(parsed, results),
+        "check": {"status": "ok", "findings": [],
+                  "verified": ["Only read: nothing was saved and no new version was made — the file is unchanged."]},
+        "ms_elapsed": int((time.time() - t0) * 1000),
+    }
+    if extra:
+        res["outputs"] = extra
+    return res
+
+
+def _office_args(app: str, src: Optional[Path], parsed: list[tuple[str, Optional[dict[str, Any]]]]) -> list[str]:
+    args = ["run"] + (["--in", str(src)] if src else [])
+    for cid, params in parsed:
+        args += ["--cmd", f"{cid}={json.dumps(params, ensure_ascii=False)}" if params else cid]
+    if app == "deck":
+        args.append("--print")                      # parancsonként „id → eredmény” — a jelentésbe és az inspect-válaszba
+    return args
+
+
+def _office_results(app: str, log_text: str, parsed: list[tuple[str, Optional[dict[str, Any]]]]) -> tuple[list[Any], list[Any]]:
+    """→ (parancsonkénti eredmények, párosíthatatlan kimenetek). A DesignCraft csak a visszatérő értékeket írja ki."""
+    if app == "deck":
+        return run_report.arrow_results(log_text), []
+    if app == "sheet":
+        return run_report.engine_results(log_text), []
+    vals = run_report.json_stream(log_text)
+    return (vals, []) if len(vals) == len(parsed) else ([], vals)
+
+
+def _on_slide(parsed: list[tuple[str, Optional[dict[str, Any]]]]) -> list[tuple[str, Optional[dict[str, Any]]]]:
+    """deck: {"on_slide": n} (1 = első dia, ahogy a hibajegyzék írja) egy parancsban → előtte slide.go arra a diára.
+    Így egy alakzat egy lépésben javítható: {"command": "text.set", "params": {"on_slide": 11, "id": 7, "text": …}}."""
+    out: list[tuple[str, Optional[dict[str, Any]]]] = []
+    cur: Optional[int] = None
+    for cid, params in parsed:
+        if params and "on_slide" in params:
+            params = dict(params)
+            n = params.pop("on_slide")
+            try:
+                idx = int(n) - 1
+            except (TypeError, ValueError):
+                raise ValueError(f'{cid}: "on_slide" is a slide number (1 = the first slide), not {n!r}') from None
+            if idx < 0:
+                raise ValueError(f'{cid}: "on_slide" starts at 1 (the first slide)')
+            if idx != cur:
+                out.append(("slide.go", {"index": idx}))
+                cur = idx
+            out.append((cid, params or None))
+            continue
+        if cid == "slide.go" and params and isinstance(params.get("index"), int):
+            cur = params["index"]
+        elif cid.startswith(("slide.", "file.", "edit.undo", "edit.redo")):
+            cur = None                              # a parancs máshová vihette az aktuális diát
+        out.append((cid, params))
+    return out
+
+
+_PDF_RO: Optional[set[str]] = None
+
+
+async def _only_reads(app: str, parsed: list[tuple[str, Optional[dict[str, Any]]]], commands: Optional[list[Command]]) -> bool:
+    global _PDF_RO
+    if app != "pdf":
+        return run_report.only_reads(parsed)
+    tools = [c.get("tool") for c in commands or [] if isinstance(c, dict)]
+    if not tools or not all(tools):
+        return False
+    if _PDF_RO is None:
+        try:
+            _PDF_RO = {t["name"] for t in json.loads(await run_cli(office_cli("pdf"), "pdfcraft-cli", "tools")) if t.get("read_only")}
+        except Exception:
+            return False
+    return all(t in _PDF_RO for t in tools)
+
+
+async def _office_read_run(app: str, file_id: str, src: Path, parsed: list[tuple[str, Optional[dict[str, Any]]]],
+                           commands: Optional[list[Command]], t0: float) -> dict[str, Any]:
+    if app == "pdf":
+        steps = [{"tool": c["tool"], "args": c.get("args") or {}} for c in commands or [] if isinstance(c, dict)]
+        try:
+            log_lines = await pdf_script([file_id], steps, src, save=False)
+        except CliError as e:
+            raise ValueError(await _explain(e, "pdf", [(st["tool"], st["args"]) for st in steps], offset=1)) from None
+        # az első érték a doc_open — utána lépésenként egy, teljes terjedelmében (ez a válasz)
+        return read_only_result(file_id, [(st["tool"], st["args"]) for st in steps], run_report.json_stream(log_lines)[1:], t0)
+    try:
+        log_lines = await run_cli(office_cli(app), f"{OFFICE[app]['exe']}-cli", *_office_args(app, src, parsed))
+    except CliError as e:
+        raise ValueError(await _explain(e, app, parsed)) from None
+    vals, extra = _office_results(app, log_lines, parsed)
+    return read_only_result(file_id, parsed, vals, t0, extra)
 
 
 async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path, save: bool = True) -> str:
@@ -482,9 +606,14 @@ async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path
 
 
 async def office_read(app: str, mode: str, file_id: Optional[str] = None, query: Optional[str] = None,
-                      offset: int = 0, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
+                      offset: int = 0, max_chars: int = DEFAULT_MAX_CHARS, slide: Optional[int] = None,
+                      shape_id: Optional[int] = None) -> dict[str, Any]:
     if app not in OFFICE:
         raise ValueError(f"app: {app} (choose from {', '.join(OFFICE)})")
+    if mode == "inspect":
+        if not file_id:
+            raise ValueError("read=inspect needs a file_id")
+        return await office_inspect(app, file_id, slide=slide, shape_id=shape_id, offset=offset, max_chars=max_chars)
     exe, name = office_cli(app), f"{OFFICE[app]['exe']}-cli"
     if mode == "commands":
         if app == "pdf":
@@ -517,7 +646,64 @@ async def office_read(app: str, mode: str, file_id: Optional[str] = None, query:
         chunk = out[offset:offset + max_chars]
         return {"text": chunk, "offset": offset, "total_chars": len(out),
                 "next_offset": offset + len(chunk) if offset + len(chunk) < len(out) else None}
-    raise ValueError("read: info | text | commands")
+    raise ValueError("read: inspect | info | text | commands")
+
+
+_DECK_SHAPE_KEYS = ("id", "name", "kind", "box", "text", "fill", "preset", "rotation", "altText", "placeholder", "hidden")
+
+
+async def office_inspect(app: str, file_id: str, *, slide: Optional[int] = None, shape_id: Optional[int] = None,
+                         offset: int = 0, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
+    """Az objektumok listája (azonosító, doboz, szöveg, kitöltés) ÚJ FÁJL NÉLKÜL — a célzott javítás alapja.
+    deck: diánként az alakzatok (a shape id = a pptx saját alakzat-azonosítója, a hibajegyzék is ezt írja);
+    shape_id (+ slide): egy alakzat teljes leírása (betű, bekezdések, effektív doboz). Más app: document.inspect."""
+    t0 = time.time()
+    src = existing(file_id)
+    if app == "pdf":
+        return await _office_read_run(app, file_id, src, [], [{"tool": "doc_inspect", "args": {}}], t0)
+    if app != "deck":
+        return await _office_read_run(app, file_id, src, [("document.inspect", None)], None, t0)
+    if src.suffix.lower() not in (".pptx", ".deckcraft"):
+        raise ValueError("deck inspect opens .pptx decks — convert this file to pptx first (convert).")
+    run = lambda cmds: run_cli(office_cli("deck"), "deckcraft-cli", *_office_args("deck", src, cmds))  # noqa: E731
+    doc = run_report.arrow_results(await run([("document.inspect", None)]))
+    doc = doc[0] if doc and isinstance(doc[0], dict) else {}
+    total = len(doc.get("slides") or [])
+    if slide is not None and not 0 < int(slide) <= total:
+        raise ValueError(f"slide: 1–{total} (this deck has {total} slide{'s' if total != 1 else ''})")
+    if shape_id is not None:
+        n = int(slide or 1)
+        out = run_report.arrow_results(await run([("slide.go", {"index": n - 1}), ("shape.inspect", {"id": int(shape_id)})]))
+        if len(out) < 2 or not isinstance(out[1], dict):
+            raise ValueError(f"Slide {n} has no shape {shape_id} — office(app=\"deck\", read=\"inspect\", slide={n}) lists its shapes.")
+        d = out[1]
+        shape = {**d["shape"], "effective_box": d.get("box")} if isinstance(d.get("shape"), dict) else d
+        return {"file_id": file_id, "slide": n, "shape": run_report._no_paths(shape), "read_only": True,
+                "how": _DECK_FIX_HOW.format(n=n, id=shape_id), "ms_elapsed": int((time.time() - t0) * 1000)}
+    want = [int(slide)] if slide is not None else list(range(1, total + 1))
+    raw = run_report.arrow_results(await run([("slide.inspect", {"index": n - 1}) for n in want]))
+    slides = []
+    for n, d in zip(want, raw):
+        if not isinstance(d, dict):
+            continue
+        slides.append({"slide": n, **{k: d[k] for k in ("layout", "background", "title", "hidden", "transition") if d.get(k) not in (None, "")},
+                       **({"animations": len(d["animations"])} if d.get("animations") else {}),
+                       **({"notes": run_report._short(d["notes"], 300)} if d.get("notes") else {}),
+                       "shapes": [{k: sh[k] for k in _DECK_SHAPE_KEYS if sh.get(k) not in (None, "", [])}
+                                  for sh in d.get("shapes") or []]})
+    page, nxt = page_items(slides, max(0, offset), max(2_000, max_chars))
+    return {"file_id": file_id, "slides_total": total, "slide_size_pt": doc.get("slideSize"),
+            "fonts": doc.get("fonts"), "slides": page, "offset": offset, "next_offset": nxt, "read_only": True,
+            "how": _DECK_FIX_HOW.format(n=(want[0] if len(want) == 1 else "n"), id="<id>"),
+            "ms_elapsed": int((time.time() - t0) * 1000)}
+
+
+_DECK_FIX_HOW = ('Nothing was saved. Boxes are [x, y, w, h] in points. Change one shape in place (a new version, '
+                 'the rest of the deck untouched, checked again): office(app="deck", file_id, commands=['
+                 '{{"command": "text.set", "params": {{"on_slide": {n}, "id": {id}, "text": "…"}}}}]) — or '
+                 '{{"command": "edit.select", "params": {{"on_slide": {n}, "ids": [{id}]}}}} then '
+                 '{{"command": "format.size", "params": {{"size": 18}}}} / {{"command": "shape.setBounds", '
+                 '"params": {{"x": …, "y": …, "w": …, "h": …}}}}. One shape in full: read="inspect", slide={n}, shape_id={id}.')
 
 
 async def office_convert(app: str, src: Path, dst: Path) -> None:
