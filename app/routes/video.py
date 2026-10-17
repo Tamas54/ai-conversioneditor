@@ -17,6 +17,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app import events, tenancy
+from app.tools import crafts
 from app.config import settings
 from app.storage import output_path, public_url, temp_path
 
@@ -144,6 +145,30 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})
         return res
+    return jobs.start("video", work)
+
+
+@router.post("/api/video/transcript")
+async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: <videó | hang | overlay-projekt>, language?} → job (időbélyeges mondatok + .srt)."""
+    from app import jobs
+    from app.tools import transcript, video
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    if not transcript.available():
+        raise HTTPException(503, "Speech recognition isn't installed on this server.")
+    fid = body.get("file_id") or ""
+    try:
+        crafts.existing(fid)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(400, "That file isn't in the workspace — upload it first (upload_file), then pass its file_id.")
+
+    async def work(progress):
+        try:
+            return await video.transcribe_file(fid, body.get("language"), progress)
+        except Exception as e:
+            raise _fail(e)
     return jobs.start("video", work)
 
 

@@ -3095,7 +3095,7 @@ def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
     if not body.get("layers"):
         raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
                          "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}].")
-    layers_from(body.get("layers"), body.get("text") or "", [])            # szerkezeti hiba (típus, idő, hely) most derüljön ki
+    layers_from(_unsaid(body.get("layers")), body.get("text") or "", [])   # szerkezeti hiba (típus, idő, hely) most derüljön ki
     return fid, ext
 
 
@@ -3114,7 +3114,8 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
         notes: list[str] = []
-        layers = layers_from(body.get("layers"), body.get("text") or "", notes)
+        raw = await said_to_times(body.get("layers"), crafts.existing(fid), notes, step, body.get("language"), new_ids=True)
+        layers = layers_from(raw, body.get("text") or "", notes)
         if not layers:
             raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
                              "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}]"
@@ -3135,6 +3136,91 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
+
+
+def _say_of(v: Any) -> Optional[str]:
+    if isinstance(v, dict) and isinstance(v.get("say"), str) and v["say"].strip():
+        return v["say"].strip()
+    if isinstance(v, str) and v.lower().startswith("say:"):
+        return v[4:].strip() or None
+    return None
+
+
+def _unsaid(raw: Any) -> Any:
+    """Az előzetes (szerkezeti) ellenőrzéshez: a {"say": …} idők helyén egy helyőrző — az igazi időt az átirat adja."""
+    if not _says(raw):
+        return raw
+    out = []
+    for ly in raw:
+        if isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))):
+            ly = dict(ly)
+            if _say_of(ly.get("at")):
+                ly["at"] = 0.0
+            if _say_of(ly.get("until")):
+                try:
+                    ly["until"] = timecode(ly.get("at", 0.0)) + 1.0
+                except ValueError:
+                    ly["until"] = 1.0
+        out.append(ly)
+    return out
+
+
+def _says(raw: Any) -> bool:
+    return isinstance(raw, list) and any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until")))
+                                         for ly in raw)
+
+
+async def said_to_times(raw: Any, footage: Path, notes: list[str], step: Callable[..., None] = lambda *a, **k: None,
+                        language: Optional[str] = None, new_ids: bool = False) -> Any:
+    """Réteg mondathoz kötve: at / until = {"say": "az ügyfél fellebbez"} → másodperc a felvétel átiratából. A réteg
+    a kimondás előtt egy hajszállal jelenik meg, és (ha nincs dur/until) a mondat végéig marad. Ha a mondat nem hangzik
+    el, a réteg kimarad, és a jegyzet megmondja, mit hallott a gép helyette."""
+    if not _says(raw):
+        return raw
+    from app.tools import transcript
+    step(0, 4, "listening to the footage (transcript)")
+    tr = await transcript.transcribe(footage, transcript_lang(language))
+    out = []
+    for n, ly in enumerate(raw, 1):
+        if not isinstance(ly, dict):
+            out.append(ly)
+            continue
+        ly = dict(ly)
+        name = ly.get("id") or (f"L{n}" if new_ids else f"new layer {n}")     # új overlaynél az id-k sorban: L1, L2…
+        ok = True
+        for key in ("at", "until"):
+            phrase = _say_of(ly.get(key))
+            if not phrase:
+                continue
+            after = float(ly["at"]) if key == "until" and isinstance(ly.get("at"), (int, float)) else 0.0
+            hit = transcript.find(tr, phrase, after=after)
+            if hit is None:
+                close = transcript.nearest(tr, phrase)
+                notes.append(f"⚠ {name}: “{phrase}” is not said in the footage" + (f" (closest: “{close}”)" if close else
+                             " (no speech was heard)") + " — left out. Give the time instead (at: \"01:24\"), or quote what is said.")
+                ok = False
+                break
+            if key == "at":
+                ly["at"] = round(max(0.0, hit["start"] - 0.15), 2)
+                if ly.get("dur") is None and ly.get("until") is None:
+                    ly["dur"] = round(max(3.0, hit["sentence_end"] - hit["start"] + 0.8), 2)
+            else:
+                ly["until"] = round(hit["end"] + 0.3, 2)
+            notes.append(f"{name} {'starts' if key == 'at' else 'ends'} when “{phrase}” is said ({_tc(hit['start'])}"
+                         + (f", heard as “{hit['said']}”" if _norm_said(hit['said']) != _norm_said(phrase) else "") + ").")
+        if ok:
+            out.append(ly)
+    return out
+
+
+def _norm_said(s: str) -> str:
+    from app.tools.transcript import _norm
+    return "".join(_norm(w) for w in s.split())
+
+
+def transcript_lang(language: Optional[str]) -> Optional[str]:
+    from app.tools import narration
+    return narration.lang_code(language)
 
 
 def check_music(choice: Any) -> None:
@@ -3510,6 +3596,42 @@ async def thumb(src: Path, raw: Path) -> None:
 
 # ---------- utólagos szerkesztés (az ügynök és az „Ask for a change”) ----------
 
+async def transcribe_file(file_id: str, language: Optional[str] = None, step: Callable[..., None] = lambda *a, **k: None) -> dict[str, Any]:
+    """Egy felvétel (videó vagy hang; overlay-projektnél az alapsáv) időbélyeges átirata + SRT-feliratfájl. Ebből köthető
+    réteg egy mondathoz (at: {"say": …}), és ebből javasolhat az ügynök grafikát (melyik mondatnál mi segítene)."""
+    from app.storage.naming import result_stem
+    from app.tools import transcript
+    p = crafts.existing(file_id)
+    ext = p.suffix.lstrip(".").lower()
+    if ext == "ecproj":
+        spec = ((read_meta(file_id) or {}).get("spec") or {})
+        base = spec.get("base")
+        if not base:
+            raise ValueError("This video was made from text — its words are its captions (video action=info). A transcript "
+                             "is for your own footage or a sound file.")
+        p = crafts.existing(assets_of(file_id).get(base["asset"]) or base.get("media_id") or base["file_id"])
+    elif ext not in MOVIE_EXTS | AUDIO_EXTS:
+        raise ValueError(f"A transcript needs a video or a sound file, not .{ext}.")
+    step(0, 2, "listening (transcript)")
+    tr = await transcript.transcribe(p, transcript_lang(language))
+    step(1, 2, "writing the subtitles")
+    sid = new_file_id("srt")
+    output_path(sid).write_text(transcript.srt(tr), "utf-8")
+    label = f"{result_stem(file_id, 'transcript')}.srt"
+    write_meta(sid, source_file_id=file_id, operation="transcript", label=label)
+    n = len(tr["sentences"])
+    check = ({"status": "ok", "findings": [], "verified": [f"{n} sentence(s) heard ({tr['language']}), {len(tr['words'])} words with "
+                                                           f"their times, from {_tc(tr['duration'])} of sound (model {tr['model']})."]}
+             if n else {"status": "needs_check", "findings": ["No speech was heard in this file."], "verified": []})
+    return {"file_id": sid, "name": label, "url": public_url(sid), "language": tr["language"], "duration": tr["duration"],
+            "sentences": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}
+                          for x in tr["sentences"]],
+            "how": 'Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …} — it starts as they are said and '
+                   'stays to the end of that sentence (or give dur / until). The .srt can go on the video as subtitles: '
+                   'file_tools add-subtitles.',
+            "check": check}
+
+
 def project_of(file_id: str) -> str:
     """A videó projektje: .ecproj maga, MP4/WebM/GIF esetén az, amiből renderelték."""
     if file_id.lower().endswith(".ecproj"):
@@ -3744,6 +3866,10 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     alpha_kinds(opts.get("alpha"))
     source = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
     notes: list[str] = []
+    if _says(changes.get("layers")) or _says(changes.get("add_layers")):        # „amikor elhangzik…” a szerkesztésben is
+        footage = crafts.existing(assets_of(pid).get(spec["base"]["asset"]) or spec["base"].get("media_id") or spec["base"]["file_id"])
+        changes = {**changes, "layers": await said_to_times(changes.get("layers"), footage, notes, step),
+                   "add_layers": await said_to_times(changes.get("add_layers"), footage, notes, step)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
     if not layers:
         raise ValueError("That would leave no layers — keep at least one, or use the original video as it is.")

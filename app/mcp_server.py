@@ -1813,10 +1813,17 @@ async def video(
       the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); layers=[…] go on top
       → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status). text = the source: numbers,
       dates and quotes in the layers are checked against it (one that isn't there drops that layer, said in the
-      check); without text they are kept and the check says "not checked against a source". title, accent, brand as
-      for make. The result's duration is the footage's (mode "footage").
+      check); without text they are kept and the check says "not checked against a source". title, accent, brand,
+      music as for make (the music drops under the footage's own speech). The result's duration is the footage's
+      (mode "footage").
+    action="transcript": what is said in a video or sound file (or an overlay project's footage), with times →
+      sentences [{at, until, text}] + an .srt subtitle file (file_id) — as a job. Offline speech recognition (Whisper
+      large-v3-turbo; `language` helps, else detected); a file heard once is not transcribed again. Use it to suggest
+      where a graphic would help, then tie layers to what is said (below).
     layers (overlay; make and edit too): [{"id"? ("L1", "L2"… given when left out — stable across edits), "at":
-      seconds | "MM:SS" | "HH:MM:SS.ms", "dur": seconds | "until": time, "type", "position"?: auto | top | bottom | left |
+      seconds | "MM:SS" | "HH:MM:SS.ms" | {"say": "words that are said"} (overlay: the layer starts as they are said
+      in the footage and stays to the end of that sentence; not said → left out, the check quotes what was heard),
+      "dur": seconds | "until": time | {"say": …}, "type", "position"?: auto | top | bottom | left |
       right | center | [x, y, w, h] (centre and size, 0–1 of the frame), "anim"?: fade | slide | pop | none (or
       {"in", "out"})}]. Types: lower_third {name, role?, side?: left|right} · title {text, subtitle?, kicker?} (a band
       across the frame) · chapter {text, subtitle?, kicker?} · source {text} (a small credit) · stat {value, label} ·
@@ -1884,6 +1891,9 @@ async def video(
     if act == "edit":
         from app.routes.video import edit_video
         return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha})
+    if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
+        from app.routes.video import transcript_video
+        return await transcript_video({"file_id": file_id or "", "language": language})
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
@@ -1901,7 +1911,7 @@ async def video(
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
     if act != "make":
-        raise ValueError('action: "make" | "overlay" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
+        raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
