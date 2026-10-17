@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-bebas-neue \
     fonts-lato \
     fonts-lobster \
+    # a feliratok betűje (a videók feliratsávja Inter — a gyors ráégetés, ffmpeg/libass is ezzel ír) — OFL
+    fonts-inter \
     # WeasyPrint runtime deps:
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
