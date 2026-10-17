@@ -24,7 +24,7 @@ from app.storage.files import new_file_id
 
 log = logging.getLogger("aice.digitize")
 
-PROMPT_VER = "book-v5"
+PROMPT_VER = "book-v6"
 # Mérve 10-11 (tests/ocr_book_bench.py; etalon: Ammianus 1916 kézi átirat + 3 Jókai-fotó pontos szöveggel, 2048 px):
 #   DeepSeek-V4.1-Flash 1,8% régi / 4,6% össz., 14 s/oldal, ~0,09 ¢/oldal  ← alap
 #   Kimi-K2.6           2,2% / 4,5%, 37 s, ~0,65 ¢      GLM-5.3-Flash 3,5% / 5,8%, 30 s, ~0,16 ¢
@@ -32,7 +32,7 @@ PROMPT_VER = "book-v5"
 # A DeepSeek ábrát csak „először a képek” sorrendű utasítással jelöl megbízhatóan (ezért ilyen a prompt).
 OCR_EDGE = 2048
 FIGURE_KEEP = {"illustration", "photo", "map", "diagram", "ornament", "emblem", "chart", "table"}
-OUTPUTS = {"docx", "pdf", "searchable_pdf", "txt", "md", "fillable_pdf"}
+OUTPUTS = {"docx", "pdf", "searchable_pdf", "review_pdf", "txt", "md", "fillable_pdf"}
 _IMG = {"png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif"}
 _CONCURRENCY = 8
 _FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -57,7 +57,11 @@ Step 2 — transcribe the page:
 - Leave out running heads (the book or chapter title repeated at the top of the page), page numbers and
   printer's marks. Never transcribe the text of stamps or handwriting.
 - Footnotes go after the page text, each on its own line as "[^1]: text"; mark the place in the text as [^1].
-- A table becomes a Markdown table. An illegible word becomes [?].
+- A table becomes a Markdown table.
+- A word you can read only with doubt (faded, damaged, blotted, an unusual letter form): write your best reading
+  of the WHOLE word as [[?reading]], or [[?reading|other possible reading]] when another reading is also possible
+  — also when only part of the word is covered (a stain over the end of a name: [[?Kolozsvárról]]). Never guess
+  silently, and do not mark words you read clearly. A word you cannot read at all becomes [?].
 - Put each [[FIGURE …]] line from step 1 where the picture stands in the text (before the text that follows it).
 - If the page has no text and no pictures, reply with nothing.
 Output only the result: no comments, no code fences."""
@@ -152,6 +156,197 @@ def _clean(s: str) -> str:
     s = re.sub(r"^```(?:markdown|md|text)?\s*\n?", "", s)
     s = re.sub(r"\n?```$", "", s)
     return s.strip()
+
+
+# ---------- bizonytalan olvasatok ----------
+# A ChatGPT-értékelés (10-17): történeti forrásnál „a bizonytalanságok pontos jelölése lenne az igazán hasznos”.
+# A modell a kétes szót [[?olvasat]] / [[?olvasat|másik]] alakban adja, az olvashatatlant [?]-ként. Oldalanként
+# sorszámot kapnak ([[?#k:…]]), így az összefűzés után is tudjuk, melyik oldalról valók. Kimenetenként:
+#   docx — sárga (olvashatatlan: piros) kiemelés + megjegyzés („3. oldal, lehet még: …”), a pandoc után;
+#   md/txt — a filológiai jelölés: [olvasat?], [olvasat? / másik], [?];
+#   kereshető PDF szövegrétege és az új tördelésű PDF — a legjobb olvasat, jelölés nélkül;
+#   review_pdf — oldalanként balra az eredeti oldalkép, jobbra az átirat, a kétes helyek kiemelve.
+
+_UNC = re.compile(r"\[\[\?\s*(?:#(\d+):)?([^\[\]|]+?)\s*(?:\|\s*([^\[\]]*?)\s*)?\]\]")
+_ILL = re.compile(r"(?<!\[)\[\?\](?!\])")
+_OPEN, _CLOSE = "\ue000", "\ue002"            # magánhasználatú jelölők: átmennek a pandoc-on, a docx-ben kitörlődnek
+_KEY0 = 0xE100
+
+
+def number_uncertain(pages: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Minden kétes és olvashatatlan szó sorszámot kap ([[?#k:olvasat|…]]) → (oldalak, tételek: page, reading, also,
+    kind = uncertain | illegible, context = a szó a környezetével, jelölés nélkül)."""
+    items: list[dict[str, Any]] = []
+    out = []
+    for n, page in enumerate(pages, 1):
+        def unc(m: re.Match) -> str:
+            reading = m.group(2).strip()
+            also = [x.strip() for x in (m.group(3) or "").split("|") if x.strip() and x.strip() != reading]
+            items.append({"page": n, "reading": reading, "also": also, "kind": "uncertain"})
+            return f"[[?#{len(items) - 1}:{reading}" + (f"|{'|'.join(also)}" if also else "") + "]]"
+
+        def ill(m: re.Match) -> str:
+            items.append({"page": n, "reading": "", "also": [], "kind": "illegible"})
+            return f"[[?#{len(items) - 1}:?]]"
+        first = len(items)
+        page = re.sub(r"\[\[\?\s*(?:\|[^\]]*)?\]\]", "[?]", page)        # üres kétes jelölés = olvashatatlan
+        page = _ILL.sub(ill, _UNC.sub(unc, page))
+        for m in _UNC.finditer(page):
+            k = int(m.group(1))
+            if k < first:
+                continue
+            flat = lambda t: re.sub(r"\s+", " ", re.sub(r"(?m)^#{1,6}\s+", "", best_reading(_FIG.sub("", t), items)))  # noqa: E731
+            left, right = flat(page[:m.start()])[-50:], flat(page[m.end():])[:50]
+            # a modell néha csak a kétes betűket jelöli („Koloz[[?svárra]]”): a teljes szó a megjegyzésbe
+            pre, post = re.search(r"[\w’'-]*$", left).group(0), re.match(r"[\w’'-]*", right).group(0)
+            if items[k]["reading"] and (pre or post):
+                items[k]["word"] = pre + items[k]["reading"] + post
+            left = left.split(" ", 1)[-1] if len(left) == 50 and " " in left else left
+            right = right.rsplit(" ", 1)[0] if len(right) == 50 and " " in right else right
+            items[k]["context"] = f"…{left}{items[k]['reading'] or '[?]'}{right}…".replace("… ", "…")
+        out.append(page)
+    return out, items
+
+
+def _render(text: str, items: list[dict[str, Any]], how: str) -> str:
+    """how: best (a legjobb olvasat; olvashatatlan → semmi) | editorial ([olvasat?]) | sentinel (docx-jelölő)."""
+    def one(m: re.Match) -> str:
+        k = int(m.group(1)) if m.group(1) is not None else None
+        it = items[k] if k is not None and k < len(items) else {"reading": m.group(2).strip(), "also": [], "kind": "uncertain"}
+        word = it["reading"]
+        if how == "best":
+            return word
+        if how == "editorial":
+            if it["kind"] == "illegible":
+                return "[?]"
+            return f"[{word}?" + (f" / {' / '.join(it['also'])}" if it["also"] else "") + "]"
+        shown = "[?]" if it["kind"] == "illegible" else word
+        if k is None or k >= 0x1000:
+            return shown
+        return f"{_OPEN}{chr(_KEY0 + k)}{shown}{_CLOSE}"
+    return _UNC.sub(one, text)
+
+
+def best_reading(text: str, items: list[dict[str, Any]]) -> str:
+    return re.sub(r"  +", " ", _render(text, items, "best"))
+
+
+def mark_docx(path: Path, items: list[dict[str, Any]], keep: bool) -> int:
+    """A pandoc-docx jelölői → kiemelés + megjegyzés (keep), vagy csak tiszta szöveg (az új tördelésű PDF-hez).
+    → hány helyet jelölt meg."""
+    from app.tools import docx_marks, ooxml_safe
+    d = docx_marks.Docx(path, author="Studio")
+    spans = d.take_spans(_OPEN, _CLOSE)
+    done = 0
+    if keep:
+        for para, a, b, key in spans:
+            k = ord(key) - _KEY0
+            if not 0 <= k < len(items) or b <= a:
+                continue
+            it = items[k]
+            try:
+                if it["kind"] == "illegible":
+                    d.highlight(para, a, b, "red")
+                    d.comment(para, a, b, f"Illegible on page {it['page']} — the word could not be read. Check the page image.")
+                else:
+                    d.highlight(para, a, b, "yellow")
+                    also = (" — also possible: " + ", ".join(f"“{x}”" for x in it["also"])) if it["also"] else ""
+                    part = f" (the doubtful letters: “{it['reading']}”)" if it.get("word") else ""
+                    d.comment(para, a, b, f"Uncertain reading on page {it['page']}: “{it.get('word') or it['reading']}”{part}{also}. "
+                                          "Check it against the page image.")
+                done += 1
+            except docx_marks.RevisionError:
+                continue
+    d.save(path)
+    ooxml_safe.fix(path)
+    return done
+
+
+def uncertain_summary(items: list[dict[str, Any]], limit: int = 100) -> dict[str, Any]:
+    unc = [i for i in items if i["kind"] == "uncertain"]
+    ill = [i for i in items if i["kind"] == "illegible"]
+    return {"uncertain": len(unc), "illegible": len(ill), "pages": sorted({i["page"] for i in items}),
+            "items": [{k: i[k] for k in ("page", "kind", "word", "reading", "also", "context") if i.get(k) not in (None, "", [])}
+                      for i in items[:limit]]}
+
+
+def _review_pdf(pages: list[Path], texts: list[str], items: list[dict[str, Any]], dst: Path) -> None:
+    """Ellenőrző PDF: oldalanként balra az eredeti oldalkép, jobbra az átirat; a kétes olvasat sárgán, az olvashatatlan
+    pirosan kiemelve (PDF-kiemelés: az olvasóprogram megjegyzés-listájában is ott van, oldalszámmal)."""
+    import html as H
+    import fitz
+    from PIL import Image
+    out = fitz.open()
+    W, Hh, M = 842.0, 595.0, 24.0                  # A4 fekvő: két hasáb
+    css = ("body{font-family:sans-serif;font-size:10pt;line-height:1.35} h1,h2{font-size:12pt;margin:0 0 4pt 0} "
+           "p{margin:0 0 6pt 0} .hd{font-size:8pt;color:#666666}")
+    for n, (img, text) in enumerate(zip(pages, texts), 1):
+        page = out.new_page(width=W, height=Hh)
+        with Image.open(img) as im:
+            small = im.convert("RGB")
+            small.thumbnail((1400, 1400))
+            buf = io.BytesIO()
+            small.save(buf, "JPEG", quality=70, optimize=True)
+            iw, ih = small.size
+        box = fitz.Rect(M, M, W / 2 - M / 2, Hh - M)
+        k = min(box.width / iw, box.height / ih)
+        shot = fitz.Rect(box.x0, box.y0, box.x0 + iw * k, box.y0 + ih * k)
+        page.insert_image(shot, stream=buf.getvalue())
+        page.draw_rect(shot, color=(0.8, 0.8, 0.8), width=0.6)          # fehér lap a fehér oldalon: vékony keret
+        body = []
+        for para in re.split(r"\n\s*\n", text):
+            para = para.strip()
+            if not para:
+                continue
+            tag = "h2" if para.startswith("#") else "p"
+            para = re.sub(r"^#+\s*", "", para)
+            # a jelölt szavak id-vel (a helyüket a Story megadja), a többi szöveg escape-elve
+            parts, last = [], 0
+            for m in _UNC.finditer(para):
+                parts.append(H.escape(best_reading(para[last:m.start()], items)))
+                kk = int(m.group(1)) if m.group(1) is not None else -1
+                it = items[kk] if 0 <= kk < len(items) else None
+                word = "[?]" if it and it["kind"] == "illegible" else (it["reading"] if it else m.group(2))
+                parts.append(f'<span id="u{kk}">{H.escape(word)}</span>' + ("" if it and it["kind"] == "illegible" else "<sup>?</sup>"))
+                last = m.end()
+            parts.append(H.escape(best_reading(para[last:], items)))
+            body.append(f"<{tag}>{''.join(parts)}</{tag}>")
+        html = f'<p class="hd">Page {n} — transcript (doubtful readings highlighted)</p>' + "".join(body)
+        spots: list[tuple[str, tuple]] = []
+        rect = fitz.Rect(W / 2 + M / 2, M, W - M, Hh - M)
+        scale = 1.0
+        for _ in range(6):                          # hosszú oldal: a betű kisebb, amíg befér (egy hasábra)
+            story = fitz.Story(html=html, user_css=css + f" body{{font-size:{10 * scale:.1f}pt}}")
+            more, _filled = story.place(rect)
+            if not more:
+                break
+            scale *= 0.85
+        spots.clear()
+        story.element_positions(lambda pos: spots.append((pos.id, tuple(pos.rect))) if getattr(pos, "id", None) else None, {})
+        buf2 = io.BytesIO()
+        w = fitz.DocumentWriter(buf2)
+        dev = w.begin_page(fitz.Rect(0, 0, W, Hh))
+        story.draw(dev)
+        w.end_page()
+        w.close()
+        page.show_pdf_page(page.rect, fitz.open("pdf", buf2.getvalue()), 0)
+        for sid, r in spots:
+            r = fitz.Rect(r)
+            if r.width <= 0.5 or not sid.startswith("u"):
+                continue
+            kk = int(sid[1:])
+            it = items[kk] if 0 <= kk < len(items) else None
+            a = page.add_highlight_annot(r)
+            if it and it["kind"] == "illegible":
+                a.set_colors(stroke=(1, 0.55, 0.55))
+                a.set_info(content=f"Illegible on page {n}.")
+            elif it:
+                a.set_colors(stroke=(1, 0.88, 0.4))
+                also = (" — also possible: " + ", ".join(it["also"])) if it["also"] else ""
+                a.set_info(content=f"Uncertain reading on page {n}: {it.get('word') or it['reading']}{also}")
+            a.update()
+    out.save(str(dst), garbage=3, deflate=True)
+    out.close()
 
 
 # ---------- ábrák ----------
@@ -460,7 +655,8 @@ def _book_reference() -> Path:
 
 
 async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs: list[str], pages: list[Path],
-                        texts: list[str], source_id: str, stem: str, style_file_id: Optional[str] = None) -> list[dict[str, Any]]:
+                        texts: list[str], source_id: str, stem: str, style_file_id: Optional[str] = None,
+                        items: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
     import pypandoc
     from app.tools import wordcraft
     files: list[tuple[str, str]] = []           # (file_id, címke)
@@ -471,7 +667,7 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
         if {"docx", "pdf"} & set(outputs):
             # a képes változat az ábrák mappájában, hogy a pandoc a relatív képútvonalakat megtalálja
             md_path = figdir / "book.md"
-            md_path.write_text(to_pandoc(md_img), "utf-8")
+            md_path.write_text(to_pandoc(_render(md_img, items or [], "sentinel")), "utf-8")
             docx_path = work / "book.docx"
             if style_file_id:                     # „olyan legyen, mint ez a dokumentumom” — a minta a sablon
                 from app.tools import doc_style
@@ -483,21 +679,34 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
                                                 "--metadata", f"title-meta={title}"])
             from app.tools import ooxml_safe
             await asyncio.to_thread(ooxml_safe.fix, docx_path)        # iPhone/Pages: sémahelyes docx
+            # a kétes olvasatok: a Word-fájlban kiemelés + megjegyzés, az új tördelésű PDF-ben tiszta szöveg
+            clean_path = work / "clean.docx"
+            shutil.copy(docx_path, clean_path)
+            await asyncio.to_thread(mark_docx, docx_path, items or [], True)
+            await asyncio.to_thread(mark_docx, clean_path, items or [], False)
         for kind in outputs:
             if kind == "md":
-                fid = new_file_id("md"); output_path(fid).write_text(_CENTER.sub(lambda m: m.group(1), md), "utf-8"); files.append((fid, f"{stem}.md"))
+                fid = new_file_id("md")
+                output_path(fid).write_text(_CENTER.sub(lambda m: m.group(1), _render(md, items or [], "editorial")), "utf-8")
+                files.append((fid, f"{stem}.md"))
             elif kind == "txt":
-                fid = new_file_id("txt"); output_path(fid).write_text(to_plain(md), "utf-8"); files.append((fid, f"{stem}.txt"))
+                fid = new_file_id("txt")
+                output_path(fid).write_text(to_plain(_render(md, items or [], "editorial")), "utf-8")
+                files.append((fid, f"{stem}.txt"))
             elif kind == "docx":
                 fid = new_file_id("docx"); shutil.copy(docx_path, output_path(fid)); files.append((fid, f"{stem}.docx"))
             elif kind == "pdf":
                 fid = new_file_id("pdf")
-                await wordcraft.convert_file(docx_path, output_path(fid))
+                await wordcraft.convert_file(clean_path, output_path(fid))
                 files.append((fid, f"{stem} (new).pdf"))
             elif kind == "searchable_pdf":
                 fid = new_file_id("pdf")
-                await asyncio.to_thread(_searchable_pdf, pages, texts, output_path(fid))
+                await asyncio.to_thread(_searchable_pdf, pages, [best_reading(t, items or []) for t in texts], output_path(fid))
                 files.append((fid, f"{stem} (searchable).pdf"))
+            elif kind == "review_pdf":
+                fid = new_file_id("pdf")
+                await asyncio.to_thread(_review_pdf, pages, texts, items or [], output_path(fid))
+                files.append((fid, f"{stem} (review).pdf"))
     finally:
         shutil.rmtree(work, ignore_errors=True)
     out = []
@@ -509,6 +718,13 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
 
 async def digitize(file_ids: list[str], outputs: list[str], language: Optional[str], max_pages: int,
                    progress: Callable[[int, int, str], None], on_pages=None, style_file_id: Optional[str] = None) -> dict[str, Any]:
+    from app import billing
+    with billing.prepaid():          # a szkennelt oldal az oldalkeretből/kreditből fizet — a modellhívása nem AI-lépés
+        return await _digitize(file_ids, outputs, language, max_pages, progress, on_pages, style_file_id)
+
+
+async def _digitize(file_ids: list[str], outputs: list[str], language: Optional[str], max_pages: int,
+                    progress: Callable[[int, int, str], None], on_pages=None, style_file_id: Optional[str] = None) -> dict[str, Any]:
     outputs = [o for o in outputs if o in OUTPUTS] or ["docx"]
     work = temp_path(new_file_id("scan"))
     work.mkdir(parents=True)
@@ -556,6 +772,7 @@ async def digitize(file_ids: list[str], outputs: list[str], language: Optional[s
             progress(done, len(pages), "reading text")
 
         await asyncio.gather(*(one(i) for i in range(len(pages))))
+        texts, items = number_uncertain(texts)
         figdir = work / "fig"
         figdir.mkdir()
         progress(len(pages), len(pages), "building files")
@@ -563,10 +780,10 @@ async def digitize(file_ids: list[str], outputs: list[str], language: Optional[s
         md_img, md = assemble(with_img), assemble(plain_pages)
         if not md.strip():
             raise ValueError("No text found on these pages.")
-        files += await build_outputs(md, md_img, figdir, title_of(md, stem), outputs, pages, plain_pages, file_ids[0], stem,
-                                     style_file_id=style_file_id)
+        files += await build_outputs(md, md_img, figdir, title_of(best_reading(md, items), stem), outputs, pages, plain_pages,
+                                     file_ids[0], stem, style_file_id=style_file_id, items=items)
         return {"files": files, "file_id": files[0]["file_id"], "pages": len(pages), "pages_cached": cached, "figures": figures,
-                "fields": form_info.get("fields", []),
-                "truncated": truncated, "words": len(to_plain(md).split())}
+                "fields": form_info.get("fields", []), "readings": uncertain_summary(items),
+                "truncated": truncated, "words": len(to_plain(best_reading(md, items)).split())}
     finally:
         shutil.rmtree(work, ignore_errors=True)

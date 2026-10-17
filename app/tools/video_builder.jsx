@@ -5,12 +5,20 @@
 //   egymásba csúsztatva; fölöttük a feliratok (Caption …, sávval); alul a zene / a saját hang.
 //   Jelenet: kép Ken Burns-mozgással (vagy színátmenet, ha nincs kép) · sötét átmenet alul · akcentus-csík ·
 //   cím (beúszik) · opcionális nagy szám (stat).
+//   D.base (overlay): a felhasználó felvétele az alapsáv a jelenetek helyett. D.layers: időkódos rétegek (rétegenként egy
+//   „Layer L1 – …” kompozíció) abszolút időben a fő idővonalon — a make- és az overlay-videón ugyanígy.
+//   D.alpha: csak a grafika (felvétel, képek, sötétítés, hang nélkül) — az átlátszó (rgba) renderhez.
 
 function tp(layer) { return layer.property("ADBE Transform Group"); }
 function ease(prop) {   // lágy indulás/érkezés minden kulcskockán (ha a motor nem tudja, marad lineáris)
   try {
     for (var k = 1; k <= prop.numKeys; k++)
       prop.setTemporalEaseAtKey(k, [new KeyframeEase(0, 60)], [new KeyframeEase(0, 60)]);
+  } catch (e) {}
+  // a helyzet EGYENES úton: az automatikus térbeli ív két azonos kulcs közt is elkanyarodik (10-17: az osztott képen
+  // a felvétel kitartás közben 26 px-t vándorolt)
+  try {
+    if (prop.isSpatial) for (var q = 1; q <= prop.numKeys; q++) prop.setSpatialTangentsAtKey(q, [0, 0, 0], [0, 0, 0]);
   } catch (e) {}
 }
 function textLayer(comp, box, str, o) {
@@ -59,41 +67,102 @@ function fadeIn(layer, t0, dur, rise) {     // átlátszóság 0→100 (és opci
   }
 }
 var FOOT = {};
+function picture(comp, file, mo, t0, t1, fadeIn) {   // egy háttérkép a [t0, t1] szakaszra, a saját mozgásával
+  var f = FOOT[file] || (FOOT[file] = app.project.importFile(new ImportOptions(new File(file))));
+  if (mo.fit === "contain") {     // az egész kép látszik; mögötte önmaga elmosva, sötétebben tölti ki a keretet
+    var B = comp.layers.add(f); B.name = "Picture fill";
+    if (t0 > 0 || t1 < comp.duration) { B.inPoint = t0; B.outPoint = t1; }
+    var sb = Math.max(D.W / f.width, D.H / f.height) * 112;
+    tp(B).property("ADBE Scale").setValue([sb, sb]);
+    blurred(B, Math.min(D.W, D.H) * 0.06);
+    var BO = tp(B).property("ADBE Opacity");
+    if (fadeIn) { BO.setValueAtTime(t0, 0); BO.setValueAtTime(t0 + fadeIn, 55); } else BO.setValue(55);
+    var Lf = comp.layers.add(f); Lf.name = "Picture";
+    if (t0 > 0 || t1 < comp.duration) { Lf.inPoint = t0; Lf.outPoint = t1; }
+    var sf = Math.min(D.W / f.width, D.H / f.height) * 100 * 0.96, zf_ = mo.zoom || 1.06;
+    var SF = tp(Lf).property("ADBE Scale");
+    var mz = mo.motion === "kb-out" || mo.motion === "out";
+    SF.setValueAtTime(t0, mz ? [sf * zf_, sf * zf_] : [sf, sf]); SF.setValueAtTime(t1, mz ? [sf, sf] : [sf * zf_, sf * zf_]);
+    if (fadeIn) { var FO = tp(Lf).property("ADBE Opacity"); FO.setValueAtTime(t0, 0); FO.setValueAtTime(t0 + fadeIn, 100); }
+    return Lf;
+  }
+  var L = comp.layers.add(f); L.name = "Picture";
+  if (t0 > 0 || t1 < comp.duration) { L.inPoint = t0; L.outPoint = t1; }
+  var s = Math.max(D.W / f.width, D.H / f.height) * 100, zf = mo.zoom || 0, z = s * (zf || 1.12);
+  var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
+  var m = mo.motion || "in";
+  if (m === "kb-in" || m === "kb-out") {
+    // Ken Burns: közelítés ÉS úsztatás egyszerre, a kép érdekes pontja (focus, 0–1) a keret közepe felé;
+    // a pozíció úgy korlátozva, hogy a kép végig kitöltse a keretet (lineáris skála + lineáris út → közben is)
+    var Z = s * (zf || 1.28), fo = mo.focus || [0.5, 0.45], hw = f.width * Z / 200, hh = f.height * Z / 200;
+    var px = D.W / 2 - (fo[0] * f.width - f.width / 2) * Z / 100, py = D.H / 2 - (fo[1] * f.height - f.height / 2) * Z / 100;
+    px = Math.min(hw, Math.max(D.W - hw, px)); py = Math.min(hh, Math.max(D.H - hh, py));
+    var a = [[s, s], [D.W / 2, D.H / 2]], b = [[Z, Z], [px, py]];
+    if (m === "kb-out") { var tmp = a; a = b; b = tmp; }
+    S.setValueAtTime(t0, a[0]); S.setValueAtTime(t1, b[0]); P.setValueAtTime(t0, a[1]); P.setValueAtTime(t1, b[1]);
+  } else if (m === "out") { S.setValueAtTime(t0, [z, z]); S.setValueAtTime(t1, [s, s]); }
+  else if (m === "left" || m === "right" || m === "up" || m === "down") {
+    // úsztatás: annyira nagyítva, hogy az út végig kitöltse a keretet (a nagyítás erőssége = az út hossza)
+    var k = s * (zf || 1.1), sign = m === "left" || m === "up" ? 1 : -1, horiz = m === "left" || m === "right";
+    var room = horiz ? (f.width * k / 100 - D.W) / 2 : (f.height * k / 100 - D.H) / 2, d = Math.max(0, room * 0.9);
+    S.setValue([k, k]);
+    if (horiz) { P.setValueAtTime(t0, [D.W / 2 + sign * d, D.H / 2]); P.setValueAtTime(t1, [D.W / 2 - sign * d, D.H / 2]); }
+    else { P.setValueAtTime(t0, [D.W / 2, D.H / 2 + sign * d]); P.setValueAtTime(t1, [D.W / 2, D.H / 2 - sign * d]); }
+  } else if (m === "still") { S.setValue([s, s]); }
+  else { S.setValueAtTime(t0, [s, s]); S.setValueAtTime(t1, [z, z]); }
+  if (fadeIn) { var O = tp(L).property("ADBE Opacity"); O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + fadeIn, 100); }
+  return L;
+}
 function background(comp, sc, dur) {
-  if (sc.image) {
-    var f = FOOT[sc.image] || (FOOT[sc.image] = app.project.importFile(new ImportOptions(new File(sc.image))));
-    var L = comp.layers.add(f); L.name = "Picture";
-    var s = Math.max(D.W / f.width, D.H / f.height) * 100, z = s * 1.12;
-    var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
-    var m = sc.motion || "in", dx = D.W * 0.035;
-    if (m === "kb-in" || m === "kb-out") {
-      // Ken Burns: közelítés ÉS úsztatás egyszerre, a kép érdekes pontja (sc.focus, 0–1) a keret közepe felé;
-      // a pozíció úgy korlátozva, hogy a kép végig kitöltse a keretet (lineáris skála + lineáris út → közben is)
-      var Z = s * 1.28, fo = sc.focus || [0.5, 0.45], hw = f.width * Z / 200, hh = f.height * Z / 200;
-      var px = D.W / 2 - (fo[0] * f.width - f.width / 2) * Z / 100, py = D.H / 2 - (fo[1] * f.height - f.height / 2) * Z / 100;
-      px = Math.min(hw, Math.max(D.W - hw, px)); py = Math.min(hh, Math.max(D.H - hh, py));
-      var a = [[s, s], [D.W / 2, D.H / 2]], b = [[Z, Z], [px, py]];
-      if (m === "kb-out") { var tmp = a; a = b; b = tmp; }
-      S.setValueAtTime(0, a[0]); S.setValueAtTime(dur, b[0]); P.setValueAtTime(0, a[1]); P.setValueAtTime(dur, b[1]);
-    } else if (m === "out") { S.setValueAtTime(0, [z, z]); S.setValueAtTime(dur, [s, s]); }
-    else if (m === "left" || m === "right") {
-      var k = s * 1.09, sign = m === "left" ? 1 : -1;
-      S.setValue([k, k]);
-      P.setValueAtTime(0, [D.W / 2 + sign * dx, D.H / 2]); P.setValueAtTime(dur, [D.W / 2 - sign * dx, D.H / 2]);
-    } else { S.setValueAtTime(0, [s, s]); S.setValueAtTime(dur, [z, z]); }
-    if (sc.blur) {
-      var b = L.property("ADBE Effect Parade").addProperty("Gaussian Blur");
-      b.property("Blurriness").setValue(sc.blur); b.property("Repeat Edge Pixels").setValue(1);
+  if (D.alpha) return;                     // átlátszó változat: a kép / háttér kimarad
+  if (sc.pics && sc.pics.length > 1) {     // képsor: a jelenet hátterei egymás után, áttűnéssel, mindegyik a saját mozgásával
+    var n = sc.pics.length, sl = dur / n, xf = Math.min(0.7, sl * 0.3);
+    for (var k = 0; k < n; k++) {
+      var a0 = k === 0 ? 0 : k * sl - xf / 2, a1 = k === n - 1 ? dur : (k + 1) * sl + xf / 2;
+      var L = picture(comp, sc.pics[k].file, { motion: sc.pics[k].motion, focus: sc.pics[k].focus, zoom: sc.zoom, fit: sc.pics[k].fit }, a0, a1, k ? xf : 0);
+      if (sc.blur) blurred(L, sc.blur);
     }
-  } else {   // nincs kép: két akcentus-tónusú lágy színátmenet
+  } else if (sc.image) {
+    var L1 = picture(comp, sc.image, { motion: sc.motion, focus: sc.focus, zoom: sc.zoom, fit: sc.fit }, 0, dur, 0);
+    if (sc.blur) blurred(L1, sc.blur);
+  } else if (sc.bg === "dark" || (sc.bg && sc.bg.charAt(0) === "#")) {   // egyszínű háttér
+    var c = sc.bg === "dark" ? D.dark : [parseInt(sc.bg.substr(1, 2), 16) / 255, parseInt(sc.bg.substr(3, 2), 16) / 255, parseInt(sc.bg.substr(5, 2), 16) / 255];
+    comp.layers.addSolid(c, "Background", D.W, D.H, 1, dur);
+  } else {   // nincs kép: két akcentus-tónusú lágy színátmenet („motion”: a fény lassan vándorol, két elmosott folt úszik)
     var g = comp.layers.addSolid(D.dark, "Background", D.W, D.H, 1, dur);
     var fx = g.property("ADBE Effect Parade").addProperty("Gradient Ramp");
-    fx.property("Start of Ramp").setValue([0, 0]); fx.property("Start Color").setValue([D.accent[0] * 0.55, D.accent[1] * 0.55, D.accent[2] * 0.55]);
-    fx.property("End of Ramp").setValue([D.W, D.H]); fx.property("End Color").setValue(D.dark);
+    var st = fx.property("Start of Ramp"), en = fx.property("End of Ramp");
+    st.setValue([0, 0]); fx.property("Start Color").setValue([D.accent[0] * 0.55, D.accent[1] * 0.55, D.accent[2] * 0.55]);
+    en.setValue([D.W, D.H]); fx.property("End Color").setValue(D.dark);
+    if (sc.bg === "motion") {
+      st.setValueAtTime(0, [0, 0]); st.setValueAtTime(dur, [D.W * 0.35, D.H * 0.2]);
+      en.setValueAtTime(0, [D.W, D.H]); en.setValueAtTime(dur, [D.W * 0.75, D.H]);
+      var mm = Math.min(D.W, D.H);
+      for (var b = 0; b < 2; b++) {
+        var r = mm * (b ? 0.55 : 0.75), blob = rect(comp, "Glow " + (b + 1), [r, r], [D.W * (b ? 0.78 : 0.22), D.H * (b ? 0.7 : 0.3)],
+          b ? [D.accent[0] * 0.6, D.accent[1] * 0.6, D.accent[2] * 0.6] : D.accent, b ? 16 : 12, r / 2);
+        blurred(blob, mm * 0.12);
+        var BP = tp(blob).property("ADBE Position"), p0 = BP.value;
+        BP.setValueAtTime(0, p0); BP.setValueAtTime(dur, [p0[0] + (b ? -1 : 1) * D.W * 0.12, p0[1] + (b ? -1 : 1) * D.H * 0.06]);
+      }
+    }
   }
+}
+function blurred(L, amount) {
+  var b = L.property("ADBE Effect Parade").addProperty("Gaussian Blur");
+  b.property("Blurriness").setValue(amount); b.property("Repeat Edge Pixels").setValue(1);
+}
+function camera(L, keys, t0) {   // a jelenet (vagy a saját felvétel) virtuális kamerája: [[t, nagyítás, x, y]]
+  var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    S.setValueAtTime(t0 + k[0], [k[1] * 100, k[1] * 100]); P.setValueAtTime(t0 + k[0], [k[2], k[3]]);
+  }
+  ease(S); ease(P);
 }
 var SHADES = {};
 function shade(comp, dur, kind) {   // alul sötétedő átmenet: előre megrajzolt PNG (olcsó); „even” = egyenletes sötétítés
+  if (D.alpha) return null;
   if (kind === "even" || !D.shade || !D.shade[kind]) {
     var s = comp.layers.addSolid([0, 0, 0], "Shade", D.W, D.H, 1, dur);
     tp(s).property("ADBE Opacity").setValue(kind === "even" ? 70 : 60);
@@ -152,6 +221,18 @@ function grower(layer, el) {   // kinövés: a horgony a növekedés kezdő él�
     o.setValueAtTime(el.t0, 0); o.setValueAtTime(el.t0 + el.dur, full);
   }
 }
+function keyed(layer, el) {      // kulcskockák [[t, x, y, szélesség?, átlátszóság?]]: helyzet (téglalapnál a bal széle),
+  var T = tp(layer), P = T.property("ADBE Position"), S = T.property("ADBE Scale"), O = T.property("ADBE Opacity");   // szélesség, láthatóság
+  var w0 = el.k === "rect" ? el.size[0] : 0;
+  if (w0) { try { T.property("ADBE Anchor Point").setValue([-w0 / 2, 0]); } catch (e) {} }
+  for (var i = 0; i < el.keys.length; i++) {
+    var k = el.keys[i];
+    P.setValueAtTime(k[0], [k[1], k[2]]);
+    if (w0 && k[3] !== undefined && k[3] !== null) S.setValueAtTime(k[0], [Math.max(0.1, k[3] / w0 * 100), 100]);
+    if (k[4] !== undefined && k[4] !== null) O.setValueAtTime(k[0], k[4]);
+  }
+  ease(P); if (w0) ease(S);
+}
 function col(v) { return v === "accent" ? D.accent : v; }
 function pathLayer(comp, el) {   // vonal / nyíl / útvonal / sokszög: a pontok KOMPOZÍCIÓ-pixelben (a réteg a [0,0]-ban)
   var s = comp.layers.addShape(); s.name = el.name;
@@ -169,13 +250,25 @@ function pathLayer(comp, el) {   // vonal / nyíl / útvonal / sokszög: a ponto
     st.property("ADBE Vector Stroke Color").setValue([sc_[0], sc_[1], sc_[2], 1]);
     st.property("ADBE Vector Stroke Width").setValue(el.stroke_w || 6);
     try { st.property("ADBE Vector Stroke Line Cap").setValue(2); st.property("ADBE Vector Stroke Line Join").setValue(2); } catch (e) {}
+    if (el.dash) {                 // szaggatott / pontozott (kerek véggel a rövid vonás pötty): [vonás, köz] px
+      try { var ds = st.property("ADBE Vector Stroke Dashes"); ds.property(1).setValue(el.dash[0]); ds.property(2).setValue(el.dash[1]); } catch (e) {}
+    }
   }
   if (el.opacity !== undefined && el.opacity !== 100) tp(s).property("ADBE Opacity").setValue(el.opacity);
   if (el.anim === "draw") {        // kirajzolódik: Trim Paths vége 0 → 100
     var tr = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Filter - Trim");
     var e_ = tr.property("ADBE Vector Trim End"); e_.setValueAtTime(el.t0, 0); e_.setValueAtTime(el.t0 + el.dur, 100); ease(e_);
+    dims(s, el);
   } else animate(s, el);
   return s;
+}
+function dims(layer, el) {       // irányított figyelem: a megadott szakaszokban [tól, ig] halványabb, utána vissza
+  if (!el.dim || !el.dim.length) return;
+  var O = tp(layer).property("ADBE Opacity"), full = el.opacity || 100, lo = full * 0.32;
+  for (var i = 0; i < el.dim.length; i++) {
+    var a = el.dim[i][0], b = el.dim[i][1];
+    O.setValueAtTime(a, full); O.setValueAtTime(a + 0.25, lo); O.setValueAtTime(b, lo); O.setValueAtTime(b + 0.35, full);
+  }
 }
 function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | grow | slide-* | pulse | none (+ move_to)
   var T = tp(layer), a = el.anim || "appear", t0 = el.t0 || 0, d = el.dur || 0.6, full = el.opacity || 100;
@@ -196,6 +289,7 @@ function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | g
     var p0 = P.value, tm = t0 + d + 0.2;
     P.setValueAtTime(tm, p0); P.setValueAtTime(tm + Math.max(0.8, d * 2), el.move_to); ease(P);
   }
+  dims(layer, el);
 }
 function multiPath(comp, el) {   // sok útvonal egy rétegen, csoportonként közös vonallal / kitöltéssel (térkép)
   var s = comp.layers.addShape(); s.name = el.name;
@@ -258,7 +352,7 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
     if (el.k === "rect") {
       var r = rect(c, el.name, el.size, el.pos, col(el.color), el.opacity, el.round, el.stroke ? col(el.stroke) : null, el.stroke_w);
       if (el.rot && el.grow !== "rotate") tp(r).property("ADBE Rotate Z").setValue(el.rot);
-      if (el.grow) grower(r, el); else if (el.anim) animate(r, el);
+      if (el.keys) keyed(r, el); else if (el.grow) grower(r, el); else if (el.anim) animate(r, el);
     } else if (el.k === "path") {
       pathLayer(c, el);
     } else if (el.k === "multipath") {
@@ -267,8 +361,9 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
       mediaLayer(c, el);
     } else {
       var tl = textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
-        font: F[el.font] || D.font.semibold, color: el.color });
-      if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
+        font: F[el.font] || D.font.semibold, color: el.color, leading: el.leading, tracking: el.tracking, shadow: el.shadow });
+      if (el.keys) keyed(tl, el);
+      else if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
         tl.inPoint = el.t0 || 0;
         if (el.t1 !== undefined) tl.outPoint = el.t1;
       } else if (el.anim) animate(tl, el); else fadeIn(tl, el.t0 || 0, 0.4, 0);
@@ -277,7 +372,7 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
 }
 function runScript(c, sc) {      // az ügynök saját kódja a jelenetre: comp, W, H, dur, accent, D (+ a fenti segédfüggvények)
   try {
-    (new Function("comp", "W", "H", "dur", "accent", "D", sc.chart.code))(c, D.W, D.H, sc.dur, D.accent, D);
+    (new Function("comp", "W", "H", "dur", "accent", "D", sc.chart.code))(c, c.width, c.height, sc.dur, D.accent, D);
   } catch (e) { writeLn("SCRIPT_ERROR " + sc.chart.id + ": " + (e && e.message ? e.message : String(e))); }
   var texts = [];                 // a szövegek számait a Python ellenőrzi a forráson
   for (var i = 1; i <= c.numLayers; i++) {
@@ -287,16 +382,24 @@ function runScript(c, sc) {      // az ügynök saját kódja a jelenetre: comp,
 }
 function contentScene(sc, i) {
   var c = app.project.items.addComp("Scene " + i + " – " + sc.headline.substring(0, 32), D.W, D.H, 1, sc.dur, D.fps);
-  background(c, sc, sc.dur);
+  // kamera: a kép és az ábra egy belső kompozícióban mozog (legalul), a feliratok (cím, nagy szám) a helyükön maradnak
+  // — 10-17: a mezre közelítéskor a jelenet címe kicsúszott a képből
+  var host = c;
+  if (sc.camera) {
+    host = app.project.items.addComp("Scene " + i + " – camera", D.W, D.H, 1, sc.dur, D.fps);
+    var Lc = c.layers.add(host); Lc.name = "Camera";
+    camera(Lc, sc.camera, 0);
+  }
+  background(host, sc, sc.dur);
   var L = D.L;
   if (sc.chart) {        // mozgó grafikon: sötétített kép, fent a cím, alatta a grafikon
-    shade(c, sc.dur, "even");
+    shade(host, sc.dur, "even");
     // + egyenletes sötét fátyol: zsúfolt képen (10-12: EEG-görbe az idővonal mögött) is olvasható maradjon az ábra
     var bd = sc.chart.backdrop === undefined || sc.chart.backdrop === null ? 58 : Math.round(sc.chart.backdrop * 100);
-    if (bd > 0) rect(c, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
+    if (bd > 0 && !D.alpha) rect(host, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
     var cs = Math.round(Math.min(D.W, D.H) * 0.052);
-    chartLayers(c, sc.chart);
-    if (sc.chart.code) runScript(c, sc);
+    chartLayers(host, sc.chart);
+    if (sc.chart.code) runScript(host, sc);
     // a cím az ábra FÖLÖTT (10-12: a teljes képes térkép útjai átfutottak rajta)
     if (sc.chart.title) fadeIn(textLayer(c, [D.W * 0.84, cs * 2.6], sc.chart.title, { size: cs, align: "center", pos: [D.W / 2, D.H * 0.1],
       leading: cs * 1.1, name: "Chart title" }), 0.1, 0.5, D.H * 0.015);
@@ -332,18 +435,60 @@ function endScene(sc) {
   return c;
 }
 
+// időkódos réteg: saját kompozíció (a Python számolta elemekkel) a fő idővonalon at-tól dur-ig, be/ki úsztatva;
+// osztott képnél az alapsáv (felvétel vagy jelenetek) a fél képre zsugorodik, a végén vissza
+function splitBase(Lb, ly) {
+  var T = tp(Lb), S = T.property("ADBE Scale"), P = T.property("ADBE Position"), s = ly.split;
+  var a = ly.at, b = ly.at + ly.dur, d = Math.min(0.5, ly.dur / 4), k = s.scale * 100, p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
+  S.setValueAtTime(a, s0); S.setValueAtTime(a + d, [k, k]); S.setValueAtTime(b - d, [k, k]); S.setValueAtTime(b, s0);
+  P.setValueAtTime(a, p0); P.setValueAtTime(a + d, s.to); P.setValueAtTime(b - d, s.to); P.setValueAtTime(b, p0);
+  ease(S); ease(P);
+}
+function overlayLayers(main, base) {
+  for (var i = 0; i < (D.layers || []).length; i++) {
+    var ly = D.layers[i];
+    var c = app.project.items.addComp(ly.name, ly.w, ly.h, 1, ly.dur, D.fps);
+    chartLayers(c, ly);
+    if (ly.code) runScript(c, { chart: { code: ly.code, id: ly.id }, dur: ly.dur });
+    var L = main.layers.add(c); L.name = ly.name; L.startTime = ly.at;
+    var T = tp(L), P = T.property("ADBE Position"), O = T.property("ADBE Opacity"), S = T.property("ADBE Scale");
+    var a = ly.at, b = ly.at + ly.dur, di = Math.min(0.45, ly.dur / 4), dq = Math.min(0.35, ly.dur / 4);
+    var ai = ly.anim["in"], ao = ly.anim["out"], off = [ly.pos[0] + ly.slide[0], ly.pos[1] + ly.slide[1]];
+    P.setValue(ly.pos);
+    if (ai !== "none") { O.setValueAtTime(a, 0); O.setValueAtTime(a + di, 100); }
+    if (ao !== "none") { O.setValueAtTime(b - dq, 100); O.setValueAtTime(b, 0); }
+    if (ai === "slide") { P.setValueAtTime(a, off); P.setValueAtTime(a + di, ly.pos); }
+    if (ao === "slide") { P.setValueAtTime(b - dq, ly.pos); P.setValueAtTime(b, off); }
+    if (ai === "pop") { S.setValueAtTime(a, [86, 86]); S.setValueAtTime(a + di, [100, 100]); }
+    if (ao === "pop") { S.setValueAtTime(b - dq, [100, 100]); S.setValueAtTime(b, [86, 86]); }
+    ease(O); ease(P); ease(S);
+    if (ly.split) for (var j = 0; j < base.length; j++) splitBase(base[j], ly);
+  }
+}
+
 var main = app.project.items.addComp("Video", D.W, D.H, 1, D.total, D.fps);
 main.bgColor = D.dark;
-var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;
-for (var i = 0; i < D.scenes.length; i++) { order.push(contentScene(D.scenes[i], i + 1)); starts.push(t); t += D.scenes[i].dur - D.xfade; }
-order.push(endScene(D.end)); starts.push(t);
-for (var j = 0; j < order.length; j++) {    // alulról fölfelé: a későbbi jelenet a korábbi FÖLÉ kerül, és beúszik
-  var L = main.layers.add(order[j]);
-  L.startTime = starts[j];
-  if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
+var baseLayers = [];
+if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja) az alapsáv
+  if (!D.alpha) {
+    var fb = main.layers.add(app.project.importFile(new ImportOptions(new File(D.base.file))));
+    fb.name = D.base.label || "Footage"; baseLayers.push(fb);
+    if (D.camera) camera(fb, D.camera, 0);      // ráközelítés a felvételre (punch-in), abszolút időben
+  }
+} else {
+  var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;
+  for (var i = 0; i < D.scenes.length; i++) { order.push(contentScene(D.scenes[i], i + 1)); starts.push(t); t += D.scenes[i].dur - D.xfade; }
+  order.push(endScene(D.end)); starts.push(t);
+  for (var j = 0; j < order.length; j++) {    // alulról fölfelé: a későbbi jelenet a korábbi FÖLÉ kerül, és beúszik
+    var L = main.layers.add(order[j]);
+    L.startTime = starts[j];
+    if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
+    baseLayers.push(L);
+  }
 }
+overlayLayers(main, baseLayers);      // a rétegek a jelenetek / a felvétel fölött, a feliratok alatt
 // feliratok: sáv + szöveg, a jelenetek fölött (a szerkesztőben egyenként átírhatók)
-for (var k = 0; k < D.captions.length; k++) {
+for (var k = 0; k < (D.captions || []).length; k++) {
   var cp = D.captions[k], Lc = D.L;
   var bar = rect(main, "Caption box " + (k + 1), [Lc.capW + Lc.capPad * 2, cp.lines * Lc.capSize * 1.28 + Lc.capPad * 1.4],
     [D.W / 2, Lc.capY], [0.04, 0.045, 0.06], 72, Lc.capPad * 0.7);
@@ -352,12 +497,13 @@ for (var k = 0; k < D.captions.length; k++) {
   var lays = [bar, tx];
   for (var q = 0; q < 2; q++) { lays[q].inPoint = cp.t0; lays[q].outPoint = cp.t1; }
 }
-// hang: saját hang teljes hangerőn, a zene alá keverve, a végén elhalkul
-if (D.audio.voice) { var v = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.voice)))); v.name = "Voice-over"; }
-if (D.audio.music) {
+// hang: saját hang teljes hangerőn, a zene alá keverve, a végén elhalkul (az átlátszó változatban nincs hang)
+if (D.audio && D.audio.voice && !D.alpha) { var v = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.voice)))); v.name = "Voice-over"; }
+if (D.audio && D.audio.music && !D.alpha) {
   var mu = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.music)))); mu.name = "Music";
   var lv = mu.property("ADBE Audio Group").property("ADBE Audio Levels"), g = D.audio.musicDb;
   lv.setValueAtTime(0, [g, g]); lv.setValueAtTime(Math.max(0, D.total - 2.5), [g, g]); lv.setValueAtTime(D.total, [-48, -48]);
 }
 main.openInViewer && main.openInViewer();
-writeLn(JSON.stringify({ comps: app.project.numItems, scenes: D.scenes.length, captions: D.captions.length, total: D.total }));
+writeLn(JSON.stringify({ comps: app.project.numItems, scenes: (D.scenes || []).length, layers: (D.layers || []).length,
+  captions: (D.captions || []).length, total: D.total }));

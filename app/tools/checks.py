@@ -296,9 +296,51 @@ def pptx_problems(p: Path) -> tuple[list[str], dict[str, Any]]:
     return out, stats
 
 
-def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) -> tuple[dict[str, Any], Optional[int]]:
-    problems, stats = pptx_problems(out)
+async def check_deck(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) -> tuple[dict[str, Any], Optional[int]]:
+    """A pakli ellenőrzése a készítés/szerkesztés végén: UGYANAZ a renderelt elemző, mint a validate_document-é
+    (a szerkesztő és a PowerPoint/LibreOffice tördelése) — a ChatGPT-teszt 10-17: a készítő „rendben”-t mondott,
+    a külön validátor túllógó szöveget talált. A két út ítélete így nem térhet el; a PDF-ek gyorsítótárban
+    maradnak, a rákövetkező validate_document nem rendereli újra."""
+    from app.tools import validate
+    rendered, note = None, None
+    try:
+        # a teljes ellenőrzés kerete 45 s (run) — a renderelés legfeljebb 30 s, utána becslés, de legyen check
+        layouts, notes = await asyncio.wait_for(validate._layouts(out, "deck", want_file=True), timeout=30)
+        try:
+            if layouts:
+                rendered = await asyncio.to_thread(validate.deck_issues, out, layouts)
+                note = f"Rendered and checked like validate_document: " + "; ".join(
+                    f"{validate.view_name(L)} — {_plural(L.pages, 'slide')}" for L in layouts) + "."
+            notes and log.info("pakli-ellenőrzés: %s", notes)
+        finally:
+            for L in layouts:
+                L.close()
+    except Exception as e:
+        log.info("renderelt pakli-ellenőrzés kimaradt: %s", e)
+        why = "it took too long" if isinstance(e, asyncio.TimeoutError) else str(e)[:100]
+        note = (f"The rendered check could not run ({why}) — text overflow was only estimated; "
+                "validate_document(file_id) renders and checks every slide.")
+    return await asyncio.to_thread(check_pptx, out, src, tool, args, rendered, note)
+
+
+def _deck_finding(it: dict[str, Any]) -> str:
+    fix = f" Fix: {it['fix']}" if it.get("fix") else ""
+    return f"{it['id']} ({it['severity']}) — {it['message']}{fix}"
+
+
+def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any], rendered: Optional[list[dict[str, Any]]] = None,
+               note: Optional[str] = None) -> tuple[dict[str, Any], Optional[int]]:
+    from app.tools.validate import ERROR
+    if rendered is not None:
+        _, stats = pptx_problems(out)
+        problems = [_deck_finding(i) for i in rendered]
+        errors = any(i["severity"] == ERROR for i in rendered)
+    else:
+        problems, stats = pptx_problems(out)
+        errors = False
     verified, findings, first_changed = [f"{_plural(stats['slides'], 'slide')}, {_plural(stats['pictures'], 'picture')}."], [], None
+    if note:
+        verified.append(note)
     if stats["slides"] == 0:
         return make("failed", ["The deck has no slides."], []), None
     if src is not None and _ext(src) == "pptx":
@@ -329,11 +371,13 @@ def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) 
             findings.append(f"“{pat}” still appears in the deck.")
         elif pat and not args.get("regex"):
             verified.append(f"“{pat}” no longer appears in the deck.")
-    findings += problems[:12]
+    findings += problems[:12] + ([f"…and {len(problems) - 12} more — validate_document(file_id) lists them all."]
+                                 if len(problems) > 12 else [])
     if findings:
-        return make("needs_check", findings + [LOOK], verified), first_changed
+        # ugyanaz az ítélet, mint a validate_document-é: hiba → failed (javítani kell), figyelmeztetés → needs_check
+        return make("failed" if errors else "needs_check", findings + [LOOK], verified), first_changed
     if src is None or first_changed:
-        return make("ok", [], verified + ["No slide has text overflowing, anything off the slide, or empty placeholders."]), first_changed
+        return make("ok", [], verified + ["No slide has text overflowing, text drawn over other text, anything off the slide, or empty placeholders."]), first_changed
     return make("needs_check", [LOOK], verified), first_changed
 
 
@@ -520,9 +564,15 @@ async def generic(out: Path) -> dict[str, Any]:
     return make("needs_check", ["No automatic check for this kind of change. " + LOOK], v)
 
 
+_LENGTH_BY = {"narration": "narration mode: the voice sets the length", "fixed": "fixed mode",
+              "footage": "the footage sets the length"}
+
+
 def check_video(p: Path, want_s: Optional[float] = None, want_wh: Optional[tuple[int, int]] = None,
-                draft: bool = False) -> dict[str, Any]:
-    """Kész videó: dekódolható-e (5 mintakocka), a hossza és a mérete a kért-e, nem fekete-e."""
+                draft: bool = False, requested: Optional[float] = None, mode: Optional[str] = None,
+                why: Optional[str] = None) -> dict[str, Any]:
+    """Kész videó: dekódolható-e (5 mintakocka), a renderelt hossz az idővonalé-e (want_s), a KÉRT hossz (requested)
+    teljesült-e — eltérésnél kimondva, miért (mode / why) —, a mérete a vártnak megfelelő-e, nem fekete-e."""
     import cv2
     c = cv2.VideoCapture(str(p))
     try:
@@ -542,9 +592,18 @@ def check_video(p: Path, want_s: Optional[float] = None, want_wh: Optional[tuple
     dur = n / fps
     findings, verified = [], [f"Plays: {good} of 5 sample frames decode; {dur:.1f} s at {fps:.0f} fps, {w}×{h}."]
     if want_s and abs(dur - want_s) > max(1.0, 0.1 * want_s):
-        findings.append(f"It is {dur:.1f} s long — {want_s:.0f} s was asked for.")
-    elif want_s:
-        verified.append(f"Length as asked ({want_s:.0f} s).")
+        findings.append(f"It is {dur:.1f} s long, but its timeline is {want_s:.1f} s — the render may have stopped early; "
+                        "render it again (video action=render).")
+    if requested:                     # a kért hossz: eltérés soha nem „teljesült” (10-17: 24 s kérve, 17 s lett, mégis ok)
+        if abs(dur - requested) > max(1.0, 0.05 * requested):
+            reason = why or _LENGTH_BY.get(mode or "", "")
+            findings.append(f"Asked for {requested:.0f} s, it is {dur:.0f} s" + (f" ({reason})" if reason else "") + ".")
+        else:
+            verified.append(f"Length as asked: {requested:.0f} s (it is {dur:.1f} s" + (f", {mode} mode" if mode else "") + ").")
+    elif mode == "footage":
+        verified.append(f"The length is the footage's: {dur:.1f} s.")
+    elif mode:
+        verified.append(f"No length was asked: the narration (or, without a voice, the scenes' reading time) sets it — {dur:.1f} s.")
     if want_wh and not draft and (w, h) != tuple(want_wh):
         findings.append(f"It is {w}×{h} — {want_wh[0]}×{want_wh[1]} was expected.")
     if good < 5:
@@ -581,11 +640,25 @@ async def run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Opt
         return None, None
 
 
+def merge_checks(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """Két ellenőrzés egyben: a rosszabb státusz, mindkét lista (ismétlés nélkül)."""
+    rank = {"ok": 0, "needs_check": 1, "failed": 2}
+    status = max(a["status"], b["status"], key=lambda x: rank.get(x, 1))
+    uniq = lambda xs: list(dict.fromkeys(xs))  # noqa: E731
+    findings = uniq([f for f in a["findings"] + b["findings"] if f != LOOK]) + ([LOOK] if LOOK in a["findings"] + b["findings"] else [])
+    return make(status, findings, uniq(a["verified"] + b["verified"]))
+
+
 async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[int]]:
     own = normalize(res.get("check"))
     if own is not None:
+        out = _path(main_file(res))
+        if out is not None and _ext(out) == "pptx" and not res.get("read_only"):
+            # saját ellenőrzés + a renderelt pakli-ellenőrzés: minden pptx-kimenet ugyanazon az elemzőn megy át
+            deck, page = await check_deck(out, None, tool, args)
+            return merge_checks(own, deck), page
         return own, None
-    if tool in _NO_CHECK or (tool == "wordcraft" and args.get("read")):    # olvasás: nincs új fájl, nincs mit ellenőrizni
+    if tool in _NO_CHECK or args.get("read") or res.get("read_only"):    # olvasás (bármely motor): nincs új fájl, nincs mit ellenőrizni
         return None, None
     # háttérmunka: a kész eredményen (digitize / restore / photo_edit — a hívás job_id-val jön vissza)
     if res.get("status") in ("running", "failed", "cancelled") and "kind" in res:
@@ -642,7 +715,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
         removed = len(_parse_page_range(str(args.get("page_range") or ""), before))
         return await check_pages_math(out, before - removed, f"{removed} of {before} pages removed"), None
     if ext == "pptx":
-        return await asyncio.to_thread(check_pptx, out, src, tool, args)
+        return await check_deck(out, src, tool, args)
     if ext == "docx":
         return await with_layout(await asyncio.to_thread(check_docx, out, src, tool, args), out), None
     if tool in ("photocraft", "photo_edit") or (ext in ("psd", "png", "jpg", "jpeg", "webp") and tool not in ("design", "vectorcraft")):
@@ -665,7 +738,18 @@ async def _check_digitize(inner: dict[str, Any]) -> dict[str, Any]:
                                                       else f"{f.get('label', 'Document')}: no text was read.")
     if findings:
         return make("failed" if not verified else "needs_check", findings, verified)
-    if verified:
+    r = inner.get("readings") or {}
+    doubtful = int(r.get("uncertain") or 0) + int(r.get("illegible") or 0)
+    if verified and doubtful:
+        # a kétes olvasat nem hiba, de ember nézze meg: hol vannak, és hogy a fájlokban jelölve vannak
+        pages = ", ".join(map(str, (r.get("pages") or [])[:15])) + ("…" if len(r.get("pages") or []) > 15 else "")
         verified.append(f"{_plural(int(inner.get('pages') or 0), 'page')} read.")
+        return make("needs_check", [f"{_plural(int(r.get('uncertain') or 0), 'uncertain reading')} and "
+                                    f"{_plural(int(r.get('illegible') or 0), 'illegible word')} on page{'s' if len(r.get('pages') or []) > 1 else ''} "
+                                    f"{pages} — marked in the files (Word: highlighted, each with a comment; txt/md: [reading?], [?]; "
+                                    "review_pdf: highlighted next to the page image). `readings.items` lists them with their context: "
+                                    "check them against the page images."], verified)
+    if verified:
+        verified.append(f"{_plural(int(inner.get('pages') or 0), 'page')} read; the reader marked no doubtful readings.")
         return make("ok", ["Spelling is read by AI — skim the text for misreads."], verified)
     return make("needs_check", [LOOK], [])

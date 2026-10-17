@@ -2,7 +2,9 @@
 Deterministic edit operations for DOCX, HTML, MD.
 
 These are the primitives that `edit_with_instruction` (LLM) compiles down to.
-They are also exposed directly as MCP tools for cheap deterministic edits.
+Some of them are also MCP tools (find_replace, delete_section, insert_after, replace_heading, delete_pages,
+extract); the paragraph-styling ones (style_paragraph, style_all_headings, docx_set_paragraph_format) are
+reachable only through edit_with_instruction.
 
 Supported scopes:
     - DOCX (python-docx): full read/write of paragraphs, headings, tables

@@ -258,6 +258,44 @@ class Docx:
         re_.addnext(ref)
         return cid
 
+    def take_spans(self, open_ch: str, close_ch: str) -> list[tuple[Any, int, int, str]]:
+        """Jelölő karakterek közti szakaszok (open + 1 kulcskarakter + szöveg + close) minden bekezdésben: a jelölők
+        kitörlődnek a szövegből (formázás marad) → [(bekezdés, kezdet, vég, kulcs)] a megtisztított szövegben.
+        A digitalizálás így viszi át a kétes olvasatokat a pandoc-on: a jelölő magánhasználatú karakter."""
+        import bisect
+        pat = re.compile(re.escape(open_ch) + r"(.)(.*?)" + re.escape(close_ch), re.S)
+        out = []
+        for p in self.paragraphs():
+            segs = self.segments(p)
+            full = "".join(x for _, _, x in segs)
+            if open_ch not in full:
+                continue
+            spans, rm = [], []
+            for m in pat.finditer(full):
+                spans.append((m.start(), m.end(), m.group(1)))
+                rm += [m.start(), m.start() + 1, m.end() - 1]
+            rm.sort()
+            gone = set(rm)
+            for a, b, key in spans:
+                out.append((p, a + 2 - bisect.bisect_left(rm, a + 2), b - 1 - bisect.bisect_left(rm, b - 1), key))
+            for t, a, x in segs:
+                if any(a <= i < a + len(x) for i in rm):
+                    t.text = "".join(ch for j, ch in enumerate(x) if a + j not in gone)
+                    t.set(XML_SPACE, "preserve")
+        return out
+
+    def highlight(self, p, start: int, end: int, color: str = "yellow") -> None:
+        """Kiemelő szín a szakaszon (a Word „szövegkiemelő” színe; a sorrendet az ooxml_safe rendezi sémahelyesre)."""
+        for r in self.runs(p, start, end):
+            rpr = r.find(w("rPr"))
+            if rpr is None:
+                rpr = etree.Element(w("rPr"))
+                r.insert(0, rpr)
+            h = rpr.find(w("highlight"))
+            if h is None:
+                h = etree.SubElement(rpr, w("highlight"))
+            h.set(w("val"), color)
+
     def bookmark(self, p, start: int, end: int, name: str) -> None:
         runs = self.runs(p, start, end)
         if not runs:

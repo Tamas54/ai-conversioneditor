@@ -53,3 +53,5 @@ ezdxf>=1.3                 # DXF → SVG/PDF/PNG (matplotlib-háttérrel)
 fonttools[woff]>=4.50      # TTF/OTF/WOFF/WOFF2/EOT/TTC
 py7zr>=0.21                # 7z tartalék, ha nincs 7z CLI
 paramiko>=3.4               # SFTP import/export (app/connectors)
+faster-whisper>=1.1,<2       # időbélyeges átirat a saját felvételhez (Whisper large-v3-turbo, CPU, int8; MIT) — app/tools/transcript.py
+requests>=2.31                # a faster-whisper importálja, de nem deklarálja

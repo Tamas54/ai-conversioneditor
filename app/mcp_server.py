@@ -13,7 +13,7 @@ import base64
 import logging
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request
 from mcp.server.fastmcp import FastMCP
@@ -93,10 +93,17 @@ mcp = FastMCP(
         "shows a document's branches and merges two of them idea by idea, as tracked changes. "
         "To SEE any other result call files(action=\"preview\", file_id, page) — the picture comes back in the "
         "tool result (pages of a document, slides, a video's frames: page 1–3); every file result also has `preview_url` "
-        "(the same PNG as a link, for the person) and `check` = {status: ok | needs_check | failed, "
-        "findings, verified}. A file existing is not the task done: if status is needs_check, look at the preview; "
+        "(the same PNG as a link, for the person), and results that make or change a file carry `check` = {status: ok | "
+        "needs_check | failed, findings, verified} (decks: the same rendered check as validate_document, each problem "
+        "with its slide, shape id and a ready fix). Commands that only read (inspect, *.get, *.list) make no new file. A file existing is not the task done: if status is needs_check, look at the preview; "
         "if failed or a finding says something is missing, fix it before telling the person it's done. "
-        "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared."
+        "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared. "
+        "YOUR THINKING, OUR ENGINES: rendering, checks, layouts, transcripts and music cost the person nothing extra here; "
+        "but a step where this server runs its OWN AI model (choosing stock photos with a vision model, finding image search "
+        "words, writing a video script from an article, describe_image / ocr_image / extract_table_from_image, "
+        "edit_with_instruction, facts checks) is a Studio AI step: a monthly allowance, then credits (result field "
+        "`studio_ai`). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
+        "finished scenes=[…] plan, look at pictures with files(action=\"preview\"), and use the editing commands directly."
     ),
     streamable_http_path="/",
     stateless_http=True,
@@ -160,10 +167,16 @@ def linked(fn):
     async def w(*a, **k):
         import time
         from app import tenancy
+        from app import billing
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
         t0 = time.monotonic()
         try:
-            res = await _finalize(fn.__name__, k, await fn(*a, **k))
+            with billing.count_steps() as used:        # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
+                res = await _finalize(fn.__name__, k, await fn(*a, **k))
+            if used[0] and isinstance(res, dict):
+                res["studio_ai"] = {"steps": used[0], "credits": used[1],
+                                    "note": "Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
+                                            f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions."}
             st = (res.get("check") or {}).get("status") if isinstance(res, dict) else None
             log.info("mcp %s(%s) ok %.1fs%s", fn.__name__, _arg_brief(k), time.monotonic() - t0, f" check={st}" if st else "")
             return res
@@ -412,8 +425,8 @@ async def files(
       Give the person its edit_url — it opens the blank file in the matching editor.
       title names the file (and the deck's first slide).
     action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id (a video: scene =
-      "s3" | its number | "title" | "end" — that scene at its end, when the animation has played; + frames=6 for a
-      filmstrip of the scene's motion — or scene="all" for every scene on one sheet, or at=seconds), so you can
+      "s3" | its number | "title" | "end" | a layer "L2" — that scene / layer at its end, when the animation has played;
+      + frames=6 for a filmstrip of its motion — or scene="all" for every scene and layer on one sheet, or at=seconds), so you can
       check your own result (text overflow, a missing object, a wrong crop) before calling it done. A Word document,
       deck or PDF: validate_document checks it for you (pictures + a machine-checked list of problems).
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
@@ -757,6 +770,8 @@ async def wordcraft(
     Edit a document with the WordCraft Word engine: the same ~460 commands
     that drive Word's ribbon (styles, tables, track changes, comments, TOC,
     footnotes…), run headless. The result is a NEW file_id; the source stays.
+    Each command's result is in `steps`. Commands that only read (document.inspect, edit.find, styles.list,
+    format.state…) save nothing: the same file_id comes back with `results` and no new version.
 
     REVIEW COMMENTS (someone commented a .docx in Word, e.g. a boss):
     1. read="comments" → each open comment thread: id, author, comment,
@@ -857,6 +872,13 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
     revise a document, then from_document, then pptx revisions.
     spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
             text, muted, font_heading, font_body}, "slides": [...]}
+    "brand": the person's saved brand by name, or "mine"; left out, their
+            default brand is used when it is set to apply automatically;
+            "none" = off (the result says which brand it used). "theme"
+            colours go on top. The deck keeps its look inside the file
+            (slide master + theme fonts/colours), so slides added later — in
+            PowerPoint, by office(app="deck"), or video(action="to_pptx") —
+            get the same background and fonts.
     "template_file_id": an uploaded .pptx/.potx used as the FULL template —
             its slide masters, layouts, backgrounds, logo, fonts and colours;
             the slides go into the template's own layouts (theme is ignored).
@@ -864,13 +886,31 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
       cover {title, subtitle?, kicker?, image?}   section {title, subtitle?, number?, image?}
       bullets {title, bullets[], text?, image?}    image_left|image_right {title, bullets[]|text, image}
       full_image {image, title?, caption?}         quote {quote, author?, image?}
-      stats {title, stats:[{value, label}] ≤4}     chart {title, chart_type, categories, series}
+      stats {title, stats:[{value, label}] ≤4}     chart {title, chart_type: column | bar | line |
+                                                         pie | doughnut | area | scatter, categories,
+                                                         series [{name, values}] — scatter: series
+                                                         [{name, points: [[x, y, "name"?]…]}] (the name
+                                                         labels the dot), x_title?, y_title? (axis
+                                                         titles with the unit — a scatter needs both),
+                                                         data_labels? (pie/doughnut: % on by default)}
+      chart with the video's chart shapes — one object works in both (the video chart object under "chart", or its
+              fields on the slide with chart_type), unit? on all: waterfall {items: [{label, value}] (a start, then
+              + / − changes), total_label?, total?} | slope {labels: [before, after], items: [{label, from, to}]} |
+              band {items: [{label, value, low?, high?}], forecast_from?} | lines {labels, series: [{name, values}]}
+              | scatter {x_title, y_title, items: [{label, x, y, size?}]} | race {labels, items: [{label, values}]}.
+              waterfall, lines, race: native charts (race = its last period as a ranking; the race moves only in the
+              video). slope, band, scatter: native shapes, the same in the editor, PowerPoint and Keynote.
       table {title, headers, rows}                 gallery {title, images[≤4], captions?}
+      diagram {title, diagram: {type: decision_tree | swimlane | network, nodes, edges, …}} — the same object as
+              a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the
+              boxes, the legend); the same actor keeps its colour on every slide
       closing {title?, subtitle?}
     image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).
     Images are cropped to their frame; FLUX images generate in parallel.
-    Check the result with validate_document (slides as pictures + overflow and off-slide problems).
+    The result's `check` is the rendered check validate_document runs (both layouts): each problem names the
+    slide and shape id with a ready office(app="deck") fix for just that shape — no rebuild. See the slides as
+    pictures with validate_document.
     """
     if from_document:
         from app.routes.make import make_deck
@@ -1097,6 +1137,7 @@ async def photocraft(
     image.autoTone, image.imageSize {width, height}, image.crop, type.create
     {x, y, text, size, color}, filter.blur.gaussianBlur {radius},
     image.adjustments.photoFilter, layers… Result is a NEW file_id.
+    Commands that only read (document.inspect, *.get, *.list…) save nothing: the same file_id comes back with `results`.
 
     remove_background=true cuts the subject out with a neural net (keeps
     hair, thin objects and EVERY person). background_file_id puts that image
@@ -1149,7 +1190,7 @@ async def vectorcraft(
     commands): posters, flyers, brochures, multi-page PDFs, SVG. Opens
     file_id (svg/pdf/ai/eps/.vectorcraft) or starts empty; exports every
     format in `export` (default ["pdf"]; also svg, png, jpg, webp, eps,
-    vectorcraft) as new file_ids.
+    vectorcraft) as new file_ids. Commands that only read (document.inspect, *.get, *.list…) save nothing: the same file_id comes back with `results`.
 
     Typical: file.new {width:"210 mm", height:"297 mm"} → shape.rectangle
     {x,y,width,height} → text.create {x, y, text, size, font, color,
@@ -1181,13 +1222,32 @@ async def office(
     query: Optional[str] = None,
     offset: int = 0,
     max_chars: int = 20000,
+    slide: Optional[int] = None,
+    shape_id: Optional[int] = None,
 ) -> dict:
     """
     Office engines, one tool. app = "deck" (PowerPoint-like, pptx) |
     "pdf" (Acrobat-like) | "layout" (InDesign-like, .designcraft/.idml) |
     "sheet" (Excel-like, xlsx/csv). Opens file_id (or starts empty),
     runs `commands`, saves a NEW file_id in save_format (default: the
-    source format; deck → pptx, layout → pdf, sheet → xlsx).
+    source format; deck → pptx, layout → pdf, sheet → xlsx). Every
+    command's result comes back in `steps`. Commands that only READ
+    (*.inspect, *.get, *.list, format.state, cell.get, edit.find, the PDF
+    tools marked read-only…, plus navigation/selection) save nothing: the
+    same file_id comes back with `results` and no new version.
+
+    LOOK, THEN FIX ONE THING (decks): read="inspect" (+ slide=n) lists each
+    slide's shapes — id, name, kind, box [x, y, w, h] pt, text, fill — with
+    no new file; slide + shape_id gives one shape in full (fonts,
+    paragraphs, effective box). Then change only that shape, in place:
+    {"command": "text.set", "params": {"on_slide": n, "id": <shape id>,
+    "text": …}} (keeps the text's formatting), or {"command":
+    "edit.select", "params": {"on_slide": n, "ids": [id]}} followed by
+    format.size {size} / format.bold / shape.setBounds {x, y, w, h} /
+    shape.fill {color}. "on_slide" (1 = first slide) goes to that slide
+    first. The result's `check` renders the deck again (the same check as
+    validate_document) and names any remaining problem with its shape id
+    and a ready fix.
 
     deck: [{"command": "file.new", "params": {"blank": true}} (no empty
       first slide), {"command": "slide.new", …},
@@ -1207,12 +1267,15 @@ async def office(
       the document is opened and saved for you.
     layout: page layout commands (file.new {preset: "A4", pages,
       facingPages, margins, bleed}…) → pdf/png/designcraft.
-    read: "info" | "text" (pdf text, sheet csv) | "commands" (ids; pass
-    `query` for params and descriptions — always look before guessing).
+    read: "inspect" (the objects, no new file — deck: per slide, see
+    above; sheet/layout/pdf: the document's structure) | "info" | "text"
+    (pdf text, sheet csv) | "commands" (ids; pass `query` for params and
+    descriptions — always look before guessing).
     """
     from app.tools import crafts
     if read:
-        return await crafts.office_read(app, read, file_id=file_id, query=query, offset=offset, max_chars=max_chars)
+        return await crafts.office_read(app, read, file_id=file_id, query=query, offset=offset, max_chars=max_chars,
+                                        slide=slide, shape_id=shape_id)
     return await crafts.office_run(app, file_id=file_id, commands=commands, save_format=save_format)
 
 
@@ -1234,8 +1297,16 @@ async def digitize(
 
     Start: file_ids = page photos/scans in order, or scanned PDFs;
     outputs ⊆ ["docx", "pdf" (new typeset A5 book), "searchable_pdf"
-    (original pages + invisible text layer), "txt", "md", "fillable_pdf"
-    (a printed form rebuilt with real form fields)] (default docx);
+    (original pages + invisible text layer), "review_pdf" (each page's
+    image beside its transcript, doubtful readings highlighted — for
+    checking a historical source), "txt", "md", "fillable_pdf" (a
+    printed form rebuilt with real form fields)] (default docx).
+    DOUBTFUL READINGS are marked, never guessed silently: a word read
+    with doubt is highlighted in the Word file with a comment (page,
+    other possible reading), [reading?] / [reading? / other] in txt/md,
+    an illegible word [?] (Word: red). The result's `readings` = {uncertain,
+    illegible, pages, items [{page, kind, reading, also, context}]}; the
+    typeset PDF and the searchable text layer carry the best reading.
     language = hint, e.g. "Hungarian"; max_pages = only the first N pages
     (a sample chapter). Returns a job — a long book takes
     minutes: call again with job_id until status is "done" (result.files)
@@ -1342,7 +1413,8 @@ async def restore_photos(
 async def find_replace(
     file_id: str, pattern: str, replacement: str, regex: bool = False
 ) -> dict:
-    """Replace a string (or regex) in a DOCX/MD/HTML/TXT file."""
+    """Replace a string (or regex) everywhere in a DOCX, PPTX (every slide's text), PDF (literal text only, no
+    regex), MD, HTML or TXT file — a new version. For one text box on a slide, office(app="deck") text.set is exact."""
     return await t_find_replace(file_id, pattern, replacement, regex)
 
 
@@ -1351,29 +1423,30 @@ async def find_replace(
 async def delete_section(
     file_id: str, heading: str, level: Optional[int] = None
 ) -> dict:
-    """Delete a section by heading title (DOCX or MD). Removes content
-    until the next same- or higher-level heading."""
+    """Delete a section by heading title (DOCX or MD: content until the next same- or higher-level heading;
+    PPTX: the slides whose title is that heading)."""
     return await t_delete_section(file_id, heading, level)
 
 
 @mcp.tool()
 @linked
 async def insert_after(file_id: str, anchor: str, content: str) -> dict:
-    """Insert content after a heading (DOCX) or after a line (MD)."""
+    """Insert content after a heading (DOCX), after a line (MD), or as new lines at the end of the body text of
+    the slide with that title (PPTX)."""
     return await t_insert_after(file_id, anchor, content)
 
 
 @mcp.tool()
 @linked
 async def replace_heading(file_id: str, old_title: str, new_title: str) -> dict:
-    """Replace a heading's text while preserving its level."""
+    """Replace a heading's text while preserving its level (DOCX, MD; PPTX: a slide title)."""
     return await t_replace_heading(file_id, old_title, new_title)
 
 
 @mcp.tool()
 @linked
 async def delete_pages(file_id: str, page_range: str) -> dict:
-    """Delete pages from a PDF. Range examples: '3', '1-5', '1,3,5-7'."""
+    """Delete pages from a PDF, or slides from a PPTX. page_range examples: '3', '1-5', '1,3,5-7'."""
     return await t_delete_pages(file_id, page_range)
 
 
@@ -1387,7 +1460,8 @@ async def merge(file_ids: list[str], target_format: str = "pdf") -> dict:
 @mcp.tool()
 @linked
 async def extract(file_id: str, mode: str = "text") -> dict:
-    """Extract text or tables from a PDF/DOCX. modes: 'text'|'tables'."""
+    """Extract text (PDF, DOCX, PPTX, MD, TXT, HTML) or tables (PDF, DOCX) — reads only, no new file.
+    mode: 'text' | 'tables'."""
     return await t_extract(file_id, mode)
 
 
@@ -1403,7 +1477,9 @@ async def edit_with_instruction(
     Edit a document using a natural-language instruction.
 
     Pipeline: load → extract text → the AI plans operations →
-    deterministic execution → render back to original format.
+    deterministic execution → render back to original format. The planning
+    runs the Studio's own model (a Studio AI step); for a change you can
+    express yourself, wordcraft / office commands or find_replace cost none.
 
     PDF inputs are auto-round-tripped via DOCX (with a layout-reflow warning).
 
@@ -1445,7 +1521,9 @@ async def facts(
             source = {"kind": "indicator", "country": "HU", "indicator": "cpi"} (cpi, core_cpi, policy_rate,
             unemployment, gdp_growth, gov_debt, bond_yield_10y, …) or {"kind": "fx", "currency": "EUR"} (MNB rate).
             Every `stat`/`fx` claim from check already carries the source to use. → a new version.
-      action="list" + file_id → the linked numbers: text in the document, newest figure, period, source, up_to_date.
+      action="list" + file_id → the linked numbers: text in the document, the figure saved at the last bind/refresh
+        (checked_at), period, source, up_to_date (= the document still shows that figure). It does not fetch; for
+        the newest figures call action="refresh".
       action="refresh" + file_id → every linked number set to its newest figure in the document's own number format,
             and only the words around it adjusted (period, direction, endings), all as tracked changes, with a comment
             where a conclusion may no longer hold → a new version (or "all up to date", no new file).
@@ -1480,16 +1558,19 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
     result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
 
     Returns status (ok | needs_check | failed), summary ("3 errors, 2 warnings"), issues [{id (E1…, W1…), severity,
-    kind, page, object, block, message, fix}], and pictures: every page small (problem pages framed red/orange), a
+    kind, page, object, block | slide + shape_id, message, fix}], and pictures: every page small (problem pages framed red/orange), a
     cut-out of each problem with it marked, and the pages with errors in full. A Word document is laid out twice — in
     the built-in editor and the way the downloaded file looks in Word — and the two are compared.
     It finds: empty list items; odd numbering (repeated, skipped, restarting, continuing under a new heading, typed
     numbers, heading numbers); table rows split across pages and tables continuing without their header row; headings
     left as the last line of a page; captions apart from their picture; text, tables or pictures off the page or into
-    the margin; empty pages. Decks: text overflowing its box (as rendered), things off the slide, empty placeholders.
+    the margin; empty pages. Decks: text overflowing its box (as rendered), text drawn over other text, things off the slide, empty placeholders.
     block = the paragraph number in wordcraft(read="inspect"); edit.goto {"paragraph": block + 1} puts the caret there,
-    and each issue's `fix` says what to do. Fix every error, then call validate_document again — a file that saved is
-    not proof that the layout is right.
+    and each issue's `fix` says what to do. Decks: shape_id is the shape's id on that slide, and `fix` is a ready
+    office(app="deck") call that changes just that shape (text.set / format.size / shape.setBounds with "on_slide") —
+    no rebuild. pptx_build and every deck edit already end with this same rendered check (their `check`), so the
+    verdicts agree. Fix every error, then call validate_document again — a file that saved is not proof that the
+    layout is right.
 
     Args:
       file_id: the .docx (or .odt/.rtf/.md), .pptx or .pdf to check.
@@ -1582,7 +1663,8 @@ async def insert_image(
 @linked
 async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> dict:
     """Read all visible text from an image (handwriting OK). language_hint
-    helps weak-light photos: 'Hungarian', 'English', etc."""
+    helps weak-light photos: 'Hungarian', 'English', etc. Runs the Studio's own vision model: one Studio AI step (monthly allowance, then credits). If you can
+    read images yourself, look at it with files(action="preview") instead."""
     return await vision_ops.ocr_image(image_file_id, language_hint=language_hint)
 
 
@@ -1593,7 +1675,8 @@ async def describe_image(image_file_id: str, question: Optional[str] = None) -> 
     description. Pass `question` for targeted queries: 'what colors dominate?',
     'count the people', etc. NOT for checking your own document, deck or PDF:
     a description is not a check — use validate_document (you see the pages
-    yourself, plus a machine-checked list of problems)."""
+    yourself, plus a machine-checked list of problems). Runs the Studio's own vision model: one Studio AI step (monthly allowance, then credits). If you can see
+    images yourself, look at it with files(action="preview") instead."""
     return await vision_ops.describe_image(image_file_id, question=question)
 
 
@@ -1601,7 +1684,8 @@ async def describe_image(image_file_id: str, question: Optional[str] = None) -> 
 @linked
 async def extract_table_from_image(image_file_id: str) -> dict:
     """Extract a table from an image as structured rows. Returns
-    {headers: [...], rows: [[...], ...]}."""
+    {headers: [...], rows: [[...], ...]}. Runs the Studio's own vision model:
+    one Studio AI step (monthly allowance, then credits)."""
     return await vision_ops.extract_table_from_image(image_file_id)
 
 
@@ -1669,6 +1753,7 @@ async def video(
     images: Optional[list] = None,
     pictures: str = "stock",
     music_file_id: Optional[str] = None,
+    music: Optional[str] = None,
     voice_file_id: Optional[str] = None,
     narration: str = "ai",
     narration_voice: Optional[str] = None,
@@ -1690,14 +1775,30 @@ async def video(
     end_subtitle: Optional[str] = None,
     scene: Optional[str] = None,
     brand: Optional[str] = None,
+    layers: Optional[list] = None,
+    alpha: Union[bool, str, None] = None,
+    duration_mode: Optional[str] = None,
+    camera: Optional[Any] = None,
 ) -> dict:
-    """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url).
+    """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
+    text, or graphics on the person's OWN footage (action="overlay").
 
     YOUR OWN SCENE PLAN (most reliable): action="make" with scenes=[{"headline", "caption", "image"? (file_id | URL
-      — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo), "stat"?
+      — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo — give it for every scene without an image: without it the search uses the headline), "stat"?
       {value, label}, "chart"? (see below), "duration"? seconds, "id"? }] + title, kicker?, title_image?, end_title?,
       end_subtitle?, format, duration (total; scenes without one share the rest). It is made exactly as given (no
-      re-planning). A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
+      re-planning).
+      MOVEMENT AND BACKGROUNDS, per scene (in scenes=[…] and in edit changes.scenes): "images": [up to 4 pictures]
+      — the scene's backgrounds one after another, crossfading, each moving; "motion": how the picture moves —
+      zoom_in | zoom_out (toward / away from its subject, Ken Burns) | pan_left | pan_right | pan_up | pan_down |
+      still | auto, "focus"?: [x, y] 0–1 (the point on the picture to move toward; found automatically otherwise),
+      "zoom"?: 1.03–1.8 (how far); "camera": a camera on the scene's picture AND graphic together — "push_in" |
+      "pull_out" | "drift" | [{"at": seconds, "zoom": 1–3 (1 = the whole frame again), "to"?: [x, y] 0–1 of the
+      frame, "dur"?: seconds}] (e.g. punch in on a detail of the photo at 1 s, or on the forecast part of a chart at
+      3 s, back out at 6 s); the scene's title, big number and captions stay put. "fit": cover (the picture fills
+      the frame, edges may be cut) | contain (the whole picture, its blurred copy filling the rest — e.g. a group
+      photo in a vertical video) | auto (default: contain for the person's own photo when its shape is far from the
+      frame's, cover otherwise). "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
       title shows the headline) — put what should be on screen into the chart title. Put the source in text too: chart numbers are checked against it (without it, against your scenes).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
@@ -1707,15 +1808,25 @@ async def video(
       MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
       (result.project / result.video, each with edit_url) or "failed".
       format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds
-      (default 60; with keep_wording and no duration the reading pace sets it). images: pictures in order —
+      (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
+      when you give duration — the video is that long: scenes hold longer, the narration is read up to 1.2× faster;
+      what still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
+      length). Every result has duration = {requested, actual, mode}; a gap beyond a second or so is a check finding
+      ("Asked for 24 s, it is 17 s (…)"), never "ok". images: pictures in order —
       file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where
       each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
-      and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
-      narration: "ai" (default) — a natural AI voice reads the title and every scene's caption aloud (offline voices,
-      58 languages, picked from the text or `language`); each scene lasts as long as its narration and music plays
-      under it | "none" — no voice. narration_voice: "female" | "male" | a Piper voice id (e.g. "hu_HU-imre-medium").
-      music_file_id / voice_file_id: audio the person gave (upload it first); a voice_file_id replaces the AI
-      narration and the video follows its length. accent: a hex colour for bars and numbers.
+      and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none (| ai: AI
+      photos — only in the Studio web app, for credits; here, make them yourself and pass them as images).
+      AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked
+      from the text or `language`) reads the title and every scene's caption aloud.
+      narration="none" turns it off (captions only). narration_voice: "female" | "male" | a Piper voice id (e.g.
+      "hu_HU-imre-medium", "en_US-ryan-medium").
+      MUSIC (none by default): music = a mood — upbeat | calm | cinematic | lofi | corporate | playful | romantic |
+      dramatic — or a track id → built-in CC0 music (no credit needed) fitted to the video's length; music_file_id =
+      the person's own music. Under speech (the narration, a voice file, or overlay footage's own sound) the music
+      drops and comes back in the pauses; "none" = no music.
+      voice_file_id: the person's own voice-over (upload it first); it replaces the AI narration; the video follows
+      its length (with duration in fixed mode: at least that long). accent: a hex colour for bars and numbers.
       ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
       | all | off (only a gentle drift).
       Animated graphics for any topic — chart = {"type", "title", "unit", "total"?, "min"?, "max"?, "items": [{"label",
@@ -1723,7 +1834,18 @@ async def video(
       icons ("1 in 4", x of 100) | counter (one number counting up) | compare (2–3 numbers side by side) | progress
       (separate %s) | gauge (one value on a min–max scale) | funnel (shrinking stages) | timeline (dated events: label =
       date) | steps (how-to) | proscons (label "+"/"-", text) | quote (text word for word from the source, label =
-      who). Every number, date and quote is checked against the source — one that isn't there drops the graphic.
+      who). With their own shape: waterfall (a start, then + / − changes; the end is computed and checked against
+      "total"? — {"items": [{"label", "value"}…], "total_label"?}) | slope (before → after per item — {"labels": [before,
+      after], "items": [{"label", "from", "to"}]}) | scatter (points, bubble when "size" — {"x_title", "y_title" (what
+      each axis measures, with the unit), "items": [{"label", "x", "y", "size"?}]}) | band (a line with its low–high
+      range, the forecast part dashed — {"items": [{"label": period, "value", "low"?, "high"?}], "forecast_from"?: the
+      first forecast period}) | lines (2–4 series over the same periods, e.g. scenarios, named at their ends —
+      {"labels": [periods], "series": [{"name", "values"}]}) | race (a ranking re-ordering period by period, the bars
+      gliding into place — {"labels": [periods], "items": [{"label", "values"}]}, 3–10 items, 3–12 periods) | sankey
+      (amounts flowing between stages, e.g. money from sources → programmes → projects; ribbons as thick as the flow,
+      each node labelled with its computed total — {"flows": [{"from", "to", "value"}], "nodes"?: [{"name", "color"?}]
+      (order and colour)}, 2–24 flows, at most 14 nodes, one way only: a loop drops it).
+      Every number, date and quote is checked against the source — one that isn't there drops the graphic.
       graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
       {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
       {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie | map, x, y (centre, 0–1 of
@@ -1731,7 +1853,8 @@ async def video(
       (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
       color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity,
       anim: appear | pop | grow | draw (lines and outlines draw themselves) | slide-left | slide-right | slide-up |
-      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there),
+      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there), dash (line, arrow,
+      path: "dashed" | "dotted" | [dash, gap] px), dim [[from, to] seconds] (faded while something else is shown),
       image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
       {"search": "bicycle"} — the server picks a free LottieFiles animation and credits it; it loops unless
       loop=false)}]}. video(action="lottie", text="bicycle") lists animations with previews, to choose one yourself.
@@ -1745,6 +1868,23 @@ async def video(
       The map widens to show every placed element. Anything left out of a graphic (unknown shape, no position, a
       number not in the source) is listed in the check's findings. Up to 80 elements, each its own layer (editable by hand); a text
       with a number that isn't in the source is left out (the check says which).
+      Explainer diagrams — give the relationship, the server lays it out (9:16, 16:9 and 1:1 each their own way) and builds
+      it up step by step: {"type": "decision_tree" | "swimlane" | "network", "title"?, "nodes": [{"id", "text" (≤ 70
+      characters), "kind"? (tree: question|condition|outcome · swimlane: start|step|decision|end), "actor"? (swimlane: its
+      lane) | "group"? (network colour + legend), "order"? (swimlane: same order = same column), "size"? 1–3, "at"? (seconds:
+      when it appears)}], "edges": [{"from", "to", "label"? ("yes", "if …", an amount), "kind"? sequence (then — the default)
+      | hierarchy (is above) | money (money/goods flow, thicker) | cause | correlation (moves together: never drawn as a
+      cause, no arrowhead) | link, "certainty"? certain | uncertain (dashed) | disputed (dotted + ?)}], "actors"? {"Name":
+      {"color"?, "short"?}} (the same actor keeps its colour in every scene and edit), "reveal"? steps (default: tree root
+      then branch by branch, swimlane in order, network centre then rings — the new part bright, the rest faded) | all,
+      "pace"? seconds per step (the scene lengthens to fit), "focus"? false (no fading), "direction"? auto | down | right |
+      outline (tree as indented rows), "center"? (network node id)}. Shorthands: tree "root" + nested "branches": [{"label",
+      "text", "kind"?, "branches"?}]; swimlane "steps" (= nodes; without edges they follow in order); network edges alone
+      (names as from/to). The legend lists the arrow kinds used. Numbers in boxes and labels are checked against the
+      source (a label without one is left out, a box without one drops the diagram); a broken diagram is refused with
+      what to fix. Change one with action=edit {"chart": {…}} WITHOUT "type": only the nodes (by id) and edges (by
+      from + to) you send change — e.g. {"edges": [{"from": "a", "to": "b", "certainty": "uncertain"}]}, {"nodes": [{"id":
+      "n3", "branches": [{"label", "text"}]}]} adds branches, {"remove": true} deletes, {"pace": 1.5} slows the build-up.
       script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
       comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
       {"type": "script", "title"?, "backdrop"?, "code": "…"}; the code gets comp (the scene composition), W, H, dur
@@ -1756,6 +1896,38 @@ async def video(
       The result's check also reports COVERAGE (which source sentences and numbers made it in — `coverage` lists the
       missing ones), shortened texts, and where your pictures went. See it scene by scene: files(action="preview",
       file_id, scene="all") or scene="s3".
+      layers=[…] (see below) put time-coded graphics on the made video too, at absolute times on its timeline.
+    action="overlay": graphics on the person's OWN video. file_id = their uploaded mp4 | mov | webm | m4v — it stays
+      the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); camera=[{"at": time,
+      "zoom", "to"?, "dur"?}] punches in on the footage (and back out with zoom 1), changes.camera in an edit;
+      layers=[…] go on top
+      → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status). text = the source: numbers,
+      dates and quotes in the layers are checked against it (one that isn't there drops that layer, said in the
+      check); without text they are kept and the check says "not checked against a source". title, accent, brand,
+      music as for make (the music drops under the footage's own speech). The result's duration is the footage's
+      (mode "footage").
+    action="transcript": what is said in a video or sound file (or an overlay project's footage), with times →
+      sentences [{at, until, text}] + an .srt subtitle file (file_id) — as a job. Offline speech recognition (Whisper
+      large-v3-turbo; `language` helps, else detected); a file heard once is not transcribed again. Use it to suggest
+      where a graphic would help, then tie layers to what is said (below).
+    layers (overlay; make and edit too): [{"id"? ("L1", "L2"… given when left out — stable across edits), "at":
+      seconds | "MM:SS" | "HH:MM:SS.ms" | {"say": "words that are said"} (overlay: the layer starts as they are said
+      in the footage and stays to the end of that sentence; not said → left out, the check quotes what was heard),
+      "dur": seconds | "until": time | {"say": …}, "type", "position"?: auto | top | bottom | left |
+      right | center | [x, y, w, h] (centre and size, 0–1 of the frame), "anim"?: fade | slide | pop | none (or
+      {"in", "out"})}]. Types: lower_third {name, role?, side?: left|right} · title {text, subtitle?, kicker?} (a band
+      across the frame) · chapter {text, subtitle?, kicker?} · source {text} (a small credit) · stat {value, label} ·
+      quote {text, author} (word for word from the source) · chart {chart: any chart above (column … quote, graphic
+      with map / lottie / image, script), panel?: false = no dark panel} — type may be the chart type itself, e.g.
+      {"type": "column", "title", "unit", "items"}; a graphic without position covers the frame transparently (an
+      arrow or a label on the footage) · fullscreen {chart | image | text (+ subtitle, kicker)}: covers the picture,
+      the sound goes on · split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base
+      shrinks to the other half. A lower third or source caption without position goes where nothing else is (other
+      layers, a made video's headlines and charts). Overlaps that remain, a layer past the end, a dropped number all
+      come back in the check's findings.
+    alpha (make, overlay, edit): true = also a transparent, graphics-only video: ProRes 4444 .mov (yuva444p12le — for
+      Premiere, Resolve, Final Cut) | "webm" (WebM VP9 with alpha — for the web; slower to render) | "both". It has
+      no base (footage, pictures, darkening) and no sound; the check proves the alpha (pixel format + a decoded frame).
     action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
       changes = {"scenes": [{"id": "s3" (stable — info lists the ids; or "scene": n, 1 = first after the title card), "headline"?, "caption"?,
       "image"? (file_id | URL — e.g. a picture you made with your own image tool | {"stock": "words"} | "none"),
@@ -1763,19 +1935,27 @@ async def video(
       e.g. {"unit": "million"} or {"title": …} changes only that) | null, "duration"?, "remove"? true}],
       "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
       "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
-      fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
-      "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?}. The AI narration is recorded
-      again from the changed captions. Numbers in a new chart or stat must be in the video's source or in `text` (pass the
-      person's words there). video(action="info") shows the scenes; check and preview_url come with the result.
+      fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music"? (a mood | a track id | "none"),
+      "music_file_id"? | "none",
+      "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?, "duration_mode"?,
+      "layers"?: [{"id": "L2", …only the fields that change} | {"id": "L2", "remove": true}] (a "chart" without "type" fixes
+      just those chart fields), "add_layers"?: [new layers]}. Untouched layers stay as they are. The AI narration is
+      recorded again from the changed captions. Numbers in a new chart or stat must be in the video's source or in
+      `text` (pass the person's words there). An overlay project takes only layers, add_layers, accent, title and music.
+      alpha=… renders the transparent version again (it is kept from the previous version otherwise).
+      video(action="info") shows the scenes and layers (id, at, dur, type, text); check and preview_url come with the result.
     action="render" with scene="s3": just that scene as a short draft MP4 (a job, seconds) — check a change without
-      rendering the whole video. (Without scene: re-render the whole project, e.g. after hand edits.)
+      rendering the whole video; scene="L2" (a layer): the video's span of that layer, with what is under it.
+      (Without scene: re-render the whole project, e.g. after hand edits.) See a layer: files(action="preview",
+      file_id, scene="L2") (its finished moment) or + frames=6 (in → out).
     brand: the person's saved brand (name, "mine") colours the video; left out, their default brand is used; "none" = off.
     action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a
-      slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster).
+      slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster). For a
+      deck, make the video in the deck's colours (accent = the deck's accent colour, or the same brand) so it fits in.
     action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
       draft=true renders half size, fast.
-    action="info": a project's compositions, length, media files and last render (file_id).
-    action="status": a make/render job (job_id).
+    action="info": a project's compositions, length, scenes, layers, media files and last render (file_id).
+    action="status": a make / overlay / edit / render job (job_id).
     """
     from app import jobs
     from app.tools import video as vid
@@ -1801,7 +1981,14 @@ async def video(
         return await render_video({"file_id": file_id or "", "draft": draft})
     if act == "edit":
         from app.routes.video import edit_video
-        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or ""})
+        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha})
+    if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
+        from app.routes.video import transcript_video
+        return await transcript_video({"file_id": file_id or "", "language": language})
+    if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
+        from app.routes.video import overlay_video
+        return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
+                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
@@ -1815,14 +2002,15 @@ async def video(
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
     if act != "make":
-        raise ValueError('action: "make" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
+        raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
-            "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
-            "narration": narration, "narration_voice": narration_voice,
+            "music_file_id": music_file_id, "music": music, "voice_file_id": voice_file_id, "accent": accent,
+            "language": language, "narration": narration, "narration_voice": narration_voice,
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
-            "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle}
+            "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle,
+            "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode}
     return await make_video(body)
 
 
@@ -1868,7 +2056,8 @@ async def chart_redraw(
 ) -> dict:
     """Read an existing chart from an image via AI vision (extracts
     type, axes, categories, series, values), and re-render via matplotlib
-    with a new palette/brand. Returns new image_file_id. Pass also_svg=true
+    with a new palette or brand (the person's saved brand by name, or "mine"; palette = hex colours wins).
+    Returns new image_file_id. Pass also_svg=true
     for a vector copy (use with insert_image's svg_file_id for vector
     charts in DOCX/PDF)."""
     return await chart_redraw_mod.chart_redraw(

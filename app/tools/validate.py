@@ -1066,16 +1066,108 @@ def _pptx_shapes(path: Path) -> tuple[list[list[dict]], float, float]:
                 pic = getattr(shp, "image", None) is not None
             except Exception:
                 pic = True
-            items.append({"name": shp.name or "shape", "box": [shp.left / 12700, shp.top / 12700,
-                                                              (shp.left + shp.width) / 12700, (shp.top + shp.height) / 12700],
+            size, grows, untitled = None, False, False
+            if getattr(shp, "has_chart", False):
+                # pontdiagram: mindkét tengely szám — tengelycím nélkül nem tudni, mit mér a kettő
+                from pptx.enum.chart import XL_CHART_TYPE
+                try:
+                    ch = shp.chart
+                    if ch.chart_type in (XL_CHART_TYPE.XY_SCATTER, XL_CHART_TYPE.XY_SCATTER_LINES, XL_CHART_TYPE.XY_SCATTER_LINES_NO_MARKERS,
+                                         XL_CHART_TYPE.XY_SCATTER_SMOOTH, XL_CHART_TYPE.XY_SCATTER_SMOOTH_NO_MARKERS, XL_CHART_TYPE.BUBBLE):
+                        untitled = not (ch.category_axis.has_title and ch.value_axis.has_title)
+                except Exception:
+                    pass
+            if shp.has_text_frame:
+                from pptx.enum.text import MSO_AUTO_SIZE
+                size = max((r.font.size.pt for p in shp.text_frame.paragraphs for r in p.runs if r.font.size), default=None)
+                grows = shp.text_frame.auto_size == MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+            # id = a pptx saját alakzat-azonosítója — a DeckCraft is ezt használja (office text.set / edit.select)
+            items.append({"id": shp.shape_id, "name": shp.name or "shape",
+                          "box": [shp.left / 12700, shp.top / 12700, (shp.left + shp.width) / 12700, (shp.top + shp.height) / 12700],
                           "text": shp.text_frame.text if shp.has_text_frame else "", "placeholder": shp.is_placeholder,
-                          "picture": pic, "table": getattr(shp, "has_table", False)})
+                          "picture": pic, "table": getattr(shp, "has_table", False), "size": size, "grows": grows,
+                          "untitled_axes": untitled})
         slides.append(items)
     return slides, sw, sh
 
 
 def _overlap(a: list[float], b: list[float], pad: float = 2) -> bool:
     return a[0] < b[2] - pad and b[0] < a[2] - pad and a[1] < b[3] - pad and b[1] < a[3] - pad
+
+
+def _cmd(c: str, **params) -> str:
+    return json.dumps({"command": c, "params": params}, ensure_ascii=False)
+
+
+def _deck_obj(n: int, it: dict) -> dict:
+    """A hibás alakzat azonosítása úgy, hogy a következő hívás közvetlenül javíthassa (dia + shape id)."""
+    return {"object": f"slide {n}, shape {it['id']} “{it['name']}”", "slide": n, "shape_id": it["id"], "_key": (n, it["id"])}
+
+
+def _deck_fix(kind: str, n: int, it: dict, sw: float, sh: float, over: float = 0) -> str:
+    """Kész javító parancs(ok) az office eszközhöz — csak ez az alakzat változik, a pakli többi része nem."""
+    sel = _cmd("edit.select", on_slide=n, ids=[it["id"]])
+    if kind == "text_overflow":
+        h = it["box"][3] - it["box"][1]
+        size = it.get("size")
+        # a tördelt szöveg magassága ~ betűméret² → a beférő méret ~ gyök(arány); 0,95 tartalék, egész pontra
+        smaller = max(8, int((size or 18) * ((h / (h + over)) ** 0.5 if h > 0 else 0.8) * 0.95))
+        return (f'office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<shorter text>")}]) '
+                f'— or a smaller font: commands=[{sel}, {_cmd("format.size", size=smaller)}]'
+                + (f" (now {size:g} pt)" if size else "") + " — or a bigger box: shape.setBounds after the select.")
+    if kind == "off_slide":
+        b = it["box"]
+        w, h = min(b[2] - b[0], sw * 0.96), min(b[3] - b[1], sh * 0.96)
+        x, y = min(max(b[0], 0), sw - w), min(max(b[1], 0), sh - h)
+        return f'office(app="deck", file_id, commands=[{sel}, {_cmd("shape.setBounds", x=round(x, 1), y=round(y, 1), w=round(w, 1), h=round(h, 1))}])'
+    if kind == "empty_placeholder":
+        return (f'office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="…")}]) '
+                f'— or remove it: commands=[{sel}, {_cmd("edit.delete")}]')
+    return ""
+
+
+def _span_near(T: list[str], sub: list[Tok], box: list[float]) -> Optional[tuple[int, int]]:
+    """Az alakzat szövegének helye a renderelt dián. Ha a szöveg többször is szerepel (pl. „igen” / „nem” egy döntési
+    fa címkéin), az alakzat SAJÁT dobozához legközelebbi előfordulás az övé — nem az első a dián (10-17: a 11. dia
+    „igen”-címkéjét a gép a másik „igen”-hez mérte, és 231 pt túllógást jelentett egy rendben lévő ábrán)."""
+    n = len(T)
+    seq = [t.t for t in sub]
+    hits = [i for i in range(len(seq) - n + 1) if seq[i:i + n] == T]
+    if not hits:
+        sp = align([("s", T)], sub).get("s")
+        return sp
+
+    def dist(i: int) -> float:
+        xs = [sub[k].box for k in range(i, i + n)]
+        cx, cy = (min(b[0] for b in xs) + max(b[2] for b in xs)) / 2, (min(b[1] for b in xs) + max(b[3] for b in xs)) / 2
+        dx = max(box[0] - cx, 0, cx - box[2])
+        dy = max(box[1] - cy, 0, cy - box[3])
+        return dx * dx + dy * dy
+    i = min(hits, key=dist)
+    return i, i + n - 1
+
+
+def _collide(a: list[Tok], b: list[Tok]) -> bool:
+    """Két szöveg betűi egymásra kerültek: legalább egy szópár dobozai érdemben fedik egymást (nem csak a sorköz széle)."""
+    for x in a:
+        for y in b:
+            w = min(x.box[2], y.box[2]) - max(x.box[0], y.box[0])
+            h = min(x.box[3], y.box[3]) - max(x.box[1], y.box[1])
+            if w > 2 and h > 0.3 * min(x.box[3] - x.box[1], y.box[3] - y.box[1]):
+                return True
+    return False
+
+
+def _clear_fix(n: int, it: dict, other_tb: list[float], own_tb: list[float], sc: float, sh: float) -> str:
+    """Kész parancs: a rövidebb szöveg dobozát a másik szöveg fölé (ha ott van hely), különben alá tesszük."""
+    b = it["box"]
+    h = b[3] - b[1]
+    top, bottom = other_tb[1] / sc, other_tb[3] / sc
+    y = top - h - 4 if (own_tb[1] + own_tb[3]) / 2 <= (other_tb[1] + other_tb[3]) / 2 and top - h - 4 >= 0 else bottom + 4
+    y = min(max(0.0, y), sh - h)
+    return (f'office(app="deck", file_id, commands=[{_cmd("edit.select", on_slide=n, ids=[it["id"]])}, '
+            f'{_cmd("shape.setBounds", x=round(b[0], 1), y=round(y, 1), w=round(b[2] - b[0], 1), h=round(h, 1))}]) '
+            f'— or shorten one of the two texts (text.set).')
 
 
 def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
@@ -1085,12 +1177,21 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
         for it in items:
             b = it["box"]
             if b[0] < -0.02 * sw or b[1] < -0.02 * sh or b[2] > 1.02 * sw or b[3] > 1.02 * sh:
-                issues.append({**_issue("off_slide", WARNING, f"Slide {n}: “{it['name']}” reaches outside the slide.", None, n),
-                               "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
+                issues.append({**_issue("off_slide", WARNING, f"Slide {n}: “{it['name']}” reaches outside the slide.", None, n,
+                                        fix=_deck_fix("off_slide", n, it, sw, sh)), **_deck_obj(n, it)})
+            if it["untitled_axes"]:
+                b = it["box"]
+                issues.append({**_issue("chart_axes_untitled", WARNING,
+                                        f"Slide {n}: the scatter chart “{it['name']}” has no axis titles — nobody can tell what "
+                                        f"the two axes measure.", None, n,
+                                        fix='pptx_build: give the chart slide "x_title" and "y_title" (with the unit) — or label '
+                                            f'the axes in place: office(app="deck", file_id, commands=[{_cmd("slide.go", index=n - 1)}, '
+                                            f'{_cmd("insert.textBox", rect=[round(b[0], 1), round(b[3] + 2, 1), round(b[2] - b[0], 1), 22], text="<x axis, unit>")}])'),
+                               **_deck_obj(n, it)})
             if it["placeholder"] and not it["text"].strip() and not it["picture"] and not it["table"]:
                 issues.append({**_issue("empty_placeholder", WARNING,
-                                        f"Slide {n}: empty placeholder “{it['name']}” (shows “Click to add text” in PowerPoint).", None, n),
-                               "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
+                                        f"Slide {n}: empty placeholder “{it['name']}” (shows “Click to add text” in PowerPoint).", None, n,
+                                        fix=_deck_fix("empty_placeholder", n, it, sw, sh)), **_deck_obj(n, it)})
     for L in layouts:
         if not L.pages:
             continue
@@ -1103,44 +1204,66 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
                 break
             idx = by_page.get(n, [])
             sub = [L.toks[i] for i in idx]
+            drawn = []                          # (alakzat, a saját renderelt szavai, a szöveg doboza) — az ütközés-vizsgálathoz
             for it in items:
                 T = _toks(it["text"])
                 if not T or it["table"]:
                     continue
-                sp = align([("s", T)], sub).get("s")
+                box = [v * sc for v in it["box"]]
+                sp = _span_near(T, sub, box)
                 if not sp:
                     continue
                 own, span = set(T), sub[sp[0]:sp[1] + 1]
                 hit = sum(1 for t in span if t.t in own)
                 if hit < 0.7 * len(T):          # kevés saját szó a tartományban: nincs bizonyíték, nincs ítélet
                     continue
+                mine = [t for t in span if t.t in own]   # a közbeeső lábléc/cím szavai ne nyújtsák meg a dobozt
                 tb = None
-                for t in span:
-                    if t.t not in own:          # a közbeeső lábléc/cím szavai ne nyújtsák meg a dobozt
-                        continue
+                for t in mine:
                     tb = list(t.box) if tb is None else [min(tb[0], t.box[0]), min(tb[1], t.box[1]), max(tb[2], t.box[2]), max(tb[3], t.box[3])]
                 if tb is None:
                     continue
-                box = [v * sc for v in it["box"]]
+                drawn.append((it, mine, tb))
                 w, h = L.sizes[n - 1]
                 reg = [(n, (max(0, min(box[0], tb[0]) - 30), max(0, min(box[1], tb[1]) - 30),
                             min(w, max(box[2], tb[2]) + 30), min(h, max(box[3], tb[3]) + 30)))]
                 if tb[3] > h + 1 or tb[2] > w + 1:
+                    over = max(tb[3] - h, tb[2] - w) / sc if sc else 0
                     issues.append({**_issue("off_page", ERROR, f"Slide {n}: text of “{it['name']}” runs off the slide.",
-                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)]),
-                                   "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"])})
+                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)],
+                                            fix=_deck_fix("text_overflow", n, it, sw, sh, over)), **_deck_obj(n, it)})
                 elif tb[3] > box[3] + 6 or tb[2] > box[2] + 6:
                     by = max(tb[3] - box[3], tb[2] - box[2])
                     # más szövegre rálóg → hiba; csak a saját dobozán nyúlik túl (pl. a kártyán belül) → figyelmeztetés
                     hits = [o["name"] for o in items if o is not it and o["text"].strip() and _overlap(tb, [v * sc for v in o["box"]])]
                     big = by > max(24, 0.25 * (box[3] - box[1]))
+                    if it["grows"] and not hits:
+                        # „méret a szöveghez” doboz: PowerPointban a doboz nő a szöveggel — a két motor betűmérése
+                        # tér el, nem hiba; csak ha másra rácsúszik (vagy lelóg a diáról: fent, off_page)
+                        continue
                     issues.append({**_issue("text_overflow", ERROR if (hits or big) else WARNING,
                                             f"Slide {n}: the text of “{it['name']}” runs {by:.0f} pt past its box"
                                             + (f" and over “{hits[0]}”." if hits else "." if big else
                                                " (it stays on the slide and covers nothing)."),
-                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)]),
-                                   "object": f"slide {n}, “{it['name']}”", "_key": (n, it["name"]),
-                                   "fix": "shorten the text, make the box bigger, or a smaller font size"})
+                                            L.view, n, regions=reg, marks=[(n, box), (n, tb)],
+                                            fix=_deck_fix("text_overflow", n, it, sw, sh, by / sc if sc else by)), **_deck_obj(n, it)})
+                    if hits:
+                        drawn[-1] = (it, [], tb)  # már jelentve „… and over …”-ként
+            # két szöveg egymáson, bár egyik sem lóg ki a dobozából (pl. a címlap felső sora a háromsoros címen)
+            for i, (a, ta, ba) in enumerate(drawn):
+                for b, tb_, bb in drawn[i + 1:]:
+                    if not ta or not tb_ or not _overlap(ba, bb, 0) or not _collide(ta, tb_):
+                        continue
+                    area = lambda x: (x['box'][2] - x['box'][0]) * (x['box'][3] - x['box'][1])  # noqa: E731
+                    move, other, mtb, otb = (a, b, ba, bb) if area(a) <= area(b) else (b, a, bb, ba)  # a kisebb doboz mozdul
+                    w, h = L.sizes[n - 1]
+                    u = [min(ba[0], bb[0]), min(ba[1], bb[1]), max(ba[2], bb[2]), max(ba[3], bb[3])]
+                    issues.append({**_issue("text_collision", ERROR,
+                                            f"Slide {n}: the text of “{move['name']}” (“{_short(move['text'], 40)}”) is drawn over "
+                                            f"the text of “{other['name']}” (“{_short(other['text'], 40)}”).",
+                                            L.view, n, regions=[(n, (max(0, u[0] - 30), max(0, u[1] - 30), min(w, u[2] + 30), min(h, u[3] + 30)))],
+                                            marks=[(n, mtb), (n, otb)],
+                                            fix=_clear_fix(n, move, otb, mtb, sc or 1.0, sh)), **_deck_obj(n, move)})
         for n in range(1, L.pages + 1):
             if not L.inked[n - 1]:
                 issues.append({**_issue("blank_page", WARNING, f"Slide {n} is empty.", L.view, n,
@@ -1465,7 +1588,8 @@ CHECKED = {
                  "headings left as the last line of a page, captions apart from their picture/table",
                  "text, tables and pictures off the page or into the margins", "empty pages",
                  "the built-in editor's layout against Word's (LibreOffice) — page count, numbering, where problems appear"],
-    "deck": ["text overflowing its box (in the actual rendered slide)", "things off the slide", "empty placeholders",
+    "deck": ["text overflowing its box (in the actual rendered slide)", "text drawn over other text", "things off the slide", "empty placeholders",
+             "scatter charts without axis titles",
              "empty slides", "the editor's slides against PowerPoint's (LibreOffice)"],
     "pdf": ["empty pages", "text and pictures off the page"],
 }

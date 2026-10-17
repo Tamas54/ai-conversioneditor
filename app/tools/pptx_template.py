@@ -276,6 +276,15 @@ def _set_title(slide, title_ph, text: Optional[str]) -> None:
             _drop(title_ph)
 
 
+def _look(prs, slide) -> dict[str, Any]:
+    """A sablon színei a natív ábrákhoz (magyarázó ábra, a videó ábrái): a dia háttere, a téma szöveg- és akcentusszíne;
+    a betű a témából öröklődik (None)."""
+    from app.tools import pptx_deck
+    acc = pptx_deck.theme_accent(prs)
+    return {"bg": "#" + (pptx_deck.bg_color(slide) or "FFFFFF"), "text": "#" + (pptx_deck.theme_text_color(prs) or "1E2430"),
+            "accent": "#" + (acc or "2F6FDE"), "muted": "#6B7280", "font_body": None}
+
+
 def _chart(slide, s: dict[str, Any], rect) -> None:
     from pptx.chart.data import CategoryChartData
     from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
@@ -287,6 +296,9 @@ def _chart(slide, s: dict[str, Any], rect) -> None:
     for se in s.get("series") or []:
         data.add_series(se.get("name", "Series"), se.get("values", []))
     ch = slide.shapes.add_chart(kind, *rect, data).chart
+    if kind == XL_CHART_TYPE.BAR_CLUSTERED:       # a szerkesztőben és a PowerPointban is az első sáv felül (pl. rangsor)
+        from app.tools.pptx_deck import bars_top_down
+        bars_top_down(ch)
     ch.has_title = False
     ch.has_legend = len(s.get("series") or []) > 1 or kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT)
     if ch.has_legend:
@@ -354,7 +366,7 @@ def _plan(prs, slides: list[dict[str, Any]], L: dict[str, Any]) -> list[tuple[An
         layout = {"cover": L["title"], "section": L["section"], "closing": L["section"], "quote": L["content"],
                   "bullets": L["two"] if s.get("image") else L["content"], "image_left": L["two"], "image_right": L["two"],
                   "full_image": L["picture"] or L["title_only"], "stats": L["title_only"], "chart": L["title_only"],
-                  "table": L["title_only"], "gallery": L["title_only"]}.get(lay, L["content"])
+                  "table": L["title_only"], "gallery": L["title_only"], "diagram": L["title_only"]}.get(lay, L["content"])
         need = []
         if lay == "gallery":
             for img in (s.get("images") or [])[:4]:
@@ -496,9 +508,21 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
                 if lay == "stats":
                     _stats(slide, s, rect)
                 elif lay == "chart":
-                    _chart(slide, s, rect)
+                    from app.tools import pptx_charts
+                    cs: Optional[dict[str, Any]] = s
+                    if pptx_charts.kind_of(s):    # a videó ábrái: a sablon hátterén és színeivel (a vonalak/verseny → natív)
+                        box = tuple(v / 914400 for v in rect)
+                        cs = pptx_charts.draw(slide, s, _look(prs, slide), box, box)
+                    if cs is not None:
+                        _chart(slide, cs, rect)
                 elif lay == "table":
                     _table(slide, s, rect)
+                elif lay == "diagram":            # magyarázó ábra natív alakzatokkal, a sablon hátterén és betűivel
+                    from app.tools import diagrams, pptx_deck
+                    t_ = _look(prs, slide)
+                    reg = pptx_deck.diagram_actors(spec, t_["accent"])
+                    diagrams.to_pptx(slide, s["diagram"], t_, tuple(v / 914400 for v in rect),
+                                     {k: reg[k] for k in diagrams.actor_names(s["diagram"])})
                 elif lay == "gallery" and imgs:
                     x, y, w, h = rect
                     n = len(imgs)

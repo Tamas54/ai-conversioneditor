@@ -7,16 +7,23 @@ az eredmény egy .ecproj (jelenetenként beágyazott kompozíció, feliratsávok
     make()    cikk / URL / dokumentum / saját szöveg → forgatókönyv (DeepSeek, JSON) → képek (a felhasználóé,
               stock, MCP-n a kliens AI-képe) → video_builder.jsx → `effectcraft-cli script` → .ecproj
               → `effectcraft-cli render` → MP4
+    overlay() a felhasználó felvétele (mp4/mov/webm/m4v) az alapsáv, fölötte időkódos rétegek (névsáv, fejezetcím,
+              forrásfelirat, szám, idézet, ábra, teljes képes bevágás, osztott kép) → .ecproj + MP4
     render()  egy (akár kézzel szerkesztett) projekt újrarenderelése MP4-re
     blank()   üres videóprojekt (álló / fekvő / négyzetes) a szerkesztőbe
-    info()    kompozíciók, hossz, rétegek, médiafájlok
+    info()    kompozíciók, hossz, jelenetek, rétegek, médiafájlok
 
-A projekt saját médiafájljai (képek, zene, hang) rejtett fájlok a munkaterületen; a projekt metája tartja a
+Rétegek (layers): EGY modell a make- és az overlay-videón — abszolút időben a fő idővonalon, rétegenként egy
+kompozíció, a meglévő ábra-építőkkel (chart_elements); alpha = átlátszó, csak grafikás változat (ProRes 4444 / WebM).
+
+A projekt saját médiafájljai (képek, zene, hang, felvétel) rejtett fájlok a munkaterületen; a projekt metája tartja a
 név → file_id párokat („assets”). Az .ecproj relatív névvel hivatkozik rájuk, így renderkor egy ideiglenes
 mappába rakjuk össze (stage), a böngészős szerkesztőnek pedig a bridge adja át őket (addFile) a projekt előtt.
 
 Mérve 10-12 (16 mag): 8 s 1080×1920 render 16 s; a CLI a termék Docker-képében (jammy) gond nélkül fut.
-⛔ Felolvasó (TTS) NINCS — saját hangfájl mehet alá, feliratok mindig vannak. Remotion NEM (céges licenc).
+AI-narráció: offline Piper-hangok (narration.py), alapból BE; saját hangfájl is mehet alá, feliratok mindig vannak.
+Időtartam: duration_mode fixed (a kért hossz) | narration (a hang szabja); az eredmény őszintén jelzi az eltérést.
+Remotion NEM (céges licenc).
 """
 from __future__ import annotations
 
@@ -46,6 +53,7 @@ _ALIASES = {"9:16": "vertical", "story": "vertical", "stories": "vertical", "ree
             "shorts": "vertical", "tiktok": "vertical", "portrait": "vertical", "16:9": "landscape", "youtube": "landscape",
             "wide": "landscape", "horizontal": "landscape", "1:1": "square", "post": "square", "instagram": "square"}
 FPS = 30
+XFADE = 0.5                            # jelenetek közti áttűnés (s)
 TICKS_PER_S = 254_016_000_000          # az .ecproj időegysége (mint a Premiere „tick”-je)
 MOVIE_EXTS = {"mp4", "mov", "webm", "m4v", "mkv"}
 AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "ogg", "oga", "flac", "aiff", "aif", "opus"}
@@ -227,6 +235,63 @@ def _main_comp(project_path: Path) -> str:
     return max(comps, key=lambda c: (c["layers"], c["duration"]))["name"] if comps else "-"
 
 
+async def probe_movie(path: Path) -> dict[str, Any]:
+    """Egy felvétel adatai (ffprobe): méret (az elforgatás szerint), képkocka/s, hossz, van-e hang, pixelformátum."""
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path), timeout=60)
+    d = json.loads(out.decode("utf-8", "replace") or "{}")
+    vs = [s for s in d.get("streams") or [] if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")]
+    if not vs:
+        raise ValueError("That file has no video picture — give an MP4, MOV, WebM or M4V video.")
+    v = vs[0]
+    w, h = int(v.get("width") or 0), int(v.get("height") or 0)
+    rot = 0
+    for sd in v.get("side_data_list") or []:
+        if sd.get("rotation") is not None:
+            rot = int(float(sd["rotation"]))
+    rot = int(float((v.get("tags") or {}).get("rotate") or rot))
+    if abs(rot) % 180 == 90:
+        w, h = h, w
+    fr = lambda x: (lambda a, b: float(a) / float(b) if float(b) else 0.0)(*(str(x or "0/1").split("/") + ["1"])[:2])
+    fps = fr(v.get("avg_frame_rate")) or fr(v.get("r_frame_rate")) or FPS
+    dur = float((d.get("format") or {}).get("duration") or v.get("duration") or 0)
+    tags = v.get("tags") or {}
+    alpha_tag = str(tags.get("alpha_mode") or tags.get("ALPHA_MODE") or "") == "1"
+    return {"width": w, "height": h, "fps": round(fps, 3), "duration": round(dur, 3), "rotation": rot,
+            "audio": any(s.get("codec_type") == "audio" for s in d.get("streams") or []),
+            "codec": v.get("codec_name"), "pix_fmt": v.get("pix_fmt"), "alpha_mode": alpha_tag}
+
+
+def _tc(t: float) -> str:
+    """Másodperc → időkód a felhasználónak („00:06”, „1:02:03”, tört másodperccel, ha van)."""
+    t = max(0.0, float(t))
+    h, rest = divmod(t, 3600)
+    mnt, s = divmod(rest, 60)
+    ss = f"{s:04.1f}" if abs(s - round(s)) > 0.05 else f"{int(round(s)):02d}"
+    return (f"{int(h)}:{int(mnt):02d}:" if h else f"{int(mnt):02d}:") + ss
+
+
+def timecode(v: Any, what: str = "at") -> float:
+    """Időpont: másodperc (84 · 84.5 · "84.5s") vagy időkód ("01:24" · "1:02:03.5" · "00:01:24,5") → másodperc."""
+    bad = ValueError(f"{what}: {v!r} is not a time — give seconds (84.5) or a timecode (\"01:24\", \"1:02:03.5\").")
+    if isinstance(v, bool) or v is None:
+        raise bad
+    if isinstance(v, (int, float)):
+        if v < 0 or v != v:
+            raise bad
+        return float(v)
+    s = str(v).strip().lower().rstrip("s").strip().replace(",", ".")
+    parts = s.split(":")
+    if not s or len(parts) > 3 or not all(re.fullmatch(r"\d+(?:\.\d+)?", p) for p in parts):
+        raise bad
+    if any("." in p for p in parts[:-1]) or (len(parts) > 1 and float(parts[-1]) >= 60) or (len(parts) == 3 and int(parts[1]) >= 60):
+        raise bad
+    out = 0.0
+    for p in parts:
+        out = out * 60 + float(p)
+    return out
+
+
 # ---------- forrás: cikk, URL, dokumentum ----------
 
 async def fetch_article(url: str) -> dict[str, Any]:
@@ -272,7 +337,7 @@ async def fetch_article(url: str) -> dict[str, Any]:
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
 {"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
-  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote",
+  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|lines|race|sankey",
             "title": str, "unit": str, "total": number | null, "min": number | null, "max": number | null,
             "items": [{"label": str, "value": number | null, "text": str}]} | null}],
  "end": {"title": str, "subtitle": str}}
@@ -301,7 +366,14 @@ Rules:
     gauge — ONE value on a scale (min/max given in the source, or 0–100%), e.g. a risk level or a score;
     funnel — 3–6 shrinking stages of a process (applicants → interviewed → hired);
     proscons — arguments for (label "+") and against (label "-"), each a short text; labels? = the two headings;
-    quote — ONE striking sentence quoted WORD FOR WORD from the source (text = the quote, label = who said it).
+    quote — ONE striking sentence quoted WORD FOR WORD from the source (text = the quote, label = who said it);
+    waterfall — a starting amount and what added to / took from it (items: the start first, then the changes with
+      their sign, e.g. -7); the end is computed;
+    slope — the same 2–6 things at two moments: "labels": [the two dates], items [{"label", "from", "to"}];
+    lines — 2–4 series over the same periods (e.g. scenarios): "labels": [periods], "series": [{"name", "values"}];
+    race — 3–10 things ranked over 3–12 periods: "labels": [periods], "items": [{"label", "values"}];
+    sankey — amounts flowing between stages (money from sources → programmes → projects, energy, people): "flows":
+      [{"from", "to", "value"}] (2–24 flows, at most 14 nodes, one way only); the node totals are computed.
   Copy every number and date EXACTLY from the source (value = a plain number, no unit); unit = "%" or a short unit
   ("$", "km", "bn") or ""; item labels ≤ 18 characters (ring/icons: ≤ 60); at most 3 chart scenes (4 for 80 s or longer) and never two of the
   same type in a row; a scene has a stat OR a chart, never both; headline = what the graphic shows.
@@ -316,10 +388,17 @@ _NUM_IN_TEXT = re.compile(r"(?<![\d.,])-?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]
 
 
 _NUM_WORDS = {w: i for i, ws in enumerate((
-    (), ("one", "egy"), ("two", "kettő", "két"), ("three", "három"), ("four", "négy"), ("five", "öt"), ("six",), ("seven",),
-    ("eight", "nyolc"), ("nine", "kilenc"), ("ten", "tíz"), ("eleven", "tizenegy"), ("twelve", "tizenkettő"),
-    ("thirteen",), ("fourteen",), ("fifteen",), ("sixteen",), ("seventeen",), ("eighteen",), ("nineteen",),
-    ("twenty", "húsz"))) for w in ws}
+    (), ("one", "egy"), ("two", "kettő", "két"), ("three", "három"), ("four", "négy"), ("five", "öt"), ("six", "hat"),
+    ("seven", "hét"), ("eight", "nyolc"), ("nine", "kilenc"), ("ten", "tíz"), ("eleven", "tizenegy"), ("twelve", "tizenkettő"),
+    ("thirteen", "tizenhárom"), ("fourteen", "tizennégy"), ("fifteen", "tizenöt"), ("sixteen", "tizenhat"),
+    ("seventeen", "tizenhét"), ("eighteen", "tizennyolc"), ("nineteen", "tizenkilenc"), ("twenty", "húsz"))) for w in ws}
+# a „hat” / „hét” többértelmű (ige, illetve a hét nap) — mégis számít: egy jó ábra ne essen ki, mert a forrás betűvel
+# írja („hat hónapon belül” → 6), a laza egyezés legfeljebb egy 6-ost enged át (10-17)
+_NUM_WORDS.update({**{f"huszon{w}": 20 + v for w, v in (("egy", 1), ("kettő", 2), ("két", 2), ("három", 3), ("négy", 4),
+                                                         ("öt", 5), ("hat", 6), ("hét", 7), ("nyolc", 8), ("kilenc", 9))},
+                   "thirty": 30, "harminc": 30, "forty": 40, "negyven": 40, "fifty": 50, "ötven": 50, "sixty": 60,
+                   "hatvan": 60, "seventy": 70, "hetven": 70, "eighty": 80, "nyolcvan": 80, "ninety": 90, "kilencven": 90,
+                   "hundred": 100, "száz": 100, "thousand": 1000, "ezer": 1000})
 _NUM_WORD_RE = re.compile(r"\b(" + "|".join(sorted(_NUM_WORDS, key=len, reverse=True)) + r")\b", re.I)
 
 
@@ -402,6 +481,12 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         for k in ("size", "width", "radius", "at", "dur", "opacity"):
             if num(e.get(k)) is not None:
                 el[k] = float(e[k])
+        dash = {"dashed": [16, 11], "dotted": [0.5, 11]}.get(e["dash"]) if isinstance(e.get("dash"), str) else e.get("dash")
+        if isinstance(dash, (list, tuple)) and len(dash) == 2 and all(num(v) is not None for v in dash):   # szaggatott vonal
+            el["dash"] = [max(0.1, min(200.0, float(dash[0]))), max(1.0, min(200.0, float(dash[1])))]
+        if isinstance(e.get("dim"), list):        # irányított figyelem: ezekben a szakaszokban [tól, ig] mp halványabb
+            el["dim"] = [[float(w[0]), float(w[1])] for w in e["dim"][:8] if isinstance(w, (list, tuple)) and len(w) == 2
+                         and all(num(v) is not None for v in w) and w[1] > w[0]]
         for k in ("from", "to", "move_to"):
             if pt(e.get(k)):
                 el[k] = pt(e[k])
@@ -485,7 +570,9 @@ def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Opti
 
 
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
-                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script")
+                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script",
+                "decision_tree", "swimlane", "network",
+                "waterfall", "slope", "scatter", "band", "lines", "race", "sankey")     # az utóbbi hét: app/tools/motion_charts.py
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -494,9 +581,16 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
     számai) — különben az ábra kimarad. A modell nem talál ki számot."""
     if not isinstance(c, dict):
         return None, None
+    from app.tools import diagrams, motion_charts
     typ = str(c.get("type") or "column").lower()
+    typ = diagrams.ALIASES.get(typ, motion_charts.ALIASES.get(typ, typ))
     if typ not in _CHART_TYPES:
         return None, None
+    if typ in motion_charts.TYPES:     # vízesés, előtte→utána, pont, sáv, több vonal, verseny, sankey: saját alakjuk van
+        return motion_charts.parse(typ, c, source)
+    if typ in diagrams.TYPES:          # magyarázó ábra: a leírása marad a jelenetben, a rajzolás a graphic elemeivel
+        nums = _text_numbers(source)
+        return diagrams.from_plan({**c, "type": typ}, lambda t: [x for x in _text_numbers(t) if x not in nums], _clean)
     if typ == "graphic":
         return _graphic_from_plan(c, source)
     if typ == "script":
@@ -610,8 +704,7 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
         if any(i["value"] < 0 for i in items) or len(items) > 6:
             return None, None
         if unit == "%" and 60 <= tot < 99.5 and not rest:   # a hiányzó rész „Egyéb" — kiszámolt, nem kitalált
-            from app.tools.infographic import _HU
-            items.append({"label": "Egyéb" if _HU.search(source or "") else "Other", "value": round(100 - tot, 6)})
+            items.append({"label": "Egyéb" if _lang_of(source) == "hu" else "Other", "value": round(100 - tot, 6)})
             rest = f" “{items[-1]['label']}” is the rest of 100%."
     if typ == "column" and (len(items) > 7 or max(len(i["label"]) for i in items) > 14):
         typ = out["type"] = "bar"
@@ -665,21 +758,27 @@ def _clean(s: Any, n: int, what: Optional[str] = None) -> str:
 _FIT: "contextvars.ContextVar[Optional[list[str]]]" = contextvars.ContextVar("video_fit", default=None)
 
 
+def _wrap(st: str, size: float, box_w: float) -> tuple[int, bool, float]:
+    """A szöveg tördelve a doboz szélességére (~0,56 em átlagos betűszélesség) → (sorok, van-e szó, ami magában
+    sem fér ki, a legszélesebb sor px-ben)."""
+    cw, lines, cur, wide, widest = 0.56 * size, 1, 0.0, False, 0.0
+    for w in str(st or "").split() or [""]:
+        ww = len(w) * cw
+        wide = wide or ww > box_w
+        nxt = ww if cur == 0 else cur + cw + ww
+        if nxt > box_w and cur > 0:
+            widest, lines, cur = max(widest, cur), lines + 1, ww
+        else:
+            cur = nxt
+    return lines, wide, max(widest, cur)
+
+
 def _fit_size(st: str, size: float, box_w: float, box_h: float, name: str = "") -> int:
     """Elfér-e a szöveg a dobozában (szótördeléssel, ~0,56 em átlagos betűszélesség, 1,22 sormagasság)? Ha nem,
     kisebb betű — legfeljebb az eredeti 55%-áig; az illesztést feljegyzi."""
     s0, size = int(size), float(size)
-    words = str(st or "").split() or [""]
     while size > s0 * 0.55:
-        cw, lines, cur, wide = 0.56 * size, 1, 0.0, False
-        for w in words:
-            ww = len(w) * cw
-            wide = wide or ww > box_w
-            nxt = ww if cur == 0 else cur + cw + ww
-            if nxt > box_w and cur > 0:
-                lines, cur = lines + 1, ww
-            else:
-                cur = nxt
+        lines, wide, _ = _wrap(st, size, box_w)
         if not wide and lines * size * 1.22 <= box_h * 1.05:
             break
         size *= 0.93
@@ -766,6 +865,19 @@ def _layout(W: int, H: int) -> dict[str, Any]:
 
 def _size_for(text: str, base: float, ref: int, floor: float) -> int:
     return round(max(floor, base * min(1.0, math.sqrt(ref / max(len(text), 1)))))
+
+
+def _chart_seconds(ch: Any) -> Optional[float]:
+    """Az időzített ábra (rangsor-verseny, megadott tempójú kibontás) kényelmes hossza — None, ha bármilyen hosszba belefér."""
+    from app.tools import diagrams, motion_charts
+    return diagrams.seconds_needed(ch) or motion_charts.seconds_needed(ch or {}) if isinstance(ch, dict) else None
+
+
+def _scene_seconds(s: dict[str, Any]) -> Optional[float]:
+    """A jelenet kért hossza: a megadott, vagy — ha nincs — egy kifejezett tempójú (pace) ábra-kibontás igénye."""
+    if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0:
+        return float(s["duration"])
+    return _chart_seconds(s.get("chart"))
 
 
 def _chunks(text: str, max_chars: int) -> list[str]:
@@ -942,6 +1054,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
         anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
         if e.get("move_to"):
             anim["move_to"] = px(e["move_to"])
+        if e.get("dim"):                  # irányított figyelem: a rétegre (és a nyílhegyére) is
+            anim["dim"] = [[round(a, 3), round(b, 3)] for a, b in e["dim"]]
         op = int(max(5, min(100, e.get("opacity", 100))))
         if sh in ("rect", "circle", "pin"):
             if sh == "rect":
@@ -972,6 +1086,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                   "fill": _gfx_color(e.get("fill"), acc, "accent" if sh == "polygon" else "none"),
                   "stroke": _gfx_color(e.get("stroke"), acc, "none" if sh == "polygon" and e.get("fill") else "accent"),
                   "stroke_w": round(e.get("width", 8) * k, 1), "opacity": op, **anim}
+            if e.get("dash"):
+                el["dash"] = [round(e["dash"][0] * k, 2), round(e["dash"][1] * k, 2)]
             if sh == "arrow":           # nyílhegy: kis háromszög a végpontnál, a vonal irányába fordítva
                 (ax, ay), (bx, by) = px(pts[0]), px(pts[1])
                 ang = math.atan2(by - ay, bx - ax)
@@ -982,7 +1098,7 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                 out.append(el)
                 out.append({"k": "path", "name": f"Arrowhead {i + 1}", "points": [[round(v, 1) for v in tip], [round(v, 1) for v in l], [round(v, 1) for v in r_]],
                             "closed": True, "fill": el["stroke"] if el["stroke"] else "accent", "stroke": None, "stroke_w": 0, "opacity": op,
-                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2})
+                            "anim": "appear", "t0": round(t0 + dur * 0.85, 3), "dur": 0.2, **({"dim": anim["dim"]} if anim.get("dim") else {})})
                 continue
             out.append(el)
         elif sh == "text":
@@ -1030,11 +1146,17 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
     return out
 
 
-def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Optional[list[float]] = None) -> list[dict[str, Any]]:
+def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Optional[list[float]] = None,
+                   dur: Optional[float] = None) -> list[dict[str, Any]]:
     """Egy mozgó grafikon rétegei (a builder csak lerakja): oszlop / sáv / vonal, értékcímkék, kategóriacímkék,
     alapvonal. Idő: az elemek egymás után nőnek ki (t0, dur). A felirat-sáv (alul) és a cím (fent) helye szabad."""
     if ch["type"] == "script":           # a jelenetet az ügynök szkriptje rajzolja (builder: runScript)
         return []
+    from app.tools import diagrams, motion_charts
+    if ch["type"] in diagrams.TYPES:     # magyarázó ábra → a saját grafika elemei, a képkocka arányára rendezve
+        return _graphic_elements({"elements": diagrams.to_graphic(ch, W, H, accent, dur, lang)}, W, H, accent or _rgb(None))
+    if ch["type"] in motion_charts.TYPES:
+        return motion_charts.elements(ch, W, H, lang, accent or _rgb(None), dur)
     m, vertical = min(W, H), H > W * 1.2
     items = ch["items"]
     n, vals = len(items), [float(i["value"]) if i.get("value") is not None else 0.0 for i in items]
@@ -1385,22 +1507,28 @@ def _motions(n: int, ken_burns: str) -> list[str]:
     return out
 
 
+def _cards(total: Optional[float]) -> tuple[float, float]:
+    """A címkártya és a zárókép hossza (rövid videón rövidebbek)."""
+    return (2.6, 3.0) if (total or 60) < 22 else (3.6, 4.2)
+
+
 def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: list[Optional[str]],
             accent: Optional[str], credits: str, voice: Optional[str], voice_s: Optional[float], music: Optional[str],
-            focus: Optional[dict[str, list[float]]] = None, ken_burns: str = "some") -> dict[str, Any]:
+            focus: Optional[dict[str, list[float]]] = None, ken_burns: str = "some",
+            fits: Optional[dict[str, str]] = None) -> dict[str, Any]:
     """A forgatókönyvből a builder adatcsomagja (D): méretek, jelenet-hosszak, feliratok időzítve."""
     W, H = FORMATS[fmt]
     L = _layout(W, H)
     m = min(W, H)
     scenes = story["scenes"]
     n = len(scenes)
-    X = 0.5
+    X = XFADE
     if voice_s:
         total = max(8.0, voice_s + 1.0)
-    Tt, Te = (2.6, 3.0) if (total or 60) < 22 else (3.6, 4.2)
+    Tt, Te = _cards(total)
     weights = [max(len(s.get("caption") or s.get("headline") or ""), 45) for s in scenes]
     # a jelenetterv (scenes) adhat fix hosszt jelenetenként; a többi a maradékon osztozik a felirat hossza szerint
-    fixed = [float(s["duration"]) if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0 else None for s in scenes]
+    fixed = [_scene_seconds(s) for s in scenes]
     if total is None:                        # saját szöveg, hossz nélkül: olvasási tempó (~14 karakter/s)
         durs = [f or max(3.5, w / 14 + 1.0) for f, w in zip(fixed, weights)]
         total = Tt + sum(durs) + Te - X * (n + 1)
@@ -1421,8 +1549,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     captions, t = [], Tt - X
     d_scenes = []
     motions = _motions(len(scenes), ken_burns)
-    from app.tools.infographic import _HU
-    lang = "hu" if _HU.search(" ".join([story.get("title") or ""] + [x.get("caption") or "" for x in scenes])) else "en"
+    lang = _lang_of(" ".join([story.get("title") or ""] + [x.get("caption") or "" for x in scenes]))
     for i, (s, d) in enumerate(zip(scenes, durs)):
         cap = s.get("caption") or ""
         parts = _chunks(cap, max_chunk) if cap else []
@@ -1443,11 +1570,21 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
             # cím nélküli graphic/script is a jelenet címét kapja (10-13: a headline nyomtalanul elveszett — az ábrás
             # jelenet a headline-t nem rajzolja, csak az ábra címét)
             chart = {"title": chart.get("title") or head,
-                     "elements": chart_elements(chart, W, H, lang, _rgb(accent)),
+                     "elements": chart_elements(chart, W, H, lang, _rgb(accent), dur=d),
                      **({"backdrop": chart["backdrop"]} if chart.get("backdrop") is not None else {}),
                      **({"code": chart["code"], "id": s.get("id") or f"s{i + 1}"} if chart["type"] == "script" else {})}
-        d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": images[i + 1] if i + 1 < len(images) else None,
-                         "motion": motions[i], "focus": (focus or {}).get(images[i + 1] if i + 1 < len(images) else "") or [0.5, 0.45],
+        slot = _slots(images[i + 1] if i + 1 < len(images) else None)
+        mv = MOTIONS.get(s.get("motion") or "auto") or motions[i]
+        # képsor: a megadott mozgás mindegyikre; különben váltakozva (közelít, úszik, távolodik…), hogy legyen ritmusa
+        pics = [{"file": f, "motion": mv if k == 0 or s.get("motion") else ("kb-in", "left", "kb-out", "right")[k % 4],
+                 "focus": s.get("focus") or (focus or {}).get(f) or [0.5, 0.45],
+                 "fit": s.get("fit") or (fits or {}).get(f) or "cover"} for k, f in enumerate(slot) if f]
+        d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": pics[0]["file"] if pics else None,
+                         "motion": pics[0]["motion"] if pics else mv, "focus": pics[0]["focus"] if pics else [0.5, 0.45],
+                         "fit": pics[0]["fit"] if pics else "cover",
+                         **({"pics": pics} if len(pics) > 1 else {}), **({"zoom": s["zoom"]} if s.get("zoom") else {}),
+                         **({"camera": _camera_keys(s["camera"], d, W, H)} if s.get("camera") else {}),
+                         **({"bg": s["background"]} if s.get("background") else {}),
                          "size": _size_for(head, m * (0.066 if fmt != "landscape" else 0.058), 34, m * 0.046)})
         t += d - X
     title = story.get("title") or ""
@@ -1471,15 +1608,662 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         "font": FONT,
         "L": {**L, "titleH": m * 0.44, "headH": m * 0.36,
               "kickerY": L["kickerTop"] + L["kickerSize"] * 0.8, "titleY": L["titleTop"] + m * 0.22, "headY": L["headTop"] + m * 0.18},
-        "title": {"text": title, "kicker": story.get("kicker") or "", "image": images[0] if images else None, "dur": Tt,
-                  "motion": "in", "size": _size_for(title, m * (0.088 if fmt != "landscape" else 0.075), 26, m * 0.056)},
+        "title": {"text": title, "kicker": story.get("kicker") or "", "image": _slots(images[0])[0] if images else None, "dur": Tt,
+                  "motion": "in", "size": _size_for(title, m * (0.088 if fmt != "landscape" else 0.075), 26, m * 0.056),
+                  "fit": (fits or {}).get(_slots(images[0])[0] if images else "") or "cover",
+                  **({"pics": [{"file": f, "motion": ("in", "left", "out", "right")[k % 4], "focus": (focus or {}).get(f) or [0.5, 0.45]}
+                               for k, f in enumerate(_slots(images[0])) if f]} if images and isinstance(images[0], list) else {})},
         "scenes": d_scenes,
         "end": {"title": end_title, "subtitle": end.get("subtitle") or "", "credits": credits, "dur": Te,
-                "image": images[0] if images else None, "size": end_size},
+                "image": _slots(images[0])[0] if images else None, "size": end_size},
         "captions": captions,
         "audio": {"voice": voice, "music": music, "musicDb": -20 if voice else -10},
     }
     return D
+
+
+# ---------- időkódos rétegek (layers): EGY modell a make- és az overlay-videón ----------
+# Réteg = {id (L1…), type, at, dur, …}: abszolút idő a fő idővonalon, saját kompozíció (Layer L1 – …), a geometriát
+# itt számoljuk (mint a chart_elements), a builder csak lerakja (overlayLayers). Az ábra, a szám és az idézet a forrással
+# ellenőrizve — forrás nélkül a réteg a saját szövegével megy át (NEM ellenőrizve; a check ezt ki is mondja).
+
+LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split")
+_LAYER_DUR = {"lower_third": 5.0, "title": 4.0, "chapter": 3.5, "source": 5.0, "stat": 5.0, "quote": 6.0, "chart": 6.0,
+              "fullscreen": 6.0, "split": 8.0}
+_LAYER_ANIM = {"lower_third": ("slide", "fade"), "title": ("fade", "fade"), "chapter": ("slide", "fade"), "source": ("fade", "fade"),
+               "stat": ("pop", "fade"), "quote": ("fade", "fade"), "chart": ("pop", "fade"), "fullscreen": ("fade", "fade"),
+               "split": ("fade", "fade")}
+_LAYER_ANIMS = ("fade", "slide", "pop", "none")
+_LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
+# z-sorrend: a teljes képes és az osztott alul, a névsáv és a forrásfelirat legfelül (egy fajtán belül az idő szerint)
+_LAYER_Z = {"fullscreen": 0, "split": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4, "source": 5}
+_LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
+                "splitscreen": "split", "credit": "source"}
+# a rövidített réteg ({"type": "race", …}) ezeket viszi át az ábrába — a saját alakú ábrák mezői is (10-17: a „series”,
+# az „x_title”, a magyarázó ábrák „nodes”/„edges” mezője eddig elveszett a rövidítésben)
+_CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "series", "x_title",
+               "y_title", "forecast_from", "total_label", "flows", "nodes", "edges", "root", "branches", "steps", "lanes",
+               "actors", "reveal", "pace", "direction", "center", "focus")
+_PANEL = [0.035, 0.04, 0.055]
+
+
+def _own_text(x: Any) -> str:
+    """A réteg saját szövegei és számai egy szövegben (forrás nélkül ezzel megy át az ellenőrzésen)."""
+    if isinstance(x, dict):
+        return "\n".join(_own_text(v) for v in x.values())
+    if isinstance(x, (list, tuple)):
+        return "\n".join(_own_text(v) for v in x)
+    return "" if x is None or isinstance(x, bool) else str(x)
+
+
+def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """Egy réteg (a kliensé, vagy szerkesztésnél base + a változó mezők) tisztítva: időkód → s, szöveghatárok, az ábra /
+    szám / idézet a forrás számaival (ami nincs benne, kimarad — None, a ⚠ megjegyzés a check-be kerül)."""
+    if not isinstance(raw, dict):
+        raise ValueError("layers[]: each layer is an object {at, dur | until, type, …}")
+    r = {**(base or {}), **raw}
+    lid = re.sub(r"[^\w-]", "", str(r.get("id") or ""))[:20] or "L?"
+    what = f"Layer {lid}"
+    typ = _LAYER_ALIAS.get(str(r.get("type") or "").strip().lower().replace(" ", "_"),
+                           str(r.get("type") or "").strip().lower().replace(" ", "_"))
+    if typ in _CHART_TYPES and typ != "quote":          # rövidítés: {"type": "column", "items": …} = ábra-réteg
+        # (szerkesztésnél a meglévő ábrára: {"id": "L3", "type": "bar"} csak a típust cseréli, a tételek maradnak)
+        r = {**r, "chart": {**((base or {}).get("chart") or {}), "type": typ, **{k: raw[k] for k in _CHART_KEYS if k in raw}}}
+        raw = {**raw, "chart": r["chart"]}
+        typ = "chart"
+    if typ not in LAYER_TYPES:
+        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} (or a chart type such as \"column\").")
+    if r.get("at") is None:
+        raise ValueError(f"{what}: give at — when it starts (seconds, or a timecode such as \"01:24\").")
+    at = timecode(r["at"], f"{what} at")
+    if raw.get("until") is not None:
+        dur = timecode(raw["until"], f"{what} until") - at
+    elif r.get("dur") is not None:
+        dur = timecode(r["dur"], f"{what} dur")
+    else:
+        dur = _LAYER_DUR[typ]
+    if dur < 0.5:
+        raise ValueError(f"{what}: it must last at least 0.5 s (dur, or an until after its at).")
+    ly: dict[str, Any] = {"id": lid, "type": typ, "at": round(at, 3), "dur": round(min(dur, 6 * 3600.0), 3)}
+    pos = r.get("position")
+    if isinstance(pos, (list, tuple)):
+        if len(pos) != 4 or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in pos):
+            raise ValueError(f"{what}: position [x, y, w, h] = centre and size, 0–1 of the frame — or auto | top | bottom | left | right | center.")
+        x, y, w, h = (float(v) for v in pos)
+        ly["position"] = [max(0.0, min(1.0, x)), max(0.0, min(1.0, y)), max(0.05, min(1.0, w)), max(0.03, min(1.0, h))]
+    elif pos not in (None, "", "auto"):
+        if str(pos).lower() not in _LAYER_POS:
+            raise ValueError(f"{what}: position {pos!r} — auto | top | bottom | left | right | center | [x, y, w, h].")
+        ly["position"] = str(pos).lower()
+    anim = r.get("anim")
+    if anim not in (None, ""):
+        a_in, a_out = (anim.get("in"), anim.get("out")) if isinstance(anim, dict) else (anim, anim)
+        for a_ in (a_in, a_out):
+            if a_ not in (None, "") and str(a_).lower() not in _LAYER_ANIMS:
+                raise ValueError(f"{what}: anim {a_!r} — {' | '.join(_LAYER_ANIMS)} (or {{\"in\": …, \"out\": …}}).")
+        ly["anim"] = {k: str(v).lower() for k, v in (("in", a_in), ("out", a_out)) if v not in (None, "")}
+    checked = bool((source or "").strip())
+    src = source if checked else _own_text(r)
+    nums = _text_numbers(src)
+    cnotes: list[str] = []
+
+    def chart_of(cc: Any, quiet: bool = False) -> Optional[dict[str, Any]]:
+        if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
+            cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a cím)
+        if not isinstance(cc, dict):
+            raise ValueError(f"{what}: chart = {{type, title, unit, items}} — any scene chart type (graphic, map, lottie and script too).")
+        chart, note = _chart_from_plan(cc, src)
+        for n_ in (note if isinstance(note, list) else [note] if note else []):
+            if n_.startswith("⚠ ") or not chart:
+                cnotes.append("⚠ " + n_.lstrip("⚠ "))
+            elif not quiet:
+                cnotes.append(n_ if checked else f"“{chart.get('title') or chart['type']}” ({chart['type']}): not checked against a source.")
+        if cc and chart is None and not note:
+            cnotes.append(f"⚠ The {cc.get('type') or 'chart'} “{cc.get('title') or ''}” was left out: "
+                          f"{'unknown type' if cc.get('type') not in _CHART_TYPES else 'not enough usable items (check items / elements)'}.")
+        return chart
+
+    if typ == "lower_third":
+        ly["name"] = _clean(r.get("name") or r.get("text"), 60, "Lower-third name")
+        if not ly["name"]:
+            raise ValueError(f"{what} (lower_third): give name (and role).")
+        ly["role"] = _clean(r.get("role") or r.get("subtitle"), 90, "Lower-third role")
+        if str(r.get("side") or "").lower() in ("left", "right"):
+            ly["side"] = str(r["side"]).lower()
+    elif typ in ("title", "chapter"):
+        ly["text"] = _clean(r.get("text") or r.get("title"), 80, "Title")
+        if not ly["text"]:
+            raise ValueError(f"{what} ({typ}): give text (and subtitle?).")
+        ly["subtitle"] = _clean(r.get("subtitle"), 110, "Subtitle")
+        ly["kicker"] = _clean(r.get("kicker"), 30, "Kicker")
+    elif typ == "source":
+        ly["text"] = _clean(r.get("text"), 140, "Source caption")
+        if not ly["text"]:
+            raise ValueError(f"{what} (source): give text, e.g. \"Source: Eurostat, 2025\".")
+    elif typ == "stat":
+        st = r.get("stat") if isinstance(r.get("stat"), dict) else r
+        ly["value"], ly["label"] = _clean(st.get("value"), 12, "Stat value"), _clean(st.get("label"), 70, "Stat label")
+        if not ly["value"]:
+            raise ValueError(f"{what} (stat): give value (and label), e.g. {{\"value\": \"72%\", \"label\": \"turnout\"}}.")
+        if [x for x in _text_numbers(f"{ly['value']} {ly['label']}") if x not in nums]:
+            notes.append(f"⚠ {what}: the number “{ly['value']}” is not in the source — the layer was left out.")
+            return None
+        cnotes.append(f"Stat “{ly['value']}”: the number is in the source text." if checked else f"Stat “{ly['value']}”: not checked against a source.")
+    elif typ == "quote":
+        chart = chart_of({"type": "quote", "items": [{"text": r.get("text"), "label": r.get("label") or r.get("author") or r.get("who")}]})
+        if not chart:
+            notes += [f"⚠ {what}: {n_[2:]}" for n_ in cnotes if n_.startswith("⚠ ")] or [f"⚠ {what}: the quote was left out."]
+            return None
+        ly["chart"] = chart
+    elif typ == "chart":
+        chart = chart_of(raw.get("chart") if "chart" in raw else r.get("chart"))
+        if not chart:
+            notes += [f"⚠ {what}: {n_[2:]}" for n_ in cnotes if n_.startswith("⚠ ")] or [f"⚠ {what}: the chart was left out."]
+            return None
+        ly["chart"] = chart
+        if r.get("panel") is not None:
+            ly["panel"] = bool(r["panel"])
+    else:                                                   # fullscreen | split: ábra, kép vagy szöveg
+        kind = next((k for k in ("chart", "image", "text") if raw.get(k)), None) or (base or {}).get("kind") \
+            or next((k for k in ("chart", "image", "text") if r.get(k)), None)
+        if not kind:
+            raise ValueError(f"{what} ({typ}): give chart, image or text.")
+        ly["kind"] = kind
+        if kind == "chart":
+            chart = chart_of(raw.get("chart") if "chart" in raw else r.get("chart"))
+            if not chart:
+                notes += [f"⚠ {what}: {n_[2:]}" for n_ in cnotes if n_.startswith("⚠ ")] or [f"⚠ {what}: the chart was left out."]
+                return None
+            ly["chart"] = chart
+        elif kind == "image":
+            if raw.get("image") or not (base or {}).get("chart"):
+                ly["image"] = r["image"]
+                cc = {"type": "graphic", "backdrop": 0, "elements": [{"shape": "image", "image": _img_spec(r["image"]), "fit": "cover",
+                                                                      "x": 0.5, "y": 0.5, "w": 1, "h": 1, "anim": "none"}]}
+            else:                                     # szerkesztés: a már letöltött kép marad (asset), nem jön le újra
+                ly["image"], cc = base.get("image"), base["chart"]
+            ly["chart"] = chart_of(cc, quiet=True)
+            if not ly["chart"]:
+                raise ValueError(f"{what} ({typ}): image = a file_id, a URL or {{\"stock\": \"words\"}}.")
+        else:
+            ly["text"] = _clean(r.get("text"), 80, "Title")
+            ly["subtitle"] = _clean(r.get("subtitle"), 110, "Subtitle")
+            ly["kicker"] = _clean(r.get("kicker"), 30, "Kicker")
+        if typ == "split" and str(r.get("side") or "").lower() in ("left", "right", "top", "bottom"):
+            ly["side"] = str(r["side"]).lower()
+    notes += [f"⚠ {what}: {n_[2:]}" if n_.startswith("⚠ ") else f"{what}: {n_}" for n_ in cnotes]
+    return ly
+
+
+def layers_from(raw: Any, source: str, notes: list[str], existing: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
+    """A kliens rétegei → tisztított rétegek stabil azonosítóval (L1, L2… — szerkesztés után is ugyanarra mutatnak)."""
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("layers: a list of {at, dur | until, type, …} objects.")
+    if len(raw) + len(existing or []) > 60:
+        raise ValueError("layers: 60 at most in one video.")
+    given = [re.sub(r"[^\w-]", "", str(x.get("id")))[:20] for x in raw if isinstance(x, dict) and x.get("id")]
+    used = {ly["id"] for ly in existing or []}
+    dup = sorted({i for i in given if given.count(i) > 1 or i in used})
+    if dup:
+        raise ValueError(f"Layer id {dup[0]} is used twice — ids must be unique (leave id out and one is given).")
+    used |= set(given)
+    k = max([int(m_.group(1)) for u in used if (m_ := re.fullmatch(r"L(\d+)", u))] or [0])
+    out = []
+    for x in raw:
+        if isinstance(x, dict) and not x.get("id"):
+            k += 1
+            while f"L{k}" in used:
+                k += 1
+            x = {**x, "id": f"L{k}"}
+            used.add(x["id"])
+        ly = _layer_from(x, source, notes)
+        if ly:
+            out.append(ly)
+    return out
+
+
+def apply_layer_changes(layers: list[dict[str, Any]], changes: dict[str, Any], source: str, notes: list[str]) -> list[dict[str, Any]]:
+    """Célzott szerkesztés id alapján: {"layers": [{"id": "L2", …a változó mezők} | {"id": "L2", "remove": true}],
+    "add_layers": [ … ]} → az új rétegsor (a többi réteg érintetlen)."""
+    out = [dict(ly) for ly in layers]
+    ids = [ly["id"] for ly in out]
+    for ch in changes.get("layers") or []:
+        if not isinstance(ch, dict) or not ch.get("id"):
+            raise ValueError("changes.layers[]: give the layer's id (\"L2\" — video action=info lists them), plus what changes "
+                             "or \"remove\": true. New layers go in add_layers.")
+        if ch["id"] not in ids:
+            raise ValueError(f"There is no layer {ch['id']} (layers: {', '.join(ids) or 'none'}). New layers go in add_layers.")
+        k = ids.index(ch["id"])
+        if ch.get("remove"):
+            out[k] = None                                     # type: ignore[call-overload]
+            continue
+        out[k] = _layer_from({k_: v for k_, v in ch.items() if k_ != "remove"}, source, notes, base=out[k])
+    kept = [ly for ly in out if ly]
+    # az új réteg nem kapja meg egy most törölt id-ját (a válaszban az „L4” ne mást jelentsen, mint a kérésben)
+    return kept + layers_from(changes.get("add_layers") or [], source, notes, existing=layers)
+
+
+def _layer_text(ly: dict[str, Any]) -> str:
+    """A réteg fő szövege a listázáshoz és a kompozíció nevéhez."""
+    t, ch = ly["type"], ly.get("chart") or {}
+    if t == "lower_third":
+        return ly["name"] + (f" — {ly['role']}" if ly.get("role") else "")
+    if t == "stat":
+        return f"{ly['value']} {ly.get('label') or ''}".strip()
+    if ch.get("type") == "quote":
+        return (ch.get("items") or [{}])[0].get("text") or ""
+    if ly.get("kind") == "image":
+        return "picture"
+    if ch:
+        return f"{ch['type']} “{ch.get('title') or ''}”"
+    return ly.get("text") or ""
+
+
+def layer_listing(layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"id": ly["id"], "type": ly["type"], "at": ly["at"], "dur": ly["dur"], "until": round(ly["at"] + ly["dur"], 3),
+             "timecode": f"{_tc(ly['at'])}–{_tc(ly['at'] + ly['dur'])}", "text": _layer_text(ly)}
+            for ly in sorted(layers, key=lambda x: (x["at"], x["id"]))]
+
+
+def _tx(name: str, st: str, size: float, x0: float, y_cap: float, w: float, *, lines: int = 1, align: str = "left",
+        font: str = "semibold", color: Any = None, t0: float = 0.3, **o: Any) -> dict[str, Any]:
+    """Szövegréteg a builder-nek: a doboz bal széle x0, szélessége w; az ELSŐ sor nagybetűinek közepe y_cap (mérve: a
+    dobozszöveg első sorának nagybetű-közepe a doboz tetejétől 0,61 em-re van)."""
+    size = int(round(size))
+    bh = size * (1.22 * max(1, lines) + 0.6)
+    top = y_cap - 0.61 * size
+    return {"k": "text", "name": name, "str": st, "size": size, "box": [round(w, 1), round(bh, 1)],
+            "pos": [round(x0 + w / 2, 1), round(top + bh / 2, 1)], "align": align, "font": font, "color": color,
+            "leading": round(size * 1.22, 1), "t0": t0, **o}
+
+
+def _stack(ly: dict[str, Any], x0: float, w: float, m: float, acc: list[float], *, size: float, align: str = "center") -> tuple[list[dict[str, Any]], float]:
+    """Felcím · cím · akcentus-csík · alcím egymás alatt (0-tól lefelé), a szélességbe illesztve → (rétegek, magasság)."""
+    out: list[dict[str, Any]] = []
+    y = 0.0
+    if ly.get("kicker"):
+        ks = _fit_size(ly["kicker"].upper(), m * 0.03, w, m * 0.04, "Kicker")
+        out.append(_tx("Kicker", ly["kicker"].upper(), ks, x0, y + 0.365 * ks, w, align=align, color=acc, t0=0.12, tracking=60))
+        y += ks * 1.35
+    s = _fit_size(ly["text"], size, w, size * 1.22 * 3, "Title")
+    lines = min(3, _wrap(ly["text"], s, w)[0])
+    out.append(_tx("Title", ly["text"], s, x0, y + 0.365 * s, w, lines=lines, align=align, font="bold", t0=0.2))
+    y += s * (0.73 + 1.22 * (lines - 1)) + s * 0.42
+    bw, bh = m * 0.1, max(5.0, m * 0.008)
+    bx = x0 + w / 2 if align == "center" else x0 + bw / 2
+    out.append({"k": "rect", "name": "Accent bar", "size": [round(bw, 1), round(bh, 1)], "pos": [round(bx, 1), round(y + bh / 2, 1)],
+                "color": "accent", "opacity": 100, "round": round(bh / 2, 1), "grow": "center" if align == "center" else "right",
+                "t0": 0.3, "dur": 0.4})
+    y += bh
+    if ly.get("subtitle"):
+        s2 = _fit_size(ly["subtitle"], m * 0.038, w, m * 0.038 * 1.22 * 3, "Subtitle")
+        sl = min(3, _wrap(ly["subtitle"], s2, w)[0])
+        y += s2 * 0.62
+        out.append(_tx("Subtitle", ly["subtitle"], s2, x0, y + 0.365 * s2, w, lines=sl, align=align, font="regular",
+                       color=[0.86, 0.88, 0.92], t0=0.42))
+        y += s2 * (0.73 + 1.22 * (sl - 1)) + s2 * 0.22
+    return out, y
+
+
+def _shift(els: list[dict[str, Any]], dx: float, dy: float) -> list[dict[str, Any]]:
+    for e in els:
+        e["pos"] = [round(e["pos"][0] + dx, 1), round(e["pos"][1] + dy, 1)]
+    return els
+
+
+def _even(v: float) -> int:
+    return max(4, int(round(v / 2)) * 2)
+
+
+def _layer_box(ly: dict[str, Any], W: int, H: int, safe: float, acc: list[float]) -> dict[str, Any]:
+    """A réteg kompozíciója a képkockán: méret (w, h), közép (cx, cy), honnan csúszik be (slide), osztott képnél az
+    alapsáv helye (split); a szöveges rétegeknél a szövegrétegek is (els) — a szövegek mérete a dobozt is méretezi."""
+    t, m = ly["type"], min(W, H)
+    mg = round(m * 0.05)
+    land, vert = W > H * 1.2, H > W * 1.2
+    pos = ly.get("position") or "auto"
+    custom = pos if isinstance(pos, list) else None
+    els: list[dict[str, Any]] = []
+    split = None
+    side = ly.get("side")
+    if t == "lower_third":
+        s1, s2, pad = m * 0.052, m * 0.032, m * 0.026
+        bar = max(6.0, m * 0.009)
+        inner = (custom[2] * W if custom else W * (0.86 if vert else 0.6)) - bar - 2 * pad
+        s1 = _fit_size(ly["name"], s1, inner / 1.04, s1 * 1.25, "Lower-third name")
+        tw, rl = _wrap(ly["name"], s1, inner)[2] * 1.04, 0
+        if ly.get("role"):
+            s2 = _fit_size(ly["role"], s2, inner, s2 * 1.22 * 2, "Lower-third role")
+            rl, _, rw = _wrap(ly["role"], s2, inner)
+            rl, tw = min(2, rl), max(tw, rw)
+        w = _even(bar + 2 * pad + max(tw + s1 * 0.3, W * 0.14))
+        top = pad * 0.95
+        nb = top + 0.73 * s1                                       # a név alapvonala
+        rt = nb + 0.22 * s1 + 0.42 * s2                            # a tisztség nagybetűinek teteje
+        bottom = (rt + 0.73 * s2 + 1.22 * s2 * (rl - 1) + 0.22 * s2) if rl else nb + 0.22 * s1
+        h = _even(bottom + pad * 0.95)
+        side = side or ("right" if pos == "right" else "left")
+        els = [{"k": "rect", "name": "Panel", "size": [w - bar, h], "pos": [round(bar + (w - bar) / 2, 1), h / 2], "color": _PANEL,
+                "opacity": 86, "round": 0, "grow": "right", "t0": 0.05, "dur": 0.35},
+               {"k": "rect", "name": "Accent bar", "size": [round(bar, 1), h], "pos": [round(bar / 2, 1), h / 2], "color": "accent",
+                "opacity": 100, "round": 0, "grow": "up", "t0": 0.0, "dur": 0.3},
+               _tx("Name", ly["name"], s1, bar + pad, top + 0.365 * s1, w - bar - 2 * pad, font="bold", t0=0.2)]
+        if rl:
+            els.append(_tx("Role", ly["role"], s2, bar + pad, rt + 0.365 * s2, w - bar - 2 * pad, lines=rl, font="regular",
+                           color=[0.84, 0.86, 0.9], t0=0.32))
+        cx = W / 2 if pos == "center" else (mg + w / 2 if side == "left" else W - mg - w / 2)
+        cy = mg + h / 2 if pos == "top" else safe - h / 2
+        slide = [-m * 0.05 if side == "left" else m * 0.05, 0]
+    elif t == "source":
+        s = m * 0.025
+        maxw = (custom[2] * W if custom else W * 0.5)
+        pad = s * 0.62
+        s = _fit_size(ly["text"], s, maxw - 2 * pad, s * 1.22 * 2, "Source caption")
+        lines, _, tw = _wrap(ly["text"], s, maxw - 2 * pad)
+        lines = min(2, lines)
+        w = _even(tw + 2 * pad + s * 0.3)
+        h = _even(pad * 1.5 + s * (0.95 + 1.22 * (lines - 1)))
+        els = [{"k": "rect", "name": "Panel", "size": [w, h], "pos": [w / 2, h / 2], "color": _PANEL, "opacity": 70,
+                "round": round(min(h * 0.3, m * 0.012), 1)},
+               _tx("Source", ly["text"], s, pad, pad * 0.75 + 0.365 * s, w - 2 * pad, lines=lines, font="regular",
+                   color=[0.9, 0.91, 0.94], t0=0.0)]
+        cx = mg + w / 2 if pos == "left" else W / 2 if pos == "center" else W - mg - w / 2
+        cy = mg + h / 2 if pos == "top" else safe - h / 2
+        slide = [0, 0]
+    elif t in ("title", "chapter"):
+        if t == "title":
+            w = _even(custom[2] * W if custom else W)
+            inner = min(w * 0.84, W * 0.84)
+            stack, sh = _stack(ly, (w - inner) / 2, inner, m, acc, size=_size_for(ly["text"], m * 0.085, 24, m * 0.055))
+            pad = m * 0.05
+            h = _even(sh + 2 * pad)
+            els = [{"k": "rect", "name": "Band", "size": [w, h], "pos": [w / 2, h / 2], "color": _PANEL, "opacity": 62, "round": 0}] \
+                + _shift(stack, 0, pad)
+            cx = W / 2
+            cy = mg + h / 2 if pos == "top" else safe - h / 2 if pos == "bottom" else H / 2
+            slide = [0, 0]
+        else:
+            pad = m * 0.04
+            maxw = custom[2] * W if custom else W * (0.56 if land else 0.84)
+            size = _size_for(ly["text"], m * 0.07, 22, m * 0.05)
+            widest = max(_wrap(ly["text"], size, maxw - 2 * pad)[2] * 1.05,
+                         _wrap(ly.get("subtitle") or "", m * 0.038, maxw - 2 * pad)[2], m * 0.2)
+            w = _even(min(maxw, widest + 2 * pad))
+            stack, sh = _stack(ly, pad, w - 2 * pad, m, acc, size=size, align="left")
+            h = _even(sh + 2 * pad)
+            els = [{"k": "rect", "name": "Panel", "size": [w, h], "pos": [w / 2, h / 2], "color": _PANEL, "opacity": 80,
+                    "round": round(m * 0.01, 1)}] + _shift(stack, 0, pad)
+            right = pos == "right"
+            cx = W / 2 if pos == "center" else (W - mg - w / 2 if right else mg + w / 2)
+            cy = mg + h / 2 if pos == "top" else safe - h / 2 if pos == "bottom" else H * (0.5 if land else 0.42)
+            slide = [m * 0.05 if right else -m * 0.05, 0]
+    elif t == "stat":
+        w = _even(custom[2] * W if custom else W * (0.34 if land else 0.62 if not vert else 0.8))
+        pad = m * 0.035
+        vs = min(m * 0.16, (w - 2 * pad) / (0.62 * max(len(ly["value"]), 1)))
+        s2 = _fit_size(ly.get("label") or "", m * 0.036, w - 2 * pad, m * 0.036 * 1.22 * 3, "Stat label")
+        ll = min(3, _wrap(ly.get("label") or "", s2, w - 2 * pad)[0]) if ly.get("label") else 0
+        vb = pad + 0.73 * vs                                         # a szám alapvonala
+        h = _even(vb + (0.3 * vs + 0.42 * s2 + s2 * (0.73 + 1.22 * (ll - 1)) + 0.22 * s2 if ll else 0.15 * vs) + pad)
+        els = [{"k": "rect", "name": "Panel", "size": [w, h], "pos": [w / 2, h / 2], "color": _PANEL, "opacity": 84,
+                "round": round(m * 0.012, 1)},
+               _tx("Number", ly["value"], vs, pad, pad + 0.365 * vs, w - 2 * pad, align="center", font="bold", color=acc, t0=0.15)]
+        if ll:
+            els.append(_tx("Number label", ly["label"], s2, pad, vb + 0.3 * vs + 0.42 * s2 + 0.365 * s2, w - 2 * pad, lines=ll,
+                           align="center", t0=0.35))
+        cx, cy = (W - mg - w / 2, H * 0.42) if land else (W / 2, mg + h / 2 + H * 0.04)
+        if pos == "left":
+            cx = mg + w / 2
+        elif pos == "center":
+            cx, cy = W / 2, H / 2
+        elif pos == "top":
+            cy = mg + h / 2
+        elif pos == "bottom":
+            cy = safe - h / 2
+        slide = [0, 0]
+    elif t in ("chart", "quote"):
+        transparent = ly.get("panel") is False or (ly.get("panel") is None and (ly.get("chart") or {}).get("type") in ("graphic", "script"))
+        if transparent and pos == "auto" and not custom:          # saját grafika a felvétel fölött: az egész képkocka
+            w, h, cx, cy = W, H, W / 2, H / 2
+        elif land and pos in ("auto", "right", "left"):
+            w, h = _even(W * 0.46), _even(min(H * 0.84, safe - mg * 0.6))
+            cx = mg + w / 2 if pos == "left" else W - mg - w / 2
+            cy = (mg * 0.6 + safe) / 2
+        elif pos == "center":
+            w, h, cx, cy = _even(W * (0.62 if land else 0.9)), _even(H * (0.74 if land else 0.5)), W / 2, H / 2
+        else:                                                    # álló / négyzetes, vagy top | bottom: széles sáv
+            w, h = _even(W - 2 * mg), _even(H * (0.42 if (vert or land) else 0.5))
+            cx = W / 2
+            cy = safe - h / 2 if pos == "bottom" else mg + h / 2 + (H * 0.04 if vert else 0)
+        if not transparent:
+            els = [{"k": "rect", "name": "Panel", "size": [w, h], "pos": [w / 2, h / 2], "color": _PANEL,
+                    "opacity": int(round(100 * (ly["chart"].get("backdrop") if ly["chart"].get("backdrop") is not None else 0.86))),
+                    "round": round(m * 0.014, 1)}]
+        slide = [0, 0]
+    elif t == "fullscreen":
+        w, h, cx, cy, slide = W, H, W / 2, H / 2, [0, 0]
+        if ly.get("kind") != "image":
+            els = [{"k": "rect", "name": "Background", "size": [W, H], "pos": [W / 2, H / 2], "color": [0.055, 0.06, 0.08], "opacity": 100, "round": 0}]
+    else:                                                          # split: az alapsáv a fél képre, a grafika a másikra
+        side = side or ("bottom" if vert else "right")
+        if side in ("left", "right"):
+            w, h = _even(W / 2 - mg * 1.5), _even(H - 2 * mg)
+            cx, cy = (W * 0.75 - mg * 0.25, H / 2) if side == "right" else (W * 0.25 + mg * 0.25, H / 2)
+            k = min((W / 2 - mg * 1.5) / W, (H - 2 * mg) / H)
+            to = [W * 0.25 + mg * 0.25, H / 2] if side == "right" else [W * 0.75 - mg * 0.25, H / 2]
+            slide = [m * 0.06 if side == "right" else -m * 0.06, 0]
+        else:
+            w, h = _even(W - 2 * mg), _even(H / 2 - mg * 1.5)
+            cx, cy = (W / 2, H * 0.75 - mg * 0.25) if side == "bottom" else (W / 2, H * 0.25 + mg * 0.25)
+            k = min((W - 2 * mg) / W, (H / 2 - mg * 1.5) / H)
+            to = [W / 2, H * 0.25 + mg * 0.25] if side == "bottom" else [W / 2, H * 0.75 - mg * 0.25]
+            slide = [0, m * 0.06 if side == "bottom" else -m * 0.06]
+        split = {"scale": round(k, 4), "to": [round(to[0], 1), round(to[1], 1)]}
+        els = [{"k": "rect", "name": "Panel", "size": [w, h], "pos": [w / 2, h / 2], "color": _PANEL, "opacity": 94,
+                "round": round(m * 0.014, 1)}]
+    if custom and t not in ("lower_third", "source", "fullscreen", "split"):
+        cx, cy = custom[0] * W, custom[1] * H
+        if t in ("chart", "quote"):
+            w, h = _even(custom[2] * W), _even(custom[3] * H)
+            if els:
+                els[0].update(size=[w, h], pos=[w / 2, h / 2])
+    elif custom:
+        cx, cy = custom[0] * W, custom[1] * H
+    if t in ("fullscreen", "split") and ly.get("kind") == "text":
+        size = _size_for(ly["text"], min(w, h) * 0.1, 24, min(w, h) * 0.06)
+        stack, sh = _stack(ly, w * 0.08, w * 0.84, min(w, h) * 1.1, acc, size=size)
+        els += _shift(stack, 0, (h - sh) / 2)
+    return {"w": int(w), "h": int(h), "cx": round(cx), "cy": round(cy), "slide": [round(slide[0], 1), round(slide[1], 1)],
+            "split": split, "els": els}
+
+
+def _layer_elements(ly: dict[str, Any], b: dict[str, Any], lang: str, acc: list[float],
+                    dur: Optional[float] = None) -> list[dict[str, Any]]:
+    """A réteg összes builder-eleme: a doboz (panel, szövegek) + az ábra a meglévő építővel (chart_elements), a réteg
+    kompozíciójának méretében; az ábra címe fölül, mint a jelenetekben."""
+    els = list(b["els"])
+    ch = ly.get("chart")
+    if not ch:
+        return els
+    w, h = b["w"], b["h"]
+    m = min(w, h)
+    over = not any(e.get("name") in ("Panel", "Background") for e in els)       # átlátszó: árnyék a felvétel fölött
+    # panelen nincs felirat-sáv alul: az ábra a panel aljáig ér (a jelenet-elrendezés alja a feliratoké) — ha ettől nem
+    # vált álló elrendezésre; a saját grafika koordinátái a panel arányai maradnak
+    hv = h / 0.9 if any(e.get("name") == "Panel" for e in els) and ch["type"] not in ("graphic", "script") \
+        and (h / 0.9 > w * 1.2) == (h > w * 1.2) else h
+    ce = chart_elements(ch, w, hv, lang, acc, dur=dur)      # a réteg hossza: az időzített ábra (verseny, kibontás) ebbe fér
+    if over:
+        for e in ce:
+            if e["k"] == "text":
+                e["shadow"] = 18
+    els += ce
+    if ch.get("title") and ch["type"] != "quote":
+        cs = round(m * 0.056)
+        els.append({"k": "text", "name": "Chart title", "str": ch["title"], "size": _fit_size(ch["title"], cs, w * 0.84, cs * 2.6, "Chart title"),
+                    "box": [round(w * 0.84, 1), round(cs * 2.6, 1)], "pos": [round(w / 2, 1), round(h * 0.1, 1)], "align": "center",
+                    "font": "bold", "leading": round(cs * 1.1, 1), "t0": 0.1, **({"shadow": 18} if over else {})})
+    credit = next((e.get("credit") for e in ch.get("elements") or [] if e.get("shape") == "image" and e.get("credit")), None)
+    if credit:
+        fs = max(12, round(m * 0.022))
+        short = re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", credit)).strip()[:120]
+        els.append(_tx("Picture credit", short, fs, w * 0.04, h - fs * 1.4, w * 0.92, align="right", font="regular",
+                       color=[0.86, 0.88, 0.92], t0=0.2, shadow=12))
+    return els
+
+
+def _loose(ly: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Szándékosan mindent takaró (teljes képes) vagy panel nélküli saját grafika (nyíl, jelölés a felvételen): ezek nem
+    „ütköznek” a többi réteggel — a teljes képes alul van, a jelölésnek csak a rajzolt elemei látszanak."""
+    return ly["type"] == "fullscreen" or (ly["type"] == "chart" and not any(e.get("name") == "Panel" for e in b["els"]))
+
+
+def _overlaps(placed: list[tuple[dict[str, Any], float, float, dict[str, Any]]]) -> list[str]:
+    """Két réteg ugyanott, ugyanakkor (a teljes képes kivételével — az szándékosan takar) → figyelmeztetés."""
+    out = []
+    for i, (a, a0, a1, ba) in enumerate(placed):
+        for b, b0, b1, bb in placed[i + 1:]:
+            if _loose(a, ba) or _loose(b, bb) or min(a1, b1) - max(a0, b0) < 0.3:
+                continue
+            ra = (ba["cx"] - ba["w"] / 2, ba["cy"] - ba["h"] / 2, ba["cx"] + ba["w"] / 2, ba["cy"] + ba["h"] / 2)
+            rb = (bb["cx"] - bb["w"] / 2, bb["cy"] - bb["h"] / 2, bb["cx"] + bb["w"] / 2, bb["cy"] + bb["h"] / 2)
+            ix = max(0.0, min(ra[2], rb[2]) - max(ra[0], rb[0])) * max(0.0, min(ra[3], rb[3]) - max(ra[1], rb[1]))
+            if ix > 0.15 * min(ba["w"] * ba["h"], bb["w"] * bb["h"]):
+                out.append(f"Layers {a['id']} ({a['type']}) and {b['id']} ({b['type']}) cover the same place from "
+                           f"{_tc(max(a0, b0))} to {_tc(min(a1, b1))} — move one (position) or change its time.")
+    return out
+
+
+def _rect(b: dict[str, Any]) -> tuple[float, float, float, float]:
+    return b["cx"] - b["w"] / 2, b["cy"] - b["h"] / 2, b["cx"] + b["w"] / 2, b["cy"] + b["h"] / 2
+
+
+def _inter(r1: tuple[float, ...], r2: tuple[float, ...]) -> float:
+    return max(0.0, min(r1[2], r2[2]) - max(r1[0], r2[0])) * max(0.0, min(r1[3], r2[3]) - max(r1[1], r2[1]))
+
+
+def _cover(b: dict[str, Any], t0: float, t1: float, placed: list[tuple[dict[str, Any], float, float, dict[str, Any]]],
+           zones: list[tuple[float, float, tuple[float, float, float, float], str]]) -> float:
+    """Mennyire takarná a réteg (a doboza) a vele egy időben látszó rétegeket és a videó saját szövegeit (terület × idő)."""
+    r = _rect(b)
+    tot = sum(_inter(r, _rect(bb)) * (min(t1, a1) - max(t0, a0)) for ly_, a0, a1, bb in placed
+              if min(t1, a1) > max(t0, a0) and not _loose(ly_, bb))
+    return tot + sum(_inter(r, zr) * (min(t1, z1) - max(t0, z0)) for z0, z1, zr, _ in zones if min(t1, z1) > max(t0, z0))
+
+
+def _auto_place(ly: dict[str, Any], b: dict[str, Any], t0: float, t1: float, placed: list, zones: list,
+                W: int, H: int, safe: float, acc: list[float]) -> dict[str, Any]:
+    """Hely nélkül megadott névsáv és forrásfelirat: az alaphely, ha szabad; különben a sarkok közül az, amelyiket a vele egy
+    időben látszó rétegek és a videó saját szövegei (jelenetcím, ábra) a legkevésbé takarnak — a szövegek körül egy kis
+    levegővel (ami épp csak nem ér hozzá, az is zsúfolt)."""
+    pad = min(W, H) * 0.03
+    zones = [(z0, z1, (r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad), w_) for z0, z1, r, w_ in zones]
+    if ly["type"] == "source":
+        mg = round(min(W, H) * 0.05)
+        w, h = b["w"], b["h"]
+        cands = [{**b, "cx": round(x), "cy": round(y)} for x, y in ((W - mg - w / 2, safe - h / 2), (mg + w / 2, safe - h / 2),
+                                                                     (W - mg - w / 2, mg + h / 2), (mg + w / 2, mg + h / 2))]
+    else:
+        cands = [b] + [_layer_box({**ly, "side": sd, **({"position": ps} if ps else {})}, W, H, safe, acc)
+                       for sd, ps in (("right", None), ("left", "top"), ("right", "top"))]
+    return min(enumerate(cands), key=lambda ic: (_cover(ic[1], t0, t1, placed, zones), ic[0]))[1]
+
+
+def _scene_zones(D: dict[str, Any]) -> list[tuple[float, float, tuple[float, float, float, float], str]]:
+    """A make-videó saját szövegei és ábrái időben (címkártya, jelenetcím, ábra, nagy szám, zárókép): a hely nélkül megadott
+    rétegek ezeket kerülik, és a check szól, ha egy réteg rájuk kerül."""
+    W, H, L = D["W"], D["H"], D["L"]
+    m = min(W, H)
+    out = []
+    for k, row in enumerate(D.get("timeline") or []):
+        t0, t1 = row["start"] + (D["xfade"] if k else 0), row["end"]
+        if row["id"] == "title":
+            ti = D["title"]
+            lines = min(3, _wrap(ti["text"], ti["size"], L["titleW"])[0])
+            r = (L["titleX"] - L["titleW"] / 2, L["kickerTop"] - m * 0.02, L["titleX"] + L["titleW"] / 2,
+                 L["titleTop"] + ti["size"] * (0.4 + 1.08 * lines))
+            what = "the title card's title"
+        elif row["id"] == "end":
+            r, what = (W * 0.08, L["endY"] - m * 0.25, W * 0.92, L["endSubY"] + L["capSize"] * 1.5), "the end card's text"
+        else:
+            sc = D["scenes"][k - 1] if 0 < k <= len(D["scenes"]) else {}
+            if sc.get("chart"):
+                r, what = (W * 0.05, H * 0.04, W * 0.95, H * 0.78), f"scene {row['id']}'s chart"
+            elif sc.get("stat"):
+                r = (W * 0.05, L["statY"] - L["statSize"] * 0.6, W * 0.95, L["statLabelY"] + L["statLabelSize"] * 1.5)
+                what = f"scene {row['id']}'s number"
+            else:
+                lines = min(3, _wrap(sc.get("headline") or "", sc.get("size") or 40, L["headW"])[0])
+                r = (L["headX"] - L["headW"] / 2, L["headBarY"] - m * 0.02, L["headX"] + L["headW"] / 2,
+                     L["headTop"] + (sc.get("size") or 40) * (0.4 + 1.12 * lines))
+                what = f"scene {row['id']}'s headline"
+        out.append((t0, t1, r, what))
+    return out
+
+
+def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang: str, acc: list[float],
+                safe: float, zones: Optional[list] = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """A rétegek a builder-nek (D.layers), az idővonal-soraik (előnézet, render scene=L2), és ami nem stimmel
+    (a videó vége utánra esik, levágódik a végén, két réteg egymást, vagy egy réteg a videó saját szövegét takarja).
+    zones: a make-videó saját szövegei időben (_scene_zones) — az overlay-videón nincs ilyen."""
+    zones = zones or []
+    out, rows, problems, placed = [], [], [], []
+    for ly in sorted(layers, key=lambda x: (_LAYER_Z[x["type"]], x["at"], x["id"])):
+        at, dur = float(ly["at"]), float(ly["dur"])
+        if at >= total - 0.3:
+            problems.append(f"Layer {ly['id']} starts at {_tc(at)}, but the video ends at {_tc(total)} — it was left out. "
+                            "Give it an earlier at.")
+            continue
+        if at + dur > total + 0.05:
+            problems.append(f"Layer {ly['id']} was asked to last until {_tc(at + dur)}; the video ends at {_tc(total)}, so it ends there.")
+            dur = round(total - at, 3)
+        b = _layer_box(ly, W, H, safe, acc)
+        if ly["type"] in ("source", "lower_third") and not ly.get("position") and not ly.get("side"):
+            b = _auto_place(ly, b, at, at + dur, placed, zones, W, H, safe, acc)
+        a_in, a_out = _LAYER_ANIM[ly["type"]]
+        if ly["type"] == "chart" and not any(e.get("name") == "Panel" for e in b["els"]):
+            a_in = "fade"
+        anim = {"in": (ly.get("anim") or {}).get("in") or a_in, "out": (ly.get("anim") or {}).get("out") or a_out}
+        item: dict[str, Any] = {"id": ly["id"], "name": f"Layer {ly['id']} – {_layer_text(ly)[:32]}", "at": round(at, 3), "dur": round(dur, 3),
+                                "w": b["w"], "h": b["h"], "pos": [b["cx"], b["cy"]], "elements": _layer_elements(ly, b, lang, acc, dur),
+                                "anim": anim, "slide": b["slide"]}
+        need = _chart_seconds(ly.get("chart"))
+        if need and dur < need - 0.3:
+            problems.append(f"Layer {ly['id']}: its {ly['chart']['type'].replace('_', ' ')} needs about {need:.0f} s to play "
+                            f"through; the layer is {dur:.1f} s, so it runs fast — give it \"dur\": {math.ceil(need)}.")
+        if b.get("split"):
+            item["split"] = b["split"]
+        if (ly.get("chart") or {}).get("type") == "script":
+            item["code"] = ly["chart"]["code"]
+        out.append(item)
+        rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": ly["type"], "layer": True})
+        placed.append((ly, at, at + dur, b))
+    rows.sort(key=lambda r_: (r_["start"], r_["id"]))
+    for ly, a0, a1, b in placed:                      # a videó saját szövegét / ábráját takaró réteg
+        if _loose(ly, b):
+            continue
+        hit: dict[str, list[float]] = {}
+        for z0, z1, zr, what in zones:
+            if min(a1, z1) - max(a0, z0) >= 0.3 and _inter(_rect(b), zr) > 0.15 * b["w"] * b["h"]:
+                span = hit.setdefault(what, [max(a0, z0), min(a1, z1)])
+                span[0], span[1] = min(span[0], max(a0, z0)), max(span[1], min(a1, z1))
+        problems += [f"Layer {ly['id']} ({ly['type']}) covers {what} from {_tc(sp[0])} to {_tc(sp[1])} — move it (position) or "
+                     "change its time." for what, sp in hit.items()]
+    return out, rows, problems + _overlaps(placed)
+
+
+def layer_size(ly: dict[str, Any], W: int, H: int, safe: float) -> tuple[int, int]:
+    """A réteg ábrájának mérete (a térképek és a saját grafikák ebben a méretben kerülnek a helyükre)."""
+    b = _layer_box(ly, W, H, safe, _rgb(None))
+    return b["w"], b["h"]
+
+
+def _caption_top(W: int, H: int) -> float:
+    """A make-videó felirat-sávjának teteje (két sorral): fölötte maradnak a rétegek."""
+    L = _layout(W, H)
+    return L["capY"] - (2 * L["capSize"] * 1.28 + L["capPad"] * 1.4) / 2 - L["capSize"] * 0.35
 
 
 # ---------- építés ----------
@@ -1492,6 +2276,14 @@ async def _probe_duration(workdir: Path, name: str) -> Optional[float]:
     except Exception as e:
         log.warning("hanghossz nem olvasható (%s): %s", name, e)
         return None
+
+
+def _lost_picture(i: int, story: dict[str, Any]) -> str:
+    where = "the title card" if i == 0 else f"scene {story['scenes'][i - 1].get('id') or i}"
+    fix = ('changes={"title_image": …}' if i == 0 else
+           f'changes={{"scenes": [{{"id": "{story["scenes"][i - 1].get("id")}", "image": …}}]}}')
+    return (f"The picture for {where} couldn't be downloaded (the picture site refused or timed out), so it shows without "
+            f"one — give it again with action=edit, {fix} (a file_id, a URL or {{\"stock\": \"words\"}}).")
 
 
 async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
@@ -1516,7 +2308,10 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
                 return name, spec.get("credit")
             return None, None
         try:
-            r = await imgs.resolve(spec, aspect=W / H, max_px=max(W, H))
+            # a saját fotó vágatlanul jön (a builder dönt: kitölti a keretet, vagy egészében mutatja — fit); a stock- és
+            # AI-kép a keret arányára vágva, mint eddig
+            own = _own_picture(spec)
+            r = await imgs.resolve(spec, aspect=None if own else W / H, max_px=int(max(W, H) * 1.6) if own else max(W, H))
         except Exception as e:
             log.warning("videókép %s nem jött le (%s): %s", i, spec, e)
             return None, None
@@ -1528,12 +2323,26 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
     async def guarded(i, s):
         async with sem:
             return await one(i, s)
-    res = await asyncio.gather(*(guarded(i, s) for i, s in enumerate(specs)))
-    for name, credit in res:
-        names.append(name)
-        per.append(credit if name else None)
+    # a képsor (lista) elemei külön fájlok: picture-02.jpg, picture-02b.jpg… — a hely maga lista marad
+    flat = [(i, j, sp) for i, slot in enumerate(specs) for j, sp in enumerate(_slots(slot))]
+    res = await asyncio.gather(*(guarded(i if j == 0 else 1000 * (j + 1) + i, sp) for i, j, sp in flat))
+    by_slot: dict[int, list[tuple[Optional[str], Optional[str]]]] = {}
+    for (i, j, _), (name, credit) in zip(flat, res):
+        if name and j:
+            new = f"picture-{i + 1:02d}{chr(ord('a') + j)}{Path(name).suffix}"
+            shutil.move(str(workdir / name), workdir / new)
+            name = new
+        by_slot.setdefault(i, []).append((name, credit))
         if credit and credit not in credits:
             credits.append(credit)
+    for i in range(len(specs)):
+        got = [(nm, cr) for nm, cr in by_slot.get(i, []) if nm]
+        if isinstance(specs[i], list) and len(got) > 1:
+            names.append([nm for nm, _ in got])
+            per.append([cr for _, cr in got])
+        else:
+            names.append(got[0][0] if got else None)
+            per.append(got[0][1] if got else None)
     return names, credits, per
 
 
@@ -1544,6 +2353,19 @@ from app.tools.images import PICK_N as _PICK_N, contact_sheet as _contact_sheet,
 async def _choose_stock(jobs: list[tuple[int, str, str]]) -> dict[int, dict[str, Any]]:
     from app.tools import images as imgs
     return await imgs.choose_stock(jobs, medium="video")
+
+
+async def _pick_stock(specs: list[Any], ctx: Callable[[int], str]) -> None:
+    """A stock-keresések jelöltjeiből a látómodell választ (egy kép nem kerül két helyre) — a képsorok elemeire is."""
+    jobs = [((i, j), sp["stock"], ctx(i)) for i, slot in enumerate(specs) for j, sp in enumerate(_slots(slot))
+            if isinstance(sp, dict) and sp.get("stock")]
+    if not jobs:
+        return
+    for (i, j), chosen in (await _choose_stock(jobs)).items():
+        if isinstance(specs[i], list):
+            specs[i][j] = chosen
+        else:
+            specs[i] = chosen
 
 
 def _title_stem(title: str) -> str:
@@ -1624,11 +2446,19 @@ async def _brand_accent(body: dict[str, Any]) -> Optional[str]:
 async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, mode: str, text: str, title_hint: str,
                      og_image: Optional[str], site: str, doc_pics: list[str]) -> dict[str, Any]:
     pictures = (body.get("pictures") or "stock").lower()
+    if pictures == "ai":
+        from app import tenancy
+        if tenancy.client_makes_images.get():
+            raise ValueError(tenancy.CLIENT_IMAGE_MSG)
     body = {**body, "accent": await _brand_accent(body)}
     pre_v: list[str] = []
     pre_f: list[str] = []
+    alpha_kinds(body.get("alpha"))           # a hibás érték még a munka előtt derüljön ki
+    duration_mode(body.get("duration_mode"), body.get("duration"))
+    lnotes: list[str] = []
+    layers = layers_from(body.get("layers"), text, lnotes)      # időkódos rétegek a fő idővonalon (a forrás számaival)
     if body.get("scenes"):                  # a kliens jelenetterve: nem tervezünk újra, pontosan ez lesz
-        return await _make_from_scenes(body, step, fmt, text, title_hint, site, pictures)
+        return await _make_from_scenes(body, step, fmt, text, title_hint, site, pictures, layers, lnotes)
     if len(text) < 20:
         raise ValueError("Give the video something to say — an article link, a document, or a few sentences of your own.")
     keep = mode == "text"
@@ -1668,6 +2498,9 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
             specs.append(mine[i % len(mine)])
         elif i == 0 and og_image:
             specs.append({"url": og_image, "credit": site or None})
+        elif pictures == "ai":                     # AI-fotó a jelenet keresőszavaiból (webes felület, kreditért)
+            specs.append(_ai_photo((_clean(story.get("image_query"), 60) or story["scenes"][-1]["image_query"]) if i == 0
+                                   else story["scenes"][i - 1]["image_query"] or story["scenes"][i - 1]["headline"]))
         elif pictures != "mine":
             # a címkártya saját képet kap (ne az 1. jelenetét); ha a terv nem adott, az utolsó jelenet keresőszava
             q = (_clean(story.get("image_query"), 60) or story["scenes"][-1]["image_query"]) if i == 0 \
@@ -1687,22 +2520,23 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
                          "(title card + scenes). Use scenes=[…] with an image per scene, or fewer pictures.")
 
     # a stock-keresések jelöltjeiből a látómodell választ (és egy kép nem kerül két jelenetbe)
-    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
-                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
-    if stock_jobs:
-        for i, chosen in (await _choose_stock(stock_jobs)).items():
-            specs[i] = chosen
+    await _pick_stock(specs, lambda i: story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
 
+    story["layers"] = layers
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": keep,
-            "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language")}
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "music": body.get("music"),
+            "keep_wording": keep,
+            "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language"),
+            "requested": float(dur) if dur else None, "duration_mode": body.get("duration_mode"), "alpha": body.get("alpha"),
+            "layer_source": text}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text,
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
-                           pre_verified=pre_v, pre_findings=pre_f)
+                           pre_verified=pre_v, pre_findings=pre_f, layer_notes=lnotes)
 
 
 async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt: str, text: str, title_hint: str,
-                            site: str, pictures: str) -> dict[str, Any]:
+                            site: str, pictures: str, layers: Optional[list[dict[str, Any]]] = None,
+                            lnotes: Optional[list[str]] = None) -> dict[str, Any]:
     """A kliens kész jelenetterve (scenes): szöveg, kép, ábra, hossz jelenetenként — pontosan ez készül el.
     Az ábrák számai a forrásban (text), vagy ha az nincs, a jelenetek saját szövegében legyenek."""
     raw = [s for s in body.get("scenes") or [] if isinstance(s, dict)][:20]
@@ -1714,51 +2548,72 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
     story = {"title": _clean(body.get("title") or title_hint or scenes[0].get("headline") or "Video", 70, "Title"),
              "kicker": _clean(body.get("kicker") or site, 28, "Kicker"), "image_query": "", "scenes": scenes,
              "end": {"title": _clean(body.get("end_title") or "", 60, "End title"),
-                     "subtitle": _clean(body.get("end_subtitle") or "", 90, "End subtitle")}}
+                     "subtitle": _clean(body.get("end_subtitle") or "", 90, "End subtitle")}, "layers": layers or []}
     pre_v = [f"Your scene plan: {len(scenes)} scenes ({', '.join(sc['id'] for sc in scenes)}), used as given."]
     step(2, 5, "finding pictures")
     specs: list[Any] = [None] * (len(scenes) + 1)
-    need = [k for k, s in enumerate(raw) if not s.get("image") and pictures != "none"]
+    # a saját hátteret („background”) kérő jelenet kép nélkül marad — annak nem kell keresőszó sem
+    need = [k for k, s in enumerate(raw) if not (s.get("image") or s.get("images") or s.get("background"))
+            and pictures not in ("none", "ai")]
+    pre_f: list[str] = []
     if need and any(not scenes[k].get("image_query") for k in need):
-        qs = await _queries_for([scenes[k] for k in need])
-        for k, q in zip(need, qs):
-            scenes[k]["image_query"] = scenes[k].get("image_query") or q
+        from app import tenancy
+        if tenancy.client_makes_images.get():
+            # MCP: a kereső szavakat a kliens is meg tudja adni — a szerver modellje nem fut rá (nem AI-lépés)
+            miss = [scenes[k]["id"] for k in need if not scenes[k].get("image_query")]
+            pre_f.append(f"Scene{'s' if len(miss) > 1 else ''} {', '.join(miss)} had no image and no image_query — the stock "
+                         "search used the headline. Give each such scene \"image_query\" (2–4 plain English words) or its own "
+                         "image for better pictures.")
+        else:
+            qs = await _queries_for([scenes[k] for k in need])
+            for k, q in zip(need, qs):
+                scenes[k]["image_query"] = scenes[k].get("image_query") or q
     for k, s in enumerate(raw):
-        if s.get("image") and pictures != "none":
-            specs[k + 1] = _img_spec(s["image"])
+        if (s.get("images") or s.get("image")) and pictures != "none":
+            specs[k + 1] = _img_spec(s.get("images") or s["image"])        # a lista: a jelenet hátterei egymás után
+        elif s.get("background"):
+            specs[k + 1] = None
+        elif pictures == "ai":
+            specs[k + 1] = _ai_photo(scenes[k].get("image_query") or scenes[k]["headline"])
         elif pictures not in ("none", "mine"):
             specs[k + 1] = {"stock": scenes[k].get("image_query") or scenes[k]["headline"]}
     if body.get("title_image") and pictures != "none":
         specs[0] = _img_spec(body["title_image"])
+    elif pictures == "ai":
+        specs[0] = _ai_photo(scenes[0].get("image_query") or story["title"])
     elif pictures != "none":
-        specs[0] = specs[1] if specs[1] and not (isinstance(specs[1], dict) and specs[1].get("stock")) else \
+        specs[0] = _slots(specs[1])[0] if specs[1] and not (isinstance(specs[1], dict) and specs[1].get("stock")) else \
             {"stock": scenes[0].get("image_query") or story["title"]}
-    pre_v.append("Pictures: title card ← " + ("your title_image" if body.get("title_image") else "scene s1's picture" if specs[0] is specs[1] else "stock")
-                 + "; " + ", ".join(f"{sc['id']} ← {'yours' if raw[k].get('image') else 'stock' if specs[k + 1] else 'none'}"
-                                    for k, sc in enumerate(scenes)))
-    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else scenes[i - 1]["headline"])
-                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
-    if stock_jobs:
-        for i, chosen in (await _choose_stock(stock_jobs)).items():
-            specs[i] = chosen
+    kind_of = lambda k: ("yours" if (raw[k].get("image") or raw[k].get("images")) else "AI photo" if pictures == "ai"   # noqa: E731
+                         else "stock" if specs[k + 1] else "none") + (f" ×{len(specs[k + 1])}" if isinstance(specs[k + 1], list) else "")
+    pre_v.append("Pictures: title card ← " + ("your title_image" if body.get("title_image") else "AI photo" if pictures == "ai"
+                                              else "scene s1's picture" if specs[0] is _slots(specs[1])[0] else "stock")
+                 + "; " + ", ".join(f"{sc['id']} ← {kind_of(k)}" for k, sc in enumerate(scenes)))
+    await _pick_stock(specs, lambda i: story["title"] if i == 0 else scenes[i - 1]["headline"])
     dur = body.get("duration")
     total = float(min(max(float(dur), 10), 180)) if dur else None
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": False,
-            "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language")}
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "music": body.get("music"),
+            "keep_wording": False,
+            "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language"),
+            "requested": float(dur) if dur else None, "duration_mode": body.get("duration_mode"), "alpha": body.get("alpha"),
+            "layer_source": text}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text or source,
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
-                           pre_verified=pre_v, pre_findings=[], scene_plan=True)
+                           pre_verified=pre_v, pre_findings=pre_f, scene_plan=True, layer_notes=lnotes)
 
 
-def _script_report(out: str, source: str) -> list[str]:
-    """A build kimenetéből: a szkriptjelenetek hibái és a szövegeikben a forrásban nem szereplő számok."""
+def _script_report(out: str, source: str, layer_ids: Optional[set[str]] = None) -> list[str]:
+    """A build kimenetéből: a szkriptes jelenetek és rétegek hibái, és a szövegeikben a forrásban nem szereplő számok."""
     nums, found = _text_numbers(source), []
+    who = lambda sid: f"Layer {sid}" if sid in (layer_ids or set()) else f"Scene {sid}"
     for ln in out.splitlines():
         if ln.startswith("SCRIPT_ERROR "):
             sid, _, msg = ln[13:].partition(": ")
-            found.append(f"Scene {sid}: the script failed — {msg[:300]}. The scene shows only its picture and title; "
-                         f"fix the code (chart.code) with action=edit.")
+            found.append(f"{who(sid)}: the script failed — {msg[:300]}. "
+                         + ("The layer shows nothing; fix its code (chart.code) with action=edit, changes.layers."
+                            if sid in (layer_ids or set()) else
+                            "The scene shows only its picture and title; fix the code (chart.code) with action=edit."))
         elif ln.startswith("SCRIPT_TEXT "):
             sid, _, raw = ln[12:].partition(" ")
             try:
@@ -1766,8 +2621,8 @@ def _script_report(out: str, source: str) -> list[str]:
             except ValueError:
                 continue
             bad = sorted({t for t in texts for x in _text_numbers(t) if x not in nums})
-            if bad:
-                found.append(f"Scene {sid}: the script shows numbers that aren't in the source: "
+            if bad and (source.strip() or sid not in (layer_ids or set())):       # forrás nélküli réteg: nem ellenőrzött
+                found.append(f"{who(sid)}: the script shows numbers that aren't in the source: "
                              + "; ".join(f"“{b[:60]}”" for b in bad[:4]) + ".")
     return found
 
@@ -1783,13 +2638,25 @@ def _without_runtime(story: dict[str, Any]) -> dict[str, Any]:
     return clean(story)
 
 
-async def _place_on_maps(story: dict[str, Any], fmt: str) -> tuple[list[str], list[str]]:
-    """A saját grafikák térképei és földrajzi elemei: helynév → lat/lon → a képkocka arányában (x, y, from, to,
-    points); a térkép rétegei az elem "_groups" kulcsába (a mentett forgatókönyvbe nem kerül). → (kreditek, hibák)"""
+def _gfx_holders(story: dict[str, Any], frame: tuple[int, int, float]) -> list[tuple[str, dict[str, Any], int, int]]:
+    """Ahol ábra lehet: a jelenetek (a képkocka méretében) és a rétegek (a saját kompozíciójuk méretében) →
+    [(név a hibaüzenethez, a jelenet / réteg, W, H)]."""
+    W, H, safe = frame
+    out = [(f"Scene {sc.get('id') or f's{i + 1}'}", sc, W, H) for i, sc in enumerate(story.get("scenes") or [])]
+    for ly in story.get("layers") or []:
+        if ly.get("chart"):
+            w, h = layer_size(ly, W, H, safe)
+            out.append((f"Layer {ly['id']}", ly, w, h))
+    return out
+
+
+async def _place_on_maps(story: dict[str, Any], frame: tuple[int, int, float]) -> tuple[list[str], list[str]]:
+    """A saját grafikák térképei és földrajzi elemei (jelenetek és rétegek): helynév → lat/lon → a képkocka (rétegnél a
+    réteg kompozíciója) arányában (x, y, from, to, points); a térkép rétegei az elem "_groups" kulcsába (a mentett
+    forgatókönyvbe nem kerül). frame = (W, H, a rétegek alsó határa). → (kreditek, hibák)"""
     from app.tools import geo as geomod
-    W, H = FORMATS[fmt]
     credits, problems = [], []
-    for si, sc in enumerate(story.get("scenes") or []):
+    for sid, sc, W, H in _gfx_holders(story, frame):
         ch = sc.get("chart") or {}
         if ch.get("type") != "graphic":
             continue
@@ -1798,9 +2665,8 @@ async def _place_on_maps(story: dict[str, Any], fmt: str) -> tuple[list[str], li
         maps = [e for e in els if e.get("shape") == "map"]
         if not refs and not maps:
             continue
-        sid = sc.get("id") or f"s{si + 1}"
         if not maps:
-            problems.append(f"Scene {sid}: elements placed by place name need a map element (shape \"map\") — left out.")
+            problems.append(f"{sid}: elements placed by place name need a map element (shape \"map\") — left out.")
             for e in refs:
                 e["_skip"] = True
             continue
@@ -1814,7 +2680,7 @@ async def _place_on_maps(story: dict[str, Any], fmt: str) -> tuple[list[str], li
                     g = await geomod.geocode(q["place"])
                     coords[q["place"]] = (g["lat"], g["lon"])
                 except Exception as ex:
-                    problems.append(f"Scene {sid}: “{q['place']}” — {ex}.")
+                    problems.append(f"{sid}: “{q['place']}” — {ex}.")
                     coords[q["place"]] = None          # type: ignore[assignment]
             return coords[q["place"]]
         for e in refs:                                   # előbb minden hely: a térkép mindet mutassa
@@ -1832,7 +2698,7 @@ async def _place_on_maps(story: dict[str, Any], fmt: str) -> tuple[list[str], li
         try:
             built = await geomod.build(m.get("map") or {}, pts, box, W, H, fit=fit)
         except Exception as ex:
-            problems.append(f"Scene {sid}: the map could not be made — {ex}.")
+            problems.append(f"{sid}: the map could not be made — {ex}.")
             for e in refs + maps:
                 e["_skip"] = True
             continue
@@ -1862,7 +2728,8 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
     parent_assets = assets_of(parent) if parent else {}
     names, lotties, credits = [], [], []
     n = 0
-    for si, sc in enumerate(story.get("scenes") or []):
+    holders = list(story.get("scenes") or []) + [ly for ly in story.get("layers") or [] if ly.get("chart")]   # jelenetek és rétegek
+    for si, sc in enumerate(holders):
         ch = sc.get("chart") or {}
         if ch.get("type") != "graphic":
             continue
@@ -1891,7 +2758,7 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
                     if isinstance(src, dict) and src.get("url"):
                         sid = src["url"]
                     if isinstance(src, dict) and src.get("search"):      # a LottieFiles könyvtárából, a látómodell választ
-                        data, cand = await lot.pick(str(src["search"]), sc.get("headline") or "")
+                        data, cand = await lot.pick(str(src["search"]), sc.get("headline") or sc.get("text") or ch.get("title") or "")
                         e["src"] = {"url": cand["json_url"]}
                         e["credit"] = cand["credit"]
                         credits.append(cand["credit"])
@@ -1930,6 +2797,35 @@ def fit_to_narration(story: dict[str, Any], clips: list) -> dict[str, Any]:
     return out
 
 
+def fit_to_length(story: dict[str, Any], clips: list, total: float) -> tuple[dict[str, Any], float]:
+    """Fix hossz (duration_mode=fixed): minden jelenet legalább a narrációja + 1,4 s (a kliens saját jelenethossza is
+    minimum), a kért hosszig maradó idő a többi jelenet közt oszlik meg arányosan (a jelenet tovább áll, a hang az
+    elején szól) — így a videó a kért hosszú. → (a forgatókönyv másolata, ennyi másodperccel hosszabb a narráció a
+    kértnél; 0, ha belefér)."""
+    out = json.loads(json.dumps(story))
+    scenes = out.get("scenes") or []
+    n = len(scenes)
+    if not n:
+        return out, 0.0
+    Tt, Te = _cards(total)
+    room = total - Tt - Te + XFADE * (n + 1)
+    need, flex = [], []
+    for i, sc in enumerate(scenes):
+        secs = clips[i + 1][1] if i + 1 < len(clips) else 0.0
+        given = float(sc["duration"]) if isinstance(sc.get("duration"), (int, float)) and sc["duration"] > 0 else None
+        need.append(max(given or 0.0, secs + 1.4 if secs else (given or 3.0)))
+        flex.append(given is None)
+    spare = room - sum(need)
+    if spare > 0:
+        grow = [i for i in range(n) if flex[i]] or list(range(n))
+        wsum = sum(need[i] for i in grow) or 1.0
+        for i in grow:
+            need[i] += spare * need[i] / wsum
+    for sc, d in zip(scenes, need):
+        sc["duration"] = round(d, 3)
+    return out, round(max(0.0, -spare), 2)
+
+
 def narration_segments(D: dict[str, Any], clips: list) -> list[tuple[float, Path]]:
     """A narráció darabjai az idővonalon: a cím a címkártyán (ha belefér), a jelenetek a saját elejükön."""
     segs: list[tuple[float, Path]] = []
@@ -1959,18 +2855,168 @@ async def _narrate(story: dict[str, Any], opts: dict[str, Any], work: Path) -> t
     return key, clips, None
 
 
+def duration_mode(mode: Any, requested: Optional[float]) -> str:
+    """fixed = a kért hossz (a jelenetek kitartanak, a narráció gyorsabban olvas — ésszerű határig) | narration = a hang
+    szabja a hosszt. Alapból fixed, ha kértek hosszt, különben narration."""
+    m_ = str(mode or "").strip().lower()
+    if m_ in ("", "auto", "none"):
+        return "fixed" if requested else "narration"
+    if m_ not in ("fixed", "narration"):
+        raise ValueError(f"duration_mode: fixed (the asked duration) | narration (the voice sets the length) — not {mode!r}.")
+    return m_
+
+
+def _lang_of(text: str) -> str:
+    """A számformázás és a kiegészítő címkék nyelve (hu | en): a gyakori szavakból; ha a szöveg ahhoz túl rövid, az ékezet
+    dönt. (10-17: egy „Kovács” név miatt az angol ábra „41,2”-t és „Egyéb”-et írt — az ékezet magában nem magyar.)"""
+    from app.tools import narration
+    from app.tools.infographic import _HU
+    t = text or ""
+    words = re.findall(r"[^\W\d_]+", t.lower())
+    hu = sum(w in narration._STOPSETS["hu"] for w in words) + 2 * sum(t.count(c) for c in "őűŐŰ")
+    en = sum(w in narration._STOPSETS["en"] for w in words)
+    if hu or en:
+        return "hu" if hu > en else "en"
+    return "hu" if _HU.search(t) else "en"
+
+
+def _layer_text_all(story: dict[str, Any]) -> str:
+    return " ".join(_own_text({k: v for k, v in ly.items() if k not in ("id", "type", "at", "dur", "position", "anim")})
+                    for ly in story.get("layers") or [])
+
+
+def _kept_layer_notes(spec: dict[str, Any], layers: list[dict[str, Any]]) -> list[str]:
+    """A mentett réteg-jegyzetek közül csak a VÁLTOZATLAN rétegeké öröklődik (a módosított réteg újra ellenőrződik)."""
+    old = {ly.get("id"): ly for ly in (spec.get("story") or {}).get("layers") or []}
+    same = {ly["id"] for ly in layers if old.get(ly["id"]) == ly}
+    return [n for n in spec.get("layer_notes") or [] if (m_ := re.match(r"Layer (\S+?):", n)) and m_.group(1) in same]
+
+
+def _split_notes(notes: list[str]) -> tuple[list[str], list[str]]:
+    """⚠ = figyelmeztetés (findings), a többi az igazolt (verified)."""
+    return [n for n in notes if not n.startswith("⚠ ")], [n[2:] for n in notes if n.startswith("⚠ ")]
+
+
+async def _build(D: dict[str, Any], work: Path, lotties: list[tuple[str, str]], out_name: str = "project.ecproj") -> str:
+    """D + video_builder.jsx → .ecproj (effectcraft-cli script). A Lottie-k előbb beimportálva (külön kompozíció, a
+    szkript erre a projektre épít); saját szkriptes ábra (jelenet vagy réteg) → csak zárkában."""
+    (work / "build.jsx").write_text("var D = " + json.dumps(D, ensure_ascii=False) + ";\n" + BUILDER_JS.read_text("utf-8"), "utf-8")
+    base = ["base.ecproj"] if lotties and (work / "base.ecproj").exists() else []
+    if not base:
+        for lf, _nm in lotties:
+            args = ["exec", "file.importLottie", "--params", json.dumps({"path": lf})]
+            args += ["--project", "base.ecproj", "--save"] if base else ["--empty", "--save-as", "base.ecproj"]
+            await _run(*args, cwd=work, timeout=120)
+            base = ["base.ecproj"]
+    scripted = any((sc.get("chart") or {}).get("code") for sc in D.get("scenes") or []) or any(ly.get("code") for ly in D.get("layers") or [])
+    async with _render_gate():
+        return await _run("script", "build.jsx", *base, "--save-as", out_name, cwd=work, untrusted=scripted,
+                          timeout=300 if scripted else None)
+
+
+def alpha_kinds(alpha: Any) -> list[str]:
+    """alpha: true | "mov" → ProRes 4444 .mov · "webm" → WebM VP9 · "both" · false/None → nincs."""
+    if alpha in (None, False, "", "false", "no", "none", "off", 0):
+        return []
+    a = "mov" if alpha is True or str(alpha).lower() in ("true", "yes", "1", "prores", "mov") else str(alpha).lower()
+    kinds = {"mov": ["mov"], "webm": ["webm"], "both": ["mov", "webm"]}.get(a)
+    if kinds is None:
+        raise ValueError(f"alpha: true (ProRes 4444 .mov) | \"webm\" (WebM VP9) | \"both\" — not {alpha!r}.")
+    return kinds
+
+
+async def _alpha_proof(path: Path, at: float) -> dict[str, Any]:
+    """Valóban átlátszó-e a kimenet: a pixelformátum (ffprobe; WebM-nél az alpha_mode jelölés) és egy dekódolt kocka
+    alfája — hol teljesen átlátszó, hol látszik grafika."""
+    from app.convert.engines import run
+    info = await probe_movie(path)
+    pf = info.get("pix_fmt") or ""
+    tagged = bool(re.search(r"yuva|rgba|argb|bgra|abgr|gbrap|^ya", pf)) or info.get("alpha_mode")
+    png = path.with_name(path.stem + "-alpha.png")
+    clear = shown = None
+    try:
+        dec = ["-c:v", "libvpx-vp9"] if path.suffix.lower() == ".webm" else []        # a beépített VP9-dekóder eldobja az alfát
+        await run("ffmpeg", "-v", "error", *dec, "-ss", f"{max(0.0, at):.2f}", "-i", str(path), "-frames:v", "1",
+                  "-vf", "format=rgba", "-y", str(png), timeout=120)
+        import numpy as np
+        from PIL import Image
+        a = np.asarray(Image.open(png).convert("RGBA"))[:, :, 3]
+        clear, shown = float((a < 8).mean()), float((a >= 8).mean())
+    except Exception as e:
+        log.info("alfa-kocka nem olvasható (%s): %s", path.name, e)
+    finally:
+        png.unlink(missing_ok=True)
+    return {"pix_fmt": pf, "codec": info.get("codec"), "alpha_mode": bool(info.get("alpha_mode")), "at": round(at, 2),
+            "transparent": None if clear is None else round(clear, 3), "graphics": None if shown is None else round(shown, 3),
+            "ok": bool(tagged) and (clear is None or (clear > 0.01 and (shown or 0) > 0.0005))}
+
+
+async def _render_alpha(D: dict[str, Any], work: Path, lotties: list[tuple[str, str]], pid: str, stem: str,
+                        group: Optional[str], kinds: list[str], probe_at: float) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """Átlátszó, csak grafikás változat: ugyanaz a builder D.alpha-val (a felvétel, a képek, a sötétítés és a hang nélkül)
+    → ProRes 4444 .mov és/vagy WebM VP9 alfával. → (fájlok, igazolt, gondok)"""
+    await _build({**D, "alpha": True}, work, lotties, "alpha.ecproj")
+    files, verified, findings = [], [], []
+    for ext in kinds:
+        out = work / f"alpha.{ext}"
+        args = ["render", "--project", "alpha.ecproj", "--comp", "Video", "--out", out.name, "--channels", "rgba", "--audio", "off", "--json"]
+        args += ["--format", "prores", "--prores", "4444"] if ext == "mov" else ["--format", "webm", "--webm-codec", "vp9"]
+        async with _render_gate():
+            await _run(*args, cwd=work)
+        if not out.exists():
+            findings.append(f"The transparent .{ext} render produced no file — try again, or use alpha=\"{'webm' if ext == 'mov' else 'mov'}\".")
+            continue
+        proof = await _alpha_proof(out, probe_at)
+        fid = new_file_id(ext)
+        shutil.move(str(out), output_path(fid))
+        what = "ProRes 4444 .mov" if ext == "mov" else "WebM VP9"
+        write_meta(fid, label=f"{stem} – transparent graphics.{ext}", operation="video render", source_file_id=pid,
+                   extra={"group": group, "variant": "alpha", "alpha": proof})
+        files.append({**_file_entry(fid), "format": what, "pix_fmt": proof["pix_fmt"], "alpha": proof["ok"]})
+        seen = (f"; at {proof['at']:.1f} s {proof['transparent'] * 100:.0f}% of the frame is fully transparent, "
+                f"{proof['graphics'] * 100:.1f}% shows graphics") if proof["transparent"] is not None else ""
+        tag = proof["pix_fmt"] + (", alpha_mode=1" if proof["alpha_mode"] else "")
+        if proof["ok"]:
+            verified.append(f"Transparent graphics: {what} ({tag}){seen}.")
+        else:
+            findings.append(f"The transparent {what} may not be transparent ({tag}{seen}). Open it in your editor to check, "
+                            f"or try alpha=\"{'webm' if ext == 'mov' else 'mov'}\".")
+    return files, verified, findings
+
+
+def _probe_time(D: dict[str, Any], rows: list[dict[str, Any]]) -> float:
+    """Egy pillanat, amikor grafika látszik (az alfa-ellenőrzéshez): az első réteg közepe, különben az első jelenet vége."""
+    if rows:
+        r_ = rows[0]
+        return r_["start"] + min(2.0, (r_["end"] - r_["start"]) / 2)
+    tl = D.get("timeline") or []
+    return scene_still(tl, 1 if len(tl) > 2 else 0) if tl else D.get("total", 2) / 2
+
+
 async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any], *, chart_notes: list[str],
                     source_text: str, source_file_id: Optional[str], step: Callable[..., None], render: bool = True,
                     parent: Optional[str] = None, label_stem: Optional[str] = None, operation: str = "video",
                     pre_verified: Optional[list[str]] = None, pre_findings: Optional[list[str]] = None,
-                    scene_plan: bool = False) -> dict[str, Any]:
+                    scene_plan: bool = False, layer_notes: Optional[list[str]] = None) -> dict[str, Any]:
     """Forgatókönyv + képleírások → .ecproj (+ MP4). A make és az edit közös útja; parent = a szerkesztett projekt
     (a képei és a hangja {"asset": név} hivatkozással, letöltés nélkül jönnek át)."""
+    from app.tools import diagrams
+    diagrams.prepare(story, opts.get("accent"))       # szereplő → szín: a projekt regisztere (story["actors"])
     fmt, total = opts["fmt"], opts.get("total")
+    W, H = FORMATS[fmt]
+    requested = opts.get("requested")
+    mode = duration_mode(opts.get("duration_mode"), requested)
+    kinds = alpha_kinds(opts.get("alpha"))
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         names, credit_list, per_credit = await _materialize_images(specs, fmt, work, parent)
-        map_credits, gfx_findings = await _place_on_maps(story, fmt)
+        map_credits, gfx_findings = await _place_on_maps(story, (W, H, _caption_top(W, H)))
+        # a kért, de le nem töltött kép (pl. a forrás 429-cel elutasította) nem lehet „ok”: megnevezzük a helyét
+        gfx_findings = [_lost_picture(i, story) for i, (sp, nm) in enumerate(zip(specs, names)) if sp and not nm] + gfx_findings
+        gfx_findings += [f"{len(_slots(sp)) - len(nm)} of the {len(_slots(sp))} pictures for "
+                         f"{'the title card' if i == 0 else 'scene ' + str(story['scenes'][i - 1].get('id'))} couldn't be downloaded — "
+                         "the others are shown." for i, (sp, nm) in enumerate(zip(specs, names))
+                         if isinstance(sp, list) and isinstance(nm, list) and len(nm) < len(sp)]
         gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
         credit_list = credit_list + [c for c in gfx_credits + map_credits if c not in credit_list]
         voice = music = None
@@ -1981,6 +3027,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             kept = opts.get(f"{base}_asset")          # szerkesztés: a szülőprojekt hangja marad
             if base == "voice" and kept == NARRATION_ASSET:
                 kept = None                           # …kivéve az AI-narrációt: az a (módosult) szövegből újra készül
+            if base == "music" and _builtin_music(opts):
+                kept = None                           # …és a beépített zenét: az a tárból, az új hosszra készül újra
             if not fid and kept and parent_assets.get(kept):
                 shutil.copyfile(crafts.existing(parent_assets[kept]), work / kept)
                 if base == "voice":
@@ -2000,11 +3048,32 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                     music = f"music.{ext}"
         if voice:
             voice_s = await _probe_duration(work, voice)
-        narr_key, narr_clips, narr_note = None, [], None
+        narr_key, narr_clips, narr_note, speed = None, [], None, 1.0
         if not voice and str(opts.get("narration") or "ai").lower() not in _NO_NARRATION:
             step(3, 5, "recording the AI narration")
             narr_key, narr_clips, narr_note = await _narrate(story, opts, work)
-        story_c = fit_to_narration(story, narr_clips) if narr_clips else story
+        why = None                                    # miért tér el a hossz a kérttől (a check mondja ki)
+        if narr_clips and mode == "fixed" and total:
+            story_c, over = fit_to_length(story, narr_clips, total)
+            if over > 0.5:                            # a narráció nem fér bele: gyorsabban olvas (legfeljebb 1,2×), újra illeszt
+                said = sum(s_ for _, s_ in narr_clips[1:]) or 1.0
+                speed = round(min(1.2, said / max(said - over, 1e-6)), 2)
+                k2, c2, _n2 = await _narrate(story, {**opts, "narration_speed": speed}, work)
+                if c2:
+                    narr_key, narr_clips = k2, c2
+                    story_c, over = fit_to_length(story, narr_clips, total)
+                else:
+                    speed = 1.0
+                if over > 0.5:
+                    why = (f"fixed mode: the narration needs about {over:.0f} s more even read {speed:g}× faster — shorten the "
+                           "captions, or ask for a longer duration")
+        else:
+            story_c = fit_to_narration(story, narr_clips) if narr_clips else story
+        c_total, c_voice = total, voice_s
+        if voice_s and mode == "fixed" and total:    # saját hang + fix hossz: a kért hossz (ha a hang belefér)
+            c_total, c_voice = max(float(total), voice_s + 1.0), None
+            if voice_s + 1.0 > total + 0.5:
+                why = f"fixed mode: your voice file is {voice_s:.0f} s long"
         anim = any(c.startswith("Animation ") for c in credit_list)
         label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else "Pictures: "
         credits = (label + " · ".join(credit_list)) if credit_list else ""     # teljes (linkekkel): a projekt metájába
@@ -2013,9 +3082,11 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         on_screen = (label + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
         kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
-        focus = {nm: await asyncio.to_thread(_focus, work / nm) for nm in names if nm} if kb != "off" else {}
-        D = compose(story_c, fmt=fmt, total=total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
-                    voice=voice, voice_s=voice_s, music=music)
+        focus = {nm: await asyncio.to_thread(_focus, work / nm) for slot in names for nm in _slots(slot) if nm}
+        fits = _auto_fits(names, specs, work, W / H)
+        D = compose(story_c, fmt=fmt, total=c_total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
+                    fits=fits,
+                    voice=voice, voice_s=c_voice, music=music)
         if narr_clips:                   # a darabok a jelenetek elejére, egy sávban, a videó teljes hosszára
             from app.tools import narration
             segs = narration_segments(D, narr_clips)
@@ -2023,62 +3094,77 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 await narration.track(segs, D["total"], work / NARRATION_ASSET)
                 voice = NARRATION_ASSET
                 D["audio"].update(voice=voice, musicDb=-20)
-                pre_verified = list(pre_verified or []) + [
-                    f"AI narration ({narr_key}): {len(segs)} part(s) read aloud — each scene lasts as long as its narration."]
+                how = ("each scene lasts as long as its narration" if mode != "fixed" else
+                       f"read {speed:g}× faster to come close to the asked {total:.0f} s (it doesn't fit — see the findings)" if why else
+                       f"fixed length: the scenes hold to fill {total:.0f} s" + (f", read {speed:g}× faster to fit" if speed != 1.0 else ""))
+                pre_verified = list(pre_verified or []) + [f"AI narration ({narr_key}): {len(segs)} part(s) read aloud — {how}."]
         if narr_note:
             pre_findings = list(pre_findings or []) + [narr_note]
+        music, track, m_v, m_f = await _music_under(opts, work, D["total"], work / voice if voice else None, music,
+                                                    story.get("title") or "")
+        if track:
+            D["audio"].update(music=track, musicDb=0 if track != music else (-20 if voice else -10))
+        pre_verified, pre_findings = list(pre_verified or []) + m_v, list(pre_findings or []) + m_f
+        # időkódos rétegek a fő idővonalon (abszolút időben, a narráció után kialakult hosszon)
+        lang = _lang_of(" ".join([story.get("title") or ""] + [x.get("caption") or "" for x in story.get("scenes") or []]))
+        D["layers"], layer_rows, layer_problems = layer_comps(story.get("layers") or [], W, H, D["total"], lang, D["accent"],
+                                                              _caption_top(W, H), _scene_zones(D))
         # előre megrajzolt rétegek (képkockánként effekt helyett): sötét átmenet a cím/jelenet alá, elmosott zárókép
-        W, H = FORMATS[fmt]
         _shade_png(work / "shade-title.png", W, H, 0.28, 0.80, 0.92)
         _shade_png(work / "shade-scene.png", W, H, 0.34, 0.84, 0.90)
         extra = ["shade-title.png", "shade-scene.png"]
         if names and names[0]:
-            _blurred(work / names[0], work / "end-blur.jpg", max(W, H) * 0.018)
+            _blurred(work / _slots(names[0])[0], work / "end-blur.jpg", max(W, H) * 0.018)
             D["end"]["image"] = "end-blur.jpg"
             extra.append("end-blur.jpg")
         D["shade"] = {"title": "shade-title.png", "scene": "shade-scene.png"}
         step(3, 5, "building the timeline")
-        (work / "build.jsx").write_text("var D = " + json.dumps(D, ensure_ascii=False) + ";\n" + BUILDER_JS.read_text("utf-8"), "utf-8")
-        base = []
-        for lf, _nm in lotties:            # Lottie: előbb beimportáljuk (külön kompozíció), a szkript erre a projektre épít
-            args = ["exec", "file.importLottie", "--params", json.dumps({"path": lf})]
-            args += ["--project", "base.ecproj", "--save"] if base else ["--empty", "--save-as", "base.ecproj"]
-            await _run(*args, cwd=work, timeout=120)
-            base = ["base.ecproj"]
-        scripted = any(((x.get("chart") or {}).get("type") == "script") for x in story.get("scenes") or [])
-        async with _render_gate():
-            out = await _run("script", "build.jsx", *base, "--save-as", "project.ecproj", cwd=work,
-                             untrusted=scripted, timeout=300 if scripted else None)
-        script_findings = _script_report(out, source_text or "") if scripted else []
+        out = await _build(D, work, lotties)
+        scripted = any(((x.get("chart") or {}).get("type") == "script") for x in (story.get("scenes") or []) + (story.get("layers") or []))
+        script_findings = _script_report(out, source_text or "", {ly["id"] for ly in story.get("layers") or []}) if scripted else []
         log.info("videó felépítve: %s", out.strip().splitlines()[-2:] if out.strip() else "")
         stem = label_stem or _title_stem(story["title"])
         pid = new_file_id("ecproj")
         shutil.copyfile(work / "project.ecproj", output_path(pid))
         from app.routes.make import _new_group
         group = _new_group()
-        info_meta = {"format": fmt, "duration": D["total"], "scenes": len(D["scenes"]), "title": story["title"]}
+        info_meta = {"format": fmt, "duration": D["total"], "scenes": len(D["scenes"]), "title": story["title"],
+                     "requested_s": requested, "duration_mode": mode, "layers": len(D["layers"])}
         # a forgatókönyv a projekt mellett: ebből szerkeszt az ügynök (edit) — képek a projekt saját médiájára hivatkozva
         def _src(sp: Any) -> Any:
             sp = sp.get("src") if isinstance(sp, dict) and sp.get("asset") else sp
             return sp if isinstance(sp, (str, dict)) else None
-        spec = {"story": _without_runtime(story), "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
-                                              for nm, cr, sp in zip(names, per_credit, specs)],
+        def _pic(nm: Any, cr: Any, sp: Any) -> Any:
+            if isinstance(nm, list):              # képsor: elemenként (a forrás a listából, ha ugyanannyi)
+                sps = _slots(sp) if isinstance(sp, list) and len(sp) == len(nm) else [None] * len(nm)
+                return [{"asset": a, "credit": c, "src": _src(x)} for a, c, x in zip(nm, cr, sps)]
+            return {"asset": nm, "credit": cr, "src": _src(sp)} if nm else None
+        spec = {"story": _without_runtime(story), "pictures": [_pic(nm, cr, sp) for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
-                         "music_asset": music, "keep_wording": bool(opts.get("keep_wording")),
+                         "music_asset": music, "music": opts.get("music") if _builtin_music(opts) else None,
+                         "keep_wording": bool(opts.get("keep_wording")),
                          "narration": narr_key or ("none" if str(opts.get("narration") or "").lower() in _NO_NARRATION else None),
-                         "narration_voice": opts.get("narration_voice"), "language": opts.get("language")},
+                         "narration_voice": opts.get("narration_voice"), "language": opts.get("language"),
+                         "requested": requested, "duration_mode": opts.get("duration_mode"), "alpha": opts.get("alpha")},
                 "source": (source_text or "")[:30000], "chart_notes": [n for n in chart_notes if not n.startswith("⚠ ")],
-                "timeline": D.get("timeline")}
+                "layer_notes": [n for n in layer_notes or [] if not n.startswith("⚠ ")],
+                "layer_source": (opts.get("layer_source") or "")[:30000],
+                "timeline": D.get("timeline"), "layer_timeline": layer_rows}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
                    extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
-        for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra + gfx_names:
+        for name in [x for slot in names for x in _slots(slot) if x] + list(dict.fromkeys(x for x in (voice, music, track) if x)) + extra + gfx_names:
             add_asset(pid, name, work / name)
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": fmt,
-                                  "duration": D["total"], "scenes": len(D["scenes"]), "captions": len(D["captions"]),
+                                  "duration": {"requested": requested, "actual": D["total"], "mode": mode},
+                                  "scenes": len(D["scenes"]), "captions": len(D["captions"]),
                                   "credits": credits or None, "story": _without_runtime(story)}
+        if D["layers"] or story.get("layers"):
+            result["layers"] = layer_listing([ly for ly in story.get("layers") or [] if ly["id"] in {r_["id"] for r_ in layer_rows}])
         if render:
             step(4, 5, "rendering the video")
-            vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"])
+            vid = await _render_staged(pid, work / "project.ecproj", stem, group=group, want_s=D["total"], requested=requested,
+                                       mode=mode, why=why)
+            result["duration"] = vid.pop("duration", None) or result["duration"]
             result["check"] = vid.pop("check", None)          # a közös check-szerződés: a feladat (a videó) ellenőrzése
             chk = result["check"]
             if chk is not None:
@@ -2091,8 +3177,10 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 if fitted:
                     chk["verified"].append(f"Fitted to their boxes: {len(fitted)} graphic text(s) set smaller, e.g. "
                                            + "; ".join(fitted[:4]) + ".")
-                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + script_findings + gfx_findings + cov_f + (
-                    [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]])
+                lay_v, lay_f = _split_notes(layer_notes or [])
+                chk["verified"] += lay_v
+                chk["findings"] = chk.get("findings", []) + list(pre_findings or []) + script_findings + gfx_findings + cov_f + lay_f \
+                    + layer_problems + ([f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]])
                 if chk["findings"] and chk.get("status") == "ok":
                     chk["status"] = "needs_check"
             # technikailag jó, tartalmilag gyanús: kevés jelenet a hosszhoz (10-12: 60 s, 1 jelenet — a szöveg nagy része kimaradt).
@@ -2113,6 +3201,16 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                         result["check"]["status"] = "needs_check"
             result["video"] = vid
             result["files"] = [result["project"], vid]
+            if kinds:
+                step(4, 5, "rendering the transparent graphics")
+                a_files, a_v, a_f = await _render_alpha(D, work, lotties, pid, stem, group, kinds, _probe_time(D, layer_rows))
+                result["alpha"] = a_files
+                result["files"] += a_files
+                if result["check"] is not None:
+                    result["check"]["verified"] += a_v
+                    result["check"]["findings"] += a_f
+                    if a_f and result["check"].get("status") == "ok":
+                        result["check"]["status"] = "needs_check"
         else:
             result["files"] = [result["project"]]
         step(5, 5, "done")
@@ -2121,6 +3219,328 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ---------- a felhasználó felvétele + időkódos rétegek (overlay) ----------
+
+FOOTAGE_EXTS = {"mp4", "mov", "webm", "m4v"}
+
+
+def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
+    """Az overlay-kérés gyors ellenőrzése a munka ELŐTT (a végpont is ezt hívja, hogy a hiba azonnal jöjjön, ne a jobból):
+    a fájl (videó, nem projekt), az alpha és a rétegek. → (file_id, kiterjesztés)"""
+    fid = str(body.get("file_id") or "").strip()
+    ext = fid.rsplit(".", 1)[-1].lower() if "." in fid else ""
+    if ext == "ecproj":
+        raise ValueError("That is a video project: add layers to it with video(action=\"edit\", file_id=…, "
+                         "changes={\"add_layers\": […]}) — overlay takes a video file (mp4, mov, webm, m4v).")
+    if ext not in FOOTAGE_EXTS:
+        raise ValueError("overlay puts graphics on your own video: give file_id = an uploaded mp4, mov, webm or m4v"
+                         + (f" (not .{ext})" if ext else "") + ". To make a video from a text, use action=\"make\".")
+    crafts.existing(fid)
+    alpha_kinds(body.get("alpha"))
+    if not body.get("layers"):
+        raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
+                         "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}].")
+    layers_from(_unsaid(body.get("layers")), body.get("text") or "", [])   # szerkezeti hiba (típus, idő, hely) most derüljön ki
+    return fid, ext
+
+
+async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """A felhasználó felvétele az alapsáv (mérete, képkocka/s-e és hangja marad — nincs 9:16-ra kényszerítés), fölötte
+    időkódos rétegek a meglévő ábra-építőkkel → .ecproj (szerkeszthető) + MP4, alpha esetén átlátszó grafika is.
+    body: {file_id, layers, text? (a forrás — a számok, idézetek ellenőrzéséhez), title?, accent?, brand?, alpha?, render?}"""
+    step = progress or (lambda *a, **k: None)
+    if not available():
+        raise RuntimeError("The video engine isn't installed on this server")
+    fid, ext = overlay_input(body)
+    step(0, 4, "reading the footage")
+    info = await probe_movie(crafts.existing(fid))
+    if info["duration"] < 1.0 or not info["width"]:
+        raise ValueError("That video is too short (under 1 s) or has no picture — give another one.")
+    tok, fit_tok = _TRUNC.set([]), _FIT.set([])
+    try:
+        notes: list[str] = []
+        raw = await said_to_times(body.get("layers"), crafts.existing(fid), notes, step, body.get("language"), new_ids=True)
+        layers = layers_from(raw, body.get("text") or "", notes)
+        if not layers:
+            raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
+                             "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}]"
+                             + (" — every layer given was left out: " + "; ".join(n[2:] for n in notes if n.startswith("⚠ ")) if notes else "") + ".")
+        from app.storage.naming import result_stem, root_name
+        base = {"asset": f"footage.{ext}", "file_id": fid, **{k: info[k] for k in ("width", "height", "fps", "duration", "audio")}}
+        if info.get("rotation") and int(info["rotation"]) % 360:
+            # telefonos felvétel elforgatás-jelöléssel: a motor a tárolt (oldalra fektetett) képet olvasná — egyszer
+            # felállítjuk (ffmpeg autorotate), és ez lesz az alapsáv
+            step(0, 4, "turning the footage upright")
+            base["media_id"], base["asset"] = await _upright(crafts.existing(fid)), "footage.mp4"
+            base["rotated"] = int(info["rotation"])
+        opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": body.get("music"),
+                "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
+                "camera": _footage_camera(body.get("camera"))}
+        return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
+                                       label_stem=result_stem(fid, "with graphics"), operation="video overlay",
+                                       render=body.get("render", True))
+    finally:
+        _TRUNC.reset(tok)
+        _FIT.reset(fit_tok)
+
+
+def _say_of(v: Any) -> Optional[str]:
+    if isinstance(v, dict) and isinstance(v.get("say"), str) and v["say"].strip():
+        return v["say"].strip()
+    if isinstance(v, str) and v.lower().startswith("say:"):
+        return v[4:].strip() or None
+    return None
+
+
+def _unsaid(raw: Any) -> Any:
+    """Az előzetes (szerkezeti) ellenőrzéshez: a {"say": …} idők helyén egy helyőrző — az igazi időt az átirat adja."""
+    if not _says(raw):
+        return raw
+    out = []
+    for ly in raw:
+        if isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))):
+            ly = dict(ly)
+            if _say_of(ly.get("at")):
+                ly["at"] = 0.0
+            if _say_of(ly.get("until")):
+                try:
+                    ly["until"] = timecode(ly.get("at", 0.0)) + 1.0
+                except ValueError:
+                    ly["until"] = 1.0
+        out.append(ly)
+    return out
+
+
+def _says(raw: Any) -> bool:
+    return isinstance(raw, list) and any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until")))
+                                         for ly in raw)
+
+
+async def said_to_times(raw: Any, footage: Path, notes: list[str], step: Callable[..., None] = lambda *a, **k: None,
+                        language: Optional[str] = None, new_ids: bool = False) -> Any:
+    """Réteg mondathoz kötve: at / until = {"say": "az ügyfél fellebbez"} → másodperc a felvétel átiratából. A réteg
+    a kimondás előtt egy hajszállal jelenik meg, és (ha nincs dur/until) a mondat végéig marad. Ha a mondat nem hangzik
+    el, a réteg kimarad, és a jegyzet megmondja, mit hallott a gép helyette."""
+    if not _says(raw):
+        return raw
+    from app.tools import transcript
+    step(0, 4, "listening to the footage (transcript)")
+    tr = await transcript.transcribe(footage, transcript_lang(language))
+    out = []
+    for n, ly in enumerate(raw, 1):
+        if not isinstance(ly, dict):
+            out.append(ly)
+            continue
+        ly = dict(ly)
+        name = ly.get("id") or (f"L{n}" if new_ids else f"new layer {n}")     # új overlaynél az id-k sorban: L1, L2…
+        ok = True
+        for key in ("at", "until"):
+            phrase = _say_of(ly.get(key))
+            if not phrase:
+                continue
+            after = float(ly["at"]) if key == "until" and isinstance(ly.get("at"), (int, float)) else 0.0
+            hit = transcript.find(tr, phrase, after=after)
+            if hit is None:
+                close = transcript.nearest(tr, phrase)
+                notes.append(f"⚠ {name}: “{phrase}” is not said in the footage" + (f" (closest: “{close}”)" if close else
+                             " (no speech was heard)") + " — left out. Give the time instead (at: \"01:24\"), or quote what is said.")
+                ok = False
+                break
+            if key == "at":
+                ly["at"] = round(max(0.0, hit["start"] - 0.15), 2)
+                if ly.get("dur") is None and ly.get("until") is None:
+                    ly["dur"] = round(max(3.0, hit["sentence_end"] - hit["start"] + 0.8), 2)
+            else:
+                ly["until"] = round(hit["end"] + 0.3, 2)
+            notes.append(f"{name} {'starts' if key == 'at' else 'ends'} when “{phrase}” is said ({_tc(hit['start'])}"
+                         + (f", heard as “{hit['said']}”" if _norm_said(hit['said']) != _norm_said(phrase) else "") + ").")
+        if ok:
+            out.append(ly)
+    return out
+
+
+def _norm_said(s: str) -> str:
+    from app.tools.transcript import _norm
+    return "".join(_norm(w) for w in s.split())
+
+
+def transcript_lang(language: Optional[str]) -> Optional[str]:
+    from app.tools import narration
+    return narration.lang_code(language)
+
+
+def check_music(choice: Any) -> None:
+    """A zene-választás ellenőrzése a munka indítása ELŐTT (ne egy perc renderelés után bukjon el)."""
+    c = str(choice or "").strip().lower()
+    if not c or c in _NO_NARRATION:
+        return
+    from app.tools import music as music_lib
+    if music_lib.find(c) is None and c not in music_lib.moods():
+        raise ValueError(f"music: {choice!r} — choose a mood ({', '.join(music_lib.moods())}), a track id, or \"none\"")
+
+
+def _builtin_music(opts: dict[str, Any]) -> bool:
+    """A beépített zenetárból kér-e zenét (hangulat vagy darab), saját zenefájl nélkül."""
+    c = str(opts.get("music") or "").strip().lower()
+    return bool(c) and c not in _NO_NARRATION and not opts.get("music_file_id")
+
+
+async def _ffmpeg_audio(src: Path, dst: Path) -> None:
+    from app.convert.engines import run
+    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn", "-ac", "2", "-ar", "48000", str(dst),
+              timeout=settings.VIDEO_TIMEOUT_S)
+
+
+async def _music_under(opts: dict[str, Any], work: Path, total: float, speech: Optional[Path], user_music: Optional[str],
+                       seed: str) -> tuple[Optional[str], Optional[str], list[str], list[str]]:
+    """Háttérzene: a beépített tárból (opts.music = hangulat vagy darab, a videó hosszára hurkolva) vagy a saját zene;
+    ha van beszéd (narráció, saját hang, a felvétel hangja), a zene alatta halkul (sidechain), a szünetekben visszajön.
+    → (az eredeti zene neve — a spec ebből halkít újra szerkesztéskor —, a projektbe kerülő sáv, verified, findings)."""
+    from app.tools import music as music_lib
+    verified: list[str] = []
+    orig, label = user_music, "Your music"
+    if not user_music and _builtin_music(opts):
+        t = music_lib.pick(str(opts["music"]).strip().lower(), seed)
+        if t is None:
+            return None, None, [], ["The built-in music library isn't installed on this server — the video has no music "
+                                    "(give music_file_id with your own)."]
+        await music_lib.bed(t, total, work / "music.wav")
+        orig, label = "music.wav", f"Music: “{t['title']}” ({t['mood']}, {t.get('genre')}; CC0 — no credit needed)"
+    if not orig:
+        return None, None, [], []
+    if speech is not None and speech.exists():
+        await music_lib.duck(speech, work / orig, work / "music-ducked.wav")       # a beszéd mért szintje alatt 14 dB
+        verified.append(f"{label} — it drops under the speech and comes back in the pauses.")
+        return orig, "music-ducked.wav", verified, []
+    verified.append(f"{label} — there is no speech, so it plays on its own.")
+    return orig, orig, verified, []
+
+
+async def _upright(src: Path) -> str:
+    """Az elforgatás-jelöléssel tárolt felvétel álló/fekvő helyzetbe újrakódolva (rejtett munkafájl) → file_id."""
+    from app.convert.engines import run
+    fid = new_file_id("mp4")
+    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+              "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path(fid)),
+              timeout=settings.VIDEO_TIMEOUT_S)
+    write_meta(fid, operation="footage set upright", source_file_id=None, extra={"ephemeral": True})
+    return fid
+
+
+def _footage_camera(cam: Any) -> Any:
+    """A saját felvétel kamerája (ráközelítés egy pillanatra — „punch-in”): ugyanaz a leírás, mint a jelenet kamerája,
+    abszolút időben (másodperc vagy időkód)."""
+    if cam in (None, "", "none", False):
+        return None
+    tmp: dict[str, Any] = {}
+    _scene_motion({"camera": cam}, tmp)
+    return tmp.get("camera")
+
+
+async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], opts: dict[str, Any], *, source: str,
+                            layer_notes: list[str], step: Callable[..., None], label_stem: str, operation: str,
+                            parent: Optional[str] = None, render: bool = True) -> dict[str, Any]:
+    """Felvétel + rétegek → .ecproj (+ MP4, + átlátszó grafika). Az overlay és a szerkesztése közös útja; parent = a
+    szerkesztett projekt (a felvétel és a rétegek képei onnan jönnek, nem másolódnak újra)."""
+    W, H = int(base["width"]), int(base["height"])
+    fps = float(base.get("fps") or FPS)
+    fps = fps if 1 <= fps <= 120 else FPS
+    total = round(float(base["duration"]), 3)
+    kinds = alpha_kinds(opts.get("alpha"))
+    work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
+    try:
+        shared = assets_of(parent).get(base["asset"]) if parent else None
+        src = crafts.existing(shared or base.get("media_id") or base["file_id"])
+        try:                                                  # a felvétel linkként a munkamappába (nem másolat)
+            os.symlink(src, work / base["asset"])
+        except OSError:
+            shutil.copyfile(src, work / base["asset"])
+        story = {"title": opts.get("title") or "Video", "layers": layers}
+        safe = H - round(min(W, H) * 0.05) * 1.2
+        map_credits, gfx_findings = await _place_on_maps(story, (W, H, safe))
+        gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
+        credit_list = list(dict.fromkeys(gfx_credits + map_credits))
+        lang = _lang_of(_layer_text_all({"layers": [{k: v for k, v in ly.items() if k != "name"} for ly in layers]}) + " " + (source or ""))
+        acc = _rgb(opts.get("accent"))
+        D: dict[str, Any] = {"W": W, "H": H, "fps": fps, "total": total, "accent": acc, "dark": [0.055, 0.06, 0.08], "font": FONT,
+                             "base": {"file": base["asset"], "label": "Footage"}, "scenes": [], "captions": [], "audio": {}}
+        if opts.get("camera"):
+            D["camera"] = _camera_keys(opts["camera"], total, W, H)
+        D["layers"], rows, problems = layer_comps(layers, W, H, total, lang, acc, safe)
+        m_v, m_f, track = [], [], None
+        if _builtin_music(opts):                              # zene a felvétel saját hangja alá (ahol beszélnek, halkul)
+            speech = None
+            if base.get("audio"):
+                speech = work / "footage-audio.wav"
+                await _ffmpeg_audio(work / base["asset"], speech)
+            _, track, m_v, m_f = await _music_under(opts, work, total, speech, None, story["title"])
+            if track:
+                D["audio"] = {"music": track, "musicDb": 0 if speech else -10}
+        problems = problems + m_f
+        step(2, 4, "building the timeline")
+        out = await _build(D, work, lotties)
+        scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
+        script_findings = _script_report(out, source or "", {ly["id"] for ly in layers}) if scripted else []
+        log.info("overlay felépítve: %s", out.strip().splitlines()[-1:] if out.strip() else "")
+        pid = new_file_id("ecproj")
+        shutil.copyfile(work / "project.ecproj", output_path(pid))
+        from app.routes.make import _new_group
+        group = _new_group()
+        credits = ("Pictures and animations: " + " · ".join(credit_list)) if credit_list else ""
+        spec = {"kind": "overlay", "story": _without_runtime(story),
+                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio")
+                         if base.get(k) is not None},
+                "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
+                         "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera")},
+                "source": (source or "")[:30000], "layer_source": (source or "")[:30000],
+                "layer_notes": [n for n in layer_notes if not n.startswith("⚠ ")], "timeline": [], "layer_timeline": rows}
+        write_meta(pid, label=f"{label_stem}.ecproj", operation=operation, source_file_id=parent or base["file_id"],
+                   extra={"video": {"format": "custom", "width": W, "height": H, "fps": fps, "duration": total, "duration_mode": "footage",
+                                    "layers": len(D["layers"]), "title": story["title"]},
+                          "group": group, "credit": credits or None, "spec": spec})
+        if shared or base.get("media_id"):                    # a felvétel egy példányban: a változatok ugyanazt használják
+            write_meta(pid, extra={"assets": {**assets_of(pid), base["asset"]: shared or base["media_id"]}})
+        else:
+            add_asset(pid, base["asset"], work / base["asset"])
+        for name in gfx_names + ([track] if track else []):
+            add_asset(pid, name, work / name)
+        placed = {r_["id"] for r_ in rows}
+        result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": "custom",
+                                  "width": W, "height": H, "fps": fps,
+                                  "duration": {"requested": None, "actual": total, "mode": "footage"},
+                                  "layers": layer_listing([ly for ly in layers if ly["id"] in placed]), "credits": credits or None}
+        if not render:
+            result["files"] = [result["project"]]
+            return result
+        step(3, 4, "rendering the video")
+        vid = await _render_staged(pid, work / "project.ecproj", label_stem, group=group, want_s=total, mode="footage")
+        result["duration"] = vid.pop("duration", None) or result["duration"]
+        chk = vid.pop("check", None) or {"status": "needs_check", "findings": [], "verified": []}
+        lay_v, lay_f = _split_notes(layer_notes)
+        fitted, trunc = _FIT.get() or [], _TRUNC.get() or []
+        chk["verified"] = m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}"
+                           + (", with its own sound." if base.get("audio") else " (it has no sound track).")
+                           + (f" It was stored turned by {base['rotated']}°, so it was set upright first." if base.get("rotated") else "")] \
+            + chk.get("verified", []) + [f"{len(rows)} layer(s) on the timeline: " + ", ".join(f"{r_['id']} {_tc(r_['start'])}" for r_ in rows) + "."] \
+            + lay_v + ([f"Fitted to their boxes: {len(fitted)} text(s) set smaller, e.g. " + "; ".join(fitted[:4]) + "."] if fitted else [])
+        chk["findings"] = chk.get("findings", []) + lay_f + problems + gfx_findings + script_findings + \
+            [f"Shortened text — {t}. Shorten it yourself, or change it with action=edit." for t in trunc[:6]]
+        result["video"] = vid
+        result["files"] = [result["project"], vid]
+        if kinds:
+            step(3, 4, "rendering the transparent graphics")
+            a_files, a_v, a_f = await _render_alpha(D, work, lotties, pid, label_stem, group, kinds, _probe_time(D, rows))
+            result["alpha"] = a_files
+            result["files"] += a_files
+            chk["verified"] += a_v
+            chk["findings"] += a_f
+        if chk["findings"] and chk.get("status") == "ok":
+            chk["status"] = "needs_check"
+        result["check"] = chk
+        step(4, 4, "done")
+        return result
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 _STEM = lambda w: w[:5]
@@ -2141,11 +3561,17 @@ def _video_text(story: dict[str, Any]) -> str:
             parts += [sc["stat"].get("value") or "", sc["stat"].get("label") or ""]
         ch = sc.get("chart") or {}
         parts.append(ch.get("title") or "")
+        if ch.get("nodes"):                        # magyarázó ábra: a dobozok, az élcímkék, a sávok neve
+            from app.tools import diagrams
+            parts += diagrams.texts(ch)
+        from app.tools import motion_charts
+        if ch.get("type") in motion_charts.TYPES:
+            parts += motion_charts.numbers(ch)
         for it in ch.get("items") or []:
             parts += [str(it.get("label") or ""), str(it.get("text") or ""), str(it.get("value") if it.get("value") is not None else "")]
         if ch.get("total"):
             parts.append(str(ch["total"]))
-    return " ".join(parts)
+    return " ".join(parts) + " " + _layer_text_all(story)          # a rétegek szövege is a képernyőn van
 
 
 def _coverage(source: str, story: dict[str, Any], keep: bool, scene_plan: bool) -> tuple[list[str], list[str], dict[str, Any]]:
@@ -2188,7 +3614,10 @@ def _file_entry(fid: str) -> dict[str, Any]:
 
 
 async def _render_staged(project_id: str, project_path: Path, stem: str, *, group: Optional[str] = None,
-                         fmt: str = "mp4", draft: bool = False, want_s: Optional[float] = None) -> dict[str, Any]:
+                         fmt: str = "mp4", draft: bool = False, want_s: Optional[float] = None, requested: Optional[float] = None,
+                         mode: Optional[str] = None, why: Optional[str] = None) -> dict[str, Any]:
+    """A projekt fő kompozíciója → MP4 (WebM / GIF) + check. A kért hossz (requested) és a mód a projekt metájából is
+    jön (újrarenderelésnél): az eredmény duration = {requested, actual (a fájl mért hossza), mode}."""
     ext = "webm" if fmt == "webm" else "gif" if fmt == "gif" else "mp4"
     out = project_path.parent / f"render.{ext}"
     args = ["render", "--project", project_path.name, "--comp", _main_comp(project_path), "--out", out.name,
@@ -2214,9 +3643,18 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
         write_meta(project_id, extra={"render_file_id": vid})
     log.info("videó renderelve: %s → %s (%.1f s)", project_id, vid, time.time() - t0)
     from app.tools import checks
-    fmt_wh = (read_meta(project_id) or {}).get("video", {}).get("format")
-    chk = await asyncio.to_thread(checks.check_video, output_path(vid), want_s, FORMATS.get(fmt_wh) if ext == "mp4" else None, draft)
-    return {**_file_entry(vid), "render_seconds": round(time.time() - t0, 1), "check": chk}
+    v = (read_meta(project_id) or {}).get("video") or {}
+    wh = FORMATS.get(v.get("format")) or ((v["width"], v["height"]) if v.get("width") and v.get("height") else None)
+    requested = requested if requested is not None else v.get("requested_s")
+    mode = mode or v.get("duration_mode")
+    chk = await asyncio.to_thread(checks.check_video, output_path(vid), want_s, wh if ext == "mp4" else None, draft,
+                                  requested, mode, why)
+    try:
+        actual = round((await probe_movie(output_path(vid)))["duration"], 2)
+    except Exception:
+        actual = want_s
+    return {**_file_entry(vid), "render_seconds": round(time.time() - t0, 1), "check": chk,
+            "duration": {"requested": requested, "actual": actual, "mode": mode}}
 
 
 async def render(file_id: str, fmt: str = "mp4", draft: bool = False) -> dict[str, Any]:
@@ -2261,7 +3699,11 @@ def info(file_id: str) -> dict[str, Any]:
                "made_from": src}
         if src and str(src).lower().endswith(".ecproj"):
             out["project"] = src
-            out["note"] = "To change this video, use video(action=\"edit\") with this file or its project; info on the project lists the scenes."
+            out["note"] = ("To change this video, use video(action=\"edit\") with this file or its project; info on the project "
+                           "lists the scenes and layers.")
+        elif ext in FOOTAGE_EXTS:
+            out["note"] = ("To put graphics on this video (name bars, chapter titles, charts, a split screen…), use "
+                           "video(action=\"overlay\", file_id=…, layers=[…]).")
         return out
     data = json.loads(p.read_text("utf-8"))
     footage = [Path(str((i.get("kind") or {}).get("path"))).name for i in (data.get("items") or {}).values()
@@ -2276,12 +3718,19 @@ def info(file_id: str) -> dict[str, Any]:
                "headline": sc.get("headline"), "caption": sc.get("caption"),
                **({"chart": sc["chart"]} if sc.get("chart") else {}),
                **({"stat": sc["stat"]} if sc.get("stat") else {}),
-               "picture": ((pics[i] or {}).get("credit") or "yes") if i < len(pics) and pics[i] else None}
+               "picture": _pic_credit(pics[i]) if i < len(pics) and pics[i] else None}
               for i, sc in enumerate((spec.get("story") or {}).get("scenes") or [], 1)]
+    rows = {x["id"]: x for x in spec.get("layer_timeline") or []}
+    layers = [{**x, **({"on_timeline": f"{_tc(rows[x['id']]['start'])}–{_tc(rows[x['id']]['end'])}"} if x["id"] in rows
+                       else {"on_timeline": "left out (it starts after the video ends)"})}
+              for x in layer_listing((spec.get("story") or {}).get("layers") or [])]
     return {"file_id": file_id, "comps": _comps(data), "footage": footage, "missing": [f for f in footage if f not in assets],
             "video": meta.get("video"), "last_render": _file_entry(rid) if rid and output_path(rid).exists() else None,
             "credits": meta.get("credit"), "editable_by_description": bool(spec),
-            **({"title": spec["story"].get("title"), "scenes": scenes, "options": spec.get("opts")} if spec else {}),
+            **({"title": spec["story"].get("title"), "scenes": scenes, "layers": layers, "options": spec.get("opts")} if spec else {}),
+            **({"base": spec["base"], "how_to_edit": "changes={\"layers\": [{\"id\": \"L2\", …fields} | {\"id\": \"L2\", "
+                "\"remove\": true}], \"add_layers\": […]}; see one layer with files(action=\"preview\", scene=\"L2\", frames=6)."}
+               if spec.get("kind") == "overlay" else {}),
             **({"note": "It was also changed by hand in the editor; an edit rebuilds from the script and leaves those hand changes out."}
                if meta.get("hand_edited") else {})}
 
@@ -2311,6 +3760,42 @@ async def thumb(src: Path, raw: Path) -> None:
 
 # ---------- utólagos szerkesztés (az ügynök és az „Ask for a change”) ----------
 
+async def transcribe_file(file_id: str, language: Optional[str] = None, step: Callable[..., None] = lambda *a, **k: None) -> dict[str, Any]:
+    """Egy felvétel (videó vagy hang; overlay-projektnél az alapsáv) időbélyeges átirata + SRT-feliratfájl. Ebből köthető
+    réteg egy mondathoz (at: {"say": …}), és ebből javasolhat az ügynök grafikát (melyik mondatnál mi segítene)."""
+    from app.storage.naming import result_stem
+    from app.tools import transcript
+    p = crafts.existing(file_id)
+    ext = p.suffix.lstrip(".").lower()
+    if ext == "ecproj":
+        spec = ((read_meta(file_id) or {}).get("spec") or {})
+        base = spec.get("base")
+        if not base:
+            raise ValueError("This video was made from text — its words are its captions (video action=info). A transcript "
+                             "is for your own footage or a sound file.")
+        p = crafts.existing(assets_of(file_id).get(base["asset"]) or base.get("media_id") or base["file_id"])
+    elif ext not in MOVIE_EXTS | AUDIO_EXTS:
+        raise ValueError(f"A transcript needs a video or a sound file, not .{ext}.")
+    step(0, 2, "listening (transcript)")
+    tr = await transcript.transcribe(p, transcript_lang(language))
+    step(1, 2, "writing the subtitles")
+    sid = new_file_id("srt")
+    output_path(sid).write_text(transcript.srt(tr), "utf-8")
+    label = f"{result_stem(file_id, 'transcript')}.srt"
+    write_meta(sid, source_file_id=file_id, operation="transcript", label=label)
+    n = len(tr["sentences"])
+    check = ({"status": "ok", "findings": [], "verified": [f"{n} sentence(s) heard ({tr['language']}), {len(tr['words'])} words with "
+                                                           f"their times, from {_tc(tr['duration'])} of sound (model {tr['model']})."]}
+             if n else {"status": "needs_check", "findings": ["No speech was heard in this file."], "verified": []})
+    return {"file_id": sid, "name": label, "url": public_url(sid), "language": tr["language"], "duration": tr["duration"],
+            "sentences": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}
+                          for x in tr["sentences"]],
+            "how": 'Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …} — it starts as they are said and '
+                   'stays to the end of that sentence (or give dur / until). The .srt can go on the video as subtitles: '
+                   'file_tools add-subtitles.',
+            "check": check}
+
+
 def project_of(file_id: str) -> str:
     """A videó projektje: .ecproj maga, MP4/WebM/GIF esetén az, amiből renderelték."""
     if file_id.lower().endswith(".ecproj"):
@@ -2318,20 +3803,168 @@ def project_of(file_id: str) -> str:
     src = (read_meta(file_id) or {}).get("source_file_id")
     if src and str(src).lower().endswith(".ecproj"):
         return src
-    raise ValueError("This video has no project behind it — make one with the video maker (video action=make).")
+    raise ValueError("This video has no project behind it — put graphics on it with video(action=\"overlay\", file_id=…, "
+                     "layers=[…]), or make a new one with the video maker (video action=make).")
 
 
 def _img_spec(x: Any) -> Any:
     """Kép a szerkesztéshez: file_id | {"file_id"} | {"url"} (pl. a kliens saját generált képe) | {"stock": szavak}
-    | None / "none" (kép nélkül)."""
+    | {"generate": leírás} (AI-fotó: a webes felületen a mi FLUX-unk, kreditért; MCP-n a kliens a saját képeszközével
+    készíti — 10-12 elv) | None / "none" (kép nélkül). Lista (legfeljebb 4): a jelenet hátterei egymás után, áttűnéssel."""
     if x in (None, "", "none", False):
         return None
+    if isinstance(x, list):
+        out = [y for y in (_img_spec(v) for v in x[:4]) if y]
+        return out if len(out) > 1 else (out[0] if out else None)
     if isinstance(x, str):
         return {"url": x} if x.startswith("http") else x
+    if isinstance(x, dict) and x.get("generate"):
+        from app import tenancy
+        if tenancy.client_makes_images.get():
+            raise ValueError(tenancy.CLIENT_IMAGE_MSG)
+        return {"generate": _clean(x["generate"], 400)}
     if isinstance(x, dict) and (x.get("file_id") or x.get("url") or x.get("stock")):
         return x.get("file_id") or ({"url": x["url"], **({"credit": x["credit"]} if x.get("credit") else {})} if x.get("url")
                                     else {"stock": _clean(x["stock"], 60)})
-    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}} or none — not {x!r}")
+    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}}, {{\"generate\": \"a description\"}}, a list "
+                     f"of up to 4 of these, or none — not {x!r}")
+
+
+def _pic_credit(pic: Any) -> str:
+    """Egy képhely forrása szövegben (képsornál: hány kép, és a forrásaik)."""
+    if isinstance(pic, list):
+        return f"{len(pic)} pictures: " + " · ".join((x or {}).get("credit") or "yes" for x in pic)
+    return (pic or {}).get("credit") or "yes"
+
+
+def _ai_photo(words: str) -> dict[str, str]:
+    """AI-fotó leírása egy jelenet képkereső szavaiból (fotószerű, szöveg és logó nélkül — a cím úgyis rákerül)."""
+    return {"generate": f"{words}, realistic photograph, natural light, no text, no logo, no watermark"}
+
+
+def _slots(sp: Any) -> list[Any]:
+    """Egy képhely: egy kép vagy egy képsor (a jelenet hátterei) — mindig listaként."""
+    return list(sp) if isinstance(sp, list) else [sp]
+
+
+# ---------- kép- és kameramozgás, háttér (10-17, Kommandant: „a kameramozgás (Ken Burns), zoom, a hátterek is cserélődhetnek”) ----------
+# motion: a jelenet KÉPÉNEK mozgása (a régi ken_burns választás jelenetenként felülírható); camera: a jelenet képének
+# ÉS ábrájának közös virtuális kamerája — egy pillanatra ráközelít egy részletre, aztán vissza; a jelenet címe, nagy
+# száma és a feliratok a helyükön maradnak (10-17: a mezre közelítéskor a cím kicsúszott); background: kép nélküli
+# jelenet háttere.
+MOTIONS = {"auto": None, "zoom_in": "kb-in", "zoom_out": "kb-out", "pan_left": "left", "pan_right": "right", "pan_up": "up",
+           "pan_down": "down", "still": "still", "ken_burns": "kb-in", "ken_burns_out": "kb-out", "gentle": "in"}
+CAMERA_PRESETS = ("push_in", "pull_out", "drift")
+BACKGROUNDS = ("gradient", "motion", "dark")
+# fit: a kép kitölti a keretet (cover — a széle levágódhat) vagy egészében látszik, mögötte önmaga elmosva (contain);
+# auto: a SAJÁT fotónál contain, ha az aránya nagyon eltér a keretétől (10-17: a fekvő csoportkép álló videóban
+# csak 1–2 arcot mutatott — a közösségi videók bevett megoldása az elmosott kitöltés), a stockkép cover marad
+FITS = ("auto", "cover", "contain")
+
+
+def _xy01(v: Any) -> Optional[list[float]]:
+    if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(c, (int, float)) for c in v):
+        return [round(min(1.0, max(0.0, float(c))), 3) for c in v]
+    return None
+
+
+def _scene_motion(ch: dict[str, Any], sc: dict[str, Any]) -> None:
+    if "motion" in ch:
+        m = str(ch.get("motion") or "auto").lower().replace("-", "_").replace(" ", "_")
+        if m not in MOTIONS:
+            raise ValueError(f"motion: {' | '.join(MOTIONS)}")
+        sc["motion"] = None if m == "auto" else m
+    if "focus" in ch:
+        sc["focus"] = _xy01(ch.get("focus"))
+    if "zoom" in ch:
+        try:
+            sc["zoom"] = round(min(1.8, max(1.03, float(ch["zoom"]))), 3) if ch["zoom"] not in (None, "") else None
+        except (TypeError, ValueError):
+            raise ValueError("zoom: a number from 1.03 to 1.8 (how far the picture moves in)") from None
+    if "camera" in ch:
+        cam = ch.get("camera")
+        if cam in (None, "", "none", False):
+            sc["camera"] = None
+        elif isinstance(cam, str) and cam.lower() in CAMERA_PRESETS:
+            sc["camera"] = cam.lower()
+        elif isinstance(cam, list):
+            moves = []
+            for mv in cam[:8]:
+                if not isinstance(mv, dict):
+                    continue
+                at = timecode(mv.get("at", 0), "camera at")
+                try:
+                    z, d = float(mv.get("zoom", 1)), float(mv.get("dur", 0.8))
+                except (TypeError, ValueError):
+                    raise ValueError('camera: [{"at": seconds, "zoom": 1–3 (1 = the whole frame), "to"?: [x, y] 0–1, "dur"?: s}]') from None
+                moves.append({"at": round(max(0.0, at), 2), "zoom": round(min(3.0, max(1.0, z)), 3), "dur": round(min(4.0, max(0.2, d)), 2),
+                              **({"to": _xy01(mv.get("to"))} if _xy01(mv.get("to")) else {})})
+            sc["camera"] = sorted(moves, key=lambda x: x["at"]) or None
+        else:
+            raise ValueError(f'camera: {" | ".join(CAMERA_PRESETS)} | [{{"at", "zoom", "to"?, "dur"?}}] | "none"')
+    if "fit" in ch:
+        ft = str(ch.get("fit") or "auto").lower()
+        if ft not in FITS:
+            raise ValueError(f"fit: {' | '.join(FITS)}")
+        sc["fit"] = None if ft == "auto" else ft
+    if "background" in ch:
+        bg = str(ch.get("background") or "gradient").lower()
+        if bg not in BACKGROUNDS and not re.fullmatch(r"#?[0-9a-f]{6}", bg):
+            raise ValueError(f"background (a scene without a picture): {' | '.join(BACKGROUNDS)} | \"#RRGGBB\"")
+        sc["background"] = bg
+
+
+def _own_picture(sp: Any) -> bool:
+    """A személy saját képe (file_id, URL, a szerkesztésben megtartott saját kép) — nem stock / AI-kép."""
+    if isinstance(sp, dict) and sp.get("asset"):
+        sp = sp.get("src")
+    return isinstance(sp, str) or (isinstance(sp, dict) and bool(sp.get("url") or sp.get("file_id")) and not sp.get("stock"))
+
+
+def _auto_fits(names: list[Any], specs: list[Any], work: Path, frame: float) -> dict[str, str]:
+    """fit=auto: a saját fotó egészében látszik (elmosott kitöltéssel), ha az aránya 1,5-szeresnél jobban eltér a keretétől."""
+    from PIL import Image
+    out = {}
+    for slot, sp in zip(names, specs):
+        sps = _slots(sp) if isinstance(sp, list) else [sp] * len(_slots(slot))
+        for nm, one in zip(_slots(slot), sps):
+            if not nm or not _own_picture(one):
+                continue
+            try:
+                with Image.open(work / nm) as im:
+                    a = im.width / im.height
+            except Exception:
+                continue
+            if max(a / frame, frame / a) > 1.5:
+                out[nm] = "contain"
+    return out
+
+
+def _camera_keys(cam: Any, dur: float, W: int, H: int) -> Optional[list[list[float]]]:
+    """A jelenet virtuális kamerája → kulcskockák [[t, nagyítás, x, y]] (a jelenet-réteg helye a fő kompozícióban).
+    A nagyított kép mindig kitölti a keretet (a hely úgy korlátozva), így szél soha nem látszik."""
+    if not cam:
+        return None
+
+    def state(z: float, to: Optional[list[float]]) -> list[float]:
+        fx, fy = (to or [0.5, 0.5])
+        px, py = W / 2 - (fx * W - W / 2) * z, H / 2 - (fy * H - H / 2) * z
+        lx, ly = W * (z - 1) / 2, H * (z - 1) / 2
+        return [round(z, 4), round(min(W / 2 + lx, max(W / 2 - lx, px)), 1), round(min(H / 2 + ly, max(H / 2 - ly, py)), 1)]
+    if cam == "push_in":
+        return [[0.0, *state(1.0, None)], [round(dur, 3), *state(1.1, None)]]
+    if cam == "pull_out":
+        return [[0.0, *state(1.1, None)], [round(dur, 3), *state(1.0, None)]]
+    if cam == "drift":
+        return [[0.0, *state(1.06, [0.47, 0.5])], [round(dur, 3), *state(1.06, [0.53, 0.5])]]
+    keys, cur = [[0.0, *state(1.0, None)]], state(1.0, None)
+    for mv in cam:
+        a = min(mv["at"], max(0.0, dur - 0.3))
+        b = min(dur, a + mv["dur"])
+        keys.append([round(a, 3), *cur])
+        cur = state(mv["zoom"], mv.get("to"))
+        keys.append([round(b, 3), *cur])
+    return keys
 
 
 def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -2351,6 +3984,7 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
             sc["duration"] = min(30.0, max(2.0, float(ch["duration"]))) if ch["duration"] not in (None, "", "auto") else None
         except (TypeError, ValueError):
             pass
+    _scene_motion(ch, sc)
     if "stat" in ch:
         st = ch["stat"]
         sc["stat"] = ({"value": _clean(st.get("value"), 10, "Stat value"), "label": _clean(st.get("label"), 48, "Stat label")}
@@ -2360,7 +3994,8 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
     if "chart" in ch:
         cc = ch["chart"]
         if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
-            cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a mértékegység)
+            from app.tools import diagrams        # ábránál a csúcsok / élek id (from+to) szerint frissülnek
+            cc = diagrams.merge(base["chart"], cc) if base["chart"].get("type") in diagrams.TYPES else {**base["chart"], **cc}
         chart, note = _chart_from_plan(cc, source) if cc else (None, None)
         for n in (note if isinstance(note, list) else [note] if note else []):
             # ⚠ = figyelmeztetés (a check findings-be): ami kimaradt, nem mehet el csendben (10-12: a térkép tűi kiestek,
@@ -2373,27 +4008,34 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
         sc["chart"] = chart
         if chart:
             sc["stat"] = None
+    if (sc.get("chart") or {}).get("nodes") and ("chart" in ch or "duration" in ch):
+        from app.tools import diagrams
+        n_ = diagrams.duration_note(sc["chart"], sc.get("duration"))
+        if n_:
+            notes.append(n_)
     return sc
 
 
 async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
-               progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+               progress: Optional[Callable[..., None]] = None, alpha: Any = None) -> dict[str, Any]:
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
-        return await _edit(file_id, changes, extra_source=extra_source, progress=progress)
+        return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha)
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
 
 
 async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
-                progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+                progress: Optional[Callable[..., None]] = None, alpha: Any = None) -> dict[str, Any]:
     """Egy elkészült videó módosítása a forgatókönyvéből → ÚJ változat (projekt + MP4). changes:
     {"scenes": [{"scene": n (1-től), "headline"?, "caption"?, "image"?, "stat"?, "chart"?, "remove"?}],
      "add": [{"after": n (0 = az első elé), "headline", "caption"?, "image"? | "image_query"?, "stat"?, "chart"?}],
      "title"?, "kicker"?, "title_image"?, "end_title"?, "end_subtitle"?,
-     "format"?, "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none", "voice_file_id"? | "none"}.
-    A grafikon számai a forrásból (vagy az extra_source-ból — pl. a kérés szövegéből) jöhetnek."""
+     "format"?, "duration"?, "duration_mode"?, "ken_burns"?, "accent"?, "music_file_id"? | "none", "voice_file_id"? | "none",
+     "layers"?: [{"id": "L2", …} | {"id": "L2", "remove": true}], "add_layers"?: […]}.
+    A grafikon számai a forrásból (vagy az extra_source-ból — pl. a kérés szövegéből) jöhetnek. Az overlay-projekt
+    (a felhasználó felvétele + rétegek) ugyanígy, csak rétegekkel."""
     step = progress or (lambda *a, **k: None)
     pid = project_of(file_id)
     meta = read_meta(pid) or {}
@@ -2401,8 +4043,15 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     if not spec:
         raise ValueError("This video wasn't made by the video maker, so it can't be changed by description — change it in "
                          "the video editor (edit_url), or make a new one with video action=make.")
-    if not isinstance(changes, dict) or not changes:
+    if not isinstance(changes, dict) or (not changes and alpha in (None, False)):
         raise ValueError("Say what should change (changes).")
+    if spec.get("kind") == "overlay":
+        res = await _edit_overlay(pid, spec, changes, extra_source=extra_source, step=step, alpha=alpha)
+        res["notes"] = ["Rebuilt from the layer list: changes made by hand in the video editor are not in this version "
+                        "(they stay in the previous one)."] if meta.get("hand_edited") else []
+        return res
+    alpha_kinds(alpha)
+    duration_mode(changes.get("duration_mode"), changes.get("duration"))
     story = copy.deepcopy(spec["story"])
     story["scenes"] = _with_ids(story["scenes"])          # régi projekt: s1, s2… a mostani sorrendben
     pics = copy.deepcopy(spec.get("pictures") or [])
@@ -2410,7 +4059,8 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     opts = dict(spec.get("opts") or {})
     source = (spec.get("source") or "") + "\n" + (extra_source or "")
     notes: list[str] = []
-    keep = lambda pic: ({"asset": pic["asset"], "credit": pic.get("credit"), "src": pic.get("src")} if pic else None)
+    keep1 = lambda pic: ({"asset": pic["asset"], "credit": pic.get("credit"), "src": pic.get("src")} if pic else None)   # noqa: E731
+    keep = lambda pic: [keep1(x) for x in pic if x] if isinstance(pic, list) else keep1(pic)   # noqa: E731
 
     for key, lim in (("title", 70), ("kicker", 28)):
         if key in changes:
@@ -2443,7 +4093,9 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
             e["remove"] = True
             continue
         e["scene"] = _scene_from(ch, source, notes, e["scene"])
-        if "image" in ch:
+        if "images" in ch:
+            e["pic"] = _img_spec(ch["images"])
+        elif "image" in ch:
             e["pic"] = _img_spec(ch["image"])
         elif ch.get("image_query"):
             e["pic"] = {"stock": _clean(ch["image_query"], 60)}
@@ -2454,7 +4106,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
         sc = _scene_from(a, source, notes)
         # keresőszó híján a videó (angol) keresőszava — a magyar cím a képtárban mellényúl („Mit tehetsz a méhekért?”)
         near = next((e["scene"].get("image_query") for e in entries[max(0, after - 1):] if e["scene"].get("image_query")), "")
-        pic = _img_spec(a["image"]) if a.get("image") else {"stock": _clean(a.get("image_query") or near or story.get("image_query")
+        pic = _img_spec(a.get("images") or a["image"]) if (a.get("image") or a.get("images")) else {"stock": _clean(a.get("image_query") or near or story.get("image_query")
                                                                             or sc["headline"] or story["title"], 60)}
         adds.setdefault(after, []).append({"scene": sc, "pic": pic, "remove": False})
     final = list(adds.get(0, []))
@@ -2470,9 +4122,22 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     if "duration" in changes:
         d = changes["duration"]
         opts["total"] = None if d in (None, "", "auto") else float(min(max(float(d), 10), 180))
-    for key in ("ken_burns", "accent", "narration", "narration_voice"):
+        opts["requested"] = None if d in (None, "", "auto") else float(d)
+        opts["duration_mode"] = None                     # új hossz: alapból fix (hacsak a duration_mode mást nem mond)
+    if changes.get("duration_mode"):
+        opts["duration_mode"] = changes["duration_mode"]
+    if alpha is not None:
+        opts["alpha"] = alpha
+    layer_src = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
+    lnotes: list[str] = []
+    story["layers"] = apply_layer_changes(story.get("layers") or [], changes, layer_src, lnotes)
+    for key in ("ken_burns", "accent", "narration", "narration_voice", "music"):
         if key in changes:
             opts[key] = changes[key]
+    if "music" in changes:                               # a tár zenéje (vagy "none") a saját zene helyére
+        opts["music_asset"], opts["music_file_id"] = None, None
+    elif changes.get("music_file_id") not in (None, "", "none"):
+        opts["music"] = None
     if changes.get("voice_file_id") not in (None, "", "none"):
         opts["narration"] = "none"                       # saját hang jött: az AI-narráció kimarad
     for key, base in (("music_file_id", "music"), ("voice_file_id", "voice")):
@@ -2485,20 +4150,53 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     specs: list[Any] = [title_pic] + [e["pic"] for e in final]
     reshape = opts["fmt"] != (spec.get("opts") or {}).get("fmt")
     if reshape:          # más képarány: a képeket az eredeti forrásból újra (különben nagyítva, elmosódva)
-        specs = [(sp.get("src") or sp) if isinstance(sp, dict) and sp.get("asset") else sp for sp in specs]
-    stock_jobs = [(i, sp["stock"], story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
-                  for i, sp in enumerate(specs) if isinstance(sp, dict) and sp.get("stock")]
-    if stock_jobs:
+        src_of = lambda sp: (sp.get("src") or sp) if isinstance(sp, dict) and sp.get("asset") else sp   # noqa: E731
+        specs = [[src_of(x) for x in sp] if isinstance(sp, list) else src_of(sp) for sp in specs]
+    if any(isinstance(sp, dict) and sp.get("stock") for slot in specs for sp in _slots(slot)):
         step(1, 5, "finding pictures")
-        for i, chosen in (await _choose_stock(stock_jobs)).items():
-            specs[i] = chosen
+    await _pick_stock(specs, lambda i: story["title"] if i == 0 else story["scenes"][i - 1]["headline"])
     from app.storage.naming import result_stem
+    opts["layer_source"] = layer_src
     res = await _assemble(story, specs, opts, chart_notes=_kept_chart_notes(spec, story) + notes, source_text=source,
                           source_file_id=pid, step=step, parent=pid, label_stem=result_stem(pid, "edited"),
-                          operation="video edit")
+                          operation="video edit", layer_notes=_kept_layer_notes(spec, story["layers"]) + lnotes)
     res["notes"] = notes + (["Rebuilt from the video's script: changes made by hand in the video editor are not in this "
                              "version (they stay in the previous one)."] if meta.get("hand_edited") else [])
     return res
+
+
+async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any], *, extra_source: str,
+                        step: Callable[..., None], alpha: Any = None) -> dict[str, Any]:
+    """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
+    (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
+    from app.storage.naming import result_stem
+    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera"}
+    other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
+    if other:
+        raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
+                         f"changes.add_layers), accent or title — not {', '.join(other)}. To recut the footage itself, use "
+                         "file_tools (trim-video…) and run overlay again.")
+    opts = dict(spec.get("opts") or {})
+    if "camera" in changes:
+        opts["camera"] = _footage_camera(changes["camera"])
+    for k in ("accent", "title", "music"):
+        if k in changes:
+            opts[k] = changes[k]
+    if alpha is not None or "alpha" in changes:
+        opts["alpha"] = changes.get("alpha", alpha)
+    alpha_kinds(opts.get("alpha"))
+    source = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
+    notes: list[str] = []
+    if _says(changes.get("layers")) or _says(changes.get("add_layers")):        # „amikor elhangzik…” a szerkesztésben is
+        footage = crafts.existing(assets_of(pid).get(spec["base"]["asset"]) or spec["base"].get("media_id") or spec["base"]["file_id"])
+        changes = {**changes, "layers": await said_to_times(changes.get("layers"), footage, notes, step),
+                   "add_layers": await said_to_times(changes.get("add_layers"), footage, notes, step)}
+    layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
+    if not layers:
+        raise ValueError("That would leave no layers — keep at least one, or use the original video as it is.")
+    return await _assemble_overlay(dict(spec["base"]), layers, opts, source=source,
+                                   layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
+                                   label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid)
 
 
 _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json object of changes — only what the request asks:
@@ -2507,9 +4205,20 @@ _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json obj
              "stat"?: {"value": str, "label": str} | null, "chart"?: <chart> | null, "remove"?: true}],
  "add": [{"after": n, "headline": str, "caption": str, "image_query": "2–4 plain English words", "stat"?: ..., "chart"?: ...}],
  "title"?: str, "end_title"?: str, "end_subtitle"?: str, "title_image"?: {"stock": "words"},
- "format"?: "vertical|landscape|square", "duration"?: seconds, "ken_burns"?: "some|all|off", "accent"?: "#RRGGBB"}
-<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
+ "format"?: "vertical|landscape|square", "duration"?: seconds, "ken_burns"?: "some|all|off", "accent"?: "#RRGGBB",
+ "layers": [{"id": "L2", "at"?: seconds, "dur"?: seconds, "name"?, "role"?, "text"?, "subtitle"?, "value"?, "label"?,
+             "chart"?: <chart>, "remove"?: true}],
+ "add_layers": [{"at": seconds, "dur": seconds, "type": "lower_third|title|chapter|source|stat|quote|chart|fullscreen|split", …}]}
+Layers are time-coded graphics over the video (listed below with their ids); change them by id. A video of the person's
+own footage has only layers: change or add layers there, never scenes.
+<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|scatter|band|lines|race|sankey", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
            "items": [{"label": str, "value": number|null, "text": str}]}
+(waterfall, slope, scatter, band, lines, race and sankey have their own fields — labels, series, from/to, x/y/size, low/high, flows;
+to change one, send a chart WITHOUT "type" with only the fields that change.)
+A scene with a diagram (decision_tree | swimlane | network, listed with its node ids): to change it send a chart WITHOUT
+"type" holding only what changes — {"nodes": [{"id", "text"?, "kind"?, "remove"?: true} | a new node],
+"edges": [{"from", "to", "kind"?, "certainty"?: "certain|uncertain|disputed", "label"?, "remove"?: true}], "pace"?: seconds
+per reveal step}; nodes match by id, edges by from+to; new ones are added.
 Scene numbers are the ones listed below (1 = the first scene after the title card). Numbers in charts and stats must
 come from the video's source or from the request itself — never invent them. Keep the language of the video.
 
@@ -2522,13 +4231,22 @@ Request: {request}"""
 def _describe(spec: dict[str, Any]) -> str:
     st, o = spec["story"], spec.get("opts") or {}
     pics = spec.get("pictures") or []
-    lines = [f"title: {st.get('title')} · format {o.get('fmt')} · {o.get('total') or 'auto'} s · Ken Burns {o.get('ken_burns')}"]
-    for i, sc in enumerate(st["scenes"], 1):
+    if spec.get("kind") == "overlay":
+        b = spec.get("base") or {}
+        lines = [f"the person's own footage: {b.get('width')}×{b.get('height')}, {_tc(b.get('duration') or 0)} — layers only"]
+    else:
+        lines = [f"title: {st.get('title')} · format {o.get('fmt')} · {o.get('total') or 'auto'} s · Ken Burns {o.get('ken_burns')}"]
+    lines += [f"layer {x['id']} ({x['type']}) {x['timecode']}: {x['text']}" for x in layer_listing(st.get("layers") or [])]
+    for i, sc in enumerate(st.get("scenes") or [], 1):
         pic = pics[i] if i < len(pics) else None
         what = f"chart {sc['chart']['type']} “{sc['chart']['title']}”" if sc.get("chart") else (f"stat {sc['stat']['value']}" if sc.get("stat") else "")
+        from app.tools import diagrams
+        if (sc.get("chart") or {}).get("type") in diagrams.TYPES:    # a sankey csomópontjai nem ábra-dobozok (nincs id-jük)
+            what += " — " + diagrams.describe(sc["chart"])
         lines.append(f"{i}. {sc.get('headline')} — caption: {sc.get('caption')}" + (f" — {what}" if what else "")
-                     + (f" — picture: {(pic or {}).get('credit') or 'yes'}" if pic else " — no picture"))
-    lines.append(f"end: {(st.get('end') or {}).get('title')} / {(st.get('end') or {}).get('subtitle')}")
+                     + (f" — picture: {_pic_credit(pic)}" if pic else " — no picture"))
+    if st.get("scenes"):
+        lines.append(f"end: {(st.get('end') or {}).get('title')} / {(st.get('end') or {}).get('subtitle')}")
     return "\n".join(lines)
 
 
@@ -2592,17 +4310,31 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
         prs = Presentation()
         prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)          # 16:9
     SW, SH = int(prs.slide_width), int(prs.slide_height)
-    layout = min(prs.slide_layouts, key=lambda lo: (len(lo.placeholders), "blank" not in lo.name.lower()))
+    from app.tools import pptx_deck
+    n_before = len(prs.slides)
+    # a minta: az a dia, ami után az új jön (alapból az utolsó) — annak hátterét és címstílusát kapja az új dia
+    ref_i = int(after_slide) - 1 if after_slide is not None else n_before - 1
+    ref = list(prs.slides)[max(0, min(n_before - 1, ref_i))] if n_before else None
+    layout = ref.slide_layout if ref is not None else \
+        min(prs.slide_layouts, key=lambda lo: (len(lo.placeholders), "blank" not in lo.name.lower()))
     slide = prs.slides.add_slide(layout)
     for ph in list(slide.placeholders):                     # üres helyőrző ne maradjon a dián
         ph._element.getparent().remove(ph._element)
+    took_bg = pptx_deck.inherit_look(slide, ref)
     top_room = 0
     if title and title.strip():
         top_room = int(SH * 0.16)
+        st = pptx_deck.title_style(ref) if ref is not None else {}
         tb = slide.shapes.add_textbox(int(SW * 0.06), int(SH * 0.04), int(SW * 0.88), int(SH * 0.1))
         tb.text_frame.text = title.strip()[:120]
-        tb.text_frame.paragraphs[0].runs[0].font.size = Pt(28)
-        tb.text_frame.paragraphs[0].runs[0].font.bold = True
+        run = tb.text_frame.paragraphs[0].runs[0]
+        run.font.size = Pt(min(32, st.get("size") or 28))
+        run.font.bold = True if st.get("bold") is None else st["bold"]
+        if st.get("font"):
+            run.font.name = st["font"]
+        color = pptx_deck.readable(st.get("color"), slide, prs)
+        if color:
+            run.font.color.rgb = pptx_deck._rgb(color)
     pad = 0 if (not deck_file_id and not top_room and vw / vh >= SW / SH * 0.98) else int(min(SW, SH) * 0.04)
     box_w, box_h = SW - 2 * pad, SH - top_room - 2 * pad
     k = min(box_w / vw, box_h / vh)
@@ -2638,8 +4370,10 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
     # ellenőrzés (közös check-szerződés): a mentett fájlban tényleg ott a videó, a megadott dián
     chk_prs = Presentation(str(output_path(out)))
     media = [sh for sh in chk_prs.slides[pos].shapes if sh.shape_type == 16]       # MSO_SHAPE_TYPE.MEDIA
+    look = ([f"The new slide has the deck's look: {'background' if took_bg else 'layout'}{' and title style' if title else ''} "
+             "from the slide next to it."] if ref is not None else [])
     check = ({"status": "ok", "findings": [], "verified": [f"The MP4 ({secs:.0f} s) is embedded on slide {pos + 1} of {len(chk_prs.slides)}, "
-                                                          "with the title card as its poster."]}
+                                                          "with the title card as its poster.", *look]}
              if media else {"status": "failed", "findings": ["The video didn't end up on the slide."], "verified": []})
     return {"file_id": out, "url": public_url(out), "label": label, "slide": pos + 1, "video_file_id": vid, "check": check,
             "note": "The video is embedded and starts by itself when the slide shows (tap or click pauses it) in "
@@ -2648,9 +4382,20 @@ async def to_pptx(file_id: str, deck_file_id: Optional[str] = None, after_slide:
 
 # ---------- előnézet jelenetenként ----------
 
+def _ids_hint(spec: dict[str, Any]) -> str:
+    sc = [str(x["id"]) for x in spec.get("timeline") or []]
+    ly = [str(x["id"]) for x in spec.get("layer_timeline") or []]
+    return "; ".join(x for x in ((f"scenes: {', '.join(sc)}" if sc else ""), (f"layers: {', '.join(ly)}" if ly else "")) if x) or "none"
+
+
+def layer_still(row: dict[str, Any]) -> float:
+    """A réteg „kész” pillanata: a beúszás és az ábra animációi lefutottak, a kiúszás még nem kezdődött."""
+    return round(max(row["start"] + 0.1, row["end"] - 0.6), 2)
+
+
 def frame_time(file_id: str, scene: Any = None, at: Optional[float] = None) -> tuple[str, float, str]:
-    """→ (a renderelt videó file_id-ja, az időpont másodpercben, címke). scene: id (s3), sorszám, "title", "end";
-    a jelenet VÉGE előtt 0,4 s-mal (az animációk már lefutottak); at: tetszőleges másodperc."""
+    """→ (a renderelt videó file_id-ja, az időpont másodpercben, címke). scene: id (s3), sorszám, "title", "end", vagy egy
+    réteg id-ja (L2); a jelenet / réteg VÉGE előtt (az animációk már lefutottak); at: tetszőleges másodperc."""
     if file_id.lower().endswith(".ecproj"):              # projekt → a legutóbbi renderje
         pid, vid = file_id, (read_meta(file_id) or {}).get("render_file_id") or ""
         if not vid or not output_path(vid).exists():
@@ -2661,16 +4406,19 @@ def frame_time(file_id: str, scene: Any = None, at: Optional[float] = None) -> t
     spec = ((read_meta(pid) or {}).get("spec") or {}) if pid else {}
     if at is not None:
         return vid, max(0.0, float(at)), f"at {float(at):.1f} s"
-    tl = spec.get("timeline") or []
-    if not tl:
+    tl, lrows = spec.get("timeline") or [], spec.get("layer_timeline") or []
+    if not tl and not lrows:
         raise ValueError("This video has no scene timeline (made before it was recorded) — use at=seconds instead.")
-    key = str(scene).strip().lower() if scene is not None else "title"
-    if key.isdigit():
+    key = str(scene).strip().lower() if scene is not None else ("title" if tl else str(lrows[0]["id"]).lower())
+    if key.isdigit() and tl:
         key = (tl[int(key)]["id"] if 0 < int(key) < len(tl) - 1 else "")
     hit = next((x for x in tl if str(x.get("id")).lower() == key), None)
-    if not hit:
-        raise ValueError(f"No scene {scene!r} — scenes: {', '.join(str(x['id']) for x in tl)}")
-    return vid, scene_still(tl, tl.index(hit)), f"{hit['id']} ({hit['start']:.1f}–{hit['end']:.1f} s)"
+    if hit:
+        return vid, scene_still(tl, tl.index(hit)), f"{hit['id']} ({hit['start']:.1f}–{hit['end']:.1f} s)"
+    lh = next((x for x in lrows if str(x.get("id")).lower() == key), None)
+    if lh:
+        return vid, layer_still(lh), f"{lh['id']} ({lh['type']}, {lh['start']:.1f}–{lh['end']:.1f} s)"
+    raise ValueError(f"No scene or layer {scene!r} — {_ids_hint(spec)}. Or use at=seconds.")
 
 
 def _kept_chart_notes(spec: dict[str, Any], story: dict[str, Any]) -> list[str]:
@@ -2694,11 +4442,14 @@ def scene_still(tl: list[dict[str, Any]], k: int) -> float:
 
 
 def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str, Any]]]:
-    """Az összes jelenet egy képen (a címkártya, minden jelenet vége, a zárókép), feliratozva — egy pillantás az egészre."""
+    """Az összes jelenet egy képen (a címkártya, minden jelenet vége, a zárókép), utánuk a rétegek (mindegyik a „kész”
+    pillanatában), feliratozva — egy pillantás az egészre."""
     import cv2
     import numpy as np
     pid = project_of(file_id)
-    tl = ((read_meta(pid) or {}).get("spec") or {}).get("timeline") or []
+    spec = (read_meta(pid) or {}).get("spec") or {}
+    tl0 = spec.get("timeline") or []
+    tl = [(x, scene_still(tl0, k)) for k, x in enumerate(tl0)] + [(x, layer_still(x)) for x in spec.get("layer_timeline") or []]
     if not tl:
         raise ValueError("This video has no scene timeline (made before it was recorded) — use at=seconds instead.")
     vid = (read_meta(pid) or {}).get("render_file_id") if file_id.lower().endswith(".ecproj") else file_id
@@ -2709,8 +4460,7 @@ def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str
     tiles, info_ = [], []
     cols = 4 if len(tl) > 6 else 3
     tw = width // cols
-    for k, x in enumerate(tl):
-        t = scene_still(tl, k)
+    for x, t in tl:
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(0, t) * fps))
         ok, f = cap.read()
         if not ok:
@@ -2732,14 +4482,18 @@ def contact_sheet(file_id: str, width: int = 1400) -> tuple[bytes, list[dict[str
 
 
 def _scene_index(pid: str, scene: Any) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """Jelenet (id / sorszám) → (1-től számolt index, jelenet, idővonal-sor)."""
+    """Jelenet (id / sorszám) vagy réteg (L2) → (1-től számolt index — rétegnél 0 —, jelenet / réteg, idővonal-sor)."""
     spec = (read_meta(pid) or {}).get("spec") or {}
     scenes = _with_ids(copy.deepcopy((spec.get("story") or {}).get("scenes") or []))
     tl = {x["id"]: x for x in spec.get("timeline") or [] if x.get("id")}
     key = str(scene or "").strip()
     k = int(key) if key.isdigit() else next((i + 1 for i, sc in enumerate(scenes) if sc["id"] == key), 0)
     if not 1 <= k <= len(scenes):
-        raise ValueError(f"No scene {scene!r} — scenes: {', '.join(sc['id'] for sc in scenes)}")
+        row = next((x for x in spec.get("layer_timeline") or [] if str(x["id"]).lower() == key.lower()), None)
+        if row:
+            ly = next((x for x in (spec.get("story") or {}).get("layers") or [] if x["id"] == row["id"]), {"id": row["id"]})
+            return 0, ly, row
+        raise ValueError(f"No scene or layer {scene!r} — {_ids_hint(spec)}.")
     sc = scenes[k - 1]
     return k, sc, tl.get(sc["id"]) or {}
 
@@ -2758,6 +4512,8 @@ def filmstrip(file_id: str, scene: Any, frames: int = 6, width: int = 1400) -> t
         raise ValueError("This video project has no render yet — render it first (video action=render).")
     frames = max(2, min(12, int(frames or 6)))
     a, b = row["start"] + 0.55, row["end"] - 0.25           # az áttűnés (0,5 s) után: ne az előző jelenet látsszon
+    if row.get("layer"):                                    # réteg: a beúszástól a kiúszásig
+        a, b = row["start"] + 0.08, row["end"] - 0.12
     times = [a + (b - a) * i / (frames - 1) for i in range(frames)]
     cap = cv2.VideoCapture(str(crafts.existing(vid)))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -2784,19 +4540,25 @@ def filmstrip(file_id: str, scene: Any, frames: int = 6, width: int = 1400) -> t
 
 
 async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str, Any]:
-    """Csak egy jelenet renderelése (a saját kompozíciója) egy rövid MP4-be — ellenőrzéshez gyors, az egész videó
-    újrarenderelése nélkül. A klip rejtett munkafájl; a teljes videó a render / edit útján készül."""
+    """Csak egy jelenet (a saját kompozíciója) vagy egy réteg (a fő videó a réteg idősávjában, a felvétellel / jelenettel
+    együtt) renderelése egy rövid MP4-be — ellenőrzéshez gyors, az egész videó újrarenderelése nélkül. A klip rejtett
+    munkafájl; a teljes videó a render / edit útján készül."""
     pid = project_of(file_id)
-    k, sc, _ = _scene_index(pid, scene)
+    k, sc, row = _scene_index(pid, scene)
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(pid, work)
         names = [c["name"] for c in _comps(json.loads(proj.read_text("utf-8")))]
-        comp = next((n for n in names if n.startswith(f"Scene {k} – ")), None)
-        if not comp:
-            raise ValueError(f"Scene {sc['id']} isn't a separate part of this project (was it rearranged by hand?).")
+        span: list[str] = []
+        if row.get("layer"):
+            comp = _main_comp(proj)
+            span = ["--start", f"{row['start']:.3f}", "--end", f"{row['end']:.3f}"]
+        else:
+            comp = next((n for n in names if n.startswith(f"Scene {k} – ")), None)
+            if not comp:
+                raise ValueError(f"Scene {sc['id']} isn't a separate part of this project (was it rearranged by hand?).")
         args = ["render", "--project", proj.name, "--comp", comp, "--out", "scene.mp4", "--format", "h264", "--json",
-                "--bitrate", "2500" if draft else "8000", "--audio", "auto"]
+                "--bitrate", "2500" if draft else "8000", "--audio", "auto", *span]
         if draft:
             args += ["--resolution", "half", "--quality", "draft"]
         t0 = time.time()
@@ -2812,6 +4574,11 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
         stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(display_label(pid)).stem)
         write_meta(vid, label=f"{stem} – {sc['id']} clip.mp4", operation="video scene render", source_file_id=pid,
                    extra={"ephemeral": True})
+        if row.get("layer"):
+            return {**_file_entry(vid), "layer": sc["id"], "type": row.get("type"), "start": row["start"], "end": row["end"],
+                    "render_seconds": round(time.time() - t0, 1),
+                    "note": f"Just {sc['id']}'s time span ({_tc(row['start'])}–{_tc(row['end'])}) of the video, with what is under it "
+                            "(draft quality unless draft=false) — to check it quickly."}
         return {**_file_entry(vid), "scene": sc["id"], "headline": sc.get("headline"), "render_seconds": round(time.time() - t0, 1),
                 "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly."}
     finally:

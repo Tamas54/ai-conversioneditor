@@ -461,9 +461,9 @@ let BRAND_FONTS = null;
 
 // ---------- csomagok ----------
 const FEATURES = {
-  free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
-  plus: p => [`${p.monthly_credits} credits every month`, "Presentations, documents and changes — as many as you need", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
-  pro: p => [`${p.monthly_credits} credits every month`, "Everything in Plus, with room for heavy use", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `Up to ${p.batch} photos at once`, "Use it from Claude, ChatGPT and your scripts (MCP)", `Files kept a year`],
+  free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `${p.ai_steps} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
+  plus: p => [`${p.monthly_credits} credits every month`, "Presentations, documents and changes — as many as you need", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `${p.ai_steps.toLocaleString("en")} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
+  pro: p => [`${p.monthly_credits} credits every month`, "Everything in Plus, with room for heavy use", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `${p.ai_steps.toLocaleString("en")} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, "Use it from Claude, ChatGPT and your scripts (MCP)", `Files kept a year`],
 };
 async function buy(item, interval) {
   if (account?.guest) { location.href = "/signup?next=/app/plans"; return; }
@@ -498,10 +498,11 @@ const views = {
     $("#packs").querySelectorAll("[data-pack]").forEach(b => b.addEventListener("click", () => buy(b.dataset.pack)));
     const c = P.costs;
     $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
-      [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+      [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`],
+      [`Studio AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps`, `1 per ${c.ai_steps_per_credit} steps`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
     if (account.usage && Object.keys(account.usage).length) {
       $("#usage-box").hidden = false;
-      const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages" };
+      const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages", ai_steps: "Studio AI steps (connected AI)" };
       $("#usage").innerHTML = Object.entries(account.usage).map(([k, u]) => `<div class="use"><span>${names[k] || k}</span><span class="mono small">${u.used} / ${u.limit.toLocaleString("en")}</span>
         <i style="--w:${Math.min(100, 100 * u.used / Math.max(1, u.limit))}%"></i></div>`).join("");
     }
@@ -1368,7 +1369,7 @@ const TRY = {
   grass: { kind: "photo", mode: "edit", set: { instruction: "Remove the blurry grass in front of the animal" }, note: "Add your photo — the instruction is filled in." },
   backdrop: { kind: "photo", mode: "edit", set: { instruction: "Put the Parliament behind it, crop to 4:5, headline ‘Budapest’ at the top" }, note: "Add your photo — the instruction is filled in; change the headline to yours." },
   restore: { kind: "photo", mode: "restore", set: { colorize: "on", split: "on" }, note: "Add a photo of an album page — every old print on it is found, repaired and coloured." },
-  oldbook: { kind: "scan", set: { out: ["docx", "pdf", "searchable_pdf"] }, note: "Add the page photos in order — you get Word, a new book PDF and a searchable PDF." },
+  oldbook: { kind: "scan", set: { out: ["docx", "pdf", "searchable_pdf", "review_pdf"] }, note: "Add the page photos in order — you get Word, a new book PDF, a searchable PDF and a review PDF with each page beside its text." },
   book: { kind: "book", set: { layout: "book" }, note: "Add your manuscript. It opens in the Word editor — then ask below it, e.g. “On page 22 add a photo of the Colosseum”." },
   deck: { kind: "deck", mode: "brief", focus: "brief", note: "Write a short brief, and add a pptx you like as the Style example below." },
   redact: { kind: "pdf", set: { action: "redact" }, focus: "words", note: "Add your PDF and the names to black out — they're removed from the file for good." },
@@ -1712,7 +1713,8 @@ const MAKERS = {
         <label>Length<select name="vlen"><option value="">Automatic</option><option value="15">15 seconds</option><option value="30" selected>30 seconds</option>
           <option value="60">1 minute</option><option value="90">1½ minutes</option></select></label>
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
-          ${seg("vpicmode", [["stock", "Stock photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}</fieldset>
+          ${seg("vpicmode", [["stock", "Stock photos"], ["ai", "AI photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}
+          <p class="muted small" data-vpic-ai hidden style="margin:6px 0 0">${account?.guest ? "AI photos need a free account." : `A new photo for every scene, made from its subject — ${account?.image_credit_cost ?? 1} credit each (about one per 5 seconds of video).`}</p></fieldset>
         ${fileSlot("vpics", { exts: EXT.image, multiple: true, label: "Your pictures (optional — used in order)" })}
         ${fileSlot("vdata", { exts: ["csv", "tsv", "xlsx", "xls"], label: "Data for animated charts (optional — a spreadsheet)" })}
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
@@ -1728,6 +1730,8 @@ const MAKERS = {
         form.querySelector("[data-vmode-make]").hidden = m === "new";
         if (m === "text" && form.querySelector("[name=vlen]").value === "30") form.querySelector("[name=vlen]").value = ""; };
       form.querySelectorAll("[name=vmode]").forEach(r => r.addEventListener("change", sync));
+      const picNote = () => { form.querySelector("[data-vpic-ai]").hidden = form.querySelector("[name=vpicmode]:checked")?.value !== "ai"; };
+      form.querySelectorAll("[name=vpicmode]").forEach(r => r.addEventListener("change", picNote)); picNote();
       const start = o.mode || (account?.guest ? "new" : "article");
       form.querySelector(`[name=vmode][value=${start}]`).checked = true; sync();
       leaveNewOnFile(form, "vmode", "article");
@@ -1765,7 +1769,7 @@ const MAKERS = {
         "building the timeline": "Building the timeline…", "rendering the video": "Rendering the video — about a minute…" };
       const r = await pollJob(job, j => STAGES[j.stage] || "Working on it…");
       return { file_id: r.file_id, n: (r.files || []).length, edit: true,
-        msg: `Your ${Math.round(r.duration)}-second video is open on the timeline; the MP4 is in your workspace` };
+        msg: `Your ${Math.round(r.duration?.actual ?? r.duration)}-second video is open on the timeline; the MP4 is in your workspace` };
     },
   },
   photo: {
@@ -1926,12 +1930,13 @@ const MAKERS = {
       <div class="checks"><label><input type="checkbox" name="out" value="docx" checked> Word document (.docx)</label>
       <label><input type="checkbox" name="out" value="pdf" checked> New, clean PDF</label>
       <label><input type="checkbox" name="out" value="searchable_pdf"> Searchable PDF — keeps the original look</label>
+      <label><input type="checkbox" name="out" value="review_pdf"> Review PDF — each page next to its text, doubtful words highlighted</label>
       <label><input type="checkbox" name="out" value="txt"> Plain text (.txt)</label>
       <label><input type="checkbox" name="out" value="fillable_pdf"> Fillable form — a printed form rebuilt with real fields</label></div></fieldset>
       <label>Language<select name="lang"><option value="">Detect automatically</option><option>English</option><option>German</option>
         <option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Dutch</option>
         <option>Polish</option><option>Czech</option><option>Hungarian</option><option>Romanian</option><option>Swedish</option><option>Latin</option></select></label>
-      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised.</p>
+      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised. A word read with doubt is never guessed silently: it is highlighted in Word with a comment (and marked [word?] in plain text).</p>
       ${styleField("document")}`,
     wire() {},
     async submit(fd, form) {
@@ -1946,6 +1951,8 @@ const MAKERS = {
       if (r.words) parts.push(`${r.words.toLocaleString("en")} words`);
       if (r.figures) parts.push(`${r.figures} picture${r.figures > 1 ? "s" : ""}`);
       if (r.fields?.length) parts.push(`${r.fields.length} form fields`);
+      const doubt = (r.readings?.uncertain || 0) + (r.readings?.illegible || 0);
+      if (doubt) parts.push(`${doubt} doubtful word${doubt > 1 ? "s" : ""} highlighted to check`);
       // a szerkesztőbe: a Word-dokumentum, ha kérte; különben az első PDF (PDF-szerkesztő), végül az első kimenet
       const open = r.files.find(x => x.file_id.endsWith(".docx")) || r.files.find(x => x.file_id.endsWith(".pdf")) || r;
       const where = EDITOR_NAMES[editorsFor(extOf(open.file_id))[0]?.[0]];

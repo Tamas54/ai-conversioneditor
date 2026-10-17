@@ -7,7 +7,8 @@
     }
 
 Elrendezések: cover · section · bullets (+image) · image_left · image_right · full_image · quote (+image)
-· stats · chart · table · gallery · closing. Minden diához "notes" (előadói jegyzet) adható; a stockképek
+· stats · chart (a videó ábráival is — vízesés, lejtő, sáv, vonalak, pont, verseny: app/tools/pptx_charts.py) · table · gallery · diagram (döntési fa / sávos folyamat / kapcsolati háló, natív alakzatokkal —
+ugyanaz a leírás és elrendezés, mint a videó ábrájáé: app/tools/diagrams.py) · closing. Minden diához "notes" (előadói jegyzet) adható; a stockképek
 forrásmegjelölése automatikusan a jegyzetbe kerül.
 
 A betűk alapból Cambria / Calibri: a PowerPointban megvannak, a szerveren a metrikailag egyező
@@ -16,6 +17,7 @@ Caladea / Carlito rajzolja az előnézetet, így a tördelés mindkét helyen ug
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from app.storage import output_path, public_url, write_meta
@@ -23,7 +25,7 @@ from app.storage.files import new_file_id
 from app.tools import images
 
 LAYOUTS = {"cover", "section", "bullets", "image_left", "image_right", "full_image", "quote",
-           "stats", "chart", "table", "gallery", "closing"}
+           "stats", "chart", "table", "gallery", "diagram", "closing"}
 DEFAULT_THEME = {
     "primary": "#14213D", "accent": "#FCA311", "bg": "#FFFFFF", "panel": "#F4F5F7",
     "text": "#1E2430", "muted": "#6B7280", "font_heading": "Cambria", "font_body": "Calibri",
@@ -32,25 +34,40 @@ W_IN, H_IN, M_IN = 13.333, 7.5, 0.6
 _FULL = W_IN / H_IN
 
 
-def _theme(spec: dict[str, Any]) -> dict[str, str]:
-    t = dict(DEFAULT_THEME)
+async def _brand_kit(spec: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """→ (spec, a pakli arculata). Ugyanaz a feloldás, mint a dizájnnál és a videónál (app.brands.user.resolve): a
+    felhasználó mentett arculata név/„mine” szerint, az alapértelmezett automatikusan (ha be van kapcsolva),
+    "none" = ki; a beépített katalógus a tartalék."""
     theme = spec.get("theme")
-    if isinstance(theme, str):                       # „theme": "executive" — név, nem színek: brandként próbáljuk
-        from app.brands import get_brand
-        if get_brand(theme) is None or spec.get("brand"):
+    if isinstance(theme, str):                       # „theme": "executive" — név, nem színek: arculatként próbáljuk
+        if spec.get("brand"):
             raise ValueError(f'"theme" is an object of colors, e.g. {{"primary": "#1F3A5F", "accent": "#D9822B"}} '
                              f'(keys: {", ".join(DEFAULT_THEME)}); for a saved brand use "brand": "<name>"')
         spec = {**spec, "brand": theme, "theme": None}
     elif theme is not None and not isinstance(theme, dict):
         raise ValueError('"theme" must be an object of colors, e.g. {"primary": "#1F3A5F", "accent": "#D9822B"}')
-    if spec.get("brand"):
+    from app.brands import user as user_brands
+    try:
+        kit = await user_brands.resolve(spec.get("brand"))
+    except ValueError:
+        if isinstance(theme, str):
+            raise ValueError(f'"theme": {theme!r} is not a brand — give colors, e.g. {{"primary": "#1F3A5F", '
+                             f'"accent": "#D9822B"}} (keys: {", ".join(DEFAULT_THEME)})') from None
+        raise
+    return spec, kit
+
+
+def _theme(spec: dict[str, Any], kit: Optional[dict[str, Any]] = None) -> dict[str, str]:
+    t = dict(DEFAULT_THEME)
+    if kit and kit.get("_registry"):                 # beépített katalógus-arculat: a pontos színei és betűi
         from app.brands import get_brand
-        b = get_brand(spec["brand"])
-        if b is None:
-            raise ValueError(f"Unknown brand: {spec['brand']}")
+        b = get_brand(kit["_registry"])
         t.update(primary=b.colors.primary, accent=b.colors.accent, bg=b.colors.body_bg, panel=b.colors.panel_bg,
                  text=b.colors.text_primary, muted=b.colors.text_muted,
                  font_heading=b.fonts.heading, font_body=b.fonts.body)
+    elif kit:                                        # a felhasználó mentett arculata — ugyanúgy, mint a dizájnon
+        from app.tools.design import apply_brand
+        t = apply_brand(t, kit)
     t.update({k: v for k, v in (spec.get("theme") or {}).items() if k in DEFAULT_THEME and v})
     return t
 
@@ -98,6 +115,177 @@ def _rgb(hexstr: str):
     from pptx.dml.color import RGBColor
     h = hexstr.lstrip("#")
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+# ---------- a pakli arculata a fájlban: ami később kerül bele, az örökli ----------
+# A ChatGPT-teszt (10-17): zöld–krém paklihoz adott videós dia FEHÉR lett — a háttér diánként volt festve, az új dia
+# az elrendezés (fehér) hátterét és a Calibrit kapta. Két általános javítás: (1) a pptx_build a mesterdiára és a
+# témába is beírja a hátteret, a betűket és a színeket — így a PowerPointban/DeckCraftban/nálunk később hozzáadott
+# dia is ilyen; (2) egy MEGLÉVŐ (bárki által készített) paklihoz adott dia a szomszédja hátterét és címstílusát kapja.
+
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def bake_theme(prs, t: dict[str, str]) -> None:
+    """A téma (háttér, címsor- és szövegbetű, szöveg-/akcentusszín) a mesterdián és a theme1.xml-ben."""
+    from lxml import etree
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    m = prs.slide_master
+    m.background.fill.solid()
+    m.background.fill.fore_color.rgb = _rgb(t["bg"])
+    try:
+        tp = m.part.part_related_by(RT.THEME)
+        root = etree.fromstring(tp.blob)
+        for tag, font in (("majorFont", t["font_heading"]), ("minorFont", t["font_body"])):
+            el = root.find(f".//{{{_A}}}fontScheme/{{{_A}}}{tag}/{{{_A}}}latin")
+            if el is not None and font:
+                el.set("typeface", font)
+        for slot, hexv in (("dk1", t["text"]), ("dk2", t["primary"]), ("accent1", t["accent"]), ("accent2", t["primary"])):
+            el = root.find(f".//{{{_A}}}clrScheme/{{{_A}}}{slot}")
+            if el is not None and hexv:
+                for ch in list(el):
+                    el.remove(ch)
+                etree.SubElement(el, f"{{{_A}}}srgbClr", val=hexv.lstrip("#").upper())
+        tp._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    except Exception:          # a téma kényelmi — a háttér a mesterdián így is megvan
+        pass
+
+
+def _bg(slide):
+    return slide._element.find(".//{http://schemas.openxmlformats.org/presentationml/2006/main}bg")
+
+
+def inherit_look(slide, ref) -> bool:
+    """Az új dia (saját háttér nélkül) a ref dia hátterét kapja — a képes háttér képével együtt. → átvette-e."""
+    from copy import deepcopy
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    if ref is None or _bg(slide) is not None or _bg(ref) is None:
+        return False
+    bg = deepcopy(_bg(ref))
+    r_embed = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+    for blip in bg.iter(f"{{{_A}}}blip"):
+        rid = blip.get(r_embed)
+        if rid:
+            blip.set(r_embed, slide.part.relate_to(ref.part.related_part(rid), RT.IMAGE))
+    slide._element.cSld.insert(0, bg)
+    return True
+
+
+def title_style(ref) -> dict[str, Any]:
+    """A ref dia címének stílusa (a legnagyobb betűs szöveg): betű, méret, szín, félkövér — az új dia címéhez."""
+    best: dict[str, Any] = {}
+    for shp in getattr(ref, "shapes", []):
+        if not shp.has_text_frame:
+            continue
+        for para in shp.text_frame.paragraphs:
+            for r in para.runs:
+                size = r.font.size.pt if r.font.size else None
+                if r.text.strip() and size and size > best.get("size", 0):
+                    color = None
+                    try:
+                        color = str(r.font.color.rgb) if r.font.color is not None and r.font.color.type is not None else None
+                    except Exception:
+                        pass
+                    best = {"size": size, "font": r.font.name, "color": color, "bold": r.font.bold}
+    return best
+
+
+def _lum(hexv: str) -> float:
+    h = hexv.lstrip("#")
+    c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def contrast(a: str, b: str) -> float:
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def bg_color(slide) -> Optional[str]:
+    """A dia tényleges egyszínű háttere (saját → elrendezés → mesterdia), ha egyszínű."""
+    for el in (slide, getattr(slide, "slide_layout", None), getattr(getattr(slide, "slide_layout", None), "slide_master", None)):
+        bg = _bg(el) if el is not None else None
+        if bg is not None:
+            clr = bg.find(f".//{{{_A}}}solidFill/{{{_A}}}srgbClr")
+            return clr.get("val") if clr is not None else None
+    return None
+
+
+def _theme_slot(prs, slot: str) -> Optional[str]:
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    try:
+        import re as _re
+        xml = prs.slide_master.part.part_related_by(RT.THEME).blob.decode("utf-8", "replace")
+        m = _re.search(rf"<a:{slot}>.*?(?:val|lastClr)=\"([0-9A-Fa-f]{{6}})\"", xml, _re.S)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def theme_text_color(prs) -> Optional[str]:
+    return _theme_slot(prs, "dk1")
+
+
+def theme_accent(prs) -> Optional[str]:
+    return _theme_slot(prs, "accent1")
+
+
+def readable(color: Optional[str], slide, prs) -> Optional[str]:
+    """A cím színe csak akkor öröklődik, ha az új dia hátterén olvasható (≥ 3:1); különben a téma szövegszíne,
+    végső esetben fekete/fehér — fehér cím krém háttéren nem maradhat."""
+    bg = bg_color(slide) or "FFFFFF"
+    if color and contrast(color, bg) >= 3:
+        return color
+    dk = theme_text_color(prs)
+    if dk and contrast(dk, bg) >= 3:
+        return dk
+    return "000000" if _lum(bg) > 0.4 else "FFFFFF"
+
+
+def neighbour(prs, pos: int):
+    """A pakli „tartalmi” mintadiája az új dia mellett: előbb a pos előtti, különben az utáni."""
+    slides = list(prs.slides)
+    for i in [pos - 1, pos + 1, *range(len(slides) - 1, -1, -1)]:
+        if 0 <= i < len(slides) and i != pos:
+            return slides[i]
+    return None
+
+
+def inherit_new_slides(before: Optional[Path], after: Path) -> int:
+    """Szerkesztés után (DeckCraft slide.new…): a BESZÚRT diák, amelyeknek nincs saját hátterük, a szomszédjukét
+    kapják. Beszúrt = a két dia-sorrend összevetésében új (a módosított meglévő dia nem; annak háttere marad).
+    → hány dia kapott hátteret."""
+    import difflib
+    import hashlib
+    from pptx import Presentation
+    from app.tools import content_digest
+    if before is None or before.suffix.lower() != ".pptx":
+        return 0
+    try:
+        a = [hashlib.sha1(repr(x).encode()).hexdigest() for x in content_digest._pptx(before)[1]]
+        b = [hashlib.sha1(repr(x).encode()).hexdigest() for x in content_digest._pptx(after)[1]]
+    except Exception:
+        return 0
+    added = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "insert":
+            added += range(j1, j2)
+        elif op == "replace" and j2 - j1 > i2 - i1:
+            added += range(j1 + (i2 - i1), j2)
+    if not added:
+        return 0
+    prs = Presentation(str(after))
+    slides = list(prs.slides)
+    if len(slides) != len(b):
+        return 0
+    n = 0
+    for i in added:
+        if inherit_look(slides[i], neighbour(prs, i)):
+            n += 1
+    if n:
+        prs.save(str(after))
+    return n
 
 
 def _rect(slide, x, y, w, h, color: str, alpha: Optional[float] = None):
@@ -162,6 +350,13 @@ def _title_size(text: str, big: int = 36) -> int:
     return big if n <= 32 else big - 6 if n <= 55 else big - 10
 
 
+def _fit(text: str, size: int, w_in: float, h_in: float) -> int:
+    """A cím betűmérete úgy, hogy tördelve beférjen a dobozába (a videó szövegillesztője, pontban) — a lent horgonyzott
+    cím így nem nő fel a fölötte lévő sorra (10-17: a címlap háromsoros címe ráírt a felső sorra)."""
+    from app.tools.video import _fit_size
+    return _fit_size(text, size, w_in * 72, h_in * 72)
+
+
 def _bullet_size(items: list) -> int:
     longest = max((len(str(i)) for i in items), default=0)
     if len(items) <= 4 and longest <= 70:
@@ -171,7 +366,7 @@ def _bullet_size(items: list) -> int:
 
 def _heading(slide, s, t, x=M_IN, w=W_IN - 2 * M_IN):
     title = s.get("title") or ""
-    _text(slide, x, 0.55, w, 1.0, title, size=_title_size(title), font=t["font_heading"], color=t["primary"],
+    _text(slide, x, 0.55, w, 1.0, title, size=_fit(title, _title_size(title), w, 1.1), font=t["font_heading"], color=t["primary"],
           bold=True, anchor="bottom")
     _rect(slide, x, 1.68, 0.9, 0.07, t["accent"])
 
@@ -189,8 +384,9 @@ def _cover(slide, s, t, img):
     _rect(slide, M_IN + 0.05, 4.05, 1.2, 0.09, t["accent"])
     title = s.get("title") or ""
     text_w = (W_IN * 0.62 - M_IN - 0.35) if img else (W_IN - 2 * M_IN)      # képes címdián a sötét panel szélessége
-    _text(slide, M_IN, 1.6, text_w, 2.35, title, size=_title_size(title, 54), font=t["font_heading"],
-          color="#FFFFFF", bold=True, anchor="bottom", spacing=1.0)
+    top = 2.2 if s.get("kicker") else 1.6                                    # a felső sor (kicker) a cím fölött marad
+    _text(slide, M_IN, top, text_w, 3.95 - top, title, size=_fit(title, _title_size(title, 54), text_w, 3.95 - top),
+          font=t["font_heading"], color="#FFFFFF", bold=True, anchor="bottom", spacing=1.0)
     if s.get("subtitle"):
         _text(slide, M_IN, 4.35, text_w if img else W_IN - 2.5 * M_IN, 1.4, s["subtitle"], size=22, font=t["font_body"],
               color="#F1F1F1")
@@ -208,7 +404,8 @@ def _section(slide, s, t, img, closing=False):
         _text(slide, M_IN, 1.5, 4, 1.4, f"{int(s['number']):02d}", size=72, font=t["font_heading"],
               color=t["accent"], bold=True)
     title = s.get("title") or ("Thank you!" if closing else "")
-    _text(slide, M_IN, 2.9, W_IN - 2 * M_IN, 1.6, title, size=_title_size(title, 46), font=t["font_heading"],
+    _text(slide, M_IN, 2.9, W_IN - 2 * M_IN, 1.6, title, size=_fit(title, _title_size(title, 46), W_IN - 2 * M_IN, 1.6),
+          font=t["font_heading"],
           color="#FFFFFF", bold=True, anchor="bottom", align="center" if closing else "left")
     if s.get("subtitle"):
         _text(slide, M_IN, 4.7, W_IN - 2 * M_IN, 1.2, s["subtitle"], size=20, font=t["font_body"], color="#E8E8E8",
@@ -302,9 +499,14 @@ def _wrap_categories(cats: list[Any], kind) -> list[str]:
 
 def _chart(slide, s, t):
     from pptx.chart.data import CategoryChartData, XyChartData
-    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
     from pptx.util import Inches, Pt
+    from app.tools import pptx_charts
     _heading(slide, s, t)
+    if pptx_charts.kind_of(s):        # a videó ábrái (vízesés, lejtő, sáv, vonalak, pont, verseny) — ugyanaz a leírás
+        s = pptx_charts.draw(slide, s, t, (M_IN, 2.0, W_IN - 2 * M_IN, 5.0), (M_IN, 1.95, W_IN - 2 * M_IN, H_IN - 1.95 - 0.62))
+        if s is None:
+            return
     kind = {"column": XL_CHART_TYPE.COLUMN_CLUSTERED, "bar": XL_CHART_TYPE.BAR_CLUSTERED, "line": XL_CHART_TYPE.LINE_MARKERS,
             "pie": XL_CHART_TYPE.PIE, "doughnut": XL_CHART_TYPE.DOUGHNUT, "area": XL_CHART_TYPE.AREA,
             "scatter": XL_CHART_TYPE.XY_SCATTER}.get(s.get("chart_type", "column"), XL_CHART_TYPE.COLUMN_CLUSTERED)
@@ -313,8 +515,8 @@ def _chart(slide, s, t):
         data = XyChartData()
         for se in series:
             ser = data.add_series(se.get("name", "Sorozat"))
-            for x, y in se.get("points") or []:
-                ser.add_data_point(float(x), float(y))
+            for pt in se.get("points") or []:
+                ser.add_data_point(float(pt[0]), float(pt[1]))
     else:
         data = CategoryChartData()
         data.categories = _wrap_categories(s.get("categories") or [], kind)
@@ -324,13 +526,7 @@ def _chart(slide, s, t):
     ch = gf.chart
     ch.font.size, ch.font.name = Pt(14), t["font_body"]
     if kind == XL_CHART_TYPE.BAR_CLUSTERED:
-        # PowerPoint alulról felfelé rajzolja a sávokat, a DeckCraft (szerkesztő, PDF) felülről lefelé (10-13) → a
-        # kategóriatengely fordítva, az értéktengely a maximumnál keresztez (lent marad): mindkettőben az első van felül
-        from pptx.oxml.ns import qn
-        ch.category_axis.reverse_order = True
-        vcr = ch._chartSpace.chart.plotArea.find(qn("c:valAx")).find(qn("c:crosses"))
-        if vcr is not None:
-            vcr.set("val", "max")
+        bars_top_down(ch)
     ch.has_title = False  # a dia címe a cím; a sorozatnévből gyártott diagramcím zavaró
     ch.has_legend = len(series) > 1 or kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT)
     if ch.has_legend:
@@ -338,9 +534,40 @@ def _chart(slide, s, t):
     pal = [t["primary"], t["accent"], "#2E7D6B", "#8E44AD", "#C0392B", "#7F8C8D"]
     plot = ch.plots[0]
     if kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT):
+        # a szelet aránya számmal is (egy kördiagram számok nélkül csak becslésre jó); a felirat színe a szelethez illik
+        show = s.get("data_labels", True)
+        if show:
+            plot.has_data_labels = True
+            dl = plot.data_labels
+            dl.show_percentage, dl.show_value, dl.show_category_name = True, False, False
+            dl.number_format, dl.number_format_is_linked = "0%", False
+            dl.font.size, dl.font.bold = Pt(16), True
         for k, pt in enumerate(plot.series[0].points if plot.series else []):
-            pt.format.fill.solid(); pt.format.fill.fore_color.rgb = _rgb(pal[k % len(pal)])
+            col = pal[k % len(pal)]
+            pt.format.fill.solid(); pt.format.fill.fore_color.rgb = _rgb(col)
+            if show:
+                pt.data_label.font.size, pt.data_label.font.bold = Pt(16), True
+                pt.data_label.font.color.rgb = _rgb("#FFFFFF" if contrast("#FFFFFF", col) >= contrast("#1B1F24", col) else "#1B1F24")
+                _percent_label(pt.data_label._dLbl)
         return
+    _axis_titles(ch, s, kind)
+    if s.get("data_labels"):
+        plot.has_data_labels = True
+        plot.data_labels.font.size = Pt(12)
+    if kind == XL_CHART_TYPE.XY_SCATTER:
+        # pont-feliratok: [x, y, "név"] — melyik pont melyik projekt / ország (név nélkül a pontfelhő kitalálós)
+        sides = _label_sides([pt for se in series for pt in se.get("points") or []], (W_IN - 2 * M_IN - 1.2) * 72, 5.0 * 72 - 90)
+        pos = {"right": XL_LABEL_POSITION.RIGHT, "left": XL_LABEL_POSITION.LEFT, "above": XL_LABEL_POSITION.ABOVE,
+               "below": XL_LABEL_POSITION.BELOW}
+        n = 0
+        for ser, se in zip(plot.series, series):
+            for k, pt in enumerate(se.get("points") or []):
+                if len(pt) > 2 and str(pt[2]).strip():
+                    tf = ser.points[k].data_label.text_frame
+                    tf.text = str(pt[2])
+                    tf.paragraphs[0].runs[0].font.size = Pt(12)
+                    ser.points[k].data_label.position = pos[sides[n]]
+                n += 1
     for k, ser in enumerate(plot.series):
         c = _rgb(pal[k % len(pal)])
         if kind in (XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.XY_SCATTER):
@@ -348,6 +575,9 @@ def _chart(slide, s, t):
             ser.marker.style, ser.marker.size = XL_MARKER_STYLE.CIRCLE, 9
             ser.marker.format.fill.solid(); ser.marker.format.fill.fore_color.rgb = c
             ser.marker.format.line.color.rgb = c
+            # a szerkesztő (DeckCraft) a vonal színét a sorozat KITÖLTÉSÉBŐL veszi (a vonalét nem nézi) — a PowerPoint és
+            # a LibreOffice a vonalét; így mindhárom ugyanazt a színt mutatja
+            ser.format.fill.solid(); ser.format.fill.fore_color.rgb = c
             if kind == XL_CHART_TYPE.XY_SCATTER:
                 ser.format.line.fill.background()
             else:
@@ -356,15 +586,110 @@ def _chart(slide, s, t):
             ser.format.fill.solid(); ser.format.fill.fore_color.rgb = c
 
 
+def bars_top_down(ch) -> None:
+    """PowerPoint alulról felfelé rajzolja a sávokat, a DeckCraft (szerkesztő, PDF) felülről lefelé (10-13) → a
+    kategóriatengely fordítva, az értéktengely a maximumnál keresztez (lent marad): mindkettőben az első van felül."""
+    from pptx.oxml.ns import qn
+    ch.category_axis.reverse_order = True
+    vcr = ch._chartSpace.chart.plotArea.find(qn("c:valAx")).find(qn("c:crosses"))
+    if vcr is not None:
+        vcr.set("val", "max")
+
+
+def _label_sides(points: list, plot_w: float, plot_h: float, size: float = 12.0) -> list[str]:
+    """Pontdiagram: minden pont nevének oldala (jobbra / balra / fölé / alá) úgy, hogy ne takarjon másik pontot és
+    korábbi nevet (10-17: a sűrű sarokban a „Hőközpont-automatika” az „Uszoda” nevére íródott) — a videó pont-
+    diagramjával közös elhelyező (motion_charts.label_sides). A becslés a rajzterület pontjaiban: a tengely a 0-tól
+    (vagy a legkisebb értéktől) a legnagyobbig fut."""
+    from app.tools.motion_charts import label_sides
+    xy = [(float(p[0]), float(p[1])) for p in points]
+    if not xy:
+        return []
+    x0, x1 = min(0.0, min(x for x, _ in xy)), max(x for x, _ in xy) or 1.0
+    y0, y1 = min(0.0, min(y for _, y in xy)), max(y for _, y in xy) or 1.0
+    P = [((x - x0) / ((x1 - x0) or 1) * plot_w, plot_h - (y - y0) / ((y1 - y0) or 1) * plot_h) for x, y in xy]
+    return label_sides(P, [str(p[2]) if len(p) > 2 else "" for p in points], (-40, -10, plot_w + 10, plot_h + 10),
+                       0.56 * size, size * 1.25)
+
+
+def _percent_label(dLbl) -> None:
+    """A szeletenkénti felirat (a saját színe miatt kell) a python-pptx alapján az ÉRTÉKET mutatná (showVal=1), nem az
+    arányt — itt is százalék, egész számra."""
+    from pptx.oxml.ns import qn
+    for tag, val in (("c:showVal", "0"), ("c:showPercent", "1"), ("c:showCatName", "0"), ("c:showSerName", "0")):
+        el = dLbl.find(qn(tag))
+        if el is not None:
+            el.set("val", val)
+    if dLbl.find(qn("c:numFmt")) is None:
+        dlbl_numfmt(dLbl, "0%")
+
+
+def dlbl_numfmt(dLbl, code: str) -> None:
+    """Számformátum EGY pont feliratára (a sorozat formátumát a pontonkénti felirat nem örökli)."""
+    from lxml import etree
+    from pptx.oxml.ns import qn
+    nf = dLbl.find(qn("c:numFmt"))
+    if nf is None:
+        nf = etree.SubElement(dLbl, qn("c:numFmt"))
+        anchor = next((dLbl.find(qn(t)) for t in ("c:tx", "c:layout", "c:idx") if dLbl.find(qn(t)) is not None), None)
+        anchor.addnext(nf)                                   # a séma sorrendje: idx, layout?, tx?, numFmt, spPr?, txPr?…
+    nf.set("formatCode", code); nf.set("sourceLinked", "0")
+
+
+def _axis_titles(ch, s: dict, kind) -> None:
+    """Tengelycímek (x_title / y_title, pl. „Beruházás, Mrd Ft”) — pontdiagramnál nélkülük nem tudni, mi a két tengely."""
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Pt
+    for key, axis in (("x_title", "category_axis"), ("y_title", "value_axis")):
+        text = str(s.get(key) or "").strip()
+        if not text:
+            continue
+        ax = getattr(ch, axis)
+        if kind == XL_CHART_TYPE.BAR_CLUSTERED:          # vízszintes sávnál a kategória függőleges, az érték vízszintes
+            ax = ch.value_axis if axis == "category_axis" else ch.category_axis
+        ax.has_title = True
+        ax.axis_title.text_frame.text = text
+        r = ax.axis_title.text_frame.paragraphs[0].runs[0]
+        r.font.size, r.font.bold = Pt(13), False
+
+
+def _table_layout(headers: list, rows: list, ncols: int, width_in: float, height_in: float) -> tuple[list[float], int, list[float]]:
+    """Oszlopszélesség a tartalomhoz (a hosszú szöveges oszlop széles, a számoszlop keskeny), betűméret és sormagasság úgy,
+    hogy a táblázat a cím és a lábléc közé férjen (10-17: egyforma oszlopokban a projektnevek három sorra törtek és a
+    LibreOffice a sorokat nem növelte — a szöveg a következő sorra csúszott)."""
+    from app.tools.video import _wrap
+    cells = [[str(r[c]) if c < len(r) else "" for c in range(ncols)] for r in ([headers] if headers else []) + rows]
+    want = []
+    for c in range(ncols):
+        col = [r[c] for r in cells]
+        longest_word = max((len(w) for x in col for w in x.split()), default=1) + 1.5   # számjegy, kötőjel: szélesebb a becslésnél
+        want.append(max(longest_word, min(max((len(x) for x in col), default=1), 34), 4))
+    tot = sum(want)
+    widths = [width_in * w / tot for w in want]
+    pad = 0.1 * 2                                                  # a cella alapértelmezett felső + alsó margója (in)
+
+    def heights(size: int) -> list[float]:
+        return [max(_wrap(x, size, widths[c] * 72 - 14)[0] for c, x in enumerate(r)) * size * 1.2 / 72 + pad for r in cells]
+    for size in (16, 15, 14, 13, 12, 11):
+        hs = heights(size)
+        if sum(hs) <= height_in:
+            break
+    return widths, size, hs
+
+
 def _table(slide, s, t):
     from pptx.util import Inches, Pt
     _heading(slide, s, t)
     headers, rows = s.get("headers") or [], s.get("rows") or []
     ncols = max([len(headers)] + [len(r) for r in rows] + [1])
+    widths, size, hs = _table_layout(headers, rows, ncols, W_IN - 2 * M_IN, H_IN - 2.1 - 0.75)
     shape = slide.shapes.add_table(len(rows) + (1 if headers else 0), ncols, Inches(M_IN), Inches(2.1),
-                                   Inches(W_IN - 2 * M_IN), Inches(0.5 * (len(rows) + 1)))
+                                   Inches(W_IN - 2 * M_IN), Inches(sum(hs)))
     tbl = shape.table
-    size = 16 if len(rows) <= 8 else 13
+    for c, w in enumerate(widths):
+        tbl.columns[c].width = Inches(w)
+    for r, h in enumerate(hs):
+        tbl.rows[r].height = Inches(h)
     all_rows = ([headers] if headers else []) + rows
     for r, row in enumerate(all_rows):
         for c in range(ncols):
@@ -391,6 +716,44 @@ def _gallery(slide, s, t, imgs):
         _picture(slide, img.path, x, 2.2, w, h)
         if k < len(caps):
             _text(slide, x, 2.3 + h, w, 0.7, caps[k], size=14, font=t["font_body"], color=t["muted"])
+
+
+def _diagram(slide, s, t, actors: dict[str, Any]) -> None:
+    """Magyarázó ábra a cím alatt: natív, szerkeszthető alakzatok (a videóéval azonos elrendezés és stílus)."""
+    from app.tools import diagrams
+    _heading(slide, {**s, "title": s.get("title") or s["diagram"].get("title") or ""}, t)
+    diagrams.to_pptx(slide, s["diagram"], t, (M_IN, 1.95, W_IN - 2 * M_IN, H_IN - 1.95 - 0.62), actors)
+
+
+def diagram_slides(spec: dict[str, Any]) -> dict[str, Any]:
+    """A diagram-diák leírása ellenőrizve és tárolható alakban (azonosítókkal) — építés ELŐTT, hogy a hiba gyorsan
+    és érthetően jöjjön (melyik dia, mit kell javítani)."""
+    from app.tools import diagrams
+    out = []
+    for i, s in enumerate(spec.get("slides") or [], 1):
+        if isinstance(s, dict) and s.get("layout") == "diagram":
+            d = s.get("diagram")
+            if not isinstance(d, dict) or not d.get("type"):
+                raise ValueError(f"Slide {i} (diagram): give diagram = {{\"type\": \"decision_tree\" | \"swimlane\" | "
+                                 "\"network\", \"nodes\": […], \"edges\": […]} — the same object as a video chart.")
+            try:
+                norm, _ = diagrams.from_plan(d)
+            except ValueError as e:
+                raise ValueError(f"Slide {i}: {e}") from None
+            s = {**s, "diagram": norm}
+        out.append(s)
+    return {**spec, "slides": out}
+
+
+def diagram_actors(spec: dict[str, Any], seed: Optional[str]) -> dict[str, Any]:
+    """A pakli szereplő-regisztere: diánként sorban, a megadott szín nyer, a többi az akcentusból — ugyanaz a
+    szereplő minden dián ugyanazt a színt kapja (a mentett leírásban is: spec["actors"])."""
+    from app.tools import diagrams
+    reg = dict(spec.get("actors") or {})
+    for s in spec.get("slides") or []:
+        if isinstance(s, dict) and s.get("layout") == "diagram":
+            reg = diagrams.register(s["diagram"], reg, seed)
+    return reg
 
 
 def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float = M_IN, right: float = W_IN - M_IN):
@@ -454,14 +817,25 @@ def _persist_spec(spec: dict[str, Any], by_slot: dict) -> dict[str, Any]:
     return saved
 
 
+def _chart_check(warn: list[str], info: list[str]) -> dict[str, Any]:
+    """A mozgó-grafikon-diák saját megjegyzése a check-be (a renderelt pakli-ellenőrzés ehhez fűződik)."""
+    if not (warn or info):
+        return {}
+    from app.tools import checks
+    return {"check": checks.make("needs_check" if warn else "ok", warn, info)}
+
+
 async def build(spec: dict[str, Any]) -> dict[str, Any]:
+    from app.tools import pptx_charts
+    spec = diagram_slides(spec)
+    chart_warn, chart_info = pptx_charts.check_slides(spec)   # a hibás ábra-leírás itt, építés előtt áll meg
     if spec.get("template_file_id"):          # a minta-pptx TELJES sablonként (mesterdiák, elrendezés, háttér, logó)
         from app.tools import pptx_template
         from app.tools.crafts import existing
         out = await pptx_template.build(spec, existing(spec["template_file_id"]))
         title = spec.get("title") or ((spec.get("slides") or [{}])[0].get("title")) or "deck"
         write_meta(out["file_id"], operation="pptx_build", label=f"{title[:50]}.pptx", extra={"deck_spec": out.pop("saved_spec")})
-        return out
+        return {**out, **_chart_check(chart_warn, chart_info)}
     from pptx import Presentation
     from pptx.util import Inches
     t0 = time.time()
@@ -471,7 +845,11 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
     bad = [s.get("layout") for s in slides if s.get("layout") not in LAYOUTS]
     if bad:
         raise ValueError(f"Unknown layout: {bad} (choose from {', '.join(sorted(LAYOUTS))})")
-    t = _theme(spec)
+    spec, kit = await _brand_kit(spec)
+    t = _theme(spec, kit)
+    actors = diagram_actors(spec, t["accent"])
+    if actors:
+        spec = {**spec, "actors": actors}
 
     reqs = await _pick_stock(_requests(slides), slides)
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
@@ -507,6 +885,9 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
                 _table(slide, s, t)
             elif lay == "gallery":
                 _gallery(slide, s, t, [by_slot[(i, j)] for j in range(len((s.get("images") or [])[:4]))])
+            elif lay == "diagram":
+                from app.tools import diagrams
+                _diagram(slide, s, t, {k: actors[k] for k in diagrams.actor_names(s["diagram"])})
             if lay not in ("cover",):
                 # bal oldali képnél a lábléc a kép mellé kerül (ne a fotóra)
                 left = (W_IN / 2 if lay == "image_left" else 4.6 if lay == "quote" and img else 0) + M_IN
@@ -517,6 +898,7 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
             notes = "\n".join(filter(None, [s.get("notes"), *credits]))
             if notes:
                 slide.notes_slide.notes_text_frame.text = notes
+        bake_theme(prs, t)
         fid = new_file_id("pptx")
         prs.save(str(output_path(fid)))
         saved = _persist_spec(spec, by_slot)
@@ -532,4 +914,6 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
         "images": [{"slot": f"s{i + 1}" + (f".{j + 1}" if j >= 0 else ""), "file_id": x.source_file_id,
                     "credit": x.attribution} for ((i, j), x) in by_slot.items()],
         "ms_elapsed": int((time.time() - t0) * 1000),
+        **({"brand": kit.get("name")} if kit and kit.get("name") else {}),
+        **_chart_check(chart_warn, chart_info),
     }

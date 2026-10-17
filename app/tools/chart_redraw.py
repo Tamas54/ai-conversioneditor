@@ -117,6 +117,22 @@ def _palette_from_brand(brand_name: str) -> list[str]:
     ]
 
 
+async def _palette_for(brand: str) -> list[str]:
+    """Ugyanaz az arculat-feloldás, mint a dizájnnál, a paklinál és a videónál (app.brands.user.resolve)."""
+    from app.brands import user as user_brands
+    kit = await user_brands.resolve(brand)
+    if kit is None:
+        raise ValueError(f"brand: {brand!r} is switched off — give a brand name, \"mine\", or a palette")
+    if kit.get("_registry"):
+        return _palette_from_brand(kit["_registry"])
+    c = kit.get("colors") or {}
+    cols = [c.get("primary"), c.get("accent"), *(c.get("extra") or [])]
+    cols = [x for x in cols if isinstance(x, str) and x.startswith("#")]
+    if not cols:
+        raise ValueError(f"brand {kit.get('name') or brand!r} has no colours to draw with — give a palette")
+    return cols + ["#6B7280", "#AAB3C2"]
+
+
 async def chart_redraw(
     image_file_id: str,
     *,
@@ -133,7 +149,7 @@ async def chart_redraw(
     Args:
       image_file_id: source chart image
       palette: explicit hex color list (takes precedence over brand)
-      brand: brand name from catalog (e.g. 'hni_policy_brief')
+      brand: the person's saved brand (name or "mine"), or a catalog brand (e.g. 'hni_policy_brief')
       chart_type_override: force a different chart type than detected
       title_override: replace the chart title
       width_px, height_px: output dimensions
@@ -152,9 +168,9 @@ async def chart_redraw(
     # 1. Extract structure via vision
     structure = await _read_chart_structure(src)
 
-    # 2. Resolve palette
+    # 2. Resolve palette — a felhasználó mentett arculata (név / "mine"), különben a beépített katalógus
     if palette is None and brand is not None:
-        palette = _palette_from_brand(brand)
+        palette = await _palette_for(brand)
 
     # 3. Re-render
     chart_type = chart_type_override or structure["chart_type"]

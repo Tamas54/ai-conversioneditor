@@ -98,6 +98,8 @@ def _retryable(e: BaseException) -> bool:
 async def _call_model(model: str, messages: list[dict], thinking: bool = True, json_mode: bool = True) -> str:
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
+    from app import billing
+    await billing.ai_step()          # MCP-ről: a szerver saját modellje dolgozik — AI-lépés (havi keret, felette kredit)
 
     async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT_S) as client:
         r = await client.post(

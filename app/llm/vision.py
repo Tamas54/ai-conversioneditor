@@ -99,6 +99,8 @@ async def _call(messages: list[dict[str, Any]], *, response_format: Optional[dic
     """
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
+    from app import billing
+    await billing.ai_step()          # MCP-ről: a szerver saját modellje dolgozik — AI-lépés (havi keret, felette kredit)
     payload: dict[str, Any] = {
         "model": model or settings.LLM_MODEL_VISION,  # DeepSeek-V4.1-Flash (leírás/kérdés/OCR)
         "messages": messages,

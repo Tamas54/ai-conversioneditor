@@ -1,7 +1,11 @@
 """Csomagok, kreditek, havi keretek és Stripe (Checkout + ügyfélportál + webhook).
 
 Árazás (10-11, a mért önköltségre): 1 kredit ≈ €0,10. Kreditbe az kerül, amibe kép kerül (FLUX/Kontext 3–4 ¢);
-a szöveges AI (DeepSeek, ~0,1 ¢/hívás) az előfizetésben „fair use”, az ingyenes fióknak havi keret.
+a szöveges AI (DeepSeek, ~0,1 ¢/hívás) a webes felületen az előfizetésben „fair use”, az ingyenes fióknak havi keret.
+MCP-n (ChatGPT, Claude… — a gondolkodás a kliens modelljén, a felhasználó előfizetésén fut) a szerver SAJÁT
+modellhívása (képválasztás látómodellel, képkereső szavak, cikkből forgatókönyv, képleírás, tényellenőrzés…) egy
+„AI-lépés”: havi keret, felette 20 lépésenként 1 kredit, előre (Kommandant 10-17: „ez is kredites legyen”). Ami már
+fizet (szkennelt oldal, fotó-helyreállítás kredittel), annak a modellhívása nem számít külön (prepaid).
 Stripe-termékeket NEM kell előre felvenni: a Checkout price_data-val dolgozik. Kulcs nélkül a fizetés
 „hamarosan” állapotú, minden más (keretek, kreditek) működik.
 
@@ -37,17 +41,18 @@ WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 PLANS: dict[str, dict[str, Any]] = {
     "free": {"name": "Free", "monthly_credits": 10,
              "quota": {"deck": 3, "revise": 20, "document": 10, "photo_edit": 10, "scan_pages": 100, "form_pages": 20, "check": 40},
-             "batch": 10, "retention_days": 30, "api_tasks": 250},
+             "batch": 10, "retention_days": 30, "api_tasks": 250, "ai_steps": 60},
     "plus": {"name": "Plus", "month": 9, "year": 90, "monthly_credits": 150,
              "quota": {"deck": 300, "revise": 3000, "document": 1000, "photo_edit": 1500, "scan_pages": 1000, "form_pages": 500, "check": 3000},
-             "batch": 50, "retention_days": 90, "api_tasks": 5000},
+             "batch": 50, "retention_days": 90, "api_tasks": 5000, "ai_steps": 1500},
     "pro": {"name": "Pro", "month": 19, "year": 190, "monthly_credits": 400,
             "quota": {"deck": 1500, "revise": 15000, "document": 5000, "photo_edit": 8000, "scan_pages": 5000, "form_pages": 2500, "check": 15000},
-            "batch": 200, "retention_days": 365, "api_tasks": 25000},
+            "batch": 200, "retention_days": 365, "api_tasks": 25000, "ai_steps": 6000},
 }
 PACKS = {"pack100": {"credits": 100, "price": 10}, "pack300": {"credits": 300, "price": 25}}
 SCAN_PAGES_PER_CREDIT = 20          # a havi oldalkeret felett
 API_TASKS_PER_CREDIT = 20           # REST API: a havi feladatkeret felett 20 feladatonként 1 kredit
+AI_STEPS_PER_CREDIT = 20            # MCP: a szerver saját modellhívásai a havi keret felett 20-anként 1 kredit
 
 
 def enabled() -> bool:
@@ -105,22 +110,93 @@ async def scan_pages(n: int) -> int:
     return credits
 
 
+async def _metered(uid: str, kind: str, n: int, per_credit: int, reason: str) -> int:
+    """Havi keret (PLANS[plan][kind]), felette per_credit egységenként 1 kredit, a blokk ELEJÉN levonva (előre fizet,
+    fedezet nélkül nem indul — InsufficientCredits). Vissza: levont kredit."""
+    from app import db
+    plan = await plan_of(uid)
+    limit = PLANS[plan].get(kind, 0)
+    before = await db.usage_get(uid, month_key(), kind)
+    after = before + n
+    over_before, over_after = max(0, before - limit), max(0, after - limit)
+    blocks = -(-over_after // per_credit) - -(-over_before // per_credit)
+    if blocks:
+        await db.credits_spend(uid, blocks, reason, ref=f"{n} {kind.replace('_', ' ')}")
+    await db.usage_add(uid, month_key(), kind, n, None)
+    return blocks
+
+
 async def api_task(uid: str, n: int = 1) -> int:
     """REST API: egy (vagy n) feldolgozó feladat (átalakítás, eszköz) a havi keretből; felette 20-anként 1 kredit,
     a 20-as blokk ELEJÉN levonva (így előre fizet, és fedezet nélkül nem indul). Vissza: levont kredit."""
     from app import db
     if uid == tenancy.ADMIN_ID or not db.enabled() or tenancy.is_guest(uid):
         return 0
+    return await _metered(uid, "api_tasks", n, API_TASKS_PER_CREDIT, "API tasks over the monthly allowance")
+
+
+# ---------- MCP: a szerver saját modellhívásai ----------
+
+from contextlib import contextmanager  # noqa: E402
+from contextvars import ContextVar  # noqa: E402
+
+_prepaid: ContextVar[bool] = ContextVar("aice_ai_prepaid", default=False)
+_steps: ContextVar[Optional[list]] = ContextVar("aice_ai_steps", default=None)   # [lépés, kredit] — a hívás eredményébe
+
+
+@contextmanager
+def prepaid():
+    """A művelet már fizetett (oldalkeret, kredit) — a benne futó modellhívás nem AI-lépés."""
+    tok = _prepaid.set(True)
+    try:
+        yield
+    finally:
+        _prepaid.reset(tok)
+
+
+@contextmanager
+def count_steps():
+    """Egy MCP-hívás alatt elhasznált AI-lépések és kreditek (a burkoló teszi az eredménybe: studio_ai)."""
+    box = [0, 0]
+    tok = _steps.set(box)
+    try:
+        yield box
+    finally:
+        _steps.reset(tok)
+
+
+class AIStepsExhausted(ValueError):
+    """A havi AI-lépések elfogytak és nincs kredit — érthető üzenet, mit tehet a kliens maga."""
+
+
+AI_STEPS_HOW = ("This step runs the Studio's own AI model (picking pictures, finding image search words, writing a "
+                "script, describing an image, checking facts…). Add credits (Plans), or do that part yourself — you are "
+                "an AI too: give each scene its own image (a URL or file_id) or \"image_query\" English words, pass a "
+                "finished scenes=[…] plan, look at pictures with files(action=\"preview\"), and use the editing commands "
+                "directly instead of edit_with_instruction.")
+
+
+async def ai_step(n: int = 1) -> int:
+    """MCP-ről indult munka közben a szerver saját modellhívása: havi keret (ai_steps), felette 20 lépésenként 1
+    kredit. Webes használatban nem számol (ott a csomagkeretek a fair use), és nem számol, ami már fizetett."""
+    from app import db
+    if not tenancy.client_makes_images.get() or _prepaid.get():
+        return 0
+    uid = tenancy.current_user_id()
+    box = _steps.get()
+    if box is not None:
+        box[0] += n
+    if uid == tenancy.ADMIN_ID or tenancy.is_guest(uid) or not db.enabled():
+        return 0
     plan = await plan_of(uid)
-    limit = PLANS[plan].get("api_tasks", 0)
-    before = await db.usage_get(uid, month_key(), "api_tasks")
-    after = before + n
-    over_before, over_after = max(0, before - limit), max(0, after - limit)
-    blocks = -(-over_after // API_TASKS_PER_CREDIT) - -(-over_before // API_TASKS_PER_CREDIT)
-    if blocks:
-        await db.credits_spend(uid, blocks, "API tasks over the monthly allowance", ref=f"{n} task(s)")
-    await db.usage_add(uid, month_key(), "api_tasks", n, None)
-    return blocks
+    try:
+        spent = await _metered(uid, "ai_steps", n, AI_STEPS_PER_CREDIT, "Studio AI steps over the monthly allowance (MCP)")
+    except db.InsufficientCredits:
+        raise AIStepsExhausted(f"Your {PLANS[plan]['ai_steps']:,} Studio AI steps for this month are used up and there "
+                               f"are no credits left (1 credit = {AI_STEPS_PER_CREDIT} more steps). " + AI_STEPS_HOW) from None
+    if box is not None:
+        box[1] += spent
+    return spent
 
 
 async def monthly_topup(uid: str) -> None:
@@ -285,7 +361,7 @@ async def plans() -> dict[str, Any]:
     return {"enabled": enabled(), "currency": CURRENCY, "credit_eur": 0.10,
             "plans": {k: {kk: vv for kk, vv in v.items()} for k, v in PLANS.items()}, "packs": PACKS,
             "costs": {"ai_image": settings.IMAGE_CREDIT_COST, "restore": 2, "colourise": 1,
-                      "scan_pages_per_credit": SCAN_PAGES_PER_CREDIT}}
+                      "scan_pages_per_credit": SCAN_PAGES_PER_CREDIT, "ai_steps_per_credit": AI_STEPS_PER_CREDIT}}
 
 
 @router.post("/api/billing/checkout")
