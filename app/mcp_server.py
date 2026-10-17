@@ -877,6 +877,13 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
                                                          labels the dot), x_title?, y_title? (axis
                                                          titles with the unit — a scatter needs both),
                                                          data_labels? (pie/doughnut: % on by default)}
+      chart with the video's chart shapes — one object works in both (the video chart object under "chart", or its
+              fields on the slide with chart_type), unit? on all: waterfall {items: [{label, value}] (a start, then
+              + / − changes), total_label?, total?} | slope {labels: [before, after], items: [{label, from, to}]} |
+              band {items: [{label, value, low?, high?}], forecast_from?} | lines {labels, series: [{name, values}]}
+              | scatter {x_title, y_title, items: [{label, x, y, size?}]} | race {labels, items: [{label, values}]}.
+              waterfall, lines, race: native charts (race = its last period as a ranking; the race moves only in the
+              video). slope, band, scatter: native shapes, the same in the editor, PowerPoint and Keynote.
       table {title, headers, rows}                 gallery {title, images[≤4], captions?}
       diagram {title, diagram: {type: decision_tree | swimlane | network, nodes, edges, …}} — the same object as
               a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the

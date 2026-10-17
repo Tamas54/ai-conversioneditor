@@ -86,7 +86,8 @@ _DECK_PROMPT = """You revise a presentation given as JSON. Apply the user's requ
 object (same structure). Keep everything the request does not mention exactly as it is.
 Layouts: cover {{title, subtitle, kicker}} · section {{title, subtitle, number}} · bullets {{title, bullets[], image?}} ·
 image_left|image_right {{title, bullets[] or text, image}} · full_image {{title, caption, image}} · quote {{quote, author}} ·
-stats {{title, stats:[{{value,label}}]}} · chart {{title, chart_type: column|bar|line|pie, categories[], series:[{{name, values[]}}]}} ·
+stats {{title, stats:[{{value,label}}]}} · chart {{title, chart_type: column|bar|line|pie, categories[], series:[{{name, values[]}}]}}
+(chart_type waterfall|slope|band|lines|scatter|race, or a "chart" object, keep their own fields: items, labels, unit…) ·
 table {{title, headers[], rows[][]}} · gallery {{title, images[]}} · closing {{title, subtitle}}.
 Pictures: strings like "IMAGE#3" are existing pictures — keep them unless asked to change them. For a NEW picture use
 {{"query": "2-4 plain English words, the main noun last"}} (stock photo, free) or {{"ai": "prompt"}} (generated, costs a credit — only if asked).
