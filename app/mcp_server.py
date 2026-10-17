@@ -1776,6 +1776,23 @@ async def video(
       The map widens to show every placed element. Anything left out of a graphic (unknown shape, no position, a
       number not in the source) is listed in the check's findings. Up to 80 elements, each its own layer (editable by hand); a text
       with a number that isn't in the source is left out (the check says which).
+      Explainer diagrams — give the relationship, the server lays it out (9:16, 16:9 and 1:1 each their own way) and builds
+      it up step by step: {"type": "decision_tree" | "swimlane" | "network", "title"?, "nodes": [{"id", "text" (≤ 70
+      characters), "kind"? (tree: question|condition|outcome · swimlane: start|step|decision|end), "actor"? (swimlane: its
+      lane) | "group"? (network colour + legend), "order"? (swimlane: same order = same column), "size"? 1–3, "at"? (seconds:
+      when it appears)}], "edges": [{"from", "to", "label"? ("yes", "if …", an amount), "kind"? sequence (then — the default)
+      | hierarchy (is above) | money (money/goods flow, thicker) | cause | correlation (moves together: never drawn as a
+      cause, no arrowhead) | link, "certainty"? certain | uncertain (dashed) | disputed (dotted + ?)}], "actors"? {"Name":
+      {"color"?, "short"?}} (the same actor keeps its colour in every scene and edit), "reveal"? steps (default: tree root
+      then branch by branch, swimlane in order, network centre then rings — the new part bright, the rest faded) | all,
+      "pace"? seconds per step (the scene lengthens to fit), "focus"? false (no fading), "direction"? auto | down | right |
+      outline (tree as indented rows), "center"? (network node id)}. Shorthands: tree "root" + nested "branches": [{"label",
+      "text", "kind"?, "branches"?}]; swimlane "steps" (= nodes; without edges they follow in order); network edges alone
+      (names as from/to). The legend lists the arrow kinds used. Numbers in boxes and labels are checked against the
+      source (a label without one is left out, a box without one drops the diagram); a broken diagram is refused with
+      what to fix. Change one with action=edit {"chart": {…}} WITHOUT "type": only the nodes (by id) and edges (by
+      from + to) you send change — e.g. {"edges": [{"from": "a", "to": "b", "certainty": "uncertain"}]}, {"nodes": [{"id":
+      "n3", "branches": [{"label", "text"}]}]} adds branches, {"remove": true} deletes, {"pace": 1.5} slows the build-up.
       script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
       comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
       {"type": "script", "title"?, "backdrop"?, "code": "…"}; the code gets comp (the scene composition), W, H, dur
