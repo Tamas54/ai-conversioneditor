@@ -2408,7 +2408,8 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
 
     story["layers"] = layers
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": keep,
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "music": body.get("music"),
+            "keep_wording": keep,
             "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language"),
             "requested": float(dur) if dur else None, "duration_mode": body.get("duration_mode"), "alpha": body.get("alpha"),
             "layer_source": text}
@@ -2461,7 +2462,8 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
     dur = body.get("duration")
     total = float(min(max(float(dur), 10), 180)) if dur else None
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
-            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "keep_wording": False,
+            "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "music": body.get("music"),
+            "keep_wording": False,
             "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language"),
             "requested": float(dur) if dur else None, "duration_mode": body.get("duration_mode"), "alpha": body.get("alpha"),
             "layer_source": text}
@@ -2886,6 +2888,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             kept = opts.get(f"{base}_asset")          # szerkesztés: a szülőprojekt hangja marad
             if base == "voice" and kept == NARRATION_ASSET:
                 kept = None                           # …kivéve az AI-narrációt: az a (módosult) szövegből újra készül
+            if base == "music" and _builtin_music(opts):
+                kept = None                           # …és a beépített zenét: az a tárból, az új hosszra készül újra
             if not fid and kept and parent_assets.get(kept):
                 shutil.copyfile(crafts.existing(parent_assets[kept]), work / kept)
                 if base == "voice":
@@ -2955,6 +2959,11 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 pre_verified = list(pre_verified or []) + [f"AI narration ({narr_key}): {len(segs)} part(s) read aloud — {how}."]
         if narr_note:
             pre_findings = list(pre_findings or []) + [narr_note]
+        music, track, m_v, m_f = await _music_under(opts, work, D["total"], work / voice if voice else None, music,
+                                                    story.get("title") or "")
+        if track:
+            D["audio"].update(music=track, musicDb=0 if track != music else (-20 if voice else -10))
+        pre_verified, pre_findings = list(pre_verified or []) + m_v, list(pre_findings or []) + m_f
         # időkódos rétegek a fő idővonalon (abszolút időben, a narráció után kialakult hosszon)
         lang = _lang_of(" ".join([story.get("title") or ""] + [x.get("caption") or "" for x in story.get("scenes") or []]))
         D["layers"], layer_rows, layer_problems = layer_comps(story.get("layers") or [], W, H, D["total"], lang, D["accent"],
@@ -2987,7 +2996,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         spec = {"story": _without_runtime(story), "pictures": [({"asset": nm, "credit": cr, "src": _src(sp)} if nm else None)
                                               for nm, cr, sp in zip(names, per_credit, specs)],
                 "opts": {"fmt": fmt, "total": total, "accent": opts.get("accent"), "ken_burns": kb, "voice_asset": voice,
-                         "music_asset": music, "keep_wording": bool(opts.get("keep_wording")),
+                         "music_asset": music, "music": opts.get("music") if _builtin_music(opts) else None,
+                         "keep_wording": bool(opts.get("keep_wording")),
                          "narration": narr_key or ("none" if str(opts.get("narration") or "").lower() in _NO_NARRATION else None),
                          "narration_voice": opts.get("narration_voice"), "language": opts.get("language"),
                          "requested": requested, "duration_mode": opts.get("duration_mode"), "alpha": opts.get("alpha")},
@@ -2997,7 +3007,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                 "timeline": D.get("timeline"), "layer_timeline": layer_rows}
         write_meta(pid, label=f"{stem}.ecproj", operation=operation, source_file_id=source_file_id,
                    extra={"video": info_meta, "group": group, "credit": credits or None, "spec": spec})
-        for name in [x for x in names if x] + [x for x in (voice, music) if x] + extra + gfx_names:
+        for name in [x for x in names if x] + list(dict.fromkeys(x for x in (voice, music, track) if x)) + extra + gfx_names:
             add_asset(pid, name, work / name)
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": fmt,
                                   "duration": {"requested": requested, "actual": D["total"], "mode": mode},
@@ -3117,7 +3127,7 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
             step(0, 4, "turning the footage upright")
             base["media_id"], base["asset"] = await _upright(crafts.existing(fid)), "footage.mp4"
             base["rotated"] = int(info["rotation"])
-        opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"),
+        opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": body.get("music"),
                 "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title")}
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
@@ -3125,6 +3135,53 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
+
+
+def check_music(choice: Any) -> None:
+    """A zene-választás ellenőrzése a munka indítása ELŐTT (ne egy perc renderelés után bukjon el)."""
+    c = str(choice or "").strip().lower()
+    if not c or c in _NO_NARRATION:
+        return
+    from app.tools import music as music_lib
+    if music_lib.find(c) is None and c not in music_lib.moods():
+        raise ValueError(f"music: {choice!r} — choose a mood ({', '.join(music_lib.moods())}), a track id, or \"none\"")
+
+
+def _builtin_music(opts: dict[str, Any]) -> bool:
+    """A beépített zenetárból kér-e zenét (hangulat vagy darab), saját zenefájl nélkül."""
+    c = str(opts.get("music") or "").strip().lower()
+    return bool(c) and c not in _NO_NARRATION and not opts.get("music_file_id")
+
+
+async def _ffmpeg_audio(src: Path, dst: Path) -> None:
+    from app.convert.engines import run
+    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn", "-ac", "2", "-ar", "48000", str(dst),
+              timeout=settings.VIDEO_TIMEOUT_S)
+
+
+async def _music_under(opts: dict[str, Any], work: Path, total: float, speech: Optional[Path], user_music: Optional[str],
+                       seed: str) -> tuple[Optional[str], Optional[str], list[str], list[str]]:
+    """Háttérzene: a beépített tárból (opts.music = hangulat vagy darab, a videó hosszára hurkolva) vagy a saját zene;
+    ha van beszéd (narráció, saját hang, a felvétel hangja), a zene alatta halkul (sidechain), a szünetekben visszajön.
+    → (az eredeti zene neve — a spec ebből halkít újra szerkesztéskor —, a projektbe kerülő sáv, verified, findings)."""
+    from app.tools import music as music_lib
+    verified: list[str] = []
+    orig, label = user_music, "Your music"
+    if not user_music and _builtin_music(opts):
+        t = music_lib.pick(str(opts["music"]).strip().lower(), seed)
+        if t is None:
+            return None, None, [], ["The built-in music library isn't installed on this server — the video has no music "
+                                    "(give music_file_id with your own)."]
+        await music_lib.bed(t, total, work / "music.wav")
+        orig, label = "music.wav", f"Music: “{t['title']}” ({t['mood']}, {t.get('genre')}; CC0 — no credit needed)"
+    if not orig:
+        return None, None, [], []
+    if speech is not None and speech.exists():
+        await music_lib.duck(speech, work / orig, work / "music-ducked.wav")       # a beszéd mért szintje alatt 14 dB
+        verified.append(f"{label} — it drops under the speech and comes back in the pauses.")
+        return orig, "music-ducked.wav", verified, []
+    verified.append(f"{label} — there is no speech, so it plays on its own.")
+    return orig, orig, verified, []
 
 
 async def _upright(src: Path) -> str:
@@ -3166,6 +3223,16 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         D: dict[str, Any] = {"W": W, "H": H, "fps": fps, "total": total, "accent": acc, "dark": [0.055, 0.06, 0.08], "font": FONT,
                              "base": {"file": base["asset"], "label": "Footage"}, "scenes": [], "captions": [], "audio": {}}
         D["layers"], rows, problems = layer_comps(layers, W, H, total, lang, acc, safe)
+        m_v, m_f, track = [], [], None
+        if _builtin_music(opts):                              # zene a felvétel saját hangja alá (ahol beszélnek, halkul)
+            speech = None
+            if base.get("audio"):
+                speech = work / "footage-audio.wav"
+                await _ffmpeg_audio(work / base["asset"], speech)
+            _, track, m_v, m_f = await _music_under(opts, work, total, speech, None, story["title"])
+            if track:
+                D["audio"] = {"music": track, "musicDb": 0 if speech else -10}
+        problems = problems + m_f
         step(2, 4, "building the timeline")
         out = await _build(D, work, lotties)
         scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
@@ -3179,7 +3246,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         spec = {"kind": "overlay", "story": _without_runtime(story),
                 "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio")
                          if base.get(k) is not None},
-                "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"]},
+                "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
+                         "music": opts.get("music") if _builtin_music(opts) else None},
                 "source": (source or "")[:30000], "layer_source": (source or "")[:30000],
                 "layer_notes": [n for n in layer_notes if not n.startswith("⚠ ")], "timeline": [], "layer_timeline": rows}
         write_meta(pid, label=f"{label_stem}.ecproj", operation=operation, source_file_id=parent or base["file_id"],
@@ -3190,7 +3258,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             write_meta(pid, extra={"assets": {**assets_of(pid), base["asset"]: shared or base["media_id"]}})
         else:
             add_asset(pid, base["asset"], work / base["asset"])
-        for name in gfx_names:
+        for name in gfx_names + ([track] if track else []):
             add_asset(pid, name, work / name)
         placed = {r_["id"] for r_ in rows}
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": "custom",
@@ -3206,7 +3274,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         chk = vid.pop("check", None) or {"status": "needs_check", "findings": [], "verified": []}
         lay_v, lay_f = _split_notes(layer_notes)
         fitted, trunc = _FIT.get() or [], _TRUNC.get() or []
-        chk["verified"] = [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}"
+        chk["verified"] = m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}"
                            + (", with its own sound." if base.get("audio") else " (it has no sound track).")
                            + (f" It was stored turned by {base['rotated']}°, so it was set upright first." if base.get("rotated") else "")] \
             + chk.get("verified", []) + [f"{len(rows)} layer(s) on the timeline: " + ", ".join(f"{r_['id']} {_tc(r_['start'])}" for r_ in rows) + "."] \
@@ -3620,9 +3688,13 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     layer_src = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
     lnotes: list[str] = []
     story["layers"] = apply_layer_changes(story.get("layers") or [], changes, layer_src, lnotes)
-    for key in ("ken_burns", "accent", "narration", "narration_voice"):
+    for key in ("ken_burns", "accent", "narration", "narration_voice", "music"):
         if key in changes:
             opts[key] = changes[key]
+    if "music" in changes:                               # a tár zenéje (vagy "none") a saját zene helyére
+        opts["music_asset"], opts["music_file_id"] = None, None
+    elif changes.get("music_file_id") not in (None, "", "none"):
+        opts["music"] = None
     if changes.get("voice_file_id") not in (None, "", "none"):
         opts["narration"] = "none"                       # saját hang jött: az AI-narráció kimarad
     for key, base in (("music_file_id", "music"), ("voice_file_id", "voice")):
@@ -3657,14 +3729,14 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
-    allowed = {"layers", "add_layers", "accent", "title", "alpha"}
+    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
                          f"changes.add_layers), accent or title — not {', '.join(other)}. To recut the footage itself, use "
                          "file_tools (trim-video…) and run overlay again.")
     opts = dict(spec.get("opts") or {})
-    for k in ("accent", "title"):
+    for k in ("accent", "title", "music"):
         if k in changes:
             opts[k] = changes[k]
     if alpha is not None or "alpha" in changes:

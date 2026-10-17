@@ -36,7 +36,8 @@ def _fail(e: Exception) -> HTTPException:
 @router.post("/api/make/video")
 async def make_video(body: dict[str, Any]) -> dict[str, Any]:
     """{mode: article|text|new, text?, url?, source_file_id?, format: vertical|landscape|square, duration?, duration_mode?,
-    images?, pictures?: stock|mine|none, music_file_id?, voice_file_id?, narration?: ai|none, narration_voice?, accent?,
+    images?, pictures?: stock|mine|none, music?: <mood|track id|none>, music_file_id?, voice_file_id?, narration?: ai|none,
+    narration_voice?, accent?,
     language?, layers?, alpha?}"""
     from app import jobs
     from app.tools import video
@@ -55,6 +56,7 @@ async def make_video(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(503, "The video engine isn't installed on this server.")
     try:
         video.fmt_name(body.get("format"))
+        video.check_music(body.get("music"))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -81,6 +83,7 @@ async def overlay_video(body: dict[str, Any]) -> dict[str, Any]:
     if not video.available():
         raise HTTPException(503, "The video engine isn't installed on this server.")
     try:
+        video.check_music(body.get("music"))
         fid, _ = video.overlay_input(body)
     except FileNotFoundError:
         raise HTTPException(400, "That file isn't in the workspace — upload the video first (upload_file), then pass its file_id.")
@@ -129,6 +132,7 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
     fid = body.get("file_id") or ""
     try:
         video.project_of(fid)
+        video.check_music((body.get("changes") or {}).get("music"))
     except ValueError as e:
         raise HTTPException(400, str(e))
 

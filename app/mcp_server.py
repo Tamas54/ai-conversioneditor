@@ -1707,6 +1707,7 @@ async def video(
     images: Optional[list] = None,
     pictures: str = "stock",
     music_file_id: Optional[str] = None,
+    music: Optional[str] = None,
     voice_file_id: Optional[str] = None,
     narration: str = "ai",
     narration_voice: Optional[str] = None,
@@ -1758,12 +1759,15 @@ async def video(
       each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
       and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none.
       AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked
-      from the text or `language`) reads the title and every scene's caption aloud; music plays under it.
+      from the text or `language`) reads the title and every scene's caption aloud.
       narration="none" turns it off (captions only). narration_voice: "female" | "male" | a Piper voice id (e.g.
       "hu_HU-imre-medium", "en_US-ryan-medium").
-      music_file_id / voice_file_id: audio the person gave (upload it first); a voice_file_id replaces the AI
-      narration; the video follows its length (with duration in fixed mode: at least that long). accent: a hex colour
-      for bars and numbers.
+      MUSIC (none by default): music = a mood — upbeat | calm | cinematic | lofi | corporate | playful | romantic |
+      dramatic — or a track id → built-in CC0 music (no credit needed) fitted to the video's length; music_file_id =
+      the person's own music. Under speech (the narration, a voice file, or overlay footage's own sound) the music
+      drops and comes back in the pauses; "none" = no music.
+      voice_file_id: the person's own voice-over (upload it first); it replaces the AI narration; the video follows
+      its length (with duration in fixed mode: at least that long). accent: a hex colour for bars and numbers.
       ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
       | all | off (only a gentle drift).
       Animated graphics for any topic — chart = {"type", "title", "unit", "total"?, "min"?, "max"?, "items": [{"label",
@@ -1834,12 +1838,13 @@ async def video(
       e.g. {"unit": "million"} or {"title": …} changes only that) | null, "duration"?, "remove"? true}],
       "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
       "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
-      fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music_file_id"? | "none",
+      fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music"? (a mood | a track id | "none"),
+      "music_file_id"? | "none",
       "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?, "duration_mode"?,
       "layers"?: [{"id": "L2", …only the fields that change} | {"id": "L2", "remove": true}] (a "chart" without "type" fixes
       just those chart fields), "add_layers"?: [new layers]}. Untouched layers stay as they are. The AI narration is
       recorded again from the changed captions. Numbers in a new chart or stat must be in the video's source or in
-      `text` (pass the person's words there). An overlay project takes only layers, add_layers, accent and title.
+      `text` (pass the person's words there). An overlay project takes only layers, add_layers, accent, title and music.
       alpha=… renders the transparent version again (it is kept from the previous version otherwise).
       video(action="info") shows the scenes and layers (id, at, dur, type, text); check and preview_url come with the result.
     action="render" with scene="s3": just that scene as a short draft MP4 (a job, seconds) — check a change without
@@ -1882,7 +1887,7 @@ async def video(
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
-                                    "accent": accent, "brand": brand, "alpha": alpha})
+                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
@@ -1900,8 +1905,8 @@ async def video(
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
-            "music_file_id": music_file_id, "voice_file_id": voice_file_id, "accent": accent, "language": language,
-            "narration": narration, "narration_voice": narration_voice,
+            "music_file_id": music_file_id, "music": music, "voice_file_id": voice_file_id, "accent": accent,
+            "language": language, "narration": narration, "narration_voice": narration_voice,
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
             "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle,
             "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode}

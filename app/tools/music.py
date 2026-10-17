@@ -93,9 +93,33 @@ async def bed(t: dict[str, Any], seconds: float, out: Path, fade_in: float = 1.0
     return out
 
 
-async def duck(speech: Path, music: Path, out: Path, music_db: float = -12.0, depth: float = 4.0) -> Path:
-    """A zene a beszéd alatt halkul (sidechain): music_db = a zene alapszintje a beszédhez képest, depth = mennyit
-    enged a beszéd alatt (arány). → csak a halkított zene (a keveréshez külön sáv: szerkeszthető marad)."""
+async def loudness(path: Path) -> Optional[float]:
+    """Integrált hangosság (LUFS, EBU R128) — None, ha néma vagy nem mérhető."""
+    proc = await asyncio.create_subprocess_exec("ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af",
+                                                "loudnorm=print_format=json", "-f", "null", "-",
+                                                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    try:
+        v = float(json.loads(err.decode("utf-8", "replace")[err.decode("utf-8", "replace").rindex("{"):])["input_i"])
+    except (ValueError, KeyError):
+        return None
+    return v if v > -70 else None
+
+
+async def level_below(speech: Path, music: Path, below: float = 14.0, fallback: float = -12.0) -> float:
+    """A zene erősítése (dB) úgy, hogy a beszéd mért hangossága alatt `below` dB-lel szóljon — halk és hangos felvételen
+    is ugyanannyival; ha valamelyik nem mérhető, a fallback."""
+    s, m = await asyncio.gather(loudness(speech), loudness(music))
+    if s is None or m is None:
+        return fallback
+    return max(-40.0, min(6.0, (s - below) - m))
+
+
+async def duck(speech: Path, music: Path, out: Path, music_db: Optional[float] = None, depth: float = 4.0) -> Path:
+    """A zene a beszéd alatt halkul (sidechain): music_db = a zene erősítése (alapból: a beszéd alatt 14 dB-lel,
+    mérve), depth = mennyit enged a beszéd alatt (arány). → csak a halkított zene (külön sáv: szerkeszthető marad)."""
+    if music_db is None:
+        music_db = await level_below(speech, music)
     await _ffmpeg("-i", str(music), "-i", str(speech), "-filter_complex",
                   f"[0:a]volume={music_db:.1f}dB[m];[1:a]aformat=channel_layouts=stereo,aresample=48000[s];"
                   f"[m][s]sidechaincompress=threshold=0.015:ratio={depth:.1f}:attack=15:release=450:makeup=1[d]",
@@ -103,8 +127,10 @@ async def duck(speech: Path, music: Path, out: Path, music_db: float = -12.0, de
     return out
 
 
-async def mix(speech: Path, music: Path, out: Path, music_db: float = -12.0, depth: float = 4.0) -> Path:
+async def mix(speech: Path, music: Path, out: Path, music_db: Optional[float] = None, depth: float = 4.0) -> Path:
     """Beszéd + alatta halkuló zene egy sávba (pl. a felvétel saját hangja + a választott zene)."""
+    if music_db is None:
+        music_db = await level_below(speech, music)
     await _ffmpeg("-i", str(music), "-i", str(speech), "-filter_complex",
                   f"[0:a]volume={music_db:.1f}dB[m];[1:a]aformat=channel_layouts=stereo,aresample=48000,asplit=2[s][k];"
                   f"[m][k]sidechaincompress=threshold=0.015:ratio={depth:.1f}:attack=15:release=450:makeup=1[d];"

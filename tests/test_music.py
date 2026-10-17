@@ -57,3 +57,20 @@ async def test_bed_fits_the_length_and_ducks_under_speech(tmp_path):
     ducked = await music.duck(speech, bed, tmp_path / "ducked.wav")
     under, free = _mean_db(ducked, 2, 1.5), _mean_db(ducked, 5, 1.5)
     assert free - under >= 6, (under, free)               # a beszéd alatt legalább 6 dB-lel halkabb
+
+
+async def test_video_music_goes_under_the_speech(tmp_path):
+    """A videó útja: a tár zenéje a hosszra szabva, a beszéd mért szintje alá, halkítva — a check kimondja."""
+    _installed()
+    from app.tools import video
+    speech = tmp_path / "speech.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=220:d=10", "-af",
+                    "volume='if(between(t,1,4),1,0)':eval=frame", str(speech)], check=True)
+    orig, track, verified, findings = await video._music_under({"music": "calm"}, tmp_path, 10, speech, None, "Beáta")
+    assert orig == "music.wav" and track == "music-ducked.wav" and not findings
+    assert "drops under the speech" in verified[0] and "CC0" in verified[0]
+    orig, track, verified, _ = await video._music_under({"music": "calm"}, tmp_path, 10, None, None, "Beáta")
+    assert track == orig == "music.wav" and "no speech" in verified[0]
+    with pytest.raises(ValueError, match="choose a mood"):
+        video.check_music("polka-party")
+    video.check_music("none")
