@@ -7,7 +7,7 @@
     }
 
 Elrendezések: cover · section · bullets (+image) · image_left · image_right · full_image · quote (+image)
-· stats · chart · table · gallery · diagram (döntési fa / sávos folyamat / kapcsolati háló, natív alakzatokkal —
+· stats · chart (a videó ábráival is — vízesés, lejtő, sáv, vonalak, pont, verseny: app/tools/pptx_charts.py) · table · gallery · diagram (döntési fa / sávos folyamat / kapcsolati háló, natív alakzatokkal —
 ugyanaz a leírás és elrendezés, mint a videó ábrájáé: app/tools/diagrams.py) · closing. Minden diához "notes" (előadói jegyzet) adható; a stockképek
 forrásmegjelölése automatikusan a jegyzetbe kerül.
 
@@ -501,7 +501,12 @@ def _chart(slide, s, t):
     from pptx.chart.data import CategoryChartData, XyChartData
     from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
     from pptx.util import Inches, Pt
+    from app.tools import pptx_charts
     _heading(slide, s, t)
+    if pptx_charts.kind_of(s):        # a videó ábrái (vízesés, lejtő, sáv, vonalak, pont, verseny) — ugyanaz a leírás
+        s = pptx_charts.draw(slide, s, t, (M_IN, 2.0, W_IN - 2 * M_IN, 5.0), (M_IN, 1.95, W_IN - 2 * M_IN, H_IN - 1.95 - 0.62))
+        if s is None:
+            return
     kind = {"column": XL_CHART_TYPE.COLUMN_CLUSTERED, "bar": XL_CHART_TYPE.BAR_CLUSTERED, "line": XL_CHART_TYPE.LINE_MARKERS,
             "pie": XL_CHART_TYPE.PIE, "doughnut": XL_CHART_TYPE.DOUGHNUT, "area": XL_CHART_TYPE.AREA,
             "scatter": XL_CHART_TYPE.XY_SCATTER}.get(s.get("chart_type", "column"), XL_CHART_TYPE.COLUMN_CLUSTERED)
@@ -521,13 +526,7 @@ def _chart(slide, s, t):
     ch = gf.chart
     ch.font.size, ch.font.name = Pt(14), t["font_body"]
     if kind == XL_CHART_TYPE.BAR_CLUSTERED:
-        # PowerPoint alulról felfelé rajzolja a sávokat, a DeckCraft (szerkesztő, PDF) felülről lefelé (10-13) → a
-        # kategóriatengely fordítva, az értéktengely a maximumnál keresztez (lent marad): mindkettőben az első van felül
-        from pptx.oxml.ns import qn
-        ch.category_axis.reverse_order = True
-        vcr = ch._chartSpace.chart.plotArea.find(qn("c:valAx")).find(qn("c:crosses"))
-        if vcr is not None:
-            vcr.set("val", "max")
+        bars_top_down(ch)
     ch.has_title = False  # a dia címe a cím; a sorozatnévből gyártott diagramcím zavaró
     ch.has_legend = len(series) > 1 or kind in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT)
     if ch.has_legend:
@@ -576,12 +575,25 @@ def _chart(slide, s, t):
             ser.marker.style, ser.marker.size = XL_MARKER_STYLE.CIRCLE, 9
             ser.marker.format.fill.solid(); ser.marker.format.fill.fore_color.rgb = c
             ser.marker.format.line.color.rgb = c
+            # a szerkesztő (DeckCraft) a vonal színét a sorozat KITÖLTÉSÉBŐL veszi (a vonalét nem nézi) — a PowerPoint és
+            # a LibreOffice a vonalét; így mindhárom ugyanazt a színt mutatja
+            ser.format.fill.solid(); ser.format.fill.fore_color.rgb = c
             if kind == XL_CHART_TYPE.XY_SCATTER:
                 ser.format.line.fill.background()
             else:
                 ser.format.line.color.rgb, ser.format.line.width = c, Pt(3)
         else:
             ser.format.fill.solid(); ser.format.fill.fore_color.rgb = c
+
+
+def bars_top_down(ch) -> None:
+    """PowerPoint alulról felfelé rajzolja a sávokat, a DeckCraft (szerkesztő, PDF) felülről lefelé (10-13) → a
+    kategóriatengely fordítva, az értéktengely a maximumnál keresztez (lent marad): mindkettőben az első van felül."""
+    from pptx.oxml.ns import qn
+    ch.category_axis.reverse_order = True
+    vcr = ch._chartSpace.chart.plotArea.find(qn("c:valAx")).find(qn("c:crosses"))
+    if vcr is not None:
+        vcr.set("val", "max")
 
 
 def _label_sides(points: list, plot_w: float, plot_h: float, size: float = 12.0) -> list[str]:
@@ -603,17 +615,25 @@ def _label_sides(points: list, plot_w: float, plot_h: float, size: float = 12.0)
 def _percent_label(dLbl) -> None:
     """A szeletenkénti felirat (a saját színe miatt kell) a python-pptx alapján az ÉRTÉKET mutatná (showVal=1), nem az
     arányt — itt is százalék, egész számra."""
-    from lxml import etree
     from pptx.oxml.ns import qn
     for tag, val in (("c:showVal", "0"), ("c:showPercent", "1"), ("c:showCatName", "0"), ("c:showSerName", "0")):
         el = dLbl.find(qn(tag))
         if el is not None:
             el.set("val", val)
     if dLbl.find(qn("c:numFmt")) is None:
+        dlbl_numfmt(dLbl, "0%")
+
+
+def dlbl_numfmt(dLbl, code: str) -> None:
+    """Számformátum EGY pont feliratára (a sorozat formátumát a pontonkénti felirat nem örökli)."""
+    from lxml import etree
+    from pptx.oxml.ns import qn
+    nf = dLbl.find(qn("c:numFmt"))
+    if nf is None:
         nf = etree.SubElement(dLbl, qn("c:numFmt"))
-        nf.set("formatCode", "0%"); nf.set("sourceLinked", "0")
         anchor = next((dLbl.find(qn(t)) for t in ("c:tx", "c:layout", "c:idx") if dLbl.find(qn(t)) is not None), None)
         anchor.addnext(nf)                                   # a séma sorrendje: idx, layout?, tx?, numFmt, spPr?, txPr?…
+    nf.set("formatCode", code); nf.set("sourceLinked", "0")
 
 
 def _axis_titles(ch, s: dict, kind) -> None:
@@ -797,15 +817,25 @@ def _persist_spec(spec: dict[str, Any], by_slot: dict) -> dict[str, Any]:
     return saved
 
 
+def _chart_check(warn: list[str], info: list[str]) -> dict[str, Any]:
+    """A mozgó-grafikon-diák saját megjegyzése a check-be (a renderelt pakli-ellenőrzés ehhez fűződik)."""
+    if not (warn or info):
+        return {}
+    from app.tools import checks
+    return {"check": checks.make("needs_check" if warn else "ok", warn, info)}
+
+
 async def build(spec: dict[str, Any]) -> dict[str, Any]:
+    from app.tools import pptx_charts
     spec = diagram_slides(spec)
+    chart_warn, chart_info = pptx_charts.check_slides(spec)   # a hibás ábra-leírás itt, építés előtt áll meg
     if spec.get("template_file_id"):          # a minta-pptx TELJES sablonként (mesterdiák, elrendezés, háttér, logó)
         from app.tools import pptx_template
         from app.tools.crafts import existing
         out = await pptx_template.build(spec, existing(spec["template_file_id"]))
         title = spec.get("title") or ((spec.get("slides") or [{}])[0].get("title")) or "deck"
         write_meta(out["file_id"], operation="pptx_build", label=f"{title[:50]}.pptx", extra={"deck_spec": out.pop("saved_spec")})
-        return out
+        return {**out, **_chart_check(chart_warn, chart_info)}
     from pptx import Presentation
     from pptx.util import Inches
     t0 = time.time()
@@ -885,4 +915,5 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
                     "credit": x.attribution} for ((i, j), x) in by_slot.items()],
         "ms_elapsed": int((time.time() - t0) * 1000),
         **({"brand": kit.get("name")} if kit and kit.get("name") else {}),
+        **_chart_check(chart_warn, chart_info),
     }

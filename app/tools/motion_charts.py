@@ -601,6 +601,19 @@ def _sankey_layout(ch: dict[str, Any], W: int, H: int, fv: Callable[[float], str
     return _sankey_plan(ch, W, H, best[1], best[0], fv)
 
 
+def waterfall_steps(ch: dict[str, Any]) -> list[tuple[str, float, float, str]]:
+    """A vízesés oszlopai: (címke, honnan, hová, total | up | down) — a kezdő és a (kiszámolt) záró érték 0-ról indul.
+    A videó és a pakli (pptx_charts) ugyanebből rajzol."""
+    items = ch["items"]
+    steps = [(items[0]["label"], 0.0, items[0]["value"], "total")]
+    run = items[0]["value"]
+    for it in items[1:]:
+        steps.append((it["label"], run, run + it["value"], "up" if it["value"] >= 0 else "down"))
+        run += it["value"]
+    steps.append((ch.get("total_label") or "", 0.0, run, "total"))
+    return steps
+
+
 # ---------- rajz: a builder elemei ----------
 
 def elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: list[float], dur: Optional[float] = None) -> list[dict[str, Any]]:
@@ -640,13 +653,7 @@ def elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: list[float],
 
     th = max(4, m * 0.006)
     if typ == "waterfall":
-        items = ch["items"]
-        steps = [(items[0]["label"], 0.0, items[0]["value"], "total")]
-        run = items[0]["value"]
-        for it in items[1:]:
-            steps.append((it["label"], run, run + it["value"], "up" if it["value"] >= 0 else "down"))
-            run += it["value"]
-        steps.append((ch.get("total_label") or "", 0.0, run, "total"))
+        steps = waterfall_steps(ch)
         lo = min(0.0, *[min(a, b) for _, a, b, _ in steps])
         hi = max(0.0, *[max(a, b) for _, a, b, _ in steps])
         top, bottom = yT + vl * 1.8, yB - (vl * 1.8 if lo < 0 else 0)
