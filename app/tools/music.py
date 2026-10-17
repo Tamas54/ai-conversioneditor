@@ -115,13 +115,18 @@ async def level_below(speech: Path, music: Path, below: float = 14.0, fallback: 
     return max(-40.0, min(6.0, (s - below) - m))
 
 
+# mindkét bemenet azonos formára a keverés előtt: a régebbi ffmpeg (élesben 4.4) nem egyezteti magától — 10-17: a
+# sidechaincompress „could not choose their formats” hibával elhasalt (helyben, 6.1-en nem jött elő)
+_SAME = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+
+
 async def duck(speech: Path, music: Path, out: Path, music_db: Optional[float] = None, depth: float = 4.0) -> Path:
     """A zene a beszéd alatt halkul (sidechain): music_db = a zene erősítése (alapból: a beszéd alatt 14 dB-lel,
     mérve), depth = mennyit enged a beszéd alatt (arány). → csak a halkított zene (külön sáv: szerkeszthető marad)."""
     if music_db is None:
         music_db = await level_below(speech, music)
     await _ffmpeg("-i", str(music), "-i", str(speech), "-filter_complex",
-                  f"[0:a]volume={music_db:.1f}dB[m];[1:a]aformat=channel_layouts=stereo,aresample=48000[s];"
+                  f"[0:a]{_SAME},volume={music_db:.1f}dB[m];[1:a]{_SAME}[s];"
                   f"[m][s]sidechaincompress=threshold=0.015:ratio={depth:.1f}:attack=15:release=450:makeup=1[d]",
                   "-map", "[d]", "-ac", "2", "-ar", "48000", str(out))
     return out
@@ -132,7 +137,7 @@ async def mix(speech: Path, music: Path, out: Path, music_db: Optional[float] = 
     if music_db is None:
         music_db = await level_below(speech, music)
     await _ffmpeg("-i", str(music), "-i", str(speech), "-filter_complex",
-                  f"[0:a]volume={music_db:.1f}dB[m];[1:a]aformat=channel_layouts=stereo,aresample=48000,asplit=2[s][k];"
+                  f"[0:a]{_SAME},volume={music_db:.1f}dB[m];[1:a]{_SAME},asplit=2[s][k];"
                   f"[m][k]sidechaincompress=threshold=0.015:ratio={depth:.1f}:attack=15:release=450:makeup=1[d];"
                   "[s][d]amix=inputs=2:normalize=0:duration=first[o]",
                   "-map", "[o]", "-ac", "2", "-ar", "48000", str(out))
