@@ -1509,7 +1509,8 @@ def _cards(total: Optional[float]) -> tuple[float, float]:
 
 def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: list[Optional[str]],
             accent: Optional[str], credits: str, voice: Optional[str], voice_s: Optional[float], music: Optional[str],
-            focus: Optional[dict[str, list[float]]] = None, ken_burns: str = "some") -> dict[str, Any]:
+            focus: Optional[dict[str, list[float]]] = None, ken_burns: str = "some",
+            fits: Optional[dict[str, str]] = None) -> dict[str, Any]:
     """A forgatókönyvből a builder adatcsomagja (D): méretek, jelenet-hosszak, feliratok időzítve."""
     W, H = FORMATS[fmt]
     L = _layout(W, H)
@@ -1571,9 +1572,11 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         mv = MOTIONS.get(s.get("motion") or "auto") or motions[i]
         # képsor: a megadott mozgás mindegyikre; különben váltakozva (közelít, úszik, távolodik…), hogy legyen ritmusa
         pics = [{"file": f, "motion": mv if k == 0 or s.get("motion") else ("kb-in", "left", "kb-out", "right")[k % 4],
-                 "focus": s.get("focus") or (focus or {}).get(f) or [0.5, 0.45]} for k, f in enumerate(slot) if f]
+                 "focus": s.get("focus") or (focus or {}).get(f) or [0.5, 0.45],
+                 "fit": s.get("fit") or (fits or {}).get(f) or "cover"} for k, f in enumerate(slot) if f]
         d_scenes.append({"headline": head, "stat": stat, "chart": chart, "dur": round(d, 3), "image": pics[0]["file"] if pics else None,
                          "motion": pics[0]["motion"] if pics else mv, "focus": pics[0]["focus"] if pics else [0.5, 0.45],
+                         "fit": pics[0]["fit"] if pics else "cover",
                          **({"pics": pics} if len(pics) > 1 else {}), **({"zoom": s["zoom"]} if s.get("zoom") else {}),
                          **({"camera": _camera_keys(s["camera"], d, W, H)} if s.get("camera") else {}),
                          **({"bg": s["background"]} if s.get("background") else {}),
@@ -1602,6 +1605,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
               "kickerY": L["kickerTop"] + L["kickerSize"] * 0.8, "titleY": L["titleTop"] + m * 0.22, "headY": L["headTop"] + m * 0.18},
         "title": {"text": title, "kicker": story.get("kicker") or "", "image": _slots(images[0])[0] if images else None, "dur": Tt,
                   "motion": "in", "size": _size_for(title, m * (0.088 if fmt != "landscape" else 0.075), 26, m * 0.056),
+                  "fit": (fits or {}).get(_slots(images[0])[0] if images else "") or "cover",
                   **({"pics": [{"file": f, "motion": ("in", "left", "out", "right")[k % 4], "focus": (focus or {}).get(f) or [0.5, 0.45]}
                                for k, f in enumerate(_slots(images[0])) if f]} if images and isinstance(images[0], list) else {})},
         "scenes": d_scenes,
@@ -2294,7 +2298,10 @@ async def _materialize_images(specs: list[Any], fmt: str, workdir: Path,
                 return name, spec.get("credit")
             return None, None
         try:
-            r = await imgs.resolve(spec, aspect=W / H, max_px=max(W, H))
+            # a saját fotó vágatlanul jön (a builder dönt: kitölti a keretet, vagy egészében mutatja — fit); a stock- és
+            # AI-kép a keret arányára vágva, mint eddig
+            own = _own_picture(spec)
+            r = await imgs.resolve(spec, aspect=None if own else W / H, max_px=int(max(W, H) * 1.6) if own else max(W, H))
         except Exception as e:
             log.warning("videókép %s nem jött le (%s): %s", i, spec, e)
             return None, None
@@ -3066,7 +3073,9 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
         focus = {nm: await asyncio.to_thread(_focus, work / nm) for slot in names for nm in _slots(slot) if nm}
+        fits = _auto_fits(names, specs, work, W / H)
         D = compose(story_c, fmt=fmt, total=c_total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
+                    fits=fits,
                     voice=voice, voice_s=c_voice, music=music)
         if narr_clips:                   # a darabok a jelenetek elejére, egy sávban, a videó teljes hosszára
             from app.tools import narration
@@ -3837,6 +3846,10 @@ MOTIONS = {"auto": None, "zoom_in": "kb-in", "zoom_out": "kb-out", "pan_left": "
            "pan_down": "down", "still": "still", "ken_burns": "kb-in", "ken_burns_out": "kb-out", "gentle": "in"}
 CAMERA_PRESETS = ("push_in", "pull_out", "drift")
 BACKGROUNDS = ("gradient", "motion", "dark")
+# fit: a kép kitölti a keretet (cover — a széle levágódhat) vagy egészében látszik, mögötte önmaga elmosva (contain);
+# auto: a SAJÁT fotónál contain, ha az aránya nagyon eltér a keretétől (10-17: a fekvő csoportkép álló videóban
+# csak 1–2 arcot mutatott — a közösségi videók bevett megoldása az elmosott kitöltés), a stockkép cover marad
+FITS = ("auto", "cover", "contain")
 
 
 def _xy01(v: Any) -> Optional[list[float]]:
@@ -3879,11 +3892,42 @@ def _scene_motion(ch: dict[str, Any], sc: dict[str, Any]) -> None:
             sc["camera"] = sorted(moves, key=lambda x: x["at"]) or None
         else:
             raise ValueError(f'camera: {" | ".join(CAMERA_PRESETS)} | [{{"at", "zoom", "to"?, "dur"?}}] | "none"')
+    if "fit" in ch:
+        ft = str(ch.get("fit") or "auto").lower()
+        if ft not in FITS:
+            raise ValueError(f"fit: {' | '.join(FITS)}")
+        sc["fit"] = None if ft == "auto" else ft
     if "background" in ch:
         bg = str(ch.get("background") or "gradient").lower()
         if bg not in BACKGROUNDS and not re.fullmatch(r"#?[0-9a-f]{6}", bg):
             raise ValueError(f"background (a scene without a picture): {' | '.join(BACKGROUNDS)} | \"#RRGGBB\"")
         sc["background"] = bg
+
+
+def _own_picture(sp: Any) -> bool:
+    """A személy saját képe (file_id, URL, a szerkesztésben megtartott saját kép) — nem stock / AI-kép."""
+    if isinstance(sp, dict) and sp.get("asset"):
+        sp = sp.get("src")
+    return isinstance(sp, str) or (isinstance(sp, dict) and bool(sp.get("url") or sp.get("file_id")) and not sp.get("stock"))
+
+
+def _auto_fits(names: list[Any], specs: list[Any], work: Path, frame: float) -> dict[str, str]:
+    """fit=auto: a saját fotó egészében látszik (elmosott kitöltéssel), ha az aránya 1,5-szeresnél jobban eltér a keretétől."""
+    from PIL import Image
+    out = {}
+    for slot, sp in zip(names, specs):
+        sps = _slots(sp) if isinstance(sp, list) else [sp] * len(_slots(slot))
+        for nm, one in zip(_slots(slot), sps):
+            if not nm or not _own_picture(one):
+                continue
+            try:
+                with Image.open(work / nm) as im:
+                    a = im.width / im.height
+            except Exception:
+                continue
+            if max(a / frame, frame / a) > 1.5:
+                out[nm] = "contain"
+    return out
 
 
 def _camera_keys(cam: Any, dur: float, W: int, H: int) -> Optional[list[list[float]]]:

@@ -1779,7 +1779,10 @@ async def video(
       "zoom"?: 1.03–1.8 (how far); "camera": a camera on the scene's picture AND graphic together — "push_in" |
       "pull_out" | "drift" | [{"at": seconds, "zoom": 1–3 (1 = the whole frame again), "to"?: [x, y] 0–1 of the
       frame, "dur"?: seconds}] (e.g. punch in on a detail of the photo at 1 s, or on the forecast part of a chart at
-      3 s, back out at 6 s); the scene's title, big number and captions stay put. "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
+      3 s, back out at 6 s); the scene's title, big number and captions stay put. "fit": cover (the picture fills
+      the frame, edges may be cut) | contain (the whole picture, its blurred copy filling the rest — e.g. a group
+      photo in a vertical video) | auto (default: contain for the person's own photo when its shape is far from the
+      frame's, cover otherwise). "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
       title shows the headline) — put what should be on screen into the chart title. Put the source in text too: chart numbers are checked against it (without it, against your scenes).
 
     action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words

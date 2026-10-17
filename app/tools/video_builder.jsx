@@ -69,6 +69,23 @@ function fadeIn(layer, t0, dur, rise) {     // átlátszóság 0→100 (és opci
 var FOOT = {};
 function picture(comp, file, mo, t0, t1, fadeIn) {   // egy háttérkép a [t0, t1] szakaszra, a saját mozgásával
   var f = FOOT[file] || (FOOT[file] = app.project.importFile(new ImportOptions(new File(file))));
+  if (mo.fit === "contain") {     // az egész kép látszik; mögötte önmaga elmosva, sötétebben tölti ki a keretet
+    var B = comp.layers.add(f); B.name = "Picture fill";
+    if (t0 > 0 || t1 < comp.duration) { B.inPoint = t0; B.outPoint = t1; }
+    var sb = Math.max(D.W / f.width, D.H / f.height) * 112;
+    tp(B).property("ADBE Scale").setValue([sb, sb]);
+    blurred(B, Math.min(D.W, D.H) * 0.06);
+    var BO = tp(B).property("ADBE Opacity");
+    if (fadeIn) { BO.setValueAtTime(t0, 0); BO.setValueAtTime(t0 + fadeIn, 55); } else BO.setValue(55);
+    var Lf = comp.layers.add(f); Lf.name = "Picture";
+    if (t0 > 0 || t1 < comp.duration) { Lf.inPoint = t0; Lf.outPoint = t1; }
+    var sf = Math.min(D.W / f.width, D.H / f.height) * 100 * 0.96, zf_ = mo.zoom || 1.06;
+    var SF = tp(Lf).property("ADBE Scale");
+    var mz = mo.motion === "kb-out" || mo.motion === "out";
+    SF.setValueAtTime(t0, mz ? [sf * zf_, sf * zf_] : [sf, sf]); SF.setValueAtTime(t1, mz ? [sf, sf] : [sf * zf_, sf * zf_]);
+    if (fadeIn) { var FO = tp(Lf).property("ADBE Opacity"); FO.setValueAtTime(t0, 0); FO.setValueAtTime(t0 + fadeIn, 100); }
+    return Lf;
+  }
   var L = comp.layers.add(f); L.name = "Picture";
   if (t0 > 0 || t1 < comp.duration) { L.inPoint = t0; L.outPoint = t1; }
   var s = Math.max(D.W / f.width, D.H / f.height) * 100, zf = mo.zoom || 0, z = s * (zf || 1.12);
@@ -102,11 +119,11 @@ function background(comp, sc, dur) {
     var n = sc.pics.length, sl = dur / n, xf = Math.min(0.7, sl * 0.3);
     for (var k = 0; k < n; k++) {
       var a0 = k === 0 ? 0 : k * sl - xf / 2, a1 = k === n - 1 ? dur : (k + 1) * sl + xf / 2;
-      var L = picture(comp, sc.pics[k].file, { motion: sc.pics[k].motion, focus: sc.pics[k].focus, zoom: sc.zoom }, a0, a1, k ? xf : 0);
+      var L = picture(comp, sc.pics[k].file, { motion: sc.pics[k].motion, focus: sc.pics[k].focus, zoom: sc.zoom, fit: sc.pics[k].fit }, a0, a1, k ? xf : 0);
       if (sc.blur) blurred(L, sc.blur);
     }
   } else if (sc.image) {
-    var L1 = picture(comp, sc.image, { motion: sc.motion, focus: sc.focus, zoom: sc.zoom }, 0, dur, 0);
+    var L1 = picture(comp, sc.image, { motion: sc.motion, focus: sc.focus, zoom: sc.zoom, fit: sc.fit }, 0, dur, 0);
     if (sc.blur) blurred(L1, sc.blur);
   } else if (sc.bg === "dark" || (sc.bg && sc.bg.charAt(0) === "#")) {   // egyszínű háttér
     var c = sc.bg === "dark" ? D.dark : [parseInt(sc.bg.substr(1, 2), 16) / 255, parseInt(sc.bg.substr(3, 2), 16) / 255, parseInt(sc.bg.substr(5, 2), 16) / 255];

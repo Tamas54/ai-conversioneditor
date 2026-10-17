@@ -115,3 +115,22 @@ def test_footage_camera_uses_the_same_moves_in_absolute_time():
     keys = video._camera_keys(cam, 90.0, 1920, 1080)
     assert keys[1][0] == 62.0 and keys[2][1] == 1.5 and keys[-1][1] == 1
     assert video._footage_camera("none") is None
+
+
+def test_own_landscape_photo_in_a_vertical_video_is_shown_whole(tmp_path):
+    """fit=auto: a saját fekvő csoportkép álló videóban egészében látszik (elmosott kitöltéssel), a stockkép kitölt."""
+    from PIL import Image
+    from app.tools import video
+    Image.new("RGB", (1600, 1200)).save(tmp_path / "own.jpg")
+    Image.new("RGB", (1600, 1200)).save(tmp_path / "stock.jpg")
+    Image.new("RGB", (1080, 1800)).save(tmp_path / "tall.jpg")
+    fits = video._auto_fits(["own.jpg", "stock.jpg", ["tall.jpg"]], ["abc.jpg", {"stock": "x"}, ["def.jpg"]], tmp_path, 1080 / 1920)
+    assert fits == {"own.jpg": "contain"}
+    sc = video._scene_from({"headline": "A", "fit": "cover"}, "", [])
+    assert sc["fit"] == "cover" and video._scene_from({"fit": "auto"}, "", [], sc)["fit"] is None
+    with pytest.raises(ValueError):
+        video._scene_from({"fit": "stretch"}, "", [])
+    story = {"title": "T", "kicker": "", "end": {}, "layers": [], "scenes": [sc]}
+    D = video.compose(story, fmt="vertical", total=None, images=[None, "own.jpg"], accent=None, credits="", voice=None,
+                      voice_s=None, music=None, fits=fits)
+    assert D["scenes"][0]["fit"] == "cover"                                   # a jelenet kifejezett kérése nyer
