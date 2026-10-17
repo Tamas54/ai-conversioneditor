@@ -1294,7 +1294,9 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
     actors = spec.get("_actors") or register(spec, {}, acc)
     lang = lang or lang_of(spec)
     x0, y0, x1, y1 = W * 0.05, H * 0.17, W * 0.95, H * 0.80
-    lay = layout(spec, (x1 - x0, y1 - y0), cw=0.56, s_max=30 * k, s_min=22 * k, lang=lang, actors=actors)
+    # kevés doboznál nagyobb betű engedett: három lépés ne ússzon apróként a képkocka közepén (10-17, élő próba)
+    cap = 44 if len(spec.get("nodes") or []) <= 5 else 30
+    lay = layout(spec, (x1 - x0, y1 - y0), cw=0.56, s_max=cap * k, s_min=22 * k, lang=lang, actors=actors)
     s = lay["s"]
     if lay["small"]:
         try:                                            # a check megemlíti (mint a dobozába kisebb betűvel férő szöveget)
