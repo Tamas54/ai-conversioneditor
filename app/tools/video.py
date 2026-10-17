@@ -867,12 +867,17 @@ def _size_for(text: str, base: float, ref: int, floor: float) -> int:
     return round(max(floor, base * min(1.0, math.sqrt(ref / max(len(text), 1)))))
 
 
+def _chart_seconds(ch: Any) -> Optional[float]:
+    """Az időzített ábra (rangsor-verseny, megadott tempójú kibontás) kényelmes hossza — None, ha bármilyen hosszba belefér."""
+    from app.tools import diagrams, motion_charts
+    return diagrams.seconds_needed(ch) or motion_charts.seconds_needed(ch or {}) if isinstance(ch, dict) else None
+
+
 def _scene_seconds(s: dict[str, Any]) -> Optional[float]:
     """A jelenet kért hossza: a megadott, vagy — ha nincs — egy kifejezett tempójú (pace) ábra-kibontás igénye."""
     if isinstance(s.get("duration"), (int, float)) and s["duration"] > 0:
         return float(s["duration"])
-    from app.tools import diagrams, motion_charts
-    return diagrams.seconds_needed(s.get("chart")) or motion_charts.seconds_needed(s.get("chart") or {})
+    return _chart_seconds(s.get("chart"))
 
 
 def _chunks(text: str, max_chars: int) -> list[str]:
@@ -2074,7 +2079,8 @@ def _layer_box(ly: dict[str, Any], W: int, H: int, safe: float, acc: list[float]
             "split": split, "els": els}
 
 
-def _layer_elements(ly: dict[str, Any], b: dict[str, Any], lang: str, acc: list[float]) -> list[dict[str, Any]]:
+def _layer_elements(ly: dict[str, Any], b: dict[str, Any], lang: str, acc: list[float],
+                    dur: Optional[float] = None) -> list[dict[str, Any]]:
     """A réteg összes builder-eleme: a doboz (panel, szövegek) + az ábra a meglévő építővel (chart_elements), a réteg
     kompozíciójának méretében; az ábra címe fölül, mint a jelenetekben."""
     els = list(b["els"])
@@ -2088,7 +2094,7 @@ def _layer_elements(ly: dict[str, Any], b: dict[str, Any], lang: str, acc: list[
     # vált álló elrendezésre; a saját grafika koordinátái a panel arányai maradnak
     hv = h / 0.9 if any(e.get("name") == "Panel" for e in els) and ch["type"] not in ("graphic", "script") \
         and (h / 0.9 > w * 1.2) == (h > w * 1.2) else h
-    ce = chart_elements(ch, w, hv, lang, acc)
+    ce = chart_elements(ch, w, hv, lang, acc, dur=dur)      # a réteg hossza: az időzített ábra (verseny, kibontás) ebbe fér
     if over:
         for e in ce:
             if e["k"] == "text":
@@ -2221,8 +2227,12 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             a_in = "fade"
         anim = {"in": (ly.get("anim") or {}).get("in") or a_in, "out": (ly.get("anim") or {}).get("out") or a_out}
         item: dict[str, Any] = {"id": ly["id"], "name": f"Layer {ly['id']} – {_layer_text(ly)[:32]}", "at": round(at, 3), "dur": round(dur, 3),
-                                "w": b["w"], "h": b["h"], "pos": [b["cx"], b["cy"]], "elements": _layer_elements(ly, b, lang, acc),
+                                "w": b["w"], "h": b["h"], "pos": [b["cx"], b["cy"]], "elements": _layer_elements(ly, b, lang, acc, dur),
                                 "anim": anim, "slide": b["slide"]}
+        need = _chart_seconds(ly.get("chart"))
+        if need and dur < need - 0.3:
+            problems.append(f"Layer {ly['id']}: its {ly['chart']['type'].replace('_', ' ')} needs about {need:.0f} s to play "
+                            f"through; the layer is {dur:.1f} s, so it runs fast — give it \"dur\": {math.ceil(need)}.")
         if b.get("split"):
             item["split"] = b["split"]
         if (ly.get("chart") or {}).get("type") == "script":

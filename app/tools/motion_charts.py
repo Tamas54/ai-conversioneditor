@@ -832,9 +832,9 @@ def elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: list[float],
         bx0, bx1 = x0 + lab_w + m * 0.015, x1 - vl * 4.6
         row = (yB - yT) / K
         bh = min(row * 0.7, m * 0.07)
-        T = min(2.0, max(0.8, ((dur or 12) - 2.5) / P))
+        T = min(2.0, max(0.8, ((dur or seconds_needed(ch)) - 1.6) / P))
         ts = [0.6 + j * T for j in range(P)]   # ekkor ÉRKEZIK meg a j. időszak állapota
-        hold, move = T * 0.55, T * 0.45         # megáll (ekkor látszanak a számai), aztán átrendeződik a következőre
+        hold, move = T * 0.6, T * 0.4           # megáll (ekkor látszanak a számai), aztán átrendeződik a következőre
         cols = cols_n(N)
         ranks = []
         for j in range(P):
@@ -927,7 +927,7 @@ def _distinct(n: int) -> list[str]:
 
 
 def seconds_needed(ch: dict[str, Any]) -> Optional[float]:
-    """A verseny időszakonként ~1,2 s-ot kér — a jelenet ennyi legyen (különben a builder sűríti)."""
+    """A verseny időszakonként ~1,5 s-ot kér (megáll, látszanak a számai, átrendeződik) — a jelenet / réteg ennyi legyen."""
     if ch.get("type") == "race":
-        return round(0.6 + len(ch.get("labels") or []) * 1.2 + 1.5, 1)
+        return round(0.6 + len(ch.get("labels") or []) * 1.5 + 1.0, 1)
     return None

@@ -177,3 +177,17 @@ def test_sankey_ribbons_start_and_end_at_their_nodes_and_never_cross_a_node(fmt)
         assert src[2] < dst[0]
     t = {e["name"]: e["t0"] for e in els if "t0" in e}
     assert t["Node – Uniós"] < t["Flow – Uniós → Energetika"] < t["Node – Energetika"] < t["Flow – Energetika → Távhő"]
+
+
+def test_a_race_layer_plays_within_its_own_length_and_a_short_one_is_said():
+    """Rétegként (saját felvételen) a verseny a RÉTEG hosszába fér — 10-17: 12 s-os alapidővel számolt, a 6 s-os rétegben
+    az utolsó év nem jelent meg; a túl rövid réteg a check-ben szól."""
+    from app.tools import video
+    ch, _ = video._chart_from_plan(CHARTS["race"], SRC)
+    layers = video.layers_from([{"at": 1, "dur": 4, "type": "chart", "chart": ch}], SRC, [])
+    comps, rows, problems = video.layer_comps(layers, 1920, 1080, 30.0, "hu", [0.95, 0.65, 0.25], 1000)
+    periods = [e for e in comps[0]["elements"] if e["name"].startswith("Period ")]
+    assert periods and max(e["t0"] for e in periods) < 4.0                     # az utolsó év is a rétegen belül jön
+    assert any("needs about" in p and "dur" in p for p in problems)
+    ok = video.layers_from([{"at": 1, "dur": 9, "type": "chart", "chart": ch}], SRC, [])
+    assert not [p for p in video.layer_comps(ok, 1920, 1080, 30.0, "hu", [0.95, 0.65, 0.25], 1000)[2] if "needs about" in p]
