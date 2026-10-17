@@ -304,7 +304,8 @@ async def check_deck(out: Path, src: Optional[Path], tool: str, args: dict[str, 
     from app.tools import validate
     rendered, note = None, None
     try:
-        layouts, notes = await validate._layouts(out, "deck", want_file=True)
+        # a teljes ellenőrzés kerete 45 s (run) — a renderelés legfeljebb 30 s, utána becslés, de legyen check
+        layouts, notes = await asyncio.wait_for(validate._layouts(out, "deck", want_file=True), timeout=30)
         try:
             if layouts:
                 rendered = await asyncio.to_thread(validate.deck_issues, out, layouts)
@@ -316,7 +317,9 @@ async def check_deck(out: Path, src: Optional[Path], tool: str, args: dict[str, 
                 L.close()
     except Exception as e:
         log.info("renderelt pakli-ellenőrzés kimaradt: %s", e)
-        note = f"The rendered check could not run ({str(e)[:100]}) — text overflow was only estimated."
+        why = "it took too long" if isinstance(e, asyncio.TimeoutError) else str(e)[:100]
+        note = (f"The rendered check could not run ({why}) — text overflow was only estimated; "
+                "validate_document(file_id) renders and checks every slide.")
     return await asyncio.to_thread(check_pptx, out, src, tool, args, rendered, note)
 
 

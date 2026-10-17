@@ -432,7 +432,8 @@ async def office_run(app: str, *, file_id: Optional[str] = None, commands: Optio
         if app == "deck":
             parsed = _on_slide(parsed)
     # csak olvasó futtatás (inspect, text.get, cell.get, doc_info…): az eredmény maga a válasz, nincs új fájl/változat
-    if src and save_format is None and await _only_reads(app, parsed, commands):
+    same_fmt = src is not None and fmt == src.suffix.lstrip(".").lower()
+    if src and same_fmt and await _only_reads(app, parsed, commands):
         return await _office_read_run(app, file_id, src, parsed, commands, t0)
     fid, out = _new_output(fmt, file_id, app, "")
     if app == "pdf":

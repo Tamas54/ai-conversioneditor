@@ -118,7 +118,7 @@ async def run(
 
     from app.tools import run_report
     parsed = [(a.partition("=")[0], _json_or_none(a.partition("=")[2])) for a in cmd_args]
-    if file_id and save_format.lower().lstrip(".") == "docx" and run_report.only_reads(parsed):
+    if file_id and _existing(file_id).suffix.lstrip(".").lower() == fmt and run_report.only_reads(parsed):
         # csak olvasó parancsok (document.inspect, edit.find, styles.list…): nincs mentés, nincs új változat
         from app.tools.crafts import read_only_result
         try:
