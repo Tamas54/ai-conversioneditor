@@ -2471,10 +2471,19 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
     step(2, 5, "finding pictures")
     specs: list[Any] = [None] * (len(scenes) + 1)
     need = [k for k, s in enumerate(raw) if not s.get("image") and pictures != "none"]
+    pre_f: list[str] = []
     if need and any(not scenes[k].get("image_query") for k in need):
-        qs = await _queries_for([scenes[k] for k in need])
-        for k, q in zip(need, qs):
-            scenes[k]["image_query"] = scenes[k].get("image_query") or q
+        from app import tenancy
+        if tenancy.client_makes_images.get():
+            # MCP: a kereső szavakat a kliens is meg tudja adni — a szerver modellje nem fut rá (nem AI-lépés)
+            miss = [scenes[k]["id"] for k in need if not scenes[k].get("image_query")]
+            pre_f.append(f"Scene{'s' if len(miss) > 1 else ''} {', '.join(miss)} had no image and no image_query — the stock "
+                         "search used the headline. Give each such scene \"image_query\" (2–4 plain English words) or its own "
+                         "image for better pictures.")
+        else:
+            qs = await _queries_for([scenes[k] for k in need])
+            for k, q in zip(need, qs):
+                scenes[k]["image_query"] = scenes[k].get("image_query") or q
     for k, s in enumerate(raw):
         if s.get("image") and pictures != "none":
             specs[k + 1] = _img_spec(s["image"])
@@ -2503,7 +2512,7 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
             "layer_source": text}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text or source,
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True),
-                           pre_verified=pre_v, pre_findings=[], scene_plan=True, layer_notes=lnotes)
+                           pre_verified=pre_v, pre_findings=pre_f, scene_plan=True, layer_notes=lnotes)
 
 
 def _script_report(out: str, source: str, layer_ids: Optional[set[str]] = None) -> list[str]:

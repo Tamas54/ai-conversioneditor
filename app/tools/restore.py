@@ -290,6 +290,12 @@ async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_i
 
 
 async def run(file_ids: list[str], colorize: Optional[bool], split_prints: bool, progress=None) -> dict[str, Any]:
+    from app import billing
+    with billing.prepaid():          # a helyreállítás kreditből fizet — a modellhívásai nem külön AI-lépések
+        return await _run(file_ids, colorize, split_prints, progress)
+
+
+async def _run(file_ids: list[str], colorize: Optional[bool], split_prints: bool, progress=None) -> dict[str, Any]:
     import shutil
     from app.storage import display_label, temp_path
     from app.storage.files import new_file_id

@@ -718,6 +718,13 @@ async def build_outputs(md: str, md_img: str, figdir: Path, title: str, outputs:
 
 async def digitize(file_ids: list[str], outputs: list[str], language: Optional[str], max_pages: int,
                    progress: Callable[[int, int, str], None], on_pages=None, style_file_id: Optional[str] = None) -> dict[str, Any]:
+    from app import billing
+    with billing.prepaid():          # a szkennelt oldal az oldalkeretből/kreditből fizet — a modellhívása nem AI-lépés
+        return await _digitize(file_ids, outputs, language, max_pages, progress, on_pages, style_file_id)
+
+
+async def _digitize(file_ids: list[str], outputs: list[str], language: Optional[str], max_pages: int,
+                    progress: Callable[[int, int, str], None], on_pages=None, style_file_id: Optional[str] = None) -> dict[str, Any]:
     outputs = [o for o in outputs if o in OUTPUTS] or ["docx"]
     work = temp_path(new_file_id("scan"))
     work.mkdir(parents=True)

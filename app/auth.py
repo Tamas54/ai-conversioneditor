@@ -371,6 +371,8 @@ async def api_account(request: Request) -> dict:
     month = billing.month_key()
     usage = {k: {"used": await db.usage_get(uid, month, k), "limit": v}
              for k, v in billing.PLANS[plan]["quota"].items()} if user else {}
+    if user:                       # a csatlakoztatott AI-k (MCP) lépései a szerver saját modelljén
+        usage["ai_steps"] = {"used": await db.usage_get(uid, month, "ai_steps"), "limit": billing.PLANS[plan]["ai_steps"]}
     base = settings.PUBLIC_BASE_URL.rstrip("/")
     return {
         "guest": guest, "guest_max_upload_mb": GUEST_MAX_UPLOAD_MB if guest else None,

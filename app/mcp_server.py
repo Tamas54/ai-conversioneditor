@@ -81,7 +81,13 @@ mcp = FastMCP(
         "needs_check | failed, findings, verified} (decks: the same rendered check as validate_document, each problem "
         "with its slide, shape id and a ready fix). Commands that only read (inspect, *.get, *.list) make no new file. A file existing is not the task done: if status is needs_check, look at the preview; "
         "if failed or a finding says something is missing, fix it before telling the person it's done. "
-        "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared."
+        "files(action=\"compare\", file_id, other_file_id) shows what changed between two versions and what disappeared. "
+        "YOUR THINKING, OUR ENGINES: rendering, checks, layouts, transcripts and music cost the person nothing extra here; "
+        "but a step where this server runs its OWN AI model (choosing stock photos with a vision model, finding image search "
+        "words, writing a video script from an article, describe_image / ocr_image / extract_table_from_image, "
+        "edit_with_instruction, facts checks) is a Studio AI step: a monthly allowance, then credits (result field "
+        "`studio_ai`). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
+        "finished scenes=[…] plan, look at pictures with files(action=\"preview\"), and use the editing commands directly."
     ),
     streamable_http_path="/",
     stateless_http=True,
@@ -145,10 +151,16 @@ def linked(fn):
     async def w(*a, **k):
         import time
         from app import tenancy
+        from app import billing
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
         t0 = time.monotonic()
         try:
-            res = await _finalize(fn.__name__, k, await fn(*a, **k))
+            with billing.count_steps() as used:        # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
+                res = await _finalize(fn.__name__, k, await fn(*a, **k))
+            if used[0] and isinstance(res, dict):
+                res["studio_ai"] = {"steps": used[0], "credits": used[1],
+                                    "note": "Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
+                                            f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions."}
             st = (res.get("check") or {}).get("status") if isinstance(res, dict) else None
             log.info("mcp %s(%s) ok %.1fs%s", fn.__name__, _arg_brief(k), time.monotonic() - t0, f" check={st}" if st else "")
             return res
@@ -1439,7 +1451,9 @@ async def edit_with_instruction(
     Edit a document using a natural-language instruction.
 
     Pipeline: load → extract text → the AI plans operations →
-    deterministic execution → render back to original format.
+    deterministic execution → render back to original format. The planning
+    runs the Studio's own model (a Studio AI step); for a change you can
+    express yourself, wordcraft / office commands or find_replace cost none.
 
     PDF inputs are auto-round-tripped via DOCX (with a layout-reflow warning).
 
@@ -1623,7 +1637,8 @@ async def insert_image(
 @linked
 async def ocr_image(image_file_id: str, language_hint: Optional[str] = None) -> dict:
     """Read all visible text from an image (handwriting OK). language_hint
-    helps weak-light photos: 'Hungarian', 'English', etc."""
+    helps weak-light photos: 'Hungarian', 'English', etc. Runs the Studio's own vision model: one Studio AI step (monthly allowance, then credits). If you can
+    read images yourself, look at it with files(action="preview") instead."""
     return await vision_ops.ocr_image(image_file_id, language_hint=language_hint)
 
 
@@ -1634,7 +1649,8 @@ async def describe_image(image_file_id: str, question: Optional[str] = None) -> 
     description. Pass `question` for targeted queries: 'what colors dominate?',
     'count the people', etc. NOT for checking your own document, deck or PDF:
     a description is not a check — use validate_document (you see the pages
-    yourself, plus a machine-checked list of problems)."""
+    yourself, plus a machine-checked list of problems). Runs the Studio's own vision model: one Studio AI step (monthly allowance, then credits). If you can see
+    images yourself, look at it with files(action="preview") instead."""
     return await vision_ops.describe_image(image_file_id, question=question)
 
 
@@ -1642,7 +1658,8 @@ async def describe_image(image_file_id: str, question: Optional[str] = None) -> 
 @linked
 async def extract_table_from_image(image_file_id: str) -> dict:
     """Extract a table from an image as structured rows. Returns
-    {headers: [...], rows: [[...], ...]}."""
+    {headers: [...], rows: [[...], ...]}. Runs the Studio's own vision model:
+    one Studio AI step (monthly allowance, then credits)."""
     return await vision_ops.extract_table_from_image(image_file_id)
 
 
@@ -1740,7 +1757,7 @@ async def video(
     text, or graphics on the person's OWN footage (action="overlay").
 
     YOUR OWN SCENE PLAN (most reliable): action="make" with scenes=[{"headline", "caption", "image"? (file_id | URL
-      — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo), "stat"?
+      — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo — give it for every scene without an image: without it the search uses the headline), "stat"?
       {value, label}, "chart"? (see below), "duration"? seconds, "id"? }] + title, kicker?, title_image?, end_title?,
       end_subtitle?, format, duration (total; scenes without one share the rest). It is made exactly as given (no
       re-planning). A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a

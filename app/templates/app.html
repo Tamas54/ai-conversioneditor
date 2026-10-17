@@ -461,9 +461,9 @@ let BRAND_FONTS = null;
 
 // ---------- csomagok ----------
 const FEATURES = {
-  free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
-  plus: p => [`${p.monthly_credits} credits every month`, "Presentations, documents and changes — as many as you need", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
-  pro: p => [`${p.monthly_credits} credits every month`, "Everything in Plus, with room for heavy use", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `Up to ${p.batch} photos at once`, "Use it from Claude, ChatGPT and your scripts (MCP)", `Files kept a year`],
+  free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `${p.ai_steps} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
+  plus: p => [`${p.monthly_credits} credits every month`, "Presentations, documents and changes — as many as you need", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `${p.ai_steps.toLocaleString("en")} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
+  pro: p => [`${p.monthly_credits} credits every month`, "Everything in Plus, with room for heavy use", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `${p.ai_steps.toLocaleString("en")} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, "Use it from Claude, ChatGPT and your scripts (MCP)", `Files kept a year`],
 };
 async function buy(item, interval) {
   if (account?.guest) { location.href = "/signup?next=/app/plans"; return; }
@@ -498,10 +498,11 @@ const views = {
     $("#packs").querySelectorAll("[data-pack]").forEach(b => b.addEventListener("click", () => buy(b.dataset.pack)));
     const c = P.costs;
     $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
-      [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+      [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`],
+      [`Studio AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps`, `1 per ${c.ai_steps_per_credit} steps`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
     if (account.usage && Object.keys(account.usage).length) {
       $("#usage-box").hidden = false;
-      const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages" };
+      const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages", ai_steps: "Studio AI steps (connected AI)" };
       $("#usage").innerHTML = Object.entries(account.usage).map(([k, u]) => `<div class="use"><span>${names[k] || k}</span><span class="mono small">${u.used} / ${u.limit.toLocaleString("en")}</span>
         <i style="--w:${Math.min(100, 100 * u.used / Math.max(1, u.limit))}%"></i></div>`).join("");
     }
