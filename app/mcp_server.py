@@ -1256,8 +1256,16 @@ async def digitize(
 
     Start: file_ids = page photos/scans in order, or scanned PDFs;
     outputs ⊆ ["docx", "pdf" (new typeset A5 book), "searchable_pdf"
-    (original pages + invisible text layer), "txt", "md", "fillable_pdf"
-    (a printed form rebuilt with real form fields)] (default docx);
+    (original pages + invisible text layer), "review_pdf" (each page's
+    image beside its transcript, doubtful readings highlighted — for
+    checking a historical source), "txt", "md", "fillable_pdf" (a
+    printed form rebuilt with real form fields)] (default docx).
+    DOUBTFUL READINGS are marked, never guessed silently: a word read
+    with doubt is highlighted in the Word file with a comment (page,
+    other possible reading), [reading?] / [reading? / other] in txt/md,
+    an illegible word [?] (Word: red). The result's `readings` = {uncertain,
+    illegible, pages, items [{page, kind, reading, also, context}]}; the
+    typeset PDF and the searchable text layer carry the best reading.
     language = hint, e.g. "Hungarian"; max_pages = only the first N pages
     (a sample chapter). Returns a job — a long book takes
     minutes: call again with job_id until status is "done" (result.files)

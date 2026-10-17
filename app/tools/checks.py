@@ -723,7 +723,18 @@ async def _check_digitize(inner: dict[str, Any]) -> dict[str, Any]:
                                                       else f"{f.get('label', 'Document')}: no text was read.")
     if findings:
         return make("failed" if not verified else "needs_check", findings, verified)
-    if verified:
+    r = inner.get("readings") or {}
+    doubtful = int(r.get("uncertain") or 0) + int(r.get("illegible") or 0)
+    if verified and doubtful:
+        # a kétes olvasat nem hiba, de ember nézze meg: hol vannak, és hogy a fájlokban jelölve vannak
+        pages = ", ".join(map(str, (r.get("pages") or [])[:15])) + ("…" if len(r.get("pages") or []) > 15 else "")
         verified.append(f"{_plural(int(inner.get('pages') or 0), 'page')} read.")
+        return make("needs_check", [f"{_plural(int(r.get('uncertain') or 0), 'uncertain reading')} and "
+                                    f"{_plural(int(r.get('illegible') or 0), 'illegible word')} on page{'s' if len(r.get('pages') or []) > 1 else ''} "
+                                    f"{pages} — marked in the files (Word: highlighted, each with a comment; txt/md: [reading?], [?]; "
+                                    "review_pdf: highlighted next to the page image). `readings.items` lists them with their context: "
+                                    "check them against the page images."], verified)
+    if verified:
+        verified.append(f"{_plural(int(inner.get('pages') or 0), 'page')} read; the reader marked no doubtful readings.")
         return make("ok", ["Spelling is read by AI — skim the text for misreads."], verified)
     return make("needs_check", [LOOK], [])

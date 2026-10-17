@@ -1368,7 +1368,7 @@ const TRY = {
   grass: { kind: "photo", mode: "edit", set: { instruction: "Remove the blurry grass in front of the animal" }, note: "Add your photo — the instruction is filled in." },
   backdrop: { kind: "photo", mode: "edit", set: { instruction: "Put the Parliament behind it, crop to 4:5, headline ‘Budapest’ at the top" }, note: "Add your photo — the instruction is filled in; change the headline to yours." },
   restore: { kind: "photo", mode: "restore", set: { colorize: "on", split: "on" }, note: "Add a photo of an album page — every old print on it is found, repaired and coloured." },
-  oldbook: { kind: "scan", set: { out: ["docx", "pdf", "searchable_pdf"] }, note: "Add the page photos in order — you get Word, a new book PDF and a searchable PDF." },
+  oldbook: { kind: "scan", set: { out: ["docx", "pdf", "searchable_pdf", "review_pdf"] }, note: "Add the page photos in order — you get Word, a new book PDF, a searchable PDF and a review PDF with each page beside its text." },
   book: { kind: "book", set: { layout: "book" }, note: "Add your manuscript. It opens in the Word editor — then ask below it, e.g. “On page 22 add a photo of the Colosseum”." },
   deck: { kind: "deck", mode: "brief", focus: "brief", note: "Write a short brief, and add a pptx you like as the Style example below." },
   redact: { kind: "pdf", set: { action: "redact" }, focus: "words", note: "Add your PDF and the names to black out — they're removed from the file for good." },
@@ -1926,12 +1926,13 @@ const MAKERS = {
       <div class="checks"><label><input type="checkbox" name="out" value="docx" checked> Word document (.docx)</label>
       <label><input type="checkbox" name="out" value="pdf" checked> New, clean PDF</label>
       <label><input type="checkbox" name="out" value="searchable_pdf"> Searchable PDF — keeps the original look</label>
+      <label><input type="checkbox" name="out" value="review_pdf"> Review PDF — each page next to its text, doubtful words highlighted</label>
       <label><input type="checkbox" name="out" value="txt"> Plain text (.txt)</label>
       <label><input type="checkbox" name="out" value="fillable_pdf"> Fillable form — a printed form rebuilt with real fields</label></div></fieldset>
       <label>Language<select name="lang"><option value="">Detect automatically</option><option>English</option><option>German</option>
         <option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Dutch</option>
         <option>Polish</option><option>Czech</option><option>Hungarian</option><option>Romanian</option><option>Swedish</option><option>Latin</option></select></label>
-      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised.</p>
+      <p class="muted small" style="margin:0 0 6px">The spelling stays as printed — old texts are not modernised. A word read with doubt is never guessed silently: it is highlighted in Word with a comment (and marked [word?] in plain text).</p>
       ${styleField("document")}`,
     wire() {},
     async submit(fd, form) {
@@ -1946,6 +1947,8 @@ const MAKERS = {
       if (r.words) parts.push(`${r.words.toLocaleString("en")} words`);
       if (r.figures) parts.push(`${r.figures} picture${r.figures > 1 ? "s" : ""}`);
       if (r.fields?.length) parts.push(`${r.fields.length} form fields`);
+      const doubt = (r.readings?.uncertain || 0) + (r.readings?.illegible || 0);
+      if (doubt) parts.push(`${doubt} doubtful word${doubt > 1 ? "s" : ""} highlighted to check`);
       // a szerkesztőbe: a Word-dokumentum, ha kérte; különben az első PDF (PDF-szerkesztő), végül az első kimenet
       const open = r.files.find(x => x.file_id.endsWith(".docx")) || r.files.find(x => x.file_id.endsWith(".pdf")) || r;
       const where = EDITOR_NAMES[editorsFor(extOf(open.file_id))[0]?.[0]];
