@@ -337,7 +337,7 @@ async def fetch_article(url: str) -> dict[str, Any]:
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
 {"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
-  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|lines|race",
+  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|lines|race|sankey",
             "title": str, "unit": str, "total": number | null, "min": number | null, "max": number | null,
             "items": [{"label": str, "value": number | null, "text": str}]} | null}],
  "end": {"title": str, "subtitle": str}}
@@ -371,7 +371,9 @@ Rules:
       their sign, e.g. -7); the end is computed;
     slope — the same 2–6 things at two moments: "labels": [the two dates], items [{"label", "from", "to"}];
     lines — 2–4 series over the same periods (e.g. scenarios): "labels": [periods], "series": [{"name", "values"}];
-    race — 3–10 things ranked over 3–12 periods: "labels": [periods], "items": [{"label", "values"}].
+    race — 3–10 things ranked over 3–12 periods: "labels": [periods], "items": [{"label", "values"}];
+    sankey — amounts flowing between stages (money from sources → programmes → projects, energy, people): "flows":
+      [{"from", "to", "value"}] (2–24 flows, at most 14 nodes, one way only); the node totals are computed.
   Copy every number and date EXACTLY from the source (value = a plain number, no unit); unit = "%" or a short unit
   ("$", "km", "bn") or ""; item labels ≤ 18 characters (ring/icons: ≤ 60); at most 3 chart scenes (4 for 80 s or longer) and never two of the
   same type in a row; a scene has a stat OR a chart, never both; headline = what the graphic shows.
@@ -570,7 +572,7 @@ def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Opti
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
                 "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script",
                 "decision_tree", "swimlane", "network",
-                "waterfall", "slope", "scatter", "band", "lines", "race")     # az utóbbi hat: app/tools/motion_charts.py
+                "waterfall", "slope", "scatter", "band", "lines", "race", "sankey")     # az utóbbi hét: app/tools/motion_charts.py
 
 
 def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -584,7 +586,7 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
     typ = diagrams.ALIASES.get(typ, motion_charts.ALIASES.get(typ, typ))
     if typ not in _CHART_TYPES:
         return None, None
-    if typ in motion_charts.TYPES:     # vízesés, előtte→utána, pont, sáv, több vonal, verseny: saját alakjuk van
+    if typ in motion_charts.TYPES:     # vízesés, előtte→utána, pont, sáv, több vonal, verseny, sankey: saját alakjuk van
         return motion_charts.parse(typ, c, source)
     if typ in diagrams.TYPES:          # magyarázó ábra: a leírása marad a jelenetben, a rajzolás a graphic elemeivel
         nums = _text_numbers(source)
@@ -1618,7 +1620,7 @@ _LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
 _LAYER_Z = {"fullscreen": 0, "split": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4, "source": 5}
 _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
                 "splitscreen": "split", "credit": "source"}
-_CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels")
+_CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "flows")
 _PANEL = [0.035, 0.04, 0.055]
 
 
@@ -3968,9 +3970,9 @@ _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json obj
  "add_layers": [{"at": seconds, "dur": seconds, "type": "lower_third|title|chapter|source|stat|quote|chart|fullscreen|split", …}]}
 Layers are time-coded graphics over the video (listed below with their ids); change them by id. A video of the person's
 own footage has only layers: change or add layers there, never scenes.
-<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|scatter|band|lines|race", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
+<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|scatter|band|lines|race|sankey", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
            "items": [{"label": str, "value": number|null, "text": str}]}
-(waterfall, slope, scatter, band, lines and race have their own fields — labels, series, from/to, x/y/size, low/high;
+(waterfall, slope, scatter, band, lines, race and sankey have their own fields — labels, series, from/to, x/y/size, low/high, flows;
 to change one, send a chart WITHOUT "type" with only the fields that change.)
 A scene with a diagram (decision_tree | swimlane | network, listed with its node ids): to change it send a chart WITHOUT
 "type" holding only what changes — {"nodes": [{"id", "text"?, "kind"?, "remove"?: true} | a new node],
@@ -3997,8 +3999,8 @@ def _describe(spec: dict[str, Any]) -> str:
     for i, sc in enumerate(st.get("scenes") or [], 1):
         pic = pics[i] if i < len(pics) else None
         what = f"chart {sc['chart']['type']} “{sc['chart']['title']}”" if sc.get("chart") else (f"stat {sc['stat']['value']}" if sc.get("stat") else "")
-        if (sc.get("chart") or {}).get("nodes"):
-            from app.tools import diagrams
+        from app.tools import diagrams
+        if (sc.get("chart") or {}).get("type") in diagrams.TYPES:    # a sankey csomópontjai nem ábra-dobozok (nincs id-jük)
             what += " — " + diagrams.describe(sc["chart"])
         lines.append(f"{i}. {sc.get('headline')} — caption: {sc.get('caption')}" + (f" — {what}" if what else "")
                      + (f" — picture: {(pic or {}).get('credit') or 'yes'}" if pic else " — no picture"))

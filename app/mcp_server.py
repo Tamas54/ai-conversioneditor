@@ -1805,7 +1805,10 @@ async def video(
       range, the forecast part dashed — {"items": [{"label": period, "value", "low"?, "high"?}], "forecast_from"?: the
       first forecast period}) | lines (2–4 series over the same periods, e.g. scenarios, named at their ends —
       {"labels": [periods], "series": [{"name", "values"}]}) | race (a ranking re-ordering period by period, the bars
-      gliding into place — {"labels": [periods], "items": [{"label", "values"}]}, 3–10 items, 3–12 periods).
+      gliding into place — {"labels": [periods], "items": [{"label", "values"}]}, 3–10 items, 3–12 periods) | sankey
+      (amounts flowing between stages, e.g. money from sources → programmes → projects; ribbons as thick as the flow,
+      each node labelled with its computed total — {"flows": [{"from", "to", "value"}], "nodes"?: [{"name", "color"?}]
+      (order and colour)}, 2–24 flows, at most 14 nodes, one way only: a loop drops it).
       Every number, date and quote is checked against the source — one that isn't there drops the graphic.
       graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
       {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
