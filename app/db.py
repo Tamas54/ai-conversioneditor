@@ -217,6 +217,15 @@ CREATE TABLE IF NOT EXISTS user_signatures (
     deleted_at      timestamptz
 );
 CREATE INDEX IF NOT EXISTS user_signatures_owner_idx ON user_signatures (owner_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS sheet_templates (
+    id              text PRIMARY KEY,
+    owner_id        text NOT NULL,
+    name            text NOT NULL,
+    nonce           bytea NOT NULL,
+    data            bytea NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sheet_templates_owner_idx ON sheet_templates (owner_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS user_profiles (
     owner_id        text PRIMARY KEY,
     nonce           bytea NOT NULL,
@@ -736,6 +745,26 @@ async def signature_get(uid: str, sid: str) -> Optional[dict[str, Any]]:
 async def signature_delete(uid: str, sid: str) -> bool:
     """Végleges törlés (a titkosított adat is) — az aláírás érzékeny adat, nem tartjuk meg."""
     return bool(await _rows("DELETE FROM user_signatures WHERE owner_id = %s AND id = %s RETURNING id", (uid, sid)))
+
+
+# ---------- ismétlődő táblázat-sablonok (jelenléti ív…), titkosítva: app/formkit/sheet_template.py ----------
+
+async def sheet_template_put(uid: str, tid: str, name: str, nonce: bytes, data: bytes) -> None:
+    await _rows("INSERT INTO sheet_templates (id, owner_id, name, nonce, data) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (tid, uid, name, nonce, data))
+
+
+async def sheet_template_list(uid: str) -> list[dict[str, Any]]:
+    return await _rows("SELECT id, name, created_at FROM sheet_templates WHERE owner_id = %s ORDER BY created_at DESC", (uid,))
+
+
+async def sheet_template_get(uid: str, tid: str) -> Optional[dict[str, Any]]:
+    rows = await _rows("SELECT id, name, nonce, data FROM sheet_templates WHERE owner_id = %s AND id = %s", (uid, tid))
+    return rows[0] if rows else None
+
+
+async def sheet_template_delete(uid: str, tid: str) -> bool:
+    return bool(await _rows("DELETE FROM sheet_templates WHERE owner_id = %s AND id = %s RETURNING id", (uid, tid)))
 
 
 async def profile_get(uid: str) -> Optional[dict[str, Any]]:

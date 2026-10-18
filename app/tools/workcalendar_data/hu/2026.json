@@ -1,0 +1,11 @@
+{
+  "year": 2026,
+  "country": "HU",
+  "workdays": ["2026-01-10", "2026-08-08", "2026-12-12"],
+  "restdays": ["2026-01-02", "2026-08-21", "2026-12-24"],
+  "source": {
+    "title": "10/2025. (IV. 30.) NGM rendelet a 2026. évi munkaszüneti napok körüli munkarendről, 2. §",
+    "url": "https://njt.jog.gov.hu/eli/R/2025/NGM/10",
+    "retrieved": "2026-10-19"
+  }
+}

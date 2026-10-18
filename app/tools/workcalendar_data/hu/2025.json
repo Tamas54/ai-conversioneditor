@@ -1,0 +1,11 @@
+{
+  "year": 2025,
+  "country": "HU",
+  "workdays": ["2025-05-17", "2025-10-18", "2025-12-13"],
+  "restdays": ["2025-05-02", "2025-10-24", "2025-12-24"],
+  "source": {
+    "title": "11/2024. (IV. 8.) NGM rendelet a 2025. évi munkaszüneti napok körüli munkarendről, 2. §",
+    "url": "https://njt.jog.gov.hu/eli/R/2024/NGM/11",
+    "retrieved": "2026-10-19"
+  }
+}

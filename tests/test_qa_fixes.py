@@ -653,3 +653,130 @@ def test_rebuilt_fillable_form_stays_small(tmp_path):
     names = forms.build_pdf([layout], [img], dst)
     assert names == ["nev"] and dst.stat().st_size < 100_000, _fonts(dst)
     assert "árvíztűrő tükörfúrógép" in _text(dst)
+
+
+# ---------- 14. ismétlődő xlsx-sablon (havi jelenléti ív) egy hívásból ----------
+
+sys_path_fixtures = str(Path(__file__).parent / "fixtures")
+
+
+def _jelenleti():
+    import sys
+    if sys_path_fixtures not in sys.path:
+        sys.path.insert(0, sys_path_fixtures)
+    import jelenleti
+    return jelenleti
+
+
+def _register(client, put_file, tmp_path, ext: str = "xlsx") -> str:
+    J = _jelenleti()
+    src = J.make_template(tmp_path / "jelenleti_sablon.xlsx")
+    if ext == "xls":
+        src = _lo_to(src, tmp_path, "xls")
+    err, r = _call(client, "forms", {"action": "template_register", "file_id": put_file(src), "profile": J.PROFILE,
+                                     "name": "Jelenléti ív"})
+    assert not err, r
+    return r["template_id"]
+
+
+def _lo_to(src: Path, out: Path, fmt: str) -> Path:
+    subprocess.run(["soffice", f"-env:UserInstallation=file://{out}/lo2", "--headless", "--convert-to", fmt, "--outdir",
+                    str(out / "conv"), str(src)], check=True, capture_output=True, timeout=180)
+    return out / "conv" / f"{src.stem}.{fmt}"
+
+
+def _raw_cell(xlsx: Path, sheet_index: int, coord: str) -> str:
+    """A cella XML-je (típus: t="s" szöveg, t="n"/nincs szám) — a „típusos írás” közvetlen bizonyítéka."""
+    import re
+    x = zipfile.ZipFile(xlsx).read(f"xl/worksheets/sheet{sheet_index}.xml").decode("utf-8")
+    m = re.search(rf'<c r="{coord}"[^>]*?(?:/>|>.*?</c>)', x)
+    return m.group(0) if m else ""
+
+
+def test_template_fill_22_workdays_gives_176_hours(client, put_file, tmp_path):
+    _need("soffice")
+    from openpyxl import load_workbook
+    tid = _register(client, put_file, tmp_path)
+    err, r = _call(client, "forms", {"action": "template_fill", "template_id": tid, "period": "2025-09"})
+    assert not err, r
+    assert r["check"]["status"] == "ok", r["check"]
+    assert r["summary"]["workdays"] == 22 and r["summary"]["hours"] == "176:00"
+    files = {f["format"]: f for f in r["files"]}
+    assert set(files) == {"xlsx", "pdf"} and files["xlsx"]["label"] == "Jelenléti ív 2025-09.xlsx"
+    x = _path(files["xlsx"]["file_id"])
+    vals = load_workbook(x, data_only=True)["Jelenléti ív"]
+    forms_ = load_workbook(x)["Jelenléti ív"]
+    assert forms_["E39"].value == "=SUM(E8:E38)"                      # a képlet maradt (Excel is újraszámol)
+    assert vals["B39"].value == 22 and vals["D39"].value == 0
+    assert vals["B3"].value == "Próba Ödön" and vals["E3"].value == "2025. szeptember"
+    assert vals["B8"].value.hour == 8 and vals["C8"].value.hour == 16          # szeptember 1. hétfő
+    assert vals["B13"].value is None and vals["C13"].value is None             # 6. szombat: üres
+    assert ' t="s"' not in _raw_cell(x, 1, "B8")                              # idő SZÁMKÉNT, nem szövegként
+    assert 'fullCalcOnLoad="1"' in zipfile.ZipFile(x).read("xl/workbook.xml").decode()
+    assert "176:00" in _text(_path(files["pdf"]["file_id"]))                 # a PDF az újraszámolt értéket mutatja
+
+
+def test_template_fill_transferred_saturday_and_three_leave_days(client, put_file, tmp_path):
+    """2025. december: dec. 13. szombat munkanap, dec. 24. pihenőnap, 25–26. munkaszüneti; 3 nap szabadság."""
+    _need("soffice")
+    from openpyxl import load_workbook
+    tid = _register(client, put_file, tmp_path)
+    exc = [{"from": "2025-12-01", "to": "2025-12-03", "kind": "Szabadság"}]
+    err, r = _call(client, "forms", {"action": "template_fill", "template_id": tid, "period": "2025-12", "exceptions": exc,
+                                     "formats": ["xlsx", "pdf", "xls"]})
+    assert not err, r
+    s = r["summary"]
+    assert r["check"]["status"] == "ok", r["check"]
+    assert (s["workdays"], s["worked_days"], s["exception_days"], s["hours"]) == (21, 18, 3, "144:00")
+    assert s["transferred_workdays"] == ["2025-12-13"] and "2025-12-24" in s["rest_days"]
+    files = {f["format"]: f for f in r["files"]}
+    vals = load_workbook(_path(files["xlsx"]["file_id"]), data_only=True)["Jelenléti ív"]
+    assert vals["B8"].value is None and vals["C8"].value == "SZABADSÁG" and vals["D8"].value == "+"
+    assert vals["B20"].value.hour == 8                                       # dec. 13. (szombat munkanap)
+    assert all(vals[f"B{7 + d}"].value is None and vals[f"C{7 + d}"].value is None for d in (24, 25, 26))
+    assert (vals["B39"].value, vals["D39"].value) == (18, 3)
+    assert _path(files["xls"]["file_id"]).read_bytes()[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"   # valódi .xls
+
+
+def test_template_fill_refuses_guesses(client, put_file, tmp_path):
+    tid = _register(client, put_file, tmp_path)
+    for args, msg in (({"period": "2027-01"}, "isn't loaded"),
+                      ({"period": "2025-12", "exceptions": [{"date": "2025-12-06", "kind": "szabadság"}]}, "not a workday"),
+                      ({"period": "2025-12", "exceptions": [{"date": "2025-12-01", "kind": "kiküldetés"}]}, "known: szabadság")):
+        err, r = _call(client, "forms", {"action": "template_fill", "template_id": tid, **args})
+        assert err and msg in str(r), (args, r)
+
+
+def test_template_learn_suggests_the_profile_from_a_filled_month(client, put_file, tmp_path):
+    _need("soffice")
+    J = _jelenleti()
+    tid = _register(client, put_file, tmp_path)
+    err, r = _call(client, "forms", {"action": "template_fill", "template_id": tid, "period": "2025-10", "formats": ["xlsx"],
+                                     "exceptions": [{"date": "2025-10-13", "kind": "szabadság"}]})
+    sample = r["files"][0]["file_id"]
+    empty = put_file(J.make_template(tmp_path / "ures.xlsx"))
+    err, s = _call(client, "forms", {"action": "template_learn", "file_id": empty, "sample_file_id": sample})
+    assert not err, s
+    p = s["profile"]
+    assert p["header"] == J.PROFILE["header"] and p["month_format"] == "{year}. {month}"
+    assert p["days"] == {"first_row": 8, "step": 1} and p["columns"] == J.PROFILE["columns"]
+    assert p["rules"]["kinds"] == {"szabadság": {"leave": "SZABADSÁG", "absence": "+"}}
+    assert p["totals"]["hours"] == "E39" and p["totals"]["absence_days"] == "D39"
+    assert p["defaults"] == {"start": "8:00", "end": "16:00"} and p["header_values"]["name"] == "Próba Ödön"
+
+
+def test_template_rest_api_and_xls_template(api, tmp_path):
+    """REST (havi cron): regisztrálás .xls sablonból (képletek, formázás megmarad), kitöltés, lista, törlés."""
+    _need("soffice")
+    J = _jelenleti()
+    xls = _lo_to(J.make_template(tmp_path / "sablon.xlsx"), tmp_path, "xls")
+    b64 = base64.b64encode(xls.read_bytes()).decode()
+    r = api.post("/v1/forms/templates", json={"file": b64, "file_name": "sablon.xls", "profile": J.PROFILE, "name": "Ív"})
+    assert r.status_code == 200, r.text
+    tid = r.json()["template_id"]
+    assert tid in [t["template_id"] for t in api.get("/v1/forms/templates").json()["data"]]
+    r = api.post(f"/v1/forms/templates/{tid}/fill", json={"period": "2025-09"})
+    assert r.status_code == 200, r.text
+    assert r.json()["summary"]["hours"] == "176:00" and r.json()["files"][0]["url"]
+    assert api.post(f"/v1/forms/templates/{tid}/fill", json={"period": "2027-02"}).status_code == 422
+    assert api.delete(f"/v1/forms/templates/{tid}").json() == {"deleted": tid}
