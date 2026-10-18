@@ -472,7 +472,8 @@ async def render(template: str, data: dict[str, Any], *, size: Optional[str] = N
         else:
             _booklet(d, data, t, imgs)
             await _trim_empty_pages(d)
-        res = await crafts.vector_run(commands=d.cmds, export=export or ["pdf", "png"])
+        from app.storage.naming import design_name
+        res = await crafts.vector_run(commands=d.cmds, export=export or ["pdf", "png"], name=design_name(template, data))
     finally:
         for x in resolved:
             x.path.unlink(missing_ok=True)

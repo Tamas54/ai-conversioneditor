@@ -64,6 +64,41 @@ def result_stem(source_file_id: Optional[str], what: str, fallback: str = "file"
     return f"{base} v{n}"
 
 
+def unique_stem(base: str) -> str:
+    """Egy adott név (pl. „Oklevél – Kovács Anna”), foglalt esetén „ v2”, „ v3”…"""
+    base = safe_title(base) or "file"
+    taken = _taken()
+    if base.lower() not in taken:
+        return base
+    n = 2
+    while f"{base} v{n}".lower() in taken:
+        n += 1
+    return f"{base} v{n}"
+
+
+_KIND_NAMES = {"certificate": ("Oklevél", "Certificate"), "poster": ("Plakát", "Poster"), "flyer": ("Szórólap", "Flyer"),
+               "report_cover": ("Borító", "Report cover"), "invitation": ("Meghívó", "Invitation"),
+               "social": ("Közösségi poszt", "Social post"), "booklet": ("Füzet", "Booklet"), "card": ("Kártya", "Card"),
+               "auto": ("Design", "Design")}
+
+
+def design_name(template: str, data: dict) -> str:
+    """A dizájn neve a sablonból és a tartalomból: „Oklevél – Kovács Anna” (oklevél: a címzett; más: a cím) —
+    a sablon neve a tartalom nyelvén (magyar szövegnél magyarul)."""
+    from app.tools import textlang
+    d = data or {}
+    who = d.get("recipient") if template in ("certificate", "invitation") else None
+    if isinstance(who, str):
+        who = re.sub(r"^(dear|kedves|tisztelt)\s+", "", who.strip(), flags=re.I).rstrip(",!")
+    subject = (who or d.get("title") or d.get("name") or "").strip() if isinstance(who or d.get("title") or d.get("name") or "", str) else ""
+    sample = " ".join(str(d.get(k) or "") for k in ("title", "recipient", "text", "lead", "subtitle", "body", "goal"))
+    hu = (textlang.detect(sample, min_hits=2, min_words=3) or "").startswith("hu")
+    hu_name, en_name = _KIND_NAMES.get(template, (template.replace("_", " ").capitalize(),) * 2)
+    kind = hu_name if hu else en_name
+    title_is_kind = subject and subject.lower() in (hu_name.lower(), en_name.lower())
+    return f"{kind}{SEP}{subject}" if subject and not title_is_kind else kind
+
+
 def safe_title(title: str, limit: int = 120) -> str:
     """Felhasználói cím fájlnévnek (a / és vezérlőkarakterek nélkül)."""
     t = re.sub(r"[\x00-\x1f/\\]+", " ", str(title or "")).strip()

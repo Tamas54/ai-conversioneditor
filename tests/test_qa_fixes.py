@@ -45,9 +45,11 @@ def _task(job: dict, name: str) -> dict:
 
 
 def _need(*exes: str) -> None:
-    from app.tools import wordcraft
+    from app.tools import crafts, wordcraft
+    have = {"wordcraft": wordcraft.available, "vectorcraft": lambda: bool(crafts.vector_cli()),
+            "photocraft": lambda: bool(crafts.photo_cli())}
     for e in exes:
-        if (e == "wordcraft" and not wordcraft.available()) or (e != "wordcraft" and not shutil.which(e)):
+        if not (have[e]() if e in have else shutil.which(e)):
             pytest.skip(f"{e} isn't installed")
 
 
@@ -946,3 +948,46 @@ def test_fixed_video_length_includes_title_and_end_cards(client, n, dur):
                             str(_path(res["video"]["file_id"]))], capture_output=True, text=True).stdout
     assert abs(float(probe) - dur) <= 0.5 and abs(res["duration"]["actual"] - dur) <= 0.5, (n, dur, probe, res["duration"])
     assert res["check"]["status"] == "ok", res["check"]
+
+
+# ---------- 12. elnevezés, egyszer szereplő fájl, méret 1 kB alatt ----------
+
+def test_design_is_named_from_template_and_recipient(client):
+    _need("vectorcraft")
+    data = {"recipient": "Kovács Anna", "text": "az őszi tanfolyam sikeres elvégzéséért", "date": "2026. október 19."}
+    err, r = _call(client, "design", {"template": "certificate", "data": data})
+    assert not err, r
+    assert {f["name"] for f in r["files"]} == {"Oklevél – Kovács Anna.pdf", "Oklevél – Kovács Anna.png"}
+    err, r2 = _call(client, "design", {"template": "certificate", "data": data})
+    assert {f["name"] for f in r2["files"]} == {"Oklevél – Kovács Anna v2.pdf", "Oklevél – Kovács Anna v2.png"}
+    err, r3 = _call(client, "design", {"template": "poster", "data": {"title": "Summer soul night", "body": "Live music in the park"}})
+    assert {f["name"].rsplit(".", 1)[0] for f in r3["files"]} == {"Poster – Summer soul night"}
+
+
+def test_image_to_xlsx_named_after_the_photo(client, put_file, samples, monkeypatch):
+    from app.llm import vision
+    from app.storage import read_meta
+
+    async def fake(msgs, response_format=None, max_tokens=4096, model=None):
+        return json.dumps({"headers": ["Év", "Bevétel"], "rows": [["2024", "140"]]})
+    monkeypatch.setattr(vision, "_call", fake)
+    err, r = _call(client, "image_to_xlsx", {"image_file_id": put_file(samples.png("bevételek 2024.png"))})
+    assert not err, r
+    assert read_meta(r["file_id"])["label"] == "bevételek 2024.xlsx"
+
+
+def test_jobs_list_each_file_once_with_bytes(client):
+    tasks = {"be": {"operation": "import/base64", "file": base64.b64encode("# Ő\n\nű\n".encode()).decode(), "filename": "kicsi.md"},
+             "word": {"operation": "convert", "input": "be", "output_format": "html"},
+             "ki": {"operation": "export/url", "input": "word"}}
+    err, r = _call(client, "jobs", {"action": "create", "tasks": tasks, "wait": 30})
+    assert not err, r
+    assert len(r["files"]) == len({f["file_id"] for f in r["files"]}) == 1
+    f = r["files"][0]
+    assert f["url"] and 0 < f["size_bytes"] < 1024
+
+
+def test_tiny_file_size_is_not_zero(client):
+    err, r = _call(client, "upload_file", {"filename": "apró ű.txt", "content_base64": base64.b64encode(("ő" * 150).encode()).decode()})
+    assert not err, r
+    assert r["size_bytes"] == 300 and r["size_kb"] == 0.3

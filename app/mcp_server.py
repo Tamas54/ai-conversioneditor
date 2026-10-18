@@ -219,14 +219,45 @@ def _name_unlabeled(tool: str, args: dict, res) -> None:
         write_meta(fid, label=label, source_file_id=src if isinstance(src, str) else None, operation=tool)
 
 
+def _sizes(x, depth: int = 0) -> None:
+    """Minden fájl-elem mérete bájtban is (size_bytes), és 10 kB alatt tizedes kB — az 1 kB alatti fájl ne „0” legyen."""
+    if depth > 4:
+        return
+    if isinstance(x, list):
+        for y in x:
+            _sizes(y, depth + 1)
+        return
+    if not isinstance(x, dict):
+        return
+    fid = x.get("file_id")
+    if isinstance(fid, str) and ("size_kb" in x or "label" in x or "url" in x):
+        from app.storage import input_path, output_path
+        try:
+            p = output_path(fid) if output_path(fid).exists() else input_path(fid)
+            n = p.stat().st_size if p.exists() else None
+        except (OSError, ValueError):
+            n = None
+        if n is not None:
+            x["size_bytes"] = n
+            if "size_kb" in x:
+                x["size_kb"] = round(n / 1024, 1) if n < 10240 else n // 1024
+    for k, v in x.items():
+        if isinstance(v, (dict, list)) and k not in ("check", "steps", "tasks"):
+            _sizes(v, depth + 1)
+
+
 async def _finalize(tool: str, args: dict, res):
-    """Minden MCP-eredmény közös utófeldolgozása: név, ellenőrzés (check), linkek (szerkesztő, előnézet)."""
+    """Minden MCP-eredmény közös utófeldolgozása: név, méret, ellenőrzés (check), linkek (szerkesztő, előnézet)."""
     if not isinstance(res, dict):
         return res                       # pl. CallToolResult (files preview képpel) — érintetlenül
     try:
         _name_unlabeled(tool, args, res)
     except Exception as e:
         log.info("elnevezés kimaradt (%s): %s", tool, e)
+    try:
+        _sizes(res)
+    except Exception as e:
+        log.info("méret kimaradt (%s): %s", tool, e)
     from app.tools import checks
     check, page = await checks.run(tool, args, res)
     pages = {}

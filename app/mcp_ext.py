@@ -160,11 +160,18 @@ async def jobs(action: str = "create", tasks: Optional[dict] = None, job_id: Opt
 
 def _job_out(job: dict) -> dict:
     """MCP-barát alak: a fájlok kiemelve (file_id → szerkesztő/előnézet link a linked burkolóban)."""
-    files = []
+    files, seen = [], {}
     for t in job["tasks"]:
         for f in (t.get("result") or {}).get("files") or []:
             if f.get("file_id") and not t["operation"].startswith("import/"):
-                files.append({"file_id": f["file_id"], "label": f.get("filename"), **({"url": f["url"]} if f.get("url") else {})})
+                if f["file_id"] in seen:              # a convert és az export/url ugyanazt a fájlt adja: egyszer
+                    if f.get("url") and "url" not in seen[f["file_id"]]:
+                        seen[f["file_id"]]["url"] = f["url"]
+                    continue
+                item = {"file_id": f["file_id"], "label": f.get("filename"), **({"url": f["url"]} if f.get("url") else {}),
+                        **({"size_bytes": f["size"]} if isinstance(f.get("size"), int) else {})}
+                seen[f["file_id"]] = item
+                files.append(item)
     return {"job_id": job["id"], "status": job["status"], "files": files,
             "tasks": [{k: t.get(k) for k in ("name", "operation", "status", "code", "message")} for t in job["tasks"]]}
 
