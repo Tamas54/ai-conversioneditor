@@ -39,6 +39,36 @@ class SourceError(RuntimeError):
     pass
 
 
+class NoPeriodData(SourceError):
+    """A forrás a kért időszakra nem ad értéket (másik időszak értéke nem helyettesítő)."""
+
+
+_PERIOD_RE = re.compile(r"\d{4}(-(0[1-9]|1[0-2])(-\d{2})?|-Q[1-4])?")
+
+
+def norm_period(period: Optional[str]) -> Optional[str]:
+    """„2024”, „2025-12”, „2025-Q4”, „2025-12-31” → ugyanez; ami nem ilyen, az None (nincs időszakos lekérés)."""
+    p = str(period or "").strip().upper().replace("Q", "-Q").replace("--Q", "-Q")
+    return p if _PERIOD_RE.fullmatch(p) else None
+
+
+def period_matches(req: str, d: dict[str, Any]) -> bool:
+    """A válasz a KÉRT időszakra szól-e. Éves kérésre csak az éves (vagy kifejezetten év végi) érték, havira a hónap
+    (a lépcsős kamatnál a hónap egy napja), napira (as-of) a napra érvényes érték — más időszak értéke soha."""
+    got = str(d.get("period_returned") or d.get("period") or "")
+    if not got:
+        return False
+    if got == req:
+        return True
+    if re.fullmatch(r"\d{4}", req):
+        return got.startswith(req + "-12") and d.get("aggregation") == "end"
+    if re.fullmatch(r"\d{4}-\d{2}", req):
+        return got.startswith(req + "-")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", req):
+        return d.get("period_requested") == req and got <= req
+    return False
+
+
 async def _statdata(tool: str, args: dict[str, Any]) -> Any:
     async with httpx.AsyncClient(timeout=60) as c:
         r = await c.post(f"{settings.STATDATA_URL.rstrip('/')}/api/call", json={"tool": tool, "args": args})
@@ -58,20 +88,28 @@ async def _statdata(tool: str, args: dict[str, Any]) -> Any:
 
 
 async def indicator(country: str, name: str, period: Optional[str] = None) -> dict[str, Any]:
-    """Egy makró-mutató: {value, unit, period, source_name, source_url, status}. period: "YYYY-MM" | "YYYY-Qn" | None."""
+    """Egy makró-mutató: {value, unit, period, source_name, source_url, status}.
+    period: "YYYY" | "YYYY-MM" | "YYYY-Qn" | "YYYY-MM-DD" | None (= a legfrissebb). Időszakos kérésnél csak a KÉRT
+    időszak értéke jön vissza; ha a forrásnak arra nincs adata, NoPeriodData — a legfrissebb érték nem helyettesítő."""
     if name not in INDICATORS:
         raise SourceError(f"unknown indicator {name!r}")
     args: dict[str, Any] = {"country": (country or "").upper()[:2], "indicator": name}
-    if period:
-        args["period"] = period
+    req = norm_period(period)
+    if period and not req:
+        raise NoPeriodData(f"the period {period!r} isn't one the statistics can be asked for")
+    if req:
+        args["period"] = req
     d = await _statdata("get_macro_indicator", args)
     if not isinstance(d, dict) or d.get("value") is None or d.get("status") in ("missing", "error"):
-        if period:            # rossz/hiányzó időszak: a StatData szerint a kérdés újra, időszak nélkül
-            raise SourceError(f"no {name} value for {args['country']} in {period}")
+        if req:
+            raise NoPeriodData(f"no {name} value for {args['country']} in {req}")
         raise SourceError(f"no {name} value for {args['country']}")
-    return {"value": float(d["value"]), "unit": d.get("unit") or INDICATORS[name], "period": d.get("period"),
+    if req and not period_matches(req, d):
+        raise NoPeriodData(f"no {name} value for {args['country']} in {req} (the source gave {d.get('period_returned') or d.get('period')})")
+    return {"value": float(d["value"]), "unit": d.get("unit") or INDICATORS[name],
+            "period": d.get("period_returned") or d.get("period"),
             "source_name": _source_name(d.get("source_used"), d.get("source_url")), "source_url": d.get("source_url"),
-            "status": d.get("status")}
+            "status": d.get("status"), **{k: d[k] for k in ("measure", "aggregation", "effective_from") if d.get(k)}}
 
 
 def _source_name(used: Optional[str], url: Optional[str]) -> str:

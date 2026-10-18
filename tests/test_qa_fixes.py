@@ -387,3 +387,70 @@ def test_extract_docx_merged_cells_like_pdfplumber(tmp_path, put_file, client):
     err, r = _call(client, "extract", {"file_id": put_file(p), "mode": "tables"})
     assert not err, r
     assert r["tables"][0]["rows"] == [["Összevont fejléc", None, "Ű"], ["a", "b", "c"]]
+
+
+# ---------- 5. facts: a múltbeli állítást a SAJÁT időszakával vetjük össze ----------
+
+async def test_facts_past_period_claims_use_their_own_period(tmp_path, monkeypatch):
+    from docx import Document
+    from app.tools import content_check as cc, datasources as ds
+    d = Document()
+    for t in ("2024-ben a magyar infláció 3,7% volt, ami jóval kisebb az előző évinél.",
+              "2025 végén az infláció 8,5% volt a KSH szerint.",
+              "2023-ban a munkanélküliségi ráta 4,1% volt Magyarországon.",
+              "2022-ben az alapkamat 13% volt, és ez a régió legmagasabbja volt."):
+        d.add_paragraph(t)
+    p = tmp_path / "allitasok.docx"
+    d.save(str(p))
+    claims = {"claims": [
+        {"paragraph": 1, "quote": "2024-ben a magyar infláció 3,7% volt", "claim": "HU infláció 2024: 3,7%",
+         "stat": {"country": "HU", "indicator": "cpi", "period": "2024", "value": 3.7}},
+        {"paragraph": 2, "quote": "2025 végén az infláció 8,5% volt", "claim": "HU infláció 2025 dec.: 8,5%",
+         "stat": {"country": "HU", "indicator": "cpi", "period": "2025-12", "value": 8.5}},
+        {"paragraph": 3, "quote": "2023-ban a munkanélküliségi ráta 4,1% volt", "claim": "HU munkanélküliség 2023: 4,1%",
+         "stat": {"country": "HU", "indicator": "unemployment", "period": "2023", "value": 4.1}},
+        {"paragraph": 4, "quote": "2022-ben az alapkamat 13% volt", "claim": "HU alapkamat 2022: 13%",
+         "stat": {"country": "HU", "indicator": "policy_rate", "period": "2022", "value": 13}}]}
+    asks = []
+
+    async def fake_ask(prompt, thinking=False):
+        asks.append(prompt[:40])
+        assert prompt.startswith("List the checkable"), "a statisztikai ítélethez nem kell a modell"
+        return claims
+    calls = []
+
+    async def fake_statdata(tool, args):
+        calls.append(dict(args))
+        key = (args["indicator"], args.get("period"))
+        return {("cpi", "2024"): {"value": 3.74, "period": "2024", "period_returned": "2024", "aggregation": "avg",
+                                  "measure": "national CPI", "status": "ok", "source_used": "KSH"},
+                ("cpi", "2025-12"): {"value": 4.4, "period": "2025-12", "period_returned": "2025-12", "status": "ok",
+                                     "source_used": "Eurostat"},
+                # régi szerver: a kért év helyett a legfrissebbet adja → nem vetjük össze
+                ("unemployment", "2023"): {"value": 4.5, "period": "2026-09", "status": "fresh", "source_used": "KSH"},
+                ("policy_rate", "2022"): {"status": "missing", "value": None}}[key]
+    monkeypatch.setattr(cc, "_ask", fake_ask)
+    monkeypatch.setattr(ds, "_statdata", fake_statdata)
+    r = await cc.facts(p)
+    by = {c["claim"]: c for c in r["claims"]}
+    assert by["HU infláció 2024: 3,7%"]["verdict"] == "supported"
+    c = by["HU infláció 2025 dec.: 8,5%"]
+    assert c["verdict"] == "contradicted" and c["correct"] == "4,4" and c["replacement"] == "2025 végén az infláció 4,4% volt"
+    for name, per in (("HU munkanélküliség 2023: 4,1%", "2023"), ("HU alapkamat 2022: 13%", "2022")):
+        c = by[name]
+        assert c["verdict"] == "unverified" and c["no_data_for_period"] == per
+        assert "Nincs adat erre az időszakra" in c["explanation"]
+    assert all(a.get("period") for a in calls), calls          # periódus nélküli („legfrissebb”) lekérés nem volt
+    assert {a["period"] for a in calls} == {"2024", "2025-12", "2023", "2022"}
+    assert len(asks) == 1
+
+
+def test_period_matching_rules():
+    from app.tools.datasources import norm_period, period_matches
+    assert norm_period("2025q4") == "2025-Q4" and norm_period("2024") == "2024" and norm_period("tavaly") is None
+    assert period_matches("2024", {"period": "2024"})
+    assert not period_matches("2024", {"period": "2024-12"})                       # decemberi érték ≠ éves
+    assert period_matches("2024", {"period_returned": "2024-12-31", "aggregation": "end"})
+    assert period_matches("2025-12", {"period_returned": "2025-12-31"})            # lépcsős kamat: a hónap utolsó napja
+    assert not period_matches("2025-12", {"period": "2026-09"})
+    assert period_matches("2025-12-31", {"period_returned": "2025-09-24", "period_requested": "2025-12-31"})

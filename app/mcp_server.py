@@ -1526,7 +1526,10 @@ async def facts(
             office and period), the right value and — when it is wrong — a corrected `replacement` for the `quote`.
             Statistics are checked against StatData (Eurostat, KSH, ECB, FRED…), forint rates against the MNB, other
             facts against a web search: short search queries built from the claims leave the server. "unverified" means
-            no source settled it — never say it is false. Costs 1 credit per 10 newly checked facts (repeats are free).
+            no source settled it — never say it is false. A statistic about a past period ("in 2024", "at the end of
+            2025") is checked against THAT period's figure only; when the source has none, it is "unverified" with
+            no_data_for_period (never compared with the latest figure). Costs 1 credit per 10 newly checked facts
+            (repeats are free).
       action="bind" + file_id, quote (exact text with the number), source → links that number to its source;
             source = {"kind": "indicator", "country": "HU", "indicator": "cpi"} (cpi, core_cpi, policy_rate,
             unemployment, gdp_growth, gov_debt, bond_yield_10y, …) or {"kind": "fx", "currency": "EUR"} (MNB rate).
@@ -1547,7 +1550,8 @@ async def facts(
     if action == "check":
         r = await cc.facts(existing(file_id), charge=_charge_claims)
         return {"claims": [{k: c.get(k) for k in ("id", "verdict", "claim", "quote", "paragraph", "explanation", "correct",
-                                                   "replacement", "source", "stat", "fx")} for c in r["claims"]],
+                                                   "replacement", "source", "stat", "fx", "no_data_for_period")
+                            if k != "no_data_for_period" or c.get(k)} for c in r["claims"]],
                 "counts": r["counts"], "checked": r["checked"], "new_checks": r["new_checks"]}
     if action == "bind":
         if not quote or not isinstance(source, dict):

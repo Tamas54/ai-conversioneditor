@@ -26,13 +26,14 @@ from typing import Any, Callable, Optional
 from app.config import settings
 from app.llm.siliconflow import _call_model, _strip_json_fences
 from app.tools import datasources as ds
+from app.tools import textlang
 from app.tools.docx_marks import Docx
 
 log = logging.getLogger("aice.content_check")
 
 VER_CONSISTENCY = "c4"
-VER_CLAIMS = "f2"
-VER_VERDICT = "v3"
+VER_CLAIMS = "f3"          # f3: az éves („YYYY”) és napi időszak is
+VER_VERDICT = "v4"         # v4: időszakos statisztika csak a saját időszakával (a régi ítéletek a legfrissebbel vetettek össze)
 VERDICT_MAX_AGE_S = 3 * 86400
 MAX_CHARS = 110_000
 MAX_CLAIMS = 30
@@ -226,8 +227,10 @@ For each claim:
   "claim": the claim as one self-contained sentence (who or what, when, how much), in the document's language,
   "query": a web search query that would verify it (the document's language; English for international facts),
   "stat": ONLY when it is one of these indicators for one country — {indicators} —
-          {{"country": "ISO-2 code", "indicator": "<one of the names>", "period": "YYYY-MM" or "YYYY-Qn" or null for the
-          current / latest value, "value": the number stated}}; otherwise null,
+          {{"country": "ISO-2 code", "indicator": "<one of the names>", "period": the period the claim is ABOUT —
+          "YYYY" for a whole year ("in 2024", "2024-ben": the annual figure), "YYYY-MM" for a month or the end of a
+          year ("at the end of 2025", "2025 végén" → "2025-12"), "YYYY-Qn" for a quarter, "YYYY-MM-DD" for a day —
+          or null when it states the current / latest value, "value": the number stated}}; otherwise null,
   "fx": ONLY for an exchange rate against the Hungarian forint: {{"currency": "EUR", "value": number}}; otherwise null.
 Reply with JSON only: {{"claims": [ … ]}}
 
@@ -271,23 +274,31 @@ def _evidence_text(ev: list[dict[str, Any]]) -> str:
     return "\n".join(lines) or "  (no evidence found)"
 
 
+def stat_period(c: dict[str, Any]) -> Optional[str]:
+    """Az állítás saját időszaka (a statisztikai lekérés EZZEL megy) — None: a jelenről / legfrissebbről szól."""
+    stat = c.get("stat")
+    return str(stat["period"]).strip() if isinstance(stat, dict) and stat.get("period") else None
+
+
 async def _evidence(c: dict[str, Any]) -> list[dict[str, Any]]:
+    """Az állítás forrásai. Múltbeli (időszakos) statisztikánál CSAK a kért időszak értéke — a legfrissebbel nem vetünk
+    össze; ha arra az időszakra nincs adat, c["no_period_data"] mondja meg, és webes keresés sem fut helyette."""
     ev: list[dict[str, Any]] = []
     stat, fxc = c.get("stat"), c.get("fx")
     try:
         if isinstance(stat, dict) and stat.get("indicator") in ds.INDICATORS and stat.get("country"):
             spec = {"kind": "indicator", "country": stat["country"], "indicator": stat["indicator"]}
-            got = []
-            if stat.get("period"):
+            per = stat_period(c)
+            if per:
+                spec = {**spec, "period": per}
                 try:
-                    got.append(await ds.fetch({**spec, "period": stat["period"]}))
-                except ds.SourceError:
-                    pass
-            latest = await ds.fetch(spec)
-            if not got or got[0].get("period") != latest.get("period"):
-                got.append(latest)
-            for g in got:
-                ev.append({"type": "data", "what": ds.describe(spec).replace(", latest", ""), "spec": spec, **g})
+                    g = await ds.fetch(spec)
+                except ds.NoPeriodData as e:
+                    c["no_period_data"] = {"period": per, "why": str(e)}
+                    return []
+            else:
+                g = await ds.fetch(spec)
+            ev.append({"type": "data", "what": ds.describe(spec).replace(", latest", ""), "spec": spec, **g})
         elif isinstance(fxc, dict) and str(fxc.get("currency", "")).upper() in ds.CURRENCIES:
             spec = {"kind": "fx", "currency": str(fxc["currency"]).upper()}
             ev.append({"type": "data", "what": ds.describe(spec), "spec": spec, **await ds.fetch(spec)})
@@ -356,6 +367,68 @@ def _numbers_ok(replacement: str, quote: str, ev: list[dict[str, Any]]) -> bool:
     return all(norm(x) in pool for x in _DIGITS.findall(replacement or ""))
 
 
+def _decimals(quote: str, value: float) -> int:
+    """Az állítás pontossága: a idézetben álló szám tizedesjegyei (3,7 → 1); ha nem található, az értékéből."""
+    for m in _DIGITS.finditer(quote or ""):
+        tok = m.group(0)
+        num = tok.replace(" ", "")
+        dec = num.rsplit(",", 1) if "," in num else num.rsplit(".", 1) if num.count(".") == 1 else [num]
+        try:
+            if abs(float(".".join(dec)) - value) < 1e-9:
+                return len(dec[1]) if len(dec) == 2 else 0
+        except ValueError:
+            continue
+    t = f"{value:g}"
+    return len(t.split(".")[1]) if "." in t else 0
+
+
+def _fmt(v: float, dec: int, comma: bool) -> str:
+    from decimal import ROUND_HALF_UP, Decimal
+    q = Decimal(str(v)).quantize(Decimal(1).scaleb(-dec), rounding=ROUND_HALF_UP)
+    s = f"{q:.{dec}f}"
+    return s.replace(".", ",") if comma else s
+
+
+def period_verdict(c: dict[str, Any], ev: list[dict[str, Any]], hu: bool) -> dict[str, Any]:
+    """Időszakos statisztika: a forrás UGYANARRA az időszakra adott értéke az állítás pontosságán → supported vagy
+    contradicted (a helyes érték az állítás saját számformájában, a csere csak a számot cseréli)."""
+    e = ev[0]
+    claimed = (c.get("stat") or {}).get("value")
+    src = {k: e.get(k) for k in ("type", "title", "url", "source_name", "source_url", "value", "unit", "period", "spec")}
+    base = {"source": src, "evidence": [{k: e.get(k) for k in ("id", "type", "title", "url", "source_name", "source_url",
+                                                                "value", "unit", "period")}]}
+    try:
+        claimed = float(str(claimed).replace(",", "."))
+    except (TypeError, ValueError):
+        return {**base, "verdict": "unverified", "correct": None, "replacement": None,
+                "explanation": ("Az állításban nincs összevethető szám." if hu else "The claim states no comparable number.")}
+    q = c.get("quote") or ""
+    dec = _decimals(q, claimed)
+    comma = "," in next((m.group(0) for m in _DIGITS.finditer(q) if "," in m.group(0) or "." in m.group(0)), "," if hu else ".")
+    mine, theirs = _fmt(claimed, dec, comma), _fmt(e["value"], dec, comma)
+    per, name = e.get("period") or stat_period(c), e.get("source_name") or "StatData"
+    if mine == theirs:
+        return {**base, "verdict": "supported", "correct": None, "replacement": None,
+                "explanation": (f"{name}: {theirs} ({per})." if hu else f"{name} gives {theirs} for {per}.")}
+    rep = None
+    for m in _DIGITS.finditer(q):
+        if m.group(0).replace(".", ",") == mine.replace(".", ",") or m.group(0) == mine:
+            rep = q[:m.start()] + theirs + q[m.end():]
+            break
+    return {**base, "verdict": "contradicted", "correct": theirs, "replacement": rep,
+            "explanation": (f"{name} szerint {per}: {theirs}, nem {mine}." if hu else f"{name} gives {theirs} for {per}, not {mine}.")}
+
+
+def no_period_verdict(c: dict[str, Any], hu: bool) -> dict[str, Any]:
+    per = c["no_period_data"]["period"]
+    return {"verdict": "unverified", "source": None, "correct": None, "replacement": None, "evidence": [],
+            "no_data_for_period": per,
+            "explanation": (f"Nincs adat erre az időszakra ({per}) a statisztikai forrásokban — más időszak értékével nem "
+                            "vetettük össze." if hu else
+                            f"No data for this period ({per}) in the statistics sources — it isn't compared with another "
+                            "period's figure.")}
+
+
 async def facts(path: Path, *, charge: Optional[Callable[[int], Any]] = None,
                 progress: Optional[Callable[[int, int, str], None]] = None) -> dict[str, Any]:
     d = Docx(path)
@@ -396,15 +469,27 @@ async def facts(path: Path, *, charge: Optional[Callable[[int], Any]] = None,
         async with sem:
             return await _evidence(c)
     evs = await asyncio.gather(*(gather_ev(c) for c in todo))
+    hu = (textlang.detect(doc) or "").startswith("hu")
     for k in range(0, len(todo), 8):                      # 8 állítás egy ítélet-hívásban
         batch = list(zip(todo[k:k + 8], evs[k:k + 8]))
         say(k, len(todo), "weighing the evidence")
-        need = [(c, ev) for c, ev in batch if ev]
+        need = []
         for c, ev in batch:
-            if not ev:
+            if c.get("no_period_data"):
+                done[c["id"]] = no_period_verdict(c, hu)
+            elif stat_period(c) and ev and ev[0]["type"] == "data":
+                done[c["id"]] = period_verdict(c, ev, hu)     # adat → determinisztikus összevetés, nem a modell
+            elif ev:
+                need.append((c, ev))
+            else:
                 done[c["id"]] = {"verdict": "unverified", "evidence": [], "source": None, "correct": None, "replacement": None,
                                  "explanation": "No source found to check this against." if ds.search_enabled()
                                  else "Only statistics can be checked on this server — web search isn't set up."}
+            if c["id"] in done and (c.get("no_period_data") or stat_period(c)):
+                try:
+                    await db.check_put("verdict", c["key"], VER_VERDICT, done[c["id"]])
+                except Exception as e:
+                    log.warning("ítélet mentése: %s", e)
         if need:
             block = "\n\n".join(f"Claim {c['id']}: {c['claim']}\n  Quote: “{c['quote']}”\n  Evidence:\n{_evidence_text(ev)}"
                                 for c, ev in need)
