@@ -164,3 +164,86 @@ def test_ooxml_table_fix_leaves_healthy_tables_alone(tmp_path):
     assert before.count(b"<w:gridCol ") == after.count(b"<w:gridCol ") == 3
     assert b'w:w="5000"' not in after
 
+
+# ---------- 2. validate_document: a szétesett táblát meg kell fognia ----------
+
+def _broken_pandoc_docx(tmp: Path) -> Path:
+    """A javítás előtti pandoc-kimenet (üres táblarács) — közvetlenül a pandocból, az ooxml_safe-javítás nélkül."""
+    out = tmp / "pandoc_hibas.docx"
+    subprocess.run(["pandoc", str(FIX), "-o", str(out)], check=True, timeout=60)
+    assert b"<w:tblGrid />" in zipfile.ZipFile(out).read("word/document.xml")
+    return out
+
+
+def test_validate_flags_cut_off_table_with_missing_cells(client, put_file, tmp_path):
+    _need("pandoc", "soffice", "wordcraft")
+    err, info = _call(client, "validate_document", {"file_id": put_file(_broken_pandoc_docx(tmp_path))})
+    assert not err, info
+    errors = [i for i in info["issues"] if i["severity"] == "error"]
+    assert errors, info["summary"]
+    miss = next(i for i in errors if i["kind"] == "content_missing")
+    assert "Év | Bevétel | Kiadás" in miss["message"]
+    assert {c["text"] for c in miss["missing_cells"]} == {"Bevétel", "Kiadás", "120", "95", "140", "110"}
+    assert miss["object"].startswith("table") and miss["box"]["page"] == 1
+
+
+def test_validate_good_wordcraft_docx_has_no_errors(client, put_file, tmp_path):
+    _need("wordcraft", "soffice")
+    err, res = _call(client, "convert", {"file_id": put_file(FIX), "target_format": "docx", "engine": "wordcraft"})
+    assert not err, res
+    err, info = _call(client, "validate_document", {"file_id": res["file_id"]})
+    assert not err, info
+    assert [i for i in info["issues"] if i["severity"] == "error"] == [], info["issues"]
+
+
+def test_validate_right_margin_overflow_is_error_with_table_box():
+    """Geometria a LibreOffice-renderen: a jobb margón túli cella hiba, a tábla határoló dobozával."""
+    from app.tools import validate as v
+    b = v.Block(pos=0, index=0, kind="table", rows=[["Év", "Bevétel"], ["2023", "120"]])
+    L = v.Layout("word", Path("x.pdf"))
+    L.sizes = [(612.0, 792.0)]
+    L.toks = [v.Tok("ev", 1, (72, 100, 90, 112)), v.Tok("bevetel", 1, (400, 100, 600, 112)),
+              v.Tok("2023", 1, (72, 120, 100, 132)), v.Tok("120", 1, (400, 120, 590, 132))]
+    L.words, L.images, L.inked = [[]], [[]], [True]
+    dc = v.DocCheck([b], [{"mL": 72, "mR": 72, "mT": 72, "mB": 72, "w": 612, "h": 792}], [L])
+    issues = dc.run()
+    e = next(i for i in issues if i["kind"] == "into_margin")
+    assert e["severity"] == "error" and e["box"] == {"page": 1, "pt": [72, 100, 600, 132]}
+
+
+def _lo_docx_to_pdf_check(client, fid):
+    err, res = _call(client, "convert", {"file_id": fid, "target_format": "pdf"})
+    assert not err, res
+    return res["check"]
+
+
+def test_convert_check_flags_missing_cells_docx_to_pdf(client, put_file, tmp_path):
+    """A convert saját checkje (docx → pdf): a forrás szövegének lefedettsége a PDF szövegrétegében."""
+    _need("pandoc", "soffice")
+    check = _lo_docx_to_pdf_check(client, put_file(_broken_pandoc_docx(tmp_path)))
+    assert check["status"] == "failed", check
+    assert any("Év | Bevétel | Kiadás" in f and "“Kiadás”" in f for f in check["findings"]), check
+
+
+def test_convert_check_ok_when_complete(client, put_file, tmp_path):
+    _need("wordcraft", "soffice")
+    err, res = _call(client, "convert", {"file_id": put_file(FIX), "target_format": "docx"})
+    check = _lo_docx_to_pdf_check(client, res["file_id"])
+    assert check["status"] == "ok", check
+    assert any("table cell" in v for v in check["verified"])
+
+
+def test_rest_convert_carries_the_coverage_check(api, tmp_path):
+    """REST: a LibreOffice-út levágja az oszlopokat → a fájl mellett failed check; az alapút (WordCraft) teljes → ok."""
+    _need("pandoc", "soffice", "wordcraft")
+    data = base64.b64encode(_broken_pandoc_docx(tmp_path).read_bytes()).decode()
+    r = api.post("/v1/convert", json={"file": data, "filename": "hibas.docx", "output_format": "pdf",
+                                      "options": {"engine": "libreoffice"}, "wait": 90}).json()
+    assert r["status"] == "finished", r
+    t = _task(r, "convert")
+    f = t["files"][0]
+    assert t["engines"] == ["libreoffice"], t
+    assert f["check"]["status"] == "failed" and any("Kiadás" in x for x in f["check"]["findings"]), f
+    r = api.post("/v1/convert", json={"file": data, "filename": "hibas.docx", "output_format": "pdf", "wait": 90}).json()
+    assert _task(r, "convert")["files"][0]["check"]["status"] == "ok"
+

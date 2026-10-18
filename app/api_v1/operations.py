@@ -319,9 +319,23 @@ async def _convert(job, task, file_ids: list[str]) -> dict[str, Any]:
             raise OpError(str(e), "FILE_NOT_FOUND")
         except Exception as e:
             raise OpError(str(e)[:500], "CONVERSION_FAILED")
-        files += [_file_entry(f["file_id"]) for f in res["files"]]
+        entries = [_file_entry(f["file_id"]) for f in res["files"]]
+        await _coverage_check(fid, entries)
+        files += entries
         task.percent = int(100 * (i + 1) / len(file_ids))
     return {"files": files, "engines": res.get("engines")}
+
+
+async def _coverage_check(src_fid: str, entries: list[dict[str, Any]]) -> None:
+    """docx/odt/rtf → pdf: ugyanaz a teljesség-ellenőrzés, mint az MCP convert `check`-je (minden bekezdés és
+    táblacella a PDF szövegrétegében) — a fájl mellett `check`."""
+    from app.tools import checks, crafts
+    src = crafts.existing(src_fid)
+    if src.suffix.lstrip(".").lower() not in checks.COVERAGE_SOURCES:
+        return
+    for e in entries:
+        if e.get("format") == "pdf":
+            e["check"] = await checks.check_convert(crafts.existing(e["file_id"]), src)
 
 
 def _retag(fid: str, fmt: str) -> str:

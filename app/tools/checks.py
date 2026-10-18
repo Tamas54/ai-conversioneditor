@@ -546,7 +546,30 @@ async def check_convert(out: Path, src: Optional[Path]) -> dict[str, Any]:
         if not text.strip():
             return make("needs_check", ["The PDF has no text layer — fonts may not have embedded. " + LOOK], verified)
         verified.append("It has a text layer.")
+        if _ext(src) in COVERAGE_SOURCES:
+            gone = await source_coverage(src, out)
+            if gone is None:
+                verified.append("(The source's text couldn't be read for a completeness check.)")
+            elif gone:
+                from app.tools.validate import describe_missing
+                return make("failed", describe_missing(gone) + [LOOK], verified)
+            else:
+                verified.append("Every paragraph and table cell of the source is in the PDF's text layer.")
     return make("ok", [], verified)
+
+
+COVERAGE_SOURCES = ("docx", "odt", "rtf")
+
+
+async def source_coverage(src: Path, pdf: Path) -> Optional[list[dict[str, Any]]]:
+    """docx/odt/rtf → pdf: a forrás szövegének lefedettsége a PDF szövegrétegében (None: a forrás nem olvasható)."""
+    from app.tools import validate
+    try:
+        docx = src if _ext(src) == "docx" else await validate._as_docx(src)
+        return await asyncio.to_thread(validate.missing_in_pdf, docx, pdf)
+    except Exception as e:
+        log.info("coverage check skipped for %s: %s", src.name, e)
+        return None
 
 
 async def check_pages_math(out: Path, expected: int, what: str) -> dict[str, Any]:

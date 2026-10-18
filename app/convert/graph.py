@@ -308,7 +308,9 @@ def _search(src: str, static: bool, prefer: Optional[str] = None, dst: Optional[
         for e in adj.get(node, ()):
             if e.dst == src or e.engine in avoid or any(p.src == e.dst for p in path):
                 continue
-            c = cost + (e.cost * 0.5 if prefer and e.engine == prefer else e.cost) + 0.05
+            # a kifejezetten kért motor éle jóval olcsóbb: azonos lépésszámnál mindig nyer (a felezésnél a WordCraft
+            # 0,5-ös éle döntetlenre hozta a kért LibreOffice-t, és a kérés elveszett)
+            c = cost + (e.cost * 0.1 if prefer and e.engine == prefer else e.cost) + 0.05
             k = (e.dst, n + 1)
             if c < best.get(k, float("inf")):
                 best[k] = c
