@@ -76,6 +76,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-draw \
     && rm -rf /var/lib/apt/lists/*
 
+# LibreOffice 26.2 (TDF „still” ág — az éles használatra ajánlott stabil) a jammy 7.3-a helyett: a /usr/local/bin/soffice
+# erre mutat (a PATH-ban a /usr/bin elé kerül). Az archív URL állandó (a „stable” könyvtárból a régi verzió kikerül);
+# rögzített verzió + SHA256 (a TDF .sha256-jával egyezik). A jammy-csomagok maradnak (más csomagok függőségei).
+ARG LIBREOFFICE_VERSION=26.2.6.3
+ARG LIBREOFFICE_SHA256=fd0e8f8f2408dd2e5b90286e60f3f97cf566ba441cd48cfc5bcc68067303e0bc
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/lo.tgz \
+        "https://downloadarchive.documentfoundation.org/libreoffice/old/${LIBREOFFICE_VERSION}/deb/x86_64/LibreOffice_${LIBREOFFICE_VERSION}_Linux_x86-64_deb.tar.gz"; \
+    echo "${LIBREOFFICE_SHA256}  /tmp/lo.tgz" | sha256sum -c -; \
+    mkdir /tmp/lo; tar -xzf /tmp/lo.tgz -C /tmp/lo --strip-components=1; dpkg -i /tmp/lo/DEBS/*.deb; \
+    LO_DIR="$(ls -d /opt/libreoffice* | head -1)"; \
+    ln -sf "$LO_DIR/program/soffice" /usr/local/bin/soffice; ln -sf "$LO_DIR/program/soffice" /usr/local/bin/libreoffice; \
+    rm -rf /tmp/lo /tmp/lo.tgz; \
+    soffice --version
+
 # Calibre — a hivatalos, önálló build (saját Python és Qt): újabb, mint a jammy 5.37-e, ír LIT-et is, és nem ütközik a
 # pip-es lxml-lel. Rögzített verzió + SHA256 (a calibre-ebook.com/signatures SHA512-jével is egyezik).
 ARG CALIBRE_VERSION=9.14.0
