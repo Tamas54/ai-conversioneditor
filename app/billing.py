@@ -356,12 +356,18 @@ async def _apply(event: dict[str, Any]) -> str:
 
 # ---------- végpontok ----------
 
+def costs() -> dict[str, Any]:
+    """Mibe kerül kredit — az app Plans oldala és a nyilvános árlap (/pricing) is innen."""
+    return {"ai_image": settings.IMAGE_CREDIT_COST, "restore": 2, "colourise": 1,
+            "scan_pages_per_credit": SCAN_PAGES_PER_CREDIT, "ai_steps_per_credit": AI_STEPS_PER_CREDIT}
+
+
 @router.get("/api/billing/plans")
 async def plans() -> dict[str, Any]:
+    from app.site.content import plan_features
     return {"enabled": enabled(), "currency": CURRENCY, "credit_eur": 0.10,
-            "plans": {k: {kk: vv for kk, vv in v.items()} for k, v in PLANS.items()}, "packs": PACKS,
-            "costs": {"ai_image": settings.IMAGE_CREDIT_COST, "restore": 2, "colourise": 1,
-                      "scan_pages_per_credit": SCAN_PAGES_PER_CREDIT, "ai_steps_per_credit": AI_STEPS_PER_CREDIT}}
+            "plans": {k: {**v, "features": plan_features("en", k)} for k, v in PLANS.items()}, "packs": PACKS,
+            "costs": costs()}
 
 
 @router.post("/api/billing/checkout")

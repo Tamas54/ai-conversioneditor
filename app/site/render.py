@@ -63,7 +63,7 @@ def nav(lang: str) -> list[tuple[str, str]]:
     """A fejléc menüje — ugyanaz az /app-ban és a nyilvános oldalakon."""
     tr = lambda k: i18n.t(lang, k)  # noqa: E731
     return [(tr("nav.make"), "/app"), (tr("nav.convert"), urls.convert_hub(lang)), (tr("nav.tools"), urls.tools_hub(lang)),
-            (tr("nav.agents"), urls.agents(lang)), (tr("nav.developers"), urls.developers(lang))]
+            (tr("nav.agents"), urls.agents(lang)), (tr("nav.developers"), urls.developers(lang)), (tr("nav.pricing"), urls.pricing(lang))]
 
 
 @functools.lru_cache(maxsize=4)

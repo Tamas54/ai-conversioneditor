@@ -63,11 +63,11 @@ def test_new_language_is_one_file(tmp_path, monkeypatch):
 PAGES = {
     "en": ["/ai-agents", "/convert", "/convert/documents", "/convert/docx-to-pdf", "/convert/heic-to-jpg", "/convert/tar-gz-to-zip",
            "/formats", "/formats/docx", "/tools", "/compare", "/compare/cloudconvert-alternative", "/developers", "/developers/docs",
-           "/developers/job-builder", "/developers/convert/docx-to-pdf", "/connect-ai", "/unit-converter",
+           "/developers/job-builder", "/developers/convert/docx-to-pdf", "/connect-ai", "/pricing", "/unit-converter",
            "/unit-converter/length", "/time-zone-converter"],
     "hu": ["/hu/ai-ugynokok", "/hu/atalakitas", "/hu/atalakitas/dokumentumok", "/hu/atalakitas/docx-bol-pdf", "/hu/atalakitas/heic-bol-jpg",
            "/hu/formatumok", "/hu/formatumok/docx", "/hu/eszkozok", "/hu/osszehasonlitas", "/hu/osszehasonlitas/smallpdf-alternativa",
-           "/hu/fejlesztoknek", "/hu/fejlesztoknek/dokumentacio", "/hu/ai-csatlakoztatas", "/hu/mertekegyseg-valto/homerseklet",
+           "/hu/fejlesztoknek", "/hu/fejlesztoknek/dokumentacio", "/hu/ai-csatlakoztatas", "/hu/arak", "/hu/mertekegyseg-valto/homerseklet",
            "/hu/idozona-valto"],
 }
 
@@ -251,3 +251,31 @@ def test_pages_are_gzipped_but_downloads_are_not(client, samples, put_file):
     url = public_url(fid).replace("http://testserver", "")
     r = client.get(url, headers={"Accept-Encoding": "gzip"})
     assert r.status_code == 200 and r.content[:4] == b"%PDF" and r.headers.get("content-encoding") is None
+
+
+def test_pricing_page_is_public_and_comes_from_billing(client):
+    """10-18, Kommandant: „a pricinget meg kellene csinálni — de fent”: Pricing a fejlécben, nyilvános árlap belépés nélkül
+    (eddig /pricing → 401), az árak a számlázás táblájából (billing.PLANS) — és nincs letiltott „Payments open soon” gomb."""
+    from app import billing
+    for path, eur in (("/pricing", lambda n: f"€{n}"), ("/hu/arak", lambda n: f"{n} €")):
+        r = client.get(path)
+        assert r.status_code == 200
+        s = BeautifulSoup(r.text, "lxml")
+        prices = [x.get_text(" ", strip=True) for x in s.select(".plan .price")]
+        assert prices[1].startswith(eur(billing.PLANS["plus"]["month"])) and prices[2].startswith(eur(billing.PLANS["pro"]["month"]))
+        assert not s.select(".plan button[disabled]") and all(a["href"] for a in s.select(".plan a.btn"))
+        lds = [json.loads(x.string) for x in s.find_all("script", type="application/ld+json")]
+        offers = next(d for d in lds if d["@type"] == "Product")["offers"]
+        assert [o["price"] for o in offers] == ["0", str(billing.PLANS["plus"]["month"]), str(billing.PLANS["pro"]["month"])]
+        assert any(d["@type"] == "FAQPage" for d in lds)
+    site_nav = {a["href"] for a in BeautifulSoup(client.get("/convert").text, "lxml").select("header.topbar nav a")}
+    assert "/pricing" in site_nav
+    app = BeautifulSoup(client.get("/app").text, "lxml")
+    assert "/app/plans" in {a["href"] for a in app.select("header.topbar nav a")}
+    assert "/pricing" in {a["href"] for a in app.select("footer a")}
+
+
+def test_app_plans_features_come_from_the_server(client):
+    r = client.get("/api/billing/plans").json()
+    assert all(r["plans"][k]["features"] for k in ("free", "plus", "pro"))
+    assert r["costs"]["ai_image"] >= 1

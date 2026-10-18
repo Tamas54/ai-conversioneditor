@@ -22,7 +22,8 @@
   "connect_ai": "ai-csatlakoztatas",
   "units": "mertekegyseg-valto",
   "timezones": "idozona-valto",
-  "agents": "ai-ugynokok"
+  "agents": "ai-ugynokok",
+  "pricing": "arak"
  },
  "nav": {
   "home": "Kezdőlap",
@@ -35,7 +36,8 @@
   "units": "Mértékegység-váltó",
   "timezones": "Időzóna-váltó",
   "make": "Készítés",
-  "agents": "AI-ügynökök"
+  "agents": "AI-ügynökök",
+  "pricing": "Árak"
  },
  "ui": {
   "skip": "Ugrás a tartalomra",
@@ -2503,5 +2505,59 @@
   "desc": "Minden formátum, amit olvasunk és írunk, összesen {formats}: dokumentum, táblázat, diasor, e-könyv, kép, vektor, videó, hang, tömörített, CAD és betűkészlet.",
   "h1": "Fájlformátumok",
   "lead": "{formats} formátum, {conversions} átalakítási irány. Válassz egyet: mi ez, mivel nyitható meg, és mire alakítható."
+ },
+ "price": {
+  "title": "{product} árak — ingyenes, Plus havi {plus} €, Pro havi {pro} €",
+  "desc": "Kezdd ingyen, 30 kredittel. A fájlok átalakítása fiók nélkül is ingyenes; kreditbe csak az AI-kép, a fotó-helyreállítás és a havi keret feletti szkennelt oldal kerül. Plus havi {plus} €, Pro havi {pro} €.",
+  "h1": "Árak",
+  "lead": "A fájlok átalakítása ingyenes, fiók nélkül is. Az ingyenes fiókkal jönnek az AI-eszközök és 30 induló kredit; kreditbe csak az kerül, aminek az elkészítése pénzbe kerül, például az AI-kép. Egy kredit nagyjából 0,10 €.",
+  "plans_h": "Csomagok",
+  "eur": "{n} €",
+  "per_month": "/hó",
+  "yearly": "vagy évi {n} € — 2 hónap ingyen",
+  "f_credits_free": "Havonta {n} kredit (induláskor 30)",
+  "f_credits": "Havonta {n} kredit",
+  "f_decks_free": "Havonta {d} prezentáció · {r} módosítás",
+  "f_unlimited": "Prezentáció, dokumentum és módosítás — amennyi kell",
+  "f_pro": "Minden, ami a Plusban, nagy terhelésre méretezve",
+  "f_scan": "Havonta {n} szkennelt oldal",
+  "f_steps": "Havonta {n} AI-lépés a csatlakoztatott AI-nak",
+  "f_batch": "Egyszerre legfeljebb {n} fotó",
+  "f_mcp": "Claude-ból, ChatGPT-ből és saját szkriptből is (MCP)",
+  "f_keep_days": "A fájlok {n} napig maradnak meg",
+  "f_keep_year": "A fájlok egy évig maradnak meg",
+  "cta_free": "Kezdés ingyen",
+  "cta_choose": "{name} választása",
+  "soon": "A fizetős csomagok hamarosan indulnak — kezdd ingyen már ma.",
+  "packs_h": "Kreditcsomagok",
+  "packs_note": "Előfizetés nélkül — nem járnak le.",
+  "credits": "kredit",
+  "costs_h": "Mibe kerül kredit",
+  "c_image": "AI-kép, AI-háttér, AI-retus",
+  "c_restore": "Régi fotó helyreállítása",
+  "c_colour": "…és kiszínezése",
+  "c_scan": "A havi keret feletti szkennelt oldalak",
+  "c_scan_v": "{n} oldalanként 1",
+  "c_steps": "A csatlakoztatott AI (ChatGPT, Claude…) havi keret feletti AI-lépései",
+  "c_steps_v": "{n} lépésenként 1",
+  "included": "Minden más — dokumentum, prezentáció, a havi keretbe férő szkennelés, módosítás, PDF-eszközök, átalakítás, szerkesztők — benne van a csomagban.",
+  "faq": [
+   [
+    "Mi az a kredit?",
+    "Egy kredit nagyjából 0,10 €. Kredit csak arra megy el, aminek az elkészítése pénzbe kerül: AI-képre, fotó-helyreállításra, a havi keret feletti szkennelt oldalakra, és a havi keret feletti AI-lépésekre, amikor a saját AI-od dolgozik vele. Minden más benne van a csomagban."
+   ],
+   [
+    "Kell hozzá fiók?",
+    "A fájlok átalakításához nem: az fiók nélkül is ingyenes. Az AI-eszközökhöz ingyenes fiók kell, ami 30 induló kredittel jár."
+   ],
+   [
+    "Lejárnak a kreditcsomagok?",
+    "Nem. A kreditcsomag egyszeri vásárlás, előfizetés nélkül, és a kreditjei nem járnak le."
+   ],
+   [
+    "Használható ChatGPT-ből vagy Claude-ból?",
+    "Igen — MCP-szerverként csatlakoztatható. A gondolkodás a saját AI-odon és annak előfizetésén fut; amit a szerver a saját modelljével végez helyetted (képválasztás, tényellenőrzés és hasonlók), az AI-lépésnek számít: havonta {steps_free} az ingyenes, {steps_plus} a Plus és {steps_pro} a Pro csomagban, felette {per} lépésenként 1 kredit."
+   ]
+  ]
  }
 }

@@ -17,7 +17,8 @@
   "connect_ai": "connect-ai",
   "units": "unit-converter",
   "timezones": "time-zone-converter",
-  "agents": "ai-agents"
+  "agents": "ai-agents",
+  "pricing": "pricing"
  },
  "nav": {
   "home": "Home",
@@ -30,7 +31,8 @@
   "units": "Unit converter",
   "timezones": "Time zone converter",
   "make": "Make",
-  "agents": "AI agents"
+  "agents": "AI agents",
+  "pricing": "Pricing"
  },
  "ui": {
   "skip": "Skip to content",
@@ -2607,5 +2609,59 @@
   "desc": "Every file format we read and write, {formats} in all: documents, spreadsheets, slides, e-books, images, vectors, video, audio, archives, CAD and fonts.",
   "h1": "File formats",
   "lead": "{formats} formats, {conversions} conversion directions. Pick one to see what it is, how to open it and what it converts to."
+ },
+ "price": {
+  "title": "{product} pricing — Free, Plus €{plus} and Pro €{pro} a month",
+  "desc": "Start free with 30 credits. Converting files is free without an account; credits pay only for AI pictures, photo restoration and extra scanned pages. Plus €{plus} a month, Pro €{pro} a month.",
+  "h1": "Pricing",
+  "lead": "Converting files is free, even without an account. A free account adds the AI tools and 30 credits to start; credits pay only for what costs money to make, like AI pictures. One credit is about €0.10.",
+  "plans_h": "Plans",
+  "eur": "€{n}",
+  "per_month": "/month",
+  "yearly": "or €{n} a year — 2 months free",
+  "f_credits_free": "{n} credits every month (30 to start)",
+  "f_credits": "{n} credits every month",
+  "f_decks_free": "{d} presentations · {r} changes a month",
+  "f_unlimited": "Presentations, documents and changes — as many as you need",
+  "f_pro": "Everything in Plus, with room for heavy use",
+  "f_scan": "{n} scanned pages a month",
+  "f_steps": "{n} {product} AI steps a month for your connected AI",
+  "f_batch": "Up to {n} photos at once",
+  "f_mcp": "Use it from Claude, ChatGPT and your scripts (MCP)",
+  "f_keep_days": "Files kept {n} days",
+  "f_keep_year": "Files kept a year",
+  "cta_free": "Start free",
+  "cta_choose": "Choose {name}",
+  "soon": "Paid plans open soon — start free today.",
+  "packs_h": "Credit packs",
+  "packs_note": "No subscription — they don't expire.",
+  "credits": "credits",
+  "costs_h": "What costs credits",
+  "c_image": "AI image, AI background, AI retouch",
+  "c_restore": "Restore an old photo",
+  "c_colour": "…and colourise it",
+  "c_scan": "Scanned pages beyond your monthly pages",
+  "c_scan_v": "1 per {n} pages",
+  "c_steps": "{product} AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps",
+  "c_steps_v": "1 per {n} steps",
+  "included": "Everything else — documents, decks, scans within your monthly pages, changes, PDF tools, conversions, editors — is included in your plan.",
+  "faq": [
+   [
+    "What is a credit?",
+    "A credit is worth about €0.10. Credits pay only for work that costs money to make: AI pictures, photo restoration, scanned pages beyond your monthly pages, and AI steps beyond the monthly steps when your own AI works with {product}. Everything else is included in your plan."
+   ],
+   [
+    "Do I need an account?",
+    "Not for converting files: conversions are free without an account. The AI tools need a free account, which comes with 30 credits to start."
+   ],
+   [
+    "Do credit packs expire?",
+    "No. A credit pack is a one-off purchase without a subscription, and its credits don't expire."
+   ],
+   [
+    "Can I use {product} from ChatGPT or Claude?",
+    "Yes — connect it as an MCP server. The thinking runs on your own AI and its subscription; the model calls {product} makes for you (choosing pictures, checking facts and the like) count as AI steps: {steps_free} a month on Free, {steps_plus} on Plus, {steps_pro} on Pro, then 1 credit per {per} steps."
+   ]
+  ]
  }
 }

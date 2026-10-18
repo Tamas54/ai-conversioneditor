@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_macros.html" import faq %}
+{% block main %}
+<h1>{{ p.h1 }}</h1>
+<p class="lead answer">{{ p.lead }}</p>
+<section><h2 class="plans-h">{{ t('price.plans_h') }}</h2>
+<div class="plan-cards">{% for pl in p.plans %}
+  <article class="plan{% if pl.key == 'plus' %} featured{% endif %}"><h3>{{ pl.name }}</h3>
+    <div class="price">{{ pl.price }}{% if pl.paid %}<small>{{ t('price.per_month') }}</small>{% endif %}</div>
+    {% if pl.year %}<p class="muted small">{{ t('price.yearly', n=pl.year) }}</p>{% endif %}
+    <ul>{% for f in pl.features %}<li>{{ f }}</li>{% endfor %}</ul>
+    {% if pl.paid and p.pay %}<a class="btn primary" href="/app/plans">{{ t('price.cta_choose', name=pl.name) }}</a>
+    {% elif pl.paid %}<p class="muted small">{{ t('price.soon') }}</p><a class="btn" href="/signup?next=/app">{{ t('price.cta_free') }}</a>
+    {% else %}<a class="btn" href="/signup?next=/app">{{ t('price.cta_free') }}</a>{% endif %}
+  </article>{% endfor %}
+</div></section>
+<section><h2 class="plans-h">{{ t('price.packs_h') }} <span class="muted small">— {{ t('price.packs_note') }}</span></h2>
+<div class="packs">{% for k in p.packs %}<article class="pack"><b>{{ k.credits }}</b> {{ t('price.credits') }}<span>{{ k.price }}</span></article>{% endfor %}</div></section>
+<section><h2 class="plans-h">{{ t('price.costs_h') }}</h2>
+<table class="costs"><tbody>{% for a, b in p.costs %}<tr><td>{{ a }}</td><td>{{ b }}</td></tr>{% endfor %}</tbody></table>
+<p class="muted small">{{ t('price.included') }}</p></section>
+{{ faq(p.faq, t) }}
+{% endblock %}
