@@ -257,6 +257,21 @@ def _arg_brief(k: dict) -> str:
 _CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
 
 
+def _no_ai_pictures(*specs: Any) -> None:
+    """MCP-n a szerver nem készít AI-képet: ha egy spec mégis kér ({"generate": …}, images/pictures="ai", ai_prompt),
+    MUNKA ELŐTT ugyanaz az egyértelmű hiba jön, nem félúton egy képnél."""
+    from app import tenancy
+
+    def asks(x: Any) -> bool:
+        if isinstance(x, dict):
+            return isinstance(x.get("generate"), str) or any(asks(v) for v in x.values())
+        if isinstance(x, (list, tuple)):
+            return any(asks(v) for v in x)
+        return False
+    if any(asks(s_) for s_ in specs):
+        raise ValueError(tenancy.CLIENT_IMAGE_MSG)
+
+
 def _sniff_ext(data: bytes) -> str:
     """Kiterjesztés a tartalomból (PDF, képek, Office-zip), ha a névből nem derül ki."""
     head = data[:8]
@@ -876,7 +891,7 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
     the file_id of a docx/odt/rtf/md/txt/html/pdf: the server turns that
     document into slides — its headings become slides, its facts and its
     own pictures are kept (`instructions` e.g. "10-minute talk for the
-    board", `slides` 4–15 or omit for auto, `images` stock|ai|doc|none,
+    board", `slides` 4–15 or omit for auto, `images` stock|doc|none,
     `template_file_id` a .pptx/.potx to build on). Typical chain: write and
     revise a document, then from_document, then pptx revisions.
     spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
@@ -914,13 +929,14 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
               a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the
               boxes, the legend); the same actor keeps its colour on every slide
       closing {title?, subtitle?}
-    image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
+    image = "<file_id>" | {"file_id"} | {"url"} (e.g. a picture you made with your own image tool)
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).
-    Images are cropped to their frame; FLUX images generate in parallel.
+    Images are cropped to their frame. This server doesn't make AI pictures for connected AIs.
     The result's `check` is the rendered check validate_document runs (both layouts): each problem names the
     slide and shape id with a ready office(app="deck") fix for just that shape — no rebuild. See the slides as
     pictures with validate_document.
     """
+    _no_ai_pictures(spec, {"generate": "ai"} if (images or "").lower() == "ai" else None)
     if from_document:
         from app.routes.make import make_deck
         return await make_deck({"mode": "document", "source_file_id": from_document, "brief": instructions or "",
@@ -1092,6 +1108,7 @@ async def design(
                                 title=data.get("title"), subtitle=data.get("subtitle"), author=data.get("author"), size=size,
                                 captions=data.get("captions"), auto_captions=bool(data.get("auto_captions")),
                                 cover=data.get("cover"), theme=theme, brand=await user_brands.resolve(brand))
+    _no_ai_pictures(data)
     if from_design:
         from app.routes.studio import package
         return await package({"from_file_id": from_design, "sizes": sizes, "content": data})
@@ -1639,16 +1656,19 @@ async def insert_image(
 
     Pictures (decks and Word documents): file_id alone → the file's pictures [{slot, where, query?}].
     file_id + slot + ONE of image_file_id | image_url (+credit, e.g. a candidate from
-    generate_image(stock_search=…)) | ai_prompt (generated, costs a credit) → a NEW version with that
-    picture replaced (same frame, nothing else changes). Let the person choose: show them the candidates."""
+    generate_image(stock_search=…), or a picture you made with your own image tool) → a NEW version with that
+    picture replaced (same frame, nothing else changes). Let the person choose: show them the candidates.
+    ai_prompt: not available here — this server doesn't make AI pictures for connected AIs (it returns an error)."""
     from app.tools import pictures
+    if ai_prompt:
+        _no_ai_pictures({"generate": ai_prompt})
     if slot or not anchor:
         if not slot:
             return {"pictures": await pictures.list_pictures(file_id)}
-        pick = ({"ai": ai_prompt} if ai_prompt else {"url": image_url, "credit": credit} if image_url
+        pick = ({"url": image_url, "credit": credit} if image_url
                 else {"file_id": image_file_id} if image_file_id else None)
         if not pick:
-            raise ValueError("Give image_file_id, image_url or ai_prompt for the new picture.")
+            raise ValueError("Give image_file_id or image_url for the new picture.")
         return await pictures.replace(file_id, slot, pick)
     if not image_file_id:
         raise ValueError("image_file_id is needed to insert a picture after the anchor.")
@@ -1715,21 +1735,17 @@ async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
 @linked
 async def generate_image(
     prompt: Optional[str] = None,
-    size: str = "1024x1024",
-    model: str = "black-forest-labs/FLUX.2-pro",
     stock_search: Optional[str] = None,
     n: int = 12,
 ) -> dict:
-    """Generate an image from text via SiliconFlow image-gen (FLUX.2-pro
-    by default; costs a credit). Useful for: missing figures, conceptual illustrations,
-    decorative covers. size "WIDTHxHEIGHT", 256–2048 px a side, e.g.
-    1792x1024 (wide), 1024x1792 (tall), 1024x1024, 1600x900 (16:9 slide).
-    Returns image_file_id usable in insert_image.
+    """Pictures for a document, deck or video: stock_search="words" → free stock photo CANDIDATES (Wikimedia Commons +
+    Openverse, unfiltered) — [{thumb_url, url, credit, title, width, height, source}] AND a numbered picture of them in
+    the result, so you see them yourself. Show them to the person and let them pick; then
+    insert_image(file_id, slot, image_url=…, credit=…), or {"url": …, "credit": …} in a pptx_build / design / video spec.
 
-    stock_search="words" instead: free stock photo CANDIDATES (Wikimedia Commons + Openverse, unfiltered) —
-    [{thumb_url, url, credit, title, width, height, source}] AND a numbered picture of them in the result, so you
-    see them yourself; nothing is generated. Show them to the person and let them pick; then
-    insert_image(file_id, slot, image_url=…, credit=…)."""
+    This server doesn't generate AI pictures for connected AIs: `prompt` only returns an error saying so. Make the
+    picture with your own image tool and pass its public URL (image_url / {"url": …}) or upload it (upload_from_url /
+    upload_file → file_id)."""
     if stock_search:
         import json
         from mcp.types import CallToolResult, ImageContent, TextContent
@@ -1744,9 +1760,9 @@ async def generate_image(
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(info, ensure_ascii=False)),
                                        ImageContent(type="image", data=base64.b64encode(sheet).decode(), mimeType="image/jpeg")],
                               structuredContent=info)
-    if not prompt:
-        raise ValueError("Give a prompt (or stock_search words for free stock candidates).")
-    return await vision_ops.generate_image(prompt, model=model, size=size)
+    if prompt:
+        _no_ai_pictures({"generate": prompt})
+    raise ValueError("Give stock_search words for free stock photo candidates.")
 
 
 # ============================================================

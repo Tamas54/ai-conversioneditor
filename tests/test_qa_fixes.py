@@ -454,3 +454,40 @@ def test_period_matching_rules():
     assert period_matches("2025-12", {"period_returned": "2025-12-31"})            # lépcsős kamat: a hónap utolsó napja
     assert not period_matches("2025-12", {"period": "2026-09"})
     assert period_matches("2025-12-31", {"period_returned": "2025-09-24", "period_requested": "2025-12-31"})
+
+
+# ---------- 6. a tool-leírás azt ígéri, amit a szerver MCP-n tud ----------
+
+def _tools(client) -> dict:
+    client.post("/mcp/", headers=HDR, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
+    r = client.post("/mcp/", headers=HDR, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    return {t["name"]: t for t in r.json()["result"]["tools"]}
+
+
+def test_mcp_descriptions_dont_promise_ai_pictures(client):
+    import re
+    tools = _tools(client)
+    g = tools["generate_image"]
+    assert not re.search(r"FLUX|costs a credit", g["description"]) and "stock_search" in g["description"]
+    assert {"size", "model"}.isdisjoint(g["inputSchema"]["properties"])
+    assert "ai_prompt (generated" not in tools["insert_image"]["description"]
+    assert "generate" not in tools["pptx_build"]["description"] and "stock|doc|none" in tools["pptx_build"]["description"]
+    for name, t in tools.items():                          # sehol ne hirdessük a szerver képgenerálását
+        assert not re.search(r"\{\"generate\"|FLUX", t["description"]), name
+
+
+def test_ai_picture_requests_get_one_clear_error_before_any_work(client, put_file, samples):
+    from app import tenancy
+    msg = tenancy.CLIENT_IMAGE_MSG
+    calls = [("generate_image", {"prompt": "egy őszi erdő"}),
+             ("insert_image", {"file_id": put_file(samples.pptx()), "slot": "s1", "ai_prompt": "őszi erdő"}),
+             ("pptx_build", {"spec": {"title": "Ű", "slides": [{"layout": "cover", "title": "Ő",
+                                                                 "image": {"generate": "őszi erdő"}}]}}),
+             ("pptx_build", {"from_document": put_file(samples.md()), "images": "ai"}),
+             ("design", {"template": "poster", "data": {"title": "Ő", "image": {"generate": "őszi erdő"}}})]
+    for name, args in calls:
+        err, res = _call(client, name, args)
+        assert err and msg in str(res), (name, res)
+    err, res = _call(client, "generate_image", {"stock_search": ""})
+    assert err and "stock_search" in str(res)
