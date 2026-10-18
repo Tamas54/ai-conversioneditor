@@ -405,7 +405,7 @@ async def files(
     page: Optional[int] = None,
     other_file_id: Optional[str] = None,
     scene: Optional[str] = None,
-    at: Optional[float] = None,
+    at: Optional[Union[float, list[float]]] = None,
     frames: Optional[int] = None,
     versions: bool = False,
 ) -> dict:
@@ -426,7 +426,9 @@ async def files(
       title names the file (and the deck's first slide).
     action="preview": SEE a file — returns the picture of page/slide `page` (default 1) of file_id (a video: scene =
       "s3" | its number | "title" | "end" | a layer "L2" — that scene / layer at its end, when the animation has played;
-      + frames=6 for a filmstrip of its motion — or scene="all" for every scene and layer on one sheet, or at=seconds), so you can
+      + frames=6 for a filmstrip of its motion — or scene="all" for every scene and layer on one sheet, or at=seconds, or
+      at=[seconds, …] (up to 12 moments on one sheet, each with a faint tenths grid: where the person points or looks →
+      a layer's position [x, y, w, h]), so you can
       check your own result (text overflow, a missing object, a wrong crop) before calling it done. A Word document,
       deck or PDF: validate_document checks it for you (pictures + a machine-checked list of problems).
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
@@ -497,7 +499,7 @@ async def files(
     return res
 
 
-async def _preview_content(file_id: Optional[str], page: int, scene: Optional[str] = None, at: Optional[float] = None,
+async def _preview_content(file_id: Optional[str], page: int, scene: Optional[str] = None, at: Any = None,
                            frames: Optional[int] = None):
     """files(action="preview"): a kép MAGA az eszköz-válaszban (a kliens-AI látja), mellette a szöveges adatok.
     Videónál jelenetenként is (scene: s3 | sorszám | title | end | all = kontaktlap) vagy időpontra (at)."""
@@ -512,7 +514,12 @@ async def _preview_content(file_id: Optional[str], page: int, scene: Optional[st
     src = existing(file_id)
     if (scene is not None or at is not None) and src.suffix.lower().lstrip(".") in ("ecproj", "mp4", "mov", "m4v", "webm"):
         from app.tools import video as vid_mod
-        if frames and scene and str(scene).lower() not in ("all", "title", "end"):     # a jelenet mozgása: filmszalag
+        if isinstance(at, list) and len(at) > 1:     # több pillanat egy képen, tizedes ráccsal (hova mutat / néz)
+            jpg, shots = await asyncio.to_thread(vid_mod.frames_grid, file_id, at)
+            info = {"file_id": file_id, "name": display_label(file_id), "frames": shots,
+                    "note": "One tile per moment (its time at the bottom left). The faint grid marks tenths of the frame — "
+                            "x left→right, y top→bottom, 0–1 — read a layer's position [x, y, w, h] straight off it."}
+        elif frames and scene and str(scene).lower() not in ("all", "title", "end"):     # a jelenet mozgása: filmszalag
             jpg, info = await asyncio.to_thread(vid_mod.filmstrip, file_id, scene, int(frames))
             info = {"file_id": file_id, "name": display_label(file_id), **info,
                     "note": "The scene from start to end — how the graphic moves, frame by frame."}
@@ -521,7 +528,7 @@ async def _preview_content(file_id: Optional[str], page: int, scene: Optional[st
             info = {"file_id": file_id, "name": display_label(file_id), "scenes": frames,
                     "note": "Every scene at its end (animations done), with the title card and the end card."}
         else:
-            vid, t, label = vid_mod.frame_time(file_id, scene, at)
+            vid, t, label = vid_mod.frame_time(file_id, scene, at[0] if isinstance(at, list) else at)
             out = previews.temp_path_for(vid, t)
             await asyncio.to_thread(previews.video_frame_at, existing(vid), t, out)
             jpg = await asyncio.to_thread(previews.to_jpeg, out, 1000)
@@ -1835,7 +1842,7 @@ async def video(
       icons ("1 in 4", x of 100) | counter (one number counting up) | compare (2–3 numbers side by side) | progress
       (separate %s) | gauge (one value on a min–max scale) | funnel (shrinking stages) | timeline (dated events: label =
       date) | steps (how-to) | proscons (label "+"/"-", text) | quote (text word for word from the source, label =
-      who). With their own shape: waterfall (a start, then + / − changes; the end is computed and checked against
+      who) | table ({"columns": [2–5 headings], "rows": [[cells]…] up to 7 rows}). With their own shape: waterfall (a start, then + / − changes; the end is computed and checked against
       "total"? — {"items": [{"label", "value"}…], "total_label"?}) | slope (before → after per item — {"labels": [before,
       after], "items": [{"label", "from", "to"}]}) | scatter (points, bubble when "size" — {"x_title", "y_title" (what
       each axis measures, with the unit), "items": [{"label", "x", "y", "size"?}]}) | band (a line with its low–high
@@ -1852,11 +1859,14 @@ async def video(
       {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie | map, x, y (centre, 0–1 of
       the frame), w, h (0–1), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
       (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
-      color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity,
-      anim: appear | pop | grow | draw (lines and outlines draw themselves) | slide-left | slide-right | slide-up |
+      color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity (0–1),
+      anim: appear | pop | grow (a rect grows from its base: upward when taller than wide — a bar —, else from the left)
+      | draw (lines, and rect / circle outlines without fill, draw themselves) | slide-left | slide-right | slide-up |
       slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there), dash (line, arrow,
       path: "dashed" | "dotted" | [dash, gap] px), dim [[from, to] seconds] (faded while something else is shown),
-      image (file_id | URL | {"stock": "words"}) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
+      image (file_id | URL | {"stock": "words"} — or the person's VIDEO file_id: its picture plays there from when the
+      element appears; "clip": [from, to] seconds of it; on an overlay "sound": "replace" | "mix" plays its sound, muted
+      by default) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
       {"search": "bicycle"} — the server picks a free LottieFiles animation and credits it; it loops unless
       loop=false)}]}. video(action="lottie", text="bicycle") lists animations with previews, to choose one yourself.
       map — a REAL map under the other elements: {"shape": "map", "place": "Szeged" (or "bbox": [south, west, north,
@@ -1927,14 +1937,17 @@ async def video(
       seconds | "MM:SS" | "HH:MM:SS.ms" | {"say": "words that are said"} (overlay: the layer starts as they are said
       in the footage and stays to the end of that sentence; not said → left out, the check quotes what was heard),
       "dur": seconds | "until": time | {"say": …}, "type", "position"?: auto | top | bottom | left |
-      right | center | [x, y, w, h] (centre and size, 0–1 of the frame), "anim"?: fade | slide | pop | none (or
+      right | center | [x, y, w, h] (centre and size, 0–1 of the frame — a graphic in such a box draws in the box: its
+      x/y/w/h are 0–1 of the box and its sizes are px at 1080 on the box's short side), "anim"?: fade | slide | pop | none (or
       {"in", "out"})}]. Types: lower_third {name, role?, side?: left|right} · title {text, subtitle?, kicker?} (a band
       across the frame) · chapter {text, subtitle?, kicker?} · source {text} (a small credit) · stat {value, label} ·
       quote {text, author} (word for word from the source) · chart {chart: any chart above (column … quote, graphic
       with map / lottie / image, script), panel?: false = no dark panel} — type may be the chart type itself, e.g.
       {"type": "column", "title", "unit", "items"}; a graphic without position covers the frame transparently (an
       arrow or a label on the footage) · fullscreen {chart | image | text (+ subtitle, kicker)}: covers the picture,
-      the sound goes on · split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base
+      the sound goes on (image may be another VIDEO of theirs — a cut-in: + "clip": [from, to] seconds of it; its own
+      sound plays instead of the footage's ("sound": "replace", the default here) | "mix" (both) | "off"; split takes a
+      video too, muted unless "sound" is given) · split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base
       shrinks to the other half. A lower third or source caption without position goes where nothing else is (other
       layers, a made video's headlines and charts). Overlaps that remain, a layer past the end, a dropped number all
       come back in the check's findings.

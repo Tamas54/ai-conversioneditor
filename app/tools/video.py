@@ -257,7 +257,12 @@ async def probe_movie(path: Path) -> dict[str, Any]:
     dur = float((d.get("format") or {}).get("duration") or v.get("duration") or 0)
     tags = v.get("tags") or {}
     alpha_tag = str(tags.get("alpha_mode") or tags.get("ALPHA_MODE") or "") == "1"
-    return {"width": w, "height": h, "fps": round(fps, 3), "duration": round(dur, 3), "rotation": rot,
+    # az első DEKÓDOLHATÓ hangsáv (a hangsávok közti sorszám): az iPhone a sima AAC mellé térhangot (APAC) is ír,
+    # amit az ffmpeg nem ismer — „-map 0:a” vele együtt elhasal (10-18, IMG_9271: „Decoder (codec none) not found”)
+    aud = [s for s in d.get("streams") or [] if s.get("codec_type") == "audio"]
+    known = [k for k, s in enumerate(aud) if s.get("codec_name") not in (None, "", "unknown", "none")]
+    return {"audio_stream": known[0] if known else None,
+            "width": w, "height": h, "fps": round(fps, 3), "duration": round(dur, 3), "rotation": rot,
             "audio": any(s.get("codec_type") == "audio" for s in d.get("streams") or []),
             "codec": v.get("codec_name"), "pix_fmt": v.get("pix_fmt"), "alpha_mode": alpha_tag}
 
@@ -337,7 +342,7 @@ async def fetch_article(url: str) -> dict[str, Any]:
 _PLAN = """You plan short social videos as JSON for a motion-graphics builder: full-screen pictures, an on-screen
 headline per scene and timed captions. Reply with ONE json object:
 {"title": str, "kicker": str, "image_query": str, "scenes": [{"headline": str, "caption": str, "image_query": str, "stat": {"value": str, "label": str} | null,
-  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|lines|race|sankey",
+  "chart": {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|table|waterfall|slope|lines|race|sankey",
             "title": str, "unit": str, "total": number | null, "min": number | null, "max": number | null,
             "items": [{"label": str, "value": number | null, "text": str}]} | null}],
  "end": {"title": str, "subtitle": str}}
@@ -481,6 +486,8 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         for k in ("size", "width", "radius", "at", "dur", "opacity"):
             if num(e.get(k)) is not None:
                 el[k] = float(e[k])
+        if 0 < el.get("opacity", 100) <= 1:      # 0–1 arány (mint minden más itt) → százalék; 10-18: 0.55 → 5 % = láthatatlan
+            el["opacity"] = el["opacity"] * 100
         dash = {"dashed": [16, 11], "dotted": [0.5, 11]}.get(e["dash"]) if isinstance(e.get("dash"), str) else e.get("dash")
         if isinstance(dash, (list, tuple)) and len(dash) == 2 and all(num(v) is not None for v in dash):   # szaggatott vonal
             el["dash"] = [max(0.1, min(200.0, float(dash[0]))), max(1.0, min(200.0, float(dash[1])))]
@@ -526,6 +533,16 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
                 continue
             el["fit"] = "cover" if e.get("fit") == "cover" else "contain"
             el["loop"] = e.get("loop") is not False
+            cl = e.get("clip")
+            if isinstance(cl, (list, tuple)) and cl and num(cl[0]) is not None:     # videó: a rész [tól, ig?] mp-ben
+                a_ = max(0.0, float(cl[0]))
+                b_ = float(cl[1]) if len(cl) > 1 and num(cl[1]) is not None and float(cl[1]) > a_ else None
+                el["clip"] = [a_, b_]
+            if e.get("sound") in ("replace", "mix", "off"):
+                el["sound"] = e["sound"]
+            for k_ in ("sound_file", "clip_len"):
+                if e.get(k_) is not None:
+                    el[k_] = e[k_]
             el["src"] = src if isinstance(src, (str, dict)) else None
             if e.get("asset"):
                 el["asset"] = str(e["asset"])
@@ -570,7 +587,7 @@ def _script_from_plan(c: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Opti
 
 
 _CHART_TYPES = ("column", "bar", "line", "area", "donut", "ring", "icons", "timeline", "steps",
-                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "graphic", "script",
+                "counter", "compare", "progress", "gauge", "funnel", "proscons", "quote", "table", "graphic", "script",
                 "decision_tree", "swimlane", "network",
                 "waterfall", "slope", "scatter", "band", "lines", "race", "sankey",
                 "threejs")                                                     # a kliens three.js-jelenete: app/tools/threejs.py     # az utóbbi hét: app/tools/motion_charts.py
@@ -614,6 +631,22 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
         who = _clean(it.get("label") if it.get("text") else "", 40, "Quote author")
         return {"type": typ, "title": title, "unit": "", "items": [{"text": q, "label": who}]}, \
             f"Quote “{q[:50]}…”: word for word in the source."
+    if typ == "table":                 # táblázat: fejléc + legfeljebb 7 sor; a szám csak a forrásból (mint minden ábrán)
+        cols = [_clean(h, 24, "Column") for h in (c.get("columns") or c.get("labels") or []) if isinstance(h, (str, int, float))][:5]
+        rows = []
+        for r_ in (c.get("rows") or [])[:7]:
+            if not isinstance(r_, list):
+                continue
+            cells = [_clean(x, 32, "Cell") for x in r_[:max(len(cols), 2)]]
+            if any(bad(x) for x in cells):
+                return None, left_out
+            if any(cells):
+                rows.append(cells + [""] * (len(cols) - len(cells)))
+        if len(cols) < 2 or not rows:
+            return None, None
+        return ({"type": typ, "title": title, "unit": "", "columns": cols, "rows": rows,
+                 "items": [{"label": r_[0], "value": None, "text": " | ".join(r_[1:])} for r_ in rows]},
+                f"Table “{title}”: {len(cols)} columns, {len(rows)} rows, no number that isn't in the source.")
     if typ == "proscons":
         items = []
         for it in raw[:8]:
@@ -632,7 +665,8 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
         items = []
         for it in raw[:6]:
             lab, txt = _clean(it.get("label"), 26 if typ == "timeline" else 30, "Chart item"), _clean(it.get("text"), 70, "Chart text")
-            if typ == "timeline" and re.sub(r"\s+", " ", lab).lower() not in src:
+            # a dátum szó szerint a forrásban — vagy legalább MINDEN száma ott van („15. mp” ← „15 és 18 másodperc”)
+            if typ == "timeline" and re.sub(r"\s+", " ", lab).lower() not in src and (not _text_numbers(lab) or bad(lab)):
                 return None, f"A suggested timeline “{title}” was left out: the date “{lab}” is not in the source."
             if bad(txt) or (typ == "steps" and bad(lab)):
                 return None, left_out
@@ -1109,13 +1143,27 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
         if e.get("_skip"):
             continue
         sh, name = e["shape"], f"{e['shape'].capitalize()} {i + 1}"
-        t0, dur = max(0.0, e.get("at", 0.3 + 0.25 * i)), max(0.1, e.get("dur", 0.6))
+        t0, dur = _el_t0(e, i), max(0.1, e.get("dur", 0.6))
         anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
         if e.get("move_to"):
             anim["move_to"] = px(e["move_to"])
         if e.get("dim"):                  # irányított figyelem: a rétegre (és a nyílhegyére) is
             anim["dim"] = [[round(a, 3), round(b, 3)] for a, b in e["dim"]]
         op = int(max(5, min(100, e.get("opacity", 100))))
+        if sh in ("rect", "circle") and anim["anim"] == "draw" and e.get("stroke") and _gfx_color(e.get("fill"), acc, "none") is None:
+            # körvonal, ami kirajzolódik: zárt útvonal (a builder a „draw”-t csak útvonalon ismeri — téglalapon az időpont
+            # elveszett, a keret rögtön ott volt; 10-18)
+            cx, cy = e.get("x", 0.5) * W, e.get("y", 0.5) * H
+            if sh == "rect":
+                hw, hh = e.get("w", 0.2) * W / 2, e.get("h", 0.1) * H / 2
+                pts = [[cx - hw, cy - hh], [cx + hw, cy - hh], [cx + hw, cy + hh], [cx - hw, cy + hh], [cx - hw, cy - hh]]
+            else:
+                rr = e.get("r", 0.06) * m
+                pts = [[cx + rr * math.sin(2 * math.pi * q / 48), cy - rr * math.cos(2 * math.pi * q / 48)] for q in range(49)]
+            out.append({"k": "path", "name": name, "points": [[round(a, 1), round(b, 1)] for a, b in pts], "closed": False,
+                        "fill": None, "stroke": _gfx_color(e["stroke"], acc), "stroke_w": round(e.get("width", 4) * k, 1),
+                        "opacity": op, **anim})
+            continue
         if sh in ("rect", "circle", "pin"):
             if sh == "rect":
                 size = [e.get("w", 0.2) * W, e.get("h", 0.1) * H]
@@ -1128,6 +1176,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                   "opacity": op, "round": round(rnd, 1), **anim}
             if e.get("stroke"):
                 el["stroke"], el["stroke_w"] = _gfx_color(e["stroke"], acc), round(e.get("width", 4) * k, 1)
+            if sh == "rect" and anim["anim"] == "grow":       # oszlop a talpáról felfelé, sáv balról — nem középről
+                el["grow"] = "up" if size[1] >= size[0] else "right"
             out.append(el)
             if sh == "pin" and e.get("text"):
                 ts = round(e.get("size", 34) * k)
@@ -1201,6 +1251,7 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                 continue
             out.append({"k": sh, "name": name, "file": e["file"], "comp": e.get("comp"), "fit": e.get("fit", "contain"),
                         "loop": e.get("loop", True), "pos": px([e.get("x", 0.5), e.get("y", 0.5)]),
+                        **({"movie": True} if Path(e["file"]).suffix.lower().lstrip(".") in MOVIE_EXTS else {}),
                         "size": [round(e.get("w", 0.3) * W, 1), round(e.get("h", 0.3) * H, 1)], "opacity": op, **anim})
     return out
 
@@ -1479,6 +1530,26 @@ def chart_elements(ch: dict[str, Any], W: int, H: int, lang: str, accent: Option
                 line(f"Point {ci + 1}.{k + 1}", it.get("text") or "", fs, colw - d * 1.6, hx + d * 1.4, cy, align="left",
                      font="semibold", t0=ts + 0.1)
                 ts += 0.4
+    elif typ == "table":              # táblázat: kiemelt fejléc, a sorok egymás után úsznak be (zebracsíkkal)
+        cols, rows_ = ch.get("columns") or [], ch.get("rows") or []
+        nc, nr = max(len(cols), 1), len(rows_)
+        rh = min((yB - yT) / (nr + 1), m * 0.11)
+        top = yT + ((yB - yT) - rh * (nr + 1)) / 2
+        cw = (x1 - x0) / nc
+        fs = round(min(rh * 0.42, m * (0.036 if nc <= 3 else 0.03)))
+        rect("Header band", (x1 - x0, rh), ((x0 + x1) / 2, top + rh / 2), color="accent", opacity=100, round=min(rh * 0.18, 10),
+             grow="right", t0=0.15, dur=0.4)
+        for j, h in enumerate(cols):
+            text(f"Head {j + 1}", h, fs, (cw * 0.92, rh * 0.9), (x0 + cw * (j + 0.5), top + rh / 2 + fs * 0.35), align="center",
+                 font="bold", color=[0.06, 0.06, 0.08], t0=0.35)
+        for k, r_ in enumerate(rows_):
+            cy, t0 = top + rh * (k + 1.5), 0.6 + k * min(0.35, 2.4 / max(nr, 1))
+            if k % 2 == 0:
+                rect(f"Row band {k + 1}", (x1 - x0, rh * 0.94), ((x0 + x1) / 2, cy), color=[1, 1, 1], opacity=10,
+                     round=min(rh * 0.15, 8), grow="right", t0=t0, dur=0.3)
+            for j, cell in enumerate(r_[:nc]):
+                text(f"Cell {k + 1}.{j + 1}", str(cell), fs, (cw * 0.92, rh * 0.9), (x0 + cw * (j + 0.5), cy + fs * 0.35),
+                     align="center", font="semibold" if j == 0 else "regular", color=[1, 1, 1] if j == 0 else soft, t0=t0 + 0.1)
     elif typ == "quote":              # idézet: nagy idézőjel, a szöveg, alatta a szerző
         q = items[0].get("text") or ""
         size = round(m * (0.06 if len(q) < 90 else 0.05 if len(q) < 160 else 0.042))
@@ -1705,7 +1776,7 @@ _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full
 # az „x_title”, a magyarázó ábrák „nodes”/„edges” mezője eddig elveszett a rövidítésben)
 _CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "series", "x_title",
                "y_title", "forecast_from", "total_label", "flows", "nodes", "edges", "root", "branches", "steps", "lanes",
-               "actors", "reveal", "pace", "direction", "center", "focus")
+               "actors", "reveal", "pace", "direction", "center", "focus", "columns", "rows")
 _PANEL = [0.035, 0.04, 0.055]
 
 
@@ -1723,6 +1794,12 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     szám / idézet a forrás számaival (ami nincs benne, kimarad — None, a ⚠ megjegyzés a check-be kerül)."""
     if not isinstance(raw, dict):
         raise ValueError("layers[]: each layer is an object {at, dur | until, type, …}")
+    if not raw.get("image"):                    # rokon kulcsok a réteg képére (10-18: a tervező a jelenetek „image_query”-jét adta)
+        q = next((raw[k] for k in ("image_prompt", "generate", "ai_image", "ai_picture") if isinstance(raw.get(k), str) and raw[k].strip()), None)
+        if q:
+            raw = {**raw, "image": {"generate": q}}
+        elif isinstance(raw.get("image_query"), str) and raw["image_query"].strip():
+            raw = {**raw, "image": {"stock": raw["image_query"]}}
     r = {**(base or {}), **raw}
     lid = re.sub(r"[^\w-]", "", str(r.get("id") or ""))[:20] or "L?"
     what = f"Layer {lid}"
@@ -1841,7 +1918,10 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
             if raw.get("image") or not (base or {}).get("chart"):
                 ly["image"] = r["image"]
                 cc = {"type": "graphic", "backdrop": 0, "elements": [{"shape": "image", "image": _img_spec(r["image"]), "fit": "cover",
-                                                                      "x": 0.5, "y": 0.5, "w": 1, "h": 1, "anim": "none"}]}
+                                                                      "x": 0.5, "y": 0.5, "w": 1, "h": 1, "anim": "none",
+                                                                      **({"clip": r["clip"]} if r.get("clip") else {}),
+                                                                      "sound": r.get("sound") if r.get("sound") in ("replace", "mix", "off")
+                                                                      else ("replace" if typ == "fullscreen" else "off")}]}
             else:                                     # szerkesztés: a már letöltött kép marad (asset), nem jön le újra
                 ly["image"], cc = base.get("image"), base["chart"]
             ly["chart"] = chart_of(cc, quiet=True)
@@ -2831,8 +2911,23 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
             try:
                 if e.get("asset") and parent_assets.get(e["asset"]):
                     shutil.copyfile(crafts.existing(parent_assets[e["asset"]]), work / name)
+                    if e.get("sound_file") and parent_assets.get(e["sound_file"]):     # a bevágás hangja is marad
+                        shutil.copyfile(crafts.existing(parent_assets[e["sound_file"]]), work / e["sound_file"])
+                        names.append(e["sound_file"])
                     if e.get("credit"):                                    # újraépítés: a kredit marad
                         credits.append(str(e["credit"])[:200])
+                elif e["shape"] == "image" and _movie_src(e.get("src")):
+                    name = f"gfx-{n:02d}-{sc.get('id') or si}.mp4"
+                    src_p = crafts.existing(_movie_src(e["src"]))
+                    span = _clip_span(e.get("clip"), sc.get("dur") if sc in (story.get("layers") or []) else None)
+                    await _cut_clip(src_p, span, work / name)
+                    e["clip_len"] = span[1]
+                    e.pop("sound_file", None)
+                    if (e.get("sound") or "off") != "off" and sc in (story.get("layers") or []):    # a hangja: a réteg idejére
+                        sname = name[:-4] + ".wav"
+                        if await _cut_sound(src_p, span, work / sname):
+                            e["sound_file"] = sname
+                            names.append(sname)
                 elif e["shape"] == "image":
                     r = await imgs.resolve(_img_spec(e.get("src")), max_px=1600)
                     name = f"gfx-{n:02d}-{sc.get('id') or si}{r.path.suffix or '.jpg'}"
@@ -2871,6 +2966,62 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
                 log.warning("grafika-elem (%s) nem jött le: %s", e.get("shape"), ex)
                 e["file"] = None
     return names, lotties, credits
+
+
+def _movie_src(src: Any) -> Optional[str]:
+    """Egy kép-elem forrása videó-e (a felhasználó egy másik felvétele) → a file_id-ja, különben None."""
+    sid = src.get("file_id") if isinstance(src, dict) else src
+    return sid if isinstance(sid, str) and not sid.startswith("http") and Path(sid).suffix.lower().lstrip(".") in MOVIE_EXTS else None
+
+
+def _clip_span(clip: Any, limit: Optional[float] = None) -> tuple[float, float]:
+    """A bevágás része → (kezdet, hossz) mp: [tól, ig] (ig nélkül legfeljebb 60 mp), legfeljebb a réteg hossza."""
+    a = float(clip[0]) if isinstance(clip, (list, tuple)) and clip else 0.0
+    b = float(clip[1]) if isinstance(clip, (list, tuple)) and len(clip) > 1 and clip[1] is not None else a + 60.0
+    n = max(0.2, b - a)
+    return a, round(min(n, float(limit)) if limit else n, 3)
+
+
+async def _cut_sound(src: Path, span: tuple[float, float], dst: Path) -> bool:
+    """A bevágás hangja külön sávnak (az első dekódolható hangsáv — az iPhone térhangja nélkül); False, ha nincs hangja."""
+    from app.convert.engines import run
+    k = (await probe_movie(src)).get("audio_stream")
+    if k is None:
+        return False
+    await run("ffmpeg", "-v", "error", "-y", "-ss", f"{span[0]:.3f}", "-i", str(src), "-t", f"{span[1]:.3f}", "-map", f"0:a:{k}",
+              "-vn", "-ac", "2", "-ar", "48000", str(dst), timeout=settings.VIDEO_TIMEOUT_S)
+    return dst.exists() and dst.stat().st_size > 1000
+
+
+def _clip_sounds(layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A rétegek bevágásainak hangja a fő idővonalra: [{file, t0, dur, mode}] — replace: közben a felvétel hangja elhalkul."""
+    out = []
+    for ly in layers:
+        for i, e in enumerate((ly.get("chart") or {}).get("elements") or []):
+            if e.get("sound_file") and e.get("sound") in ("replace", "mix"):
+                t0 = float(ly["at"]) + _el_t0(e, i)
+                dur = min(float(e.get("clip_len") or ly["dur"]), float(ly["at"]) + float(ly["dur"]) - t0)
+                if dur > 0.1:
+                    out.append({"file": e["sound_file"], "t0": round(t0, 3), "dur": round(dur, 3), "mode": e["sound"]})
+    return out
+
+
+def _el_t0(e: dict[str, Any], i: int) -> float:
+    """Egy grafika-elem megjelenése (mp a jelenet / réteg elejétől): a megadott, különben sorban; a bevágott videó azonnal."""
+    movie = e.get("clip") is not None or Path(str(e.get("file") or "")).suffix.lower().lstrip(".") in MOVIE_EXTS
+    return max(0.0, float(e["at"])) if e.get("at") is not None else (0.0 if movie else 0.3 + 0.25 * i)
+
+
+async def _cut_clip(src: Path, span: tuple[float, float], dst: Path) -> Path:
+    """Egy másik felvétel része a grafikába (bevágás): span = (kezdet, hossz) mp; a kép NÉMÁN (a hangja külön sáv:
+    _cut_sound), az elforgatás szerint egyenesen, a hosszabb oldal legfeljebb 1920 px."""
+    from app.convert.engines import run
+    a, n = span
+    await run("ffmpeg", "-v", "error", "-y", "-ss", f"{a:.3f}", "-i", str(src), "-t", f"{n:.3f}", "-map", "0:v:0", "-an",
+              "-vf", "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'", "-c:v", "libx264",
+              "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst),
+              timeout=settings.VIDEO_TIMEOUT_S)
+    return dst
 
 
 NARRATION_ASSET = "narration.wav"
@@ -3520,7 +3671,9 @@ async def _upright(src: Path) -> str:
     """Az elforgatás-jelöléssel tárolt felvétel álló/fekvő helyzetbe újrakódolva (rejtett munkafájl) → file_id."""
     from app.convert.engines import run
     fid = new_file_id("mp4")
-    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+    k = (await probe_movie(src)).get("audio_stream")
+    aud = ["-map", f"0:a:{k}"] if k is not None else []      # csak az első dekódolható hangsáv (térhang nélkül)
+    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud, "-c:v", "libx264", "-preset", "veryfast",
               "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path(fid)),
               timeout=settings.VIDEO_TIMEOUT_S)
     write_meta(fid, operation="footage set upright", source_file_id=None, extra={"ephemeral": True})
@@ -3675,6 +3828,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             D["L"] = {k: Lc[k] for k in ("capW", "capSize", "capY", "capPad")}
             D["captions"] = caption_track(subs, W, H, total)
         D["layers"], rows, problems = layer_comps(layers, W, H, total, lang, acc, safe)
+        cuts = _clip_sounds(layers)                           # bevágott felvételek hangja (teljes képen a felvételé helyett)
+        if cuts:
+            D["audio"]["clips"] = cuts
         m_v, m_f, track = [], [], None
         if _builtin_music(opts):                              # zene a felvétel saját hangja alá (ahol beszélnek, halkul)
             speech = None
@@ -3683,7 +3839,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                 await _ffmpeg_audio(work / base["asset"], speech)
             _, track, m_v, m_f = await _music_under(opts, work, total, speech, None, story["title"])
             if track:
-                D["audio"] = {"music": track, "musicDb": 0 if speech else -10}
+                D["audio"] = {**D["audio"], "music": track, "musicDb": 0 if speech else -10}
         problems = problems + m_f
         if _has_3d(D):                                        # three.js-rétegek: a réteg hosszában és méretében
             step(2, 4, "rendering the 3D scenes")
@@ -4440,10 +4596,18 @@ _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json obj
  "layers": [{"id": "L2", "at"?: seconds, "dur"?: seconds, "name"?, "role"?, "text"?, "subtitle"?, "value"?, "label"?,
              "chart"?: <chart>, "remove"?: true}],
  "add_layers": [{"at": seconds, "dur": seconds, "type": "lower_third|title|chapter|source|stat|quote|chart|fullscreen|split", …}]}
+A fullscreen layer (covers the picture, the sound goes on) or a split layer (+ "side": left|right|top|bottom) holds ONE of:
+"image": {"stock": "2–4 plain English words"} (a real photo) | {"generate": "an English description"} (an AI picture —
+when the person asks for an AI / generated picture) | a file_id from the request · "chart": <chart> · "text" (+ "subtitle").
 Layers are time-coded graphics over the video (listed below with their ids); change them by id. A video of the person's
-own footage has only layers: change or add layers there, never scenes.
-<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|waterfall|slope|scatter|band|lines|race|sankey", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
+own footage has only layers: change or add layers there, never scenes. When the request points to what is said in the
+footage ("what I ask for in the video", "the graphics I mention"), read the speech listed below and add every graphic the
+speaker asks for or describes, each at the time it is said (it may last until the next one starts): e.g. "a table" → a
+table chart, "an infographic above me" → a chart layer, "flying / animated infographics" → an animated chart (race,
+waterfall, lines…) — with the speaker's own words and numbers, never invented ones.
+<chart> = {"type": "column|bar|line|area|donut|ring|icons|timeline|steps|counter|compare|progress|gauge|funnel|proscons|quote|table|waterfall|slope|scatter|band|lines|race|sankey", "title": str, "unit": str, "total": number|null, "min"?: number, "max"?: number,
            "items": [{"label": str, "value": number|null, "text": str}]}
+  (table: {"type": "table", "title": str, "columns": [2–5 headings], "rows": [[cells], … up to 7 rows]} — words or numbers)
 (waterfall, slope, scatter, band, lines, race and sankey have their own fields — labels, series, from/to, x/y/size, low/high, flows;
 to change one, send a chart WITHOUT "type" with only the fields that change.)
 A scene with a diagram (decision_tree | swimlane | network, listed with its node ids): to change it send a chart WITHOUT
@@ -4459,6 +4623,14 @@ The video now:
 Request: {request}"""
 
 
+def _speech(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """A saját felvétel beszéde időkóddal: a feliratok (ha a videónak van), különben az alapfelvétel átirata (gyorsítótárból)."""
+    if spec.get("kind") != "overlay":
+        return []
+    subs = (spec.get("story") or {}).get("subtitles") or []
+    return [c for c in subs if isinstance(c, dict) and c.get("text")][:300]
+
+
 def _describe(spec: dict[str, Any]) -> str:
     st, o = spec["story"], spec.get("opts") or {}
     pics = spec.get("pictures") or []
@@ -4468,6 +4640,10 @@ def _describe(spec: dict[str, Any]) -> str:
     else:
         lines = [f"title: {st.get('title')} · format {o.get('fmt')} · {o.get('total') or 'auto'} s · Ken Burns {o.get('ken_burns')}"]
     lines += [f"layer {x['id']} ({x['type']}) {x['timecode']}: {x['text']}" for x in layer_listing(st.get("layers") or [])]
+    said = _speech(spec)
+    if said:                  # saját felvétel: ami elhangzik, időkóddal (a „tedd bele, amit a videóban kérek”-hez)
+        lines.append("what is said in the footage (start–end: words):")
+        lines += [f"  {_tc(c['start'])}–{_tc(c['end'])}: {c['text']}" for c in said]
     for i, sc in enumerate(st.get("scenes") or [], 1):
         pic = pics[i] if i < len(pics) else None
         what = f"chart {sc['chart']['type']} “{sc['chart']['title']}”" if sc.get("chart") else (f"stat {sc['stat']['value']}" if sc.get("stat") else "")
@@ -4501,7 +4677,9 @@ async def revise(file_id: str, request: str, progress: Optional[Callable[..., No
     if not isinstance(plan_, dict):
         raise ValueError(f"Couldn't work out the change ({last}) — try saying it differently.")
     summary = _clean((plan_ or {}).pop("summary", "") if isinstance(plan_, dict) else "", 200)
-    res = await edit(pid, plan_ if isinstance(plan_, dict) else {}, extra_source=request, progress=progress)
+    said = " ".join(c["text"] for c in _speech(spec))       # a felvételben elhangzott számok is a forrás részei
+    res = await edit(pid, plan_ if isinstance(plan_, dict) else {}, extra_source=(request + "\n" + said).strip(),
+                     progress=progress)
     res["summary"] = summary or "Video changed."
     return res
 
@@ -4814,3 +4992,50 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
                 "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly."}
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def frames_grid(file_id: str, times: list[float], width: int = 1500) -> tuple[bytes, list[dict[str, Any]]]:
+    """Több pillanat EGY képen (files preview, at=[…]): minden csempén az időpont és egy halvány tizedes rács (0–1, x balról,
+    y felülről) — a kliens-AI ebből látja, hova mutat / néz a szereplő, és a réteg helyét ("position": [x, y, w, h])
+    egyenesen leolvashatja. (Kommandant 10-18: „ahova mutatok, oda akarok ábrákat”.)"""
+    import cv2
+    times = [max(0.0, float(t)) for t in times][:12]
+    vid = frame_time(file_id, None, times[0])[0]
+    cap = cv2.VideoCapture(str(crafts.existing(vid)))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    tiles, info_ = [], []
+    first = None
+    for t in times:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(t * fps))
+        ok, f = cap.read()
+        if not ok:
+            continue
+        first = first if first is not None else f.shape
+        cols = 3 if f.shape[0] > f.shape[1] * 1.2 else 2
+        tw = width // cols
+        th = int(tw * f.shape[0] / f.shape[1])
+        f = cv2.resize(f, (tw, th))
+        over = f.copy()
+        for k in range(1, 10):                       # tizedes rács, a 0,5 erősebb
+            x, y = int(tw * k / 10), int(th * k / 10)
+            w_ = 2 if k == 5 else 1
+            cv2.line(over, (x, 0), (x, th), (255, 255, 255), w_)
+            cv2.line(over, (0, y), (tw, y), (255, 255, 255), w_)
+            if k % 2 == 1 or k == 5:
+                cv2.putText(over, f".{k}", (x + 2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(over, f".{k}", (2, y - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+        f = cv2.addWeighted(over, 0.35, f, 0.65, 0)
+        cv2.rectangle(f, (0, th - 30), (110, th), (0, 0, 0), -1)
+        cv2.putText(f, f"{t:.1f} s", (8, th - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+        tiles.append(f)
+        info_.append({"index": len(tiles), "at": round(t, 2)})
+    cap.release()
+    if not tiles:
+        raise ValueError("No frame could be read at those times — check them against the video's length.")
+    import numpy as np
+    cols = 3 if first[0] > first[1] * 1.2 else 2
+    rows = [tiles[i:i + cols] for i in range(0, len(tiles), cols)]
+    blank = np.zeros_like(tiles[0])
+    sheet = np.vstack([np.hstack(r + [blank] * (cols - len(r))) for r in rows])
+    ok, buf = cv2.imencode(".jpg", sheet, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return buf.tobytes(), info_

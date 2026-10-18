@@ -341,6 +341,7 @@ function mediaLayer(comp, el) {   // kép vagy Lottie egy dobozba illesztve
       } catch (e) { writeLn("lottie loop: " + e); }
     }
   }
+  if (el.movie) L.startTime = el.t0 || 0;     // bevágott felvétel: a megjelenésekor indul (néma — a hang az alapsávé)
   if (el.opacity !== undefined && el.opacity !== 100) tp(L).property("ADBE Opacity").setValue(el.opacity);
   animate(L, el);
   return L;
@@ -503,6 +504,19 @@ if (D.audio && D.audio.music && !D.alpha) {
   var mu = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.music)))); mu.name = "Music";
   var lv = mu.property("ADBE Audio Group").property("ADBE Audio Levels"), g = D.audio.musicDb;
   lv.setValueAtTime(0, [g, g]); lv.setValueAtTime(Math.max(0, D.total - 2.5), [g, g]); lv.setValueAtTime(D.total, [-48, -48]);
+}
+// bevágott felvételek hangja: a helyén szól; „replace” — közben a felvétel saját hangja elhalkul (mint egy vágásnál)
+for (var ci = 0; D.audio && D.audio.clips && !D.alpha && ci < D.audio.clips.length; ci++) {
+  var cs = D.audio.clips[ci];
+  var cl = main.layers.add(app.project.importFile(new ImportOptions(new File(cs.file)))); cl.name = "Cut-in sound " + (ci + 1);
+  cl.startTime = cs.t0;
+  if (cs.mode === "replace") for (var bj = 0; bj < baseLayers.length; bj++) {
+    try {
+      var bl = baseLayers[bj].property("ADBE Audio Group").property("ADBE Audio Levels");
+      bl.setValueAtTime(Math.max(0, cs.t0 - 0.12), [0, 0]); bl.setValueAtTime(cs.t0, [-48, -48]);
+      bl.setValueAtTime(cs.t0 + cs.dur - 0.05, [-48, -48]); bl.setValueAtTime(cs.t0 + cs.dur + 0.15, [0, 0]);
+    } catch (e) { writeLn("cut-in sound: " + e); }
+  }
 }
 main.openInViewer && main.openInViewer();
 writeLn(JSON.stringify({ comps: app.project.numItems, scenes: (D.scenes || []).length, layers: (D.layers || []).length,
