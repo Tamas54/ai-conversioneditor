@@ -61,6 +61,14 @@ async def _validation_error(request: Request, exc: RequestValidationError):
     return _err(422, "INVALID_REQUEST", f"{loc}: {first.get('msg', 'invalid')}")
 
 
+from app.filecheck import DamagedFile  # noqa: E402
+
+
+@v1.exception_handler(DamagedFile)
+async def _damaged_file(request: Request, exc: DamagedFile):
+    return _err(400, "DAMAGED_FILE", str(exc))
+
+
 @v1.exception_handler(J.JobError)
 async def _job_error(request: Request, exc: J.JobError):
     return _err(422, exc.code, str(exc))

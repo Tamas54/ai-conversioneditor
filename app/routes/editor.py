@@ -92,9 +92,26 @@ async def editor_slash(app: str, request: Request):
     return RedirectResponse(f"/editor/{app}/" + (f"?{qs}" if qs else ""))
 
 
+_MISSING = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Editor unavailable</title>
+<style>body{{margin:0;height:100vh;display:grid;place-items:center;background:#16191a;color:#e8e6e1;
+font:15px/1.5 system-ui,sans-serif}}main{{max-width:30em;padding:24px;text-align:center}}p{{color:#a7a59f}}</style></head>
+<body><main><h2>The {name} isn't available right now</h2>
+<p>Your file is safe. Switch to <b>Preview</b> to see it, use <b>Download</b> to save it, or change it with the tools
+and the request box around this window.</p></main></body></html>"""
+
+
 @router.get("/editor/{app}/", include_in_schema=False)
 async def editor_index(app: str) -> HTMLResponse:
-    html = (_web_dir(app) / "index.html").read_text("utf-8")
+    try:
+        d = _web_dir(app)
+    except HTTPException as e:       # a szerkesztő keretben nyílik: nyers JSON helyett mondat, ami továbbvisz
+        if e.status_code != 503:
+            raise
+        name = {"wordcraft": "Word editor", "deckcraft": "slide editor", "pdfcraft": "PDF editor",
+                "gridcraft": "spreadsheet editor", "photocraft": "photo editor", "designcraft": "layout editor",
+                "vectorcraft": "design editor", "effectcraft": "video editor", "filmcraft": "video cutter"}.get(app, "editor")
+        return HTMLResponse(_MISSING.format(name=name), status_code=503, headers={"Cache-Control": "no-store"})
+    html = (d / "index.html").read_text("utf-8")
     tag = '<script src="./aice_bridge.js"></script>\n'
     # A bridge-nek a WASM-modul ELŐTT kell futnia (TrunkApplicationStarted-figyelő).
     marker = '<script type="module">'

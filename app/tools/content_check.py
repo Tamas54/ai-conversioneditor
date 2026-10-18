@@ -141,11 +141,37 @@ Candidates:
 {block}"""
 
 
+# kitöltetlen helyőrző: [a könyvtár neve], {{name}}, TBD/TODO/XXX, Lorem ipsum — determinisztikus, modell nélkül
+# (UI-próba 10-18: a briefből írt meghívóban három [..] maradt, a Check „nothing found”-ot mondott). A „[1]”-féle
+# hivatkozás, a „[…]” kihagyás és a „[sic]” nem az.
+_PLACEHOLDER = re.compile(r"\[(?!sic\])[^\[\]\n]*[^\W\d_][^\[\]\n]*[^\W\d_][^\[\]\n]*\]|\{\{[^{}\n]{1,60}\}\}"
+                          r"|\b(?:TBD|TODO|XXX+)\b|\b[Ll]orem ipsum\b")
+
+
+def placeholders(d: Docx) -> Optional[dict[str, Any]]:
+    places = [{"paragraph": i, "quote": m.group(), "start": m.start(), "end": m.end()}
+              for i, t in enumerate(d.texts()) for m in _PLACEHOLDER.finditer(t) if len(m.group()) <= 82][:20]
+    if not places:
+        return None
+    n = len(places)
+    return {"kind": "placeholder", "places": places, "fix": None,
+            "note": f"{n} placeholder{'s' if n > 1 else ''} not filled in yet — replace with the real text, or remove."}
+
+
 async def consistency(path: Path) -> dict[str, Any]:
     d = Docx(path)
     doc, cut = numbered(d.texts())
     if not doc.strip():
         return {"findings": [], "checked": "nothing to check — the document has no text", "truncated": False}
+    res = await _consistency_ai(d, doc, cut)
+    ph = placeholders(d)
+    if ph:                                    # biztos lelet: elöl, a modell átnézése nélkül
+        res["findings"] = [{"id": "C1", **ph}] + [{**f, "id": f"C{k}"} for k, f in enumerate(res["findings"], 2)]
+    res["checked"] = "unfilled placeholders, " + res["checked"]
+    return res
+
+
+async def _consistency_ai(d: Docx, doc: str, cut: bool) -> dict[str, Any]:
 
     async def make():
         return await _ask(_CONSISTENCY_PROMPT.format(doc=doc))

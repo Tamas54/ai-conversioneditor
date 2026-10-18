@@ -151,7 +151,7 @@ async def _revise_deck(spec: dict[str, Any], request: str, theme: Optional[dict[
 async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] = None) -> dict[str, Any]:
     from app.storage import display_label, output_path, public_url, write_meta
     from app.storage.files import new_file_id
-    from app.tools import crafts
+    from app.tools import crafts, forms
     src = crafts.existing(file_id)
     ext = src.suffix.lstrip(".").lower()
     stem = Path(display_label(file_id)).stem.split(" (")[0]
@@ -199,6 +199,10 @@ async def revise(pool, file_id: str, request: str, style_file_id: Optional[str] 
         out = [f for f in res["files"] if not f["file_id"].endswith(".psd")] or res["files"]
         out_id, summary = out[0]["file_id"], res.get("summary") or ""
         extra_files = [f["file_id"] for f in res["files"] if f["file_id"] != out_id]
+    elif ext == "pdf" and await forms.has_fields(file_id):      # kitölthető űrlap: a mezőkbe, NEM Wordön át újraszedve
+        out_id = new_file_id("pdf")
+        r = await forms.fill_from_request(file_id, request, output_path(out_id))
+        summary = r["summary"]
     elif ext in DOCS or (ext == "pdf" and _docx_source(file_id)):
         from app.tools import doc_revise
         docx_id = file_id if ext in DOCS else _docx_source(file_id)

@@ -28,6 +28,7 @@ import io
 import logging
 import os
 import posixpath
+import re
 import shutil
 import tempfile
 import zipfile
@@ -295,7 +296,37 @@ def _plan(zf: zipfile.ZipFile) -> tuple[dict[str, bytes], set[str], list[str], s
         done.append(f"{len(store)} video/audio part(s) stored uncompressed")
     if ct_changed:
         new["[Content_Types].xml"] = _xml(ct)
+    # 9. a szöveg nyelve: a sablonok „en-US”-t írnak → egy magyar paklit a PowerPoint/Keynote angolként ellenőriz
+    #    (UI-próba 10-18). Csak biztos felismerésnél, csak az en-US-t írja át.
+    lang_parts = _fix_lang(zf, new)
+    if lang_parts:
+        done.append(f"text language {lang_parts}")
     return new, drop, done, store
+
+
+_LANG_EN = re.compile(rb'(?<![A-Za-z])lang="en-US"')
+
+
+def _fix_lang(zf: zipfile.ZipFile, new: dict[str, bytes]) -> str:
+    from app.tools import textlang
+    names = zf.namelist()
+    slides = [n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
+    text = " ".join(t.text or "" for n in slides for t in etree.fromstring(new.get(n) or zf.read(n)).iter(_q(_A, "t")))
+    lang = textlang.detect(text)
+    if not lang or lang == "en-US":
+        return ""
+    parts = [n for n in names if n == "ppt/presentation.xml" or re.fullmatch(
+        r"ppt/(slides|slideLayouts|slideMasters|notesMasters|notesSlides)/[^/]+\.xml", n)]
+    hit = 0
+    for n in parts:
+        raw = new.get(n) or zf.read(n)
+        fixed = _LANG_EN.sub(f'lang="{lang}"'.encode(), raw)
+        if fixed != raw:
+            new[n] = fixed
+            hit += 1
+    if hit:      # a sablon nem ír nyelvet a futásokra → az alapértelmezés (presentation.xml) mondja meg
+        return lang
+    return ""
 
 
 def _rewrite(zf: zipfile.ZipFile, out: IO[bytes], new: dict[str, bytes], drop: set[str],

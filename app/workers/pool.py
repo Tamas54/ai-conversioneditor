@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -107,7 +108,8 @@ class WorkerPool:
         try:
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
-                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"],
+                executable_path=os.getenv("CHROMIUM_EXECUTABLE") or None,   # mint web.py / threejs.py
             )
             log.info("Chromium launched (warm=%d)", self.chromium_warm)
         except Exception:

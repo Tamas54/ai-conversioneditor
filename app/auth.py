@@ -238,7 +238,7 @@ _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/product.css"></head>
 <body class="auth"><main class="auth-card">
-  <a class="back" href="/" data-back>← Back</a>
+  <a class="back" href="{next}" data-back>← Back</a>
   <a class="brand" href="/">{product}</a>
   <h1>{title}</h1>
   {error}
@@ -250,24 +250,32 @@ _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </main></body></html>"""
 
 
-def _page(title, action, fields, button, alt, nxt, error="") -> HTMLResponse:
+def _page(title, action, fields, button, alt, nxt, error="", status=200) -> HTMLResponse:
     err = f'<p class="error">{html.escape(error)}</p>' if error else ""
     from app.routes.product import static_v
     return HTMLResponse(_PAGE.replace('href="/static/product.css"', f'href="{static_v("product.css")}"').format(title=title, product=html.escape(settings.PRODUCT_NAME), action=action,
-                                     fields=fields, button=button, alt=alt, next=html.escape(_safe_next(nxt)), error=err))
+                                     fields=fields, button=button, alt=alt, next=html.escape(_safe_next(nxt)), error=err), status_code=status)
 
 
-_EMAIL = '<label>Email<input type="email" name="email" autocomplete="email" required autofocus></label>'
+_EMAIL = '<label>Email<input type="email" name="email" autocomplete="email" required autofocus value="{email}"></label>'
 _PW = '<label>Password<input type="password" name="password" autocomplete="{ac}" required minlength="{min}"></label>'
+
+
+def _with_next(path: str, nxt: str) -> str:
+    nxt = _safe_next(nxt)
+    return path + (f"?next={quote(nxt, safe='')}" if nxt != "/app" else "")   # pl. az OAuth-engedélyezés folytatódjon
+
+
+def _login_form(nxt: str, error: str = "", email: str = "", status: int = 200) -> HTMLResponse:
+    alt = (f'No account yet? <a href="{html.escape(_with_next("/signup", nxt))}">Create one</a> · ' if settings.SIGNUP_OPEN else "") + \
+          f'<a href="{html.escape(_safe_next(nxt))}">Look around without an account</a>'
+    fields = _EMAIL.replace(" required", "").format(email=html.escape(email)) + _PW.format(ac="current-password", min=1)
+    return _page("Sign in", "/login", fields, "Sign in", alt, nxt, error, status)
 
 
 @router.get("/login", include_in_schema=False)
 async def login_page(next: str = "/app", error: str = "") -> HTMLResponse:
-    signup = "/signup" + (f"?next={quote(_safe_next(next), safe='')}" if _safe_next(next) != "/app" else "")   # pl. az OAuth-engedélyezés folytatódjon
-    alt = (f'No account yet? <a href="{html.escape(signup)}">Create one</a> · ' if settings.SIGNUP_OPEN else "") + \
-          '<a href="/app">Look around without an account</a>'
-    fields = _EMAIL.replace(" required", "") + _PW.format(ac="current-password", min=1)
-    return _page("Sign in", "/login", fields, "Sign in", alt, next, error)
+    return _login_form(next, error)
 
 
 @router.post("/login", include_in_schema=False)
@@ -286,7 +294,7 @@ async def login(request: Request, password: str = Form(...), email: str = Form("
     if uid is None:
         _fails[ip].append(time.time())
         log.warning("sikertelen belépés: %s", ip)
-        return RedirectResponse(f"/login?next={quote(nxt)}&error={quote('Wrong email or password.')}", 303)
+        return _login_form(nxt, "Wrong email or password.", email.strip(), 401)
     _fails[ip].clear()
     await _adopt_guest(request, uid)
     resp = RedirectResponse(nxt, status_code=303)
@@ -299,10 +307,16 @@ async def login(request: Request, password: str = Form(...), email: str = Form("
 async def signup_page(next: str = "/app", error: str = "") -> HTMLResponse:
     if not settings.SIGNUP_OPEN:
         return _page("Sign up", "/signup", "", "Back to sign in", "Sign-up is closed for now.", "/login", "")
-    fields = ('<label>Name<input type="text" name="name" autocomplete="name" maxlength="80"></label>'
-              + _EMAIL + _PW.format(ac="new-password", min=10))
-    return _page("Create your account", "/signup", fields, "Create account",
-                 'Already have an account? <a href="/login">Sign in</a> · <a href="/app">Not now</a>', next, error)
+    return _signup_form(next, error)
+
+
+def _signup_form(nxt: str, error: str = "", name: str = "", email: str = "", status: int = 200) -> HTMLResponse:
+    fields = (f'<label>Name<input type="text" name="name" autocomplete="name" maxlength="80" value="{html.escape(name)}"></label>'
+              + _EMAIL.format(email=html.escape(email))
+              + _PW.format(ac="new-password", min=10).replace("</label>", '<small class="muted">At least 10 characters</small></label>'))
+    alt = (f'Already have an account? <a href="{html.escape(_with_next("/login", nxt))}">Sign in</a> · '
+           f'<a href="{html.escape(_safe_next(nxt))}">Not now</a>')
+    return _page("Create your account", "/signup", fields, "Create account", alt, nxt, error, status)
 
 
 @router.post("/signup", include_in_schema=False)
@@ -313,13 +327,13 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     if not settings.SIGNUP_OPEN or not db.enabled():
         raise HTTPException(403, "sign-up is closed")
     if _limited(_signups, ip, _SIGNUP_LIMIT, _SIGNUP_WINDOW_S):
-        return RedirectResponse(f"/signup?error={quote('Too many sign-ups from this network — try later.')}", 303)
+        return _signup_form(nxt, "Too many sign-ups from this network — try later.", name, email, 429)
     if len(password) < 10 or "@" not in email:
-        return RedirectResponse(f"/signup?error={quote('Use a valid email and a password of at least 10 characters.')}", 303)
+        return _signup_form(nxt, "Use a valid email and a password of at least 10 characters.", name, email, 400)
     try:
         user = await db.user_create(email, password, name.strip() or None, credits=settings.SIGNUP_CREDITS)
     except ValueError as e:
-        return RedirectResponse(f"/signup?error={quote(str(e))}", 303)
+        return _signup_form(nxt, str(e), name, email, 400)
     _signups[ip].append(time.time())
     if settings.SIGNUP_CREDITS:
         await db.credits_add(user["id"], 0, "signup")  # napló-sor a kezdő egyenlegről

@@ -196,6 +196,8 @@ async def api_upload(file: UploadFile = File(...)) -> dict[str, Any]:
     ext = Path(file.filename).suffix.lstrip(".") or "bin"
     fid = new_file_id(ext)
     data = await file.read()
+    from app.filecheck import check_bytes
+    check_bytes(data, file.filename)
     await save_bytes(input_path(fid), data)
     write_meta(
         fid,
@@ -239,7 +241,8 @@ async def _run_with_event(name: str, params: dict[str, Any], coro_factory):
             error=str(e),
             ms_elapsed=int((time.time() - t0) * 1000),
         )
-        raise HTTPException(500, str(e))
+        from app.filecheck import public_message
+        raise HTTPException(500, public_message(e))
 
 
 @router.post("/api/convert")

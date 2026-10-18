@@ -640,6 +640,10 @@ def _chart_from_plan(c: Any, source: str) -> tuple[Optional[dict[str, Any]], Opt
                 items.append({"label": lab, "text": txt})
         if len(items) < (2 if typ == "timeline" else 3):
             return None, None
+        if typ == "timeline" and sum(bool(re.search(r"\d", it["label"])) for it in items) < 2:
+            # „Kr. e. 100 körül” → „ettől kezdve”: a szövegben szerepel, de nem időpont (UI-próba 10-18) — egy dátumból
+            # nem lesz idővonal
+            return None, f"A suggested timeline “{title}” was left out: it has fewer than two real dates."
         return ({"type": typ, "title": title, "unit": "", "items": items},
                 f"{'Timeline' if typ == 'timeline' else 'Steps'} “{title}”: {len(items)} items"
                 + (", every date is in the source text." if typ == "timeline" else ", no number that isn't in the source."))
@@ -805,6 +809,57 @@ def _with_ids(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             sc["id"] = f"s{k}"
             used.add(sc["id"])
     return scenes
+
+
+_ABBR = {"dr", "kr", "e", "i", "sz", "st", "szt", "mr", "mrs", "ms", "jr", "sr", "vs", "pl", "ld", "kb", "prof", "ifj",
+         "id", "özv", "no", "nr", "ca", "approx", "etc", "gen", "u", "ú", "hr", "ny", "kft", "zrt", "bt"}
+
+
+def _sentences(text: str) -> list[str]:
+    """Mondatok: írásjel + szóköz a határ, de a kisbetűvel vagy számmal folytatódó rész az előzőhöz tartozik
+    (a „Kr. e. 100”, „dr. Kiss”, „a 3. fejezet” nem vág ketté). Bekezdéshatáron nem olvaszt össze."""
+    out: list[str] = []
+    for para in re.split(r"\n+", text or ""):
+        cur: list[str] = []
+        for part in re.split(r"(?<=[.!?…])\s+", para.strip()):
+            if not part:
+                continue
+            last = cur[-1].rsplit(None, 1)[-1] if cur else ""
+            short_abbr = cur and (last.rstrip(".").lower() in _ABBR or re.fullmatch(r"[^\W\d_]\.", last))   # „Dr.”, „J.”
+            if cur and (short_abbr or not (part[:1].isupper() or part[:1] in "\"„«(")):
+                cur[-1] += " " + part
+            else:
+                cur.append(part)
+        out += cur
+    return [x for x in out if re.search(r"[^\W\d_]", x)]
+
+
+def _restore_wording(text: str, scenes: list[dict[str, Any]], cap: int = 200) -> int:
+    """keep_wording: a forrás kimaradt mondatai vissza, a sorrendjük szerinti helyre — a legutóbbi lefedett mondat
+    jelenetének feliratához fűzve, vagy (ha nem fér) új jelenetként utána. → hány mondatot pótolt."""
+    flat = lambda t: " ".join(re.findall(r"\w+", (t or "").lower()))
+    def covered_in(snt: str) -> int:
+        ws = {_STEM(w) for w in _words(snt)}
+        for i, sc in enumerate(scenes):
+            vt = f"{sc.get('headline', '')} {sc.get('caption', '')}"
+            if (len(ws & {_STEM(w) for w in _words(vt)}) / len(ws) >= 0.6) if ws else flat(snt) in flat(vt):
+                return i                       # rövid mondat („Ez jó.”): szó szerint
+        return -1
+    added, cur = 0, 0
+    for snt in _sentences(text):
+        at = covered_in(snt)
+        if at >= 0:
+            cur = at
+            continue
+        sc = scenes[cur]
+        if len(sc.get("caption") or "") + 1 + len(snt) <= cap:
+            sc["caption"] = f"{sc.get('caption') or ''} {snt}".strip()
+        else:
+            cur += 1
+            scenes.insert(cur, {"headline": "", "caption": _clean(snt, cap, "Caption"),
+                                "image_query": sc.get("image_query", ""), "stat": None, "chart": None})
+        added += 1
+    return added
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -1828,7 +1883,23 @@ def layers_from(raw: Any, source: str, notes: list[str], existing: Optional[list
         ly = _layer_from(x, source, notes)
         if ly:
             out.append(ly)
-    return out
+    return _drop_echo_titles(out, existing or [], notes)
+
+
+def _drop_echo_titles(layers: list[dict[str, Any]], existing: list[dict[str, Any]], notes: list[str]) -> list[dict[str, Any]]:
+    """Az a címréteg, amely egy vele egy időben látszó ábra CÍMÉT ismétli, kimarad: az ábra a címét maga is kiírja
+    (UI-próba 10-18: „Három fontos gondolat” kétszer, a dupla panel a beszélő homlokába lógott)."""
+    norm = lambda t: re.sub(r"\W+", " ", str(t or "")).strip().lower()
+    charts = [(c["at"], c["at"] + c["dur"], norm((c.get("chart") or {}).get("title")))
+              for c in existing + layers if c.get("type") == "chart" and (c.get("chart") or {}).get("title")]
+    keep = []
+    for ly in layers:
+        t = norm(ly.get("text")) if ly.get("type") == "title" and not (ly.get("subtitle") or ly.get("kicker")) else ""
+        if t and any(a < ly["at"] + ly["dur"] and ly["at"] < b and t == ct for a, b, ct in charts):
+            notes.append(f"Layer {ly['id']}: left out — it only repeated the title of the chart shown at the same time.")
+            continue
+        keep.append(ly)
+    return keep
 
 
 def apply_layer_changes(layers: list[dict[str, Any]], changes: dict[str, Any], source: str, notes: list[str]) -> list[dict[str, Any]]:
@@ -2474,7 +2545,8 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
     # saját szövegnél is a hossz szerint bontunk (10-12: egy bekezdésként jött 60 s → 1 jelenet, a szöveg nagy része
     # kimaradt); a bekezdések száma csak alsó határ — a modell a mondatokat gondolatonként csoportosítja
     by_len = max(2, min(12, round(((total or 60) - 7) / 6.5)))
-    n = max(len(_paragraphs(text)), by_len if (total or len(text) > 400) else 1) if keep else by_len
+    # saját szöveg időtartam nélkül: legalább két mondatonként egy jelenet (10-18: 4 mondat → 1 jelenet → 2 kimaradt)
+    n = max(len(_paragraphs(text)), -(-len(_sentences(text)) // 2), by_len if (total or len(text) > 400) else 1) if keep else by_len
     n = max(1, min(n, 14))
 
     step(1, 5, "writing the script")
@@ -2484,6 +2556,11 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
     chart_notes: list[str] = []
     # minden jelenet egy úton: szöveghatárok, ábra a forrás számaival (különben kimarad — a modell nem talál ki számot)
     story["scenes"] = _with_ids([_scene_from(s, text, chart_notes) for s in story.get("scenes") or [] if isinstance(s, dict)][:14])
+    if keep and story["scenes"]:              # a saját szöveg MINDEN mondata a feliratokban (a modell néha elhagy)
+        added = _restore_wording(text, story["scenes"])
+        if added:
+            story["scenes"] = _with_ids(story["scenes"])
+            pre_v.append(f"Your text in full: {added} sentence(s) the script writer left out were put back in their place.")
     if body.get("data_file_id"):           # táblázatból: a cellák értékei, a 2. jelenettől beszúrva
         for k, ch in enumerate(charts_from_table(body["data_file_id"])):
             story["scenes"].insert(min(len(story["scenes"]), 1 + 2 * k),
@@ -3519,7 +3596,7 @@ async def _auto_subtitles(fid: str, language: Optional[str], step: Callable[...,
     from app.tools import transcript
     step(1, 4, "listening (transcript)")
     tr = await transcript.transcribe(crafts.existing(fid), transcript_lang(language))
-    return subtitle_cues(tr.get("sentences") or [])
+    return subtitle_cues(transcript.cues(tr))
 
 
 def _has_3d(D: dict[str, Any]) -> bool:
@@ -3927,8 +4004,9 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
     step(0, 2, "listening (transcript)")
     tr = await transcript.transcribe(p, transcript_lang(language))
     step(1, 2, "writing the subtitles")
+    subs = transcript.cues(tr)               # feliratméretű sorok a szóidőkből (a mondat a rétegkötéshez marad)
     sid = new_file_id("srt")
-    output_path(sid).write_text(transcript.srt(tr), "utf-8")
+    output_path(sid).write_text(transcript.srt({"sentences": subs}), "utf-8")
     label = f"{result_stem(file_id, 'transcript')}.srt"
     write_meta(sid, source_file_id=file_id, operation="transcript", label=label)
     n = len(tr["sentences"])
@@ -3938,6 +4016,8 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
     return {"file_id": sid, "name": label, "url": public_url(sid), "language": tr["language"], "duration": tr["duration"],
             "sentences": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}
                           for x in tr["sentences"]],
+            "subtitles": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}
+                          for x in subs],
             "how": 'Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …} — it starts as they are said and '
                    'stays to the end of that sentence (or give dur / until). Subtitles in the Studio caption style: show the '
                    'person these sentences, correct them together, then video(action="overlay", file_id, subtitles=[{"start", '

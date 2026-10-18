@@ -589,7 +589,7 @@ async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path
     kimeneti útvonal, a {"file_id": …} paraméter útvonallá oldódik; save=True → a végén doc 1 mentése out-ba."""
     from app import tenancy
     from app.storage import temp_path
-    script = [{"tool": "doc_open", "args": {"path": str(existing(f))}} for f in file_ids]
+    script = [{"tool": "doc_open", "args": {"path": str(f if isinstance(f, Path) else existing(f))}} for f in file_ids]
     for st in steps:
         args = resolve_file_ids(dict(st.get("args") or {}))
         args = {k: (str(out) if v == "$out" else v) for k, v in args.items()}

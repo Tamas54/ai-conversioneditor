@@ -134,6 +134,8 @@ def _input_files(inputs: list) -> list[str]:
 def _save_named(data_path: Path, filename: str) -> str:
     from app.storage import input_path, write_meta
     from app.storage.files import new_file_id
+    from app.filecheck import check_path
+    check_path(data_path, filename)          # sérült / weboldal / üres → DamagedFile (minden út: API, MCP, web)
     ext = from_filename(filename) or (filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin")
     fid = new_file_id(ext)
     os.replace(data_path, input_path(fid))
