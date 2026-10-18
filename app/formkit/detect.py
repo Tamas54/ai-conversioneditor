@@ -94,10 +94,12 @@ def table_fields(rows: list[list[Optional[str]]]) -> list[tuple[int, int, str]]:
     """Egy táblázat mezői: CSAK üres cella lehet mező, szöveges cella soha. → [(sor, oszlop, felirat)].
 
     rows: cellaszövegek soronként; None = egyesített cella folytatása (nem önálló cella). Két űrlap-alak:
-      felirat + üres cella mellette   „Név | ⎵” — a bal cella felirat (nem szám), a jobb üres
-      fejléc + üres sorok             az első sor felirat-fejléc, alatta üres (vagy csak az első oszlopban kitöltött)
-                                      sorok — pl. jelenléti ív napi sorai; a felirat: fejléc (+ a sor első cellája)
-    A kitöltött adattábla (minden sorban adat) üres cellája sem mező."""
+      fejléc + üres sorok   az első sor felirat-fejléc; az alatta lévő sorokban egy oszlop BEVITELI oszlop, ha a
+                            törzssorok legalább felében (és legalább két sorban) üres — pl. a jelenléti ív napi sorai
+                            (a napszám és a képletes óra-oszlop kitöltött, az érkezés/távozás üres); a felirat:
+                            fejléc – a sor első cellája
+      felirat + üres cella  „Név | ⎵” — a bal cella felirat (nem szám), a jobb üres
+    A kitöltött adattábla (egy-egy hiányzó értékkel) nem űrlap: ott az üres cella sem mező."""
     def txt(r: int, c: int) -> str:
         v = rows[r][c] if c < len(rows[r]) else None
         return (v or "").strip()
@@ -106,21 +108,22 @@ def table_fields(rows: list[list[Optional[str]]]) -> list[tuple[int, int, str]]:
         return c < len(rows[r]) and rows[r][c] is not None and not BLANK_RE.sub("", txt(r, c)).strip()
 
     out: list[tuple[int, int, str]] = []
-    seen: set[tuple[int, int]] = set()
     n_cols = max((len(r) for r in rows), default=0)
     header = [txt(0, c) for c in range(n_cols)] if rows else []
-    body = range(1, len(rows))
-    # fejléc: az első oszlop után minden oszlopnak van (nem szám) felirata — a „Név | ⎵” kétoszlopos tábla nem ilyen
-    gridlike = len(rows) >= 2 and n_cols >= 2 and all(header[c] and not numeric(header[c]) for c in range(1, n_cols)) and any(
-        all(empty(r, c) or (c == 0 and txt(r, 0)) for c in range(n_cols)) and any(empty(r, c) for c in range(1, n_cols))
-        for r in body)
-    if gridlike:
+    body = list(range(1, len(rows)))
+    inputs = []
+    for c in range(1, n_cols):
+        if not header[c] or numeric(header[c]):
+            continue
+        gone = [r for r in body if empty(r, c)]
+        if len(gone) >= 2 and len(gone) >= 0.5 * len(body):
+            inputs.append(c)
+    if inputs:
         for r in body:
             lab0 = txt(r, 0)
-            for c in range(n_cols):
-                if empty(r, c) and header[c] and not numeric(header[c]) and (r, c) not in seen:
-                    seen.add((r, c))
-                    out.append((r, c, f"{header[c]} – {lab0}" if lab0 and c else f"{header[c]} {r}"))
+            for c in inputs:
+                if empty(r, c):
+                    out.append((r, c, f"{header[c]} – {lab0}" if lab0 else f"{header[c]} {r}"))
         return out
     for r in range(len(rows)):
         for c in range(n_cols - 1):

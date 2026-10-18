@@ -1725,9 +1725,26 @@ async def extract_table_from_image(image_file_id: str) -> dict:
 
 @mcp.tool()
 @linked
-async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
-    """OCR a photographed table and save as a real XLSX (one shot).
-    Returns the new XLSX file_id."""
+async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1", mode: str = "data") -> dict:
+    """A photographed table → a real XLSX.
+    mode="data" (default): the table's data only (header + rows), one shot.
+    mode="layout": a FAITHFUL, fillable copy of a paper form (e.g. a photographed attendance sheet): perspective and
+      skew corrected, the grid measured from the drawn lines — rows, columns, merged cells, proportional column widths
+      and row heights, borders; text with bold and alignment; numbers, dates and times typed; empty cells of a
+      form-like table marked as fillable fields (unlocked; listed in `fields`); a visible totals row rebuilt as
+      formulas (SUM / COUNT / COUNTA, and the daily leave − arrival time) marked inferred and checked against the
+      photo's numbers (`formulas`); uncertain readings commented (`uncertain`). Also `comparison_url` (the photo and
+      the rendered sheet side by side) and, for an attendance sheet, `template_profile` — ready for
+      forms(action="template_register") so the sheet can be filled every month.
+    Runs the Studio's own vision model (Studio AI steps)."""
+    if mode == "layout":
+        from app.storage import display_label
+        from app.tools import table_layout
+        from app.tools.vision_ops import _resolve_image
+        src = _resolve_image(image_file_id)
+        return await table_layout.image_to_layout_xlsx(src, Path(display_label(image_file_id)).stem, sheet_name)
+    if mode != "data":
+        raise ValueError('mode: "data" (the table\'s data) or "layout" (a faithful, fillable copy of the form)')
     return await vision_ops.image_to_xlsx(image_file_id, sheet_name=sheet_name)
 
 

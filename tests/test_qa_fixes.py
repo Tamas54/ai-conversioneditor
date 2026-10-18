@@ -6,6 +6,7 @@ egy űrlaprész (Név, Születési dátum, Telefonszám). Az elfogadási feltét
 from __future__ import annotations
 
 import base64
+import os
 import json
 import shutil
 import subprocess
@@ -338,7 +339,7 @@ def test_form_like_grid_in_pdf_and_numeric_label_lowers_quality(tmp_path):
     pdf = tmp_path / "racs.pdf"
     doc = fitz.open()
     pg = doc.new_page()
-    xs, ys = [72, 172, 272, 372], [100, 120, 140, 160]
+    xs, ys = [72, 172, 272, 372], [100, 120, 140, 160, 180]
     for y in ys:
         pg.draw_line((xs[0], y), (xs[-1], y))
     for x in xs:
@@ -348,6 +349,7 @@ def test_form_like_grid_in_pdf_and_numeric_label_lowers_quality(tmp_path):
     pg.insert_text((xs[0] + 4, ys[1] + 14), "1.")
     pg.insert_text((xs[1] + 4, ys[1] + 14), "8:00")             # kitöltött cella: nem mező
     pg.insert_text((xs[0] + 4, ys[2] + 14), "2.")
+    pg.insert_text((xs[0] + 4, ys[3] + 14), "3.")
     pg.insert_text((72, 260), "120")
     pg.draw_line((100, 262), (250, 262))
     doc.save(str(pdf))
@@ -780,3 +782,111 @@ def test_template_rest_api_and_xls_template(api, tmp_path):
     assert r.json()["summary"]["hours"] == "176:00" and r.json()["files"][0]["url"]
     assert api.post(f"/v1/forms/templates/{tid}/fill", json={"period": "2027-02"}).status_code == 422
     assert api.delete(f"/v1/forms/templates/{tid}").json() == {"deleted": tid}
+
+
+# ---------- 15. táblázat fotóról → élethű XLSX → kitöltés ----------
+
+def _fake_vision(monkeypatch, truth: list[list[str]]):
+    """A látó modell helyett: a kért sáv sorainak szövege (a rács sorszámai szerint) — a geometria valódi."""
+    import re
+    from app.llm import vision
+
+    async def fake(msgs, response_format=None, max_tokens=4096, model=None):
+        a, b = map(int, re.search(r"rows (\d+)–(\d+)", msgs[0]["content"][0]["text"]).groups())
+        assert msgs[0]["content"][1]["image_url"]["url"].startswith("data:image/")
+        return json.dumps({"rows": {str(r): truth[r - 1] for r in range(a, b + 1) if r - 1 < len(truth)},
+                           "uncertain": ["E8"]}, ensure_ascii=False)
+    monkeypatch.setattr(vision, "_call", fake)
+
+
+def _shown(cell) -> str:
+    """A cella látható szövege (LibreOffice-szal újraszámolt fájlból): szám, idő, időtartam a saját formátumában."""
+    import datetime as dt
+    from openpyxl.utils.datetime import to_excel
+    v = cell.value
+    if v is None:
+        return ""
+    if isinstance(v, (dt.time, dt.timedelta, dt.datetime)) or ("h" in (cell.number_format or "") and isinstance(v, (int, float))):
+        mins = round(float(to_excel(v) if not isinstance(v, (int, float)) else v) * 1440)
+        return f"{mins // 60}:{mins % 60:02d}"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+@pytest.mark.parametrize("seed,rot,persp", [(7, 1.5, 0.035), (5, 3.0, 0.05)])
+def test_photo_to_faithful_xlsx_and_monthly_fill(client, put_file, tmp_path, monkeypatch, seed, rot, persp):
+    _need("soffice")
+    from openpyxl import load_workbook
+    from app.formkit import sheet_template as ST
+    J = _jelenleti()
+    truth = J.visible_texts()
+    photo = J.distort(J.render_png(J.make_template(tmp_path / "sablon.xlsx"), tmp_path / "r"), tmp_path / "foto.jpg",
+                      seed=seed, rot=rot, persp=persp)
+    _fake_vision(monkeypatch, truth)
+    err, r = _call(client, "image_to_xlsx", {"image_file_id": put_file(photo), "mode": "layout", "sheet_name": "Jelenléti ív"})
+    assert not err, r
+    # sor- és oszlopszám, egyesített cellák
+    assert (r["grid"]["rows"], r["grid"]["cols"]) == (39, 6) and sorted(r["grid"]["merged"]) == sorted(J.MERGED)
+    # a cellaszövegek (újraszámolás után, ahogy a lapon látszanak) legalább 98%-ban egyeznek
+    x = _path(r["file_id"])
+    calc = tmp_path / "calc"
+    calc.mkdir()
+    import asyncio
+    recalced = asyncio.run(ST._soffice(x, calc, "xlsx:Calc MS Excel 2007 XML"))
+    ws = load_workbook(recalced, data_only=True).worksheets[0]
+    same = sum(_shown(ws.cell(rr + 1, cc + 1)) == truth[rr][cc] for rr in range(39) for cc in range(6))
+    assert same / (39 * 6) >= 0.98, [(f"{chr(65 + cc)}{rr + 1}", _shown(ws.cell(rr + 1, cc + 1)), truth[rr][cc])
+                                     for rr in range(39) for cc in range(6) if _shown(ws.cell(rr + 1, cc + 1)) != truth[rr][cc]][:20]
+    # képletek: az összesítő és a napi idő, „inferred”, a fotó számával ellenőrizve
+    fm = {f["cell"]: f for f in r["formulas"]}
+    assert fm["E39"]["formula"] == "=SUM(E8:E38)" and fm["E39"]["inferred"] and fm["E39"]["verified"]
+    assert fm["B39"]["formula"] == "=COUNT(B8:B38)" and fm["D39"]["formula"] == "=COUNTA(D8:D38)"
+    assert fm["E8"]["formula"].startswith("=IF(AND(ISNUMBER(B8),ISNUMBER(C8)),C8-B8")
+    assert load_workbook(x).worksheets[0]["E39"].value == "=SUM(E8:E38)"
+    # formázás, mezők, bizonytalan olvasat, összevető kép
+    src = load_workbook(x).worksheets[0]
+    assert src["A1"].font.b and src["B7"].font.b and not src["A8"].font.b
+    cells = {f["cell"] for f in r["fields"]}
+    assert {"B3", "E3", "B4", "E4", "B8", "C8", "D8"} <= cells and not cells & {"A8", "E8", "B7"}
+    assert src["B8"].protection.locked is False and src["A8"].protection.locked is not False
+    assert r["uncertain"] == ["E8"] and r["comparison_url"]
+    # a rekonstruált sablon a 14. ponttal hibátlanul kitölthető
+    prof = {**r["template_profile"], "sheet": "Jelenléti ív",
+            "rules": {**r["template_profile"]["rules"], "kinds": {"szabadság": {"leave": "SZABADSÁG", "absence": "+"}}},
+            "header_values": {"name": "Próba Ödön"}}
+    assert prof["header"] == {"name": "B3", "month": "E3", "job_title": "B4", "code": "E4"}
+    assert prof["days"]["first_row"] == 8 and prof["columns"] == {"arrive": "B", "leave": "C", "absence": "D"}
+    err, reg = _call(client, "forms", {"action": "template_register", "file_id": r["file_id"], "profile": prof})
+    assert not err, reg
+    err, f = _call(client, "forms", {"action": "template_fill", "template_id": reg["template_id"], "period": "2025-12",
+                                     "exceptions": [{"from": "2025-12-01", "to": "2025-12-03", "kind": "szabadság"}]})
+    assert not err, f
+    assert f["check"]["status"] == "ok", f["check"]
+    assert (f["summary"]["worked_days"], f["summary"]["exception_days"], f["summary"]["hours"]) == (18, 3, "144:00")
+
+
+def test_layout_table_rule_keeps_attendance_rows_fillable():
+    """Kiegészítés a 3. ponthoz: a jelenléti ív napi soraiban (napszám és képletes óra kitöltve) az üres cellák mezők."""
+    from app.formkit.detect import table_fields
+    J = _jelenleti()
+    t = J.visible_texts()
+    got = table_fields(t[6:38])
+    cols = {c for _, c, _ in got}
+    assert cols == {1, 2, 3, 5} and len(got) == 4 * 31
+    assert (1, 1, "Érkezés – 1") in got
+
+
+@pytest.mark.skipif(not os.getenv("RUN_LIVE_VISION"), reason="live vision model (RUN_LIVE_VISION=1 and a SiliconFlow key)")
+async def test_live_vision_reads_98_percent_of_the_distorted_photo(tmp_path):
+    """Élő mérés (2026-10-19, Kimi K2.6 vision): két torzított fotón 230/234 = 98,3% cellaszöveg-egyezés."""
+    import cv2
+    from app.tools import table_layout as T
+    J = _jelenleti()
+    truth = J.visible_texts()
+    photo = J.distort(J.render_png(J.make_template(tmp_path / "s.xlsx"), tmp_path / "r"), tmp_path / "f.jpg")
+    flat, _ = T.rectify(cv2.imread(str(photo)))
+    g = T.grid(flat)
+    texts, _ = await T.read_cells(flat, g, tmp_path)
+    same = sum(texts[r][c] == truth[r][c] for r in range(39) for c in range(6))
+    assert (g.rows, g.cols) == (39, 6) and same / 234 >= 0.98
