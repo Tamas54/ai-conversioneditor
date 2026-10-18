@@ -906,3 +906,24 @@ def test_photo_edit_plan_errors_name_the_allowed_values(client, put_file, sample
     assert err and "doesn't generate AI pictures" in str(r)
     tools = _tools(client)
     assert '{"op": "<name>"' in tools["photo_edit"]["description"]
+
+
+# ---------- 10. page-numbers: a szokásos pozíció-aliasok ----------
+
+def test_page_number_position_aliases(client, put_file, samples):
+    import fitz
+    from app.convert.options import alias
+    assert [alias("position", x) for x in ("bottom-center", "Bottom Center", "center_bottom", "top-centre", "middle",
+                                           "left-top", "bottom right")] == ["bottom", "bottom", "bottom", "top", "center",
+                                                                             "top-left", "bottom-right"]
+    fid = put_file(samples.pdf(pages=1))
+    for pos, top in (("bottom-center", False), ("top-center", True)):
+        err, r = _call(client, "file_tools", {"tool": "page-numbers", "file_ids": [fid], "options": {"position": pos}})
+        assert not err, r
+        with fitz.open(_out_file(r)) as d:
+            pg = d[0]
+            y = next(w[1] for w in pg.get_text("words") if w[4] == "1")
+            assert (y < pg.rect.height / 2) == top, (pos, y)
+    err, r = _call(client, "file_tools", {"tool": "page-numbers", "file_ids": [fid], "options": {"position": "sehol"}})
+    assert err and "position: one of center, top-left" in str(r)
+    assert "bottom-center → bottom" in _tools(client)["file_tools"]["description"]

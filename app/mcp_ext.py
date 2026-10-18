@@ -32,6 +32,9 @@ def _tools_doc() -> str:
         "Run a file tool. tool = one of the keys below; file_ids = the input files (upload first with upload_file / "
         "upload_from_url / transfer); options = the tool's options. Returns new file(s) — the originals stay. Long tasks "
         "(video, OCR) return a job: call again with job_id until status is \"done\".\n" + "\n".join(groups) +
+        "\nposition (page-numbers, watermarks): center | top-left | top | top-right | left | right | bottom-left | bottom | "
+        "bottom-right | tile (watermarks); also bottom-center → bottom, top-center → top, middle → center; page numbers go "
+        "top-left | top | top-right | bottom-left | bottom | bottom-right (center = bottom)."
         "\nAdvanced: ffmpeg-advanced / imagemagick-advanced take allow-listed flags in options.args (e.g. [\"-crf\", \"20\"])."
     )
 
