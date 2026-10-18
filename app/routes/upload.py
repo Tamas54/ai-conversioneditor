@@ -16,6 +16,8 @@ async def upload_file(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lstrip(".") or "bin"
     fid = new_file_id(ext)
     data = await file.read()
+    from app.filecheck import check_bytes
+    check_bytes(data, file.filename)
     await save_bytes(input_path(fid), data)
     return {
         "file_id": fid,

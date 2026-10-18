@@ -35,7 +35,8 @@ Steps (use the #index numbers above; "to" is inclusive; omit "to" for a single p
   {{"op":"insert_text","after":i,"text":"...","style":"Normal|Heading 1|Heading 2|Heading 3|Quote"}}
   {{"op":"replace_text","find":"exact text","replace":"new text","from":i,"to":j}}   (no from/to = whole document)
   {{"op":"delete","from":i,"to":j}}
-  {{"op":"style","from":i,"to":j,"font":"…","size_pt":n,"bold":true|false,"italic":true|false,"align":"left|center|right|justify","line_spacing":1.15,"space_after_pt":n}}
+  {{"op":"style","from":i,"to":j,"font":"font family name","color":"#RRGGBB","size_pt":n,"bold":true|false,"italic":true|false,"align":"left|center|right|justify","line_spacing":1.15,"space_after_pt":n}}
+      (a colour goes in "color" as a hex code, never in "font")
   {{"op":"page_break_before","at":i}}
   {{"op":"heading","at":i,"level":1|2|3}}
   {{"op":"unsupported","reason":"…"}}   when no step can do it
@@ -118,6 +119,42 @@ async def plan(doc, pages: list[int], request: str) -> dict[str, Any]:
 
 # ---------- végrehajtás ----------
 
+# színnév → hex (ha a modell mégis névvel vagy a "font" mezőben adja a színt)
+_COLORS = {"black": "000000", "white": "FFFFFF", "gray": "7F7F7F", "grey": "7F7F7F", "dark gray": "404040",
+           "dark grey": "404040", "red": "C00000", "dark red": "8B0000", "orange": "ED7D31", "yellow": "FFC000",
+           "green": "00B050", "dark green": "1E5631", "blue": "2E74B5", "dark blue": "1F3864", "navy": "1F3864",
+           "light blue": "9DC3E6", "purple": "7030A0", "pink": "E83E8C", "brown": "843C0C", "teal": "008080"}
+
+
+def _color(v: Any) -> Optional[str]:
+    """„#1F3864”, „1f3864”, „dark blue” → "1F3864"; ami nem szín: None."""
+    t = str(v or "").strip().lower()
+    if re.fullmatch(r"#?[0-9a-f]{6}", t):
+        return t.lstrip("#").upper()
+    return _COLORS.get(t.replace("-", " "))
+
+
+def _replace_in_runs(p, find: str, repl: str, start: int = 0) -> int:
+    """Csere a bekezdésben úgy, hogy a többi futás formázása megmaradjon: csak a `find`-ot lefedő futások
+    érintett része változik, a csere az első érintett futás formázását kapja (a „Helyszín:” félkövér címkéje így
+    nem nyeli el a mögötte álló szöveget — UI-próba 10-18). → a csere utáni pozíció, vagy -1 (nincs találat)."""
+    runs = p.runs
+    text = "".join(r.text for r in runs)
+    at = text.find(find, start) if find else -1
+    if at < 0:
+        return -1
+    end, pos, first = at + len(find), 0, True
+    for r in runs:
+        a, b = pos, pos + len(r.text)
+        pos = b
+        if b <= at or a >= end:
+            continue
+        lo, hi = max(at, a) - a, min(end, b) - a           # az érintett szelet a futáson belül
+        r.text = r.text[:lo] + (repl if first else "") + r.text[hi:]
+        first = False
+    return at + len(repl)                               # innen keressük a következőt (a csere belsejét nem)
+
+
 def _is_body(p) -> bool:
     name = (p.style.name if p.style is not None else "").lower()
     return bool(p.text.strip()) and not name.startswith(("heading", "title", "subtitle", "toc", "caption", "image caption", "centered")) \
@@ -166,9 +203,14 @@ async def apply(doc, steps: list[dict[str, Any]]) -> tuple[int, list[str]]:
                         pf.line_spacing = float(s["line_spacing"])
                     if s.get("space_after_pt") is not None:
                         pf.space_after = Pt(float(s["space_after_pt"]))
+                    color = _color(s.get("color")) or _color(s.get("font"))
+                    font = s.get("font") if s.get("font") and not _color(s.get("font")) else None   # szín ≠ betűtípus
                     for r in pars[i].runs:
-                        if s.get("font"):
-                            r.font.name = s["font"]
+                        if font:
+                            r.font.name = font
+                        if color:
+                            from docx.shared import RGBColor
+                            r.font.color.rgb = RGBColor.from_string(color)
                         if s.get("size_pt"):
                             r.font.size = Pt(float(s["size_pt"]))
                         if s.get("bold") is not None:
@@ -180,12 +222,17 @@ async def apply(doc, steps: list[dict[str, Any]]) -> tuple[int, list[str]]:
                 targets = rng(s) if "from" in s else range(n)
                 for i in targets:
                     p = pars[i]
-                    if s["find"] in p.text:
-                        new = p.text.replace(s["find"], s.get("replace", ""))
-                        if p.runs:
-                            p.runs[0].text = new
+                    if s["find"] not in p.text:
+                        continue
+                    pos = _replace_in_runs(p, s["find"], s.get("replace", ""))
+                    if pos < 0:
+                        if p.runs:                  # a szöveg nem a futásokban (pl. hivatkozásban): a régi út
+                            p.runs[0].text = p.text.replace(s["find"], s.get("replace", ""))
                             for r in p.runs[1:]:
                                 r.text = ""
+                        continue
+                    while pos >= 0:                 # a többi előfordulás is, a már cserélt szöveg után folytatva
+                        pos = _replace_in_runs(p, s["find"], s.get("replace", ""), pos)
                 done += 1
             elif op == "page_break_before" and 0 <= int(s.get("at", -1)) < n:
                 pars[int(s["at"])].paragraph_format.page_break_before = True

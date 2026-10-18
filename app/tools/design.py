@@ -85,6 +85,20 @@ class Doc:
             self._add("text.thread.create")
 
 
+# az oklevél kísérő mondata a tartalom nyelvén (UI-próba 10-18: magyar oklevélen angol „This certificate is presented to”)
+_CERT_LEAD = {"en-US": "This certificate is presented to", "hu-HU": "Ezt az oklevelet kapja",
+              "de-DE": "Diese Urkunde wird verliehen an", "fr-FR": "Ce certificat est décerné à",
+              "es-ES": "Este certificado se otorga a", "it-IT": "Questo attestato è conferito a",
+              "pt-PT": "Este certificado é atribuído a", "nl-NL": "Dit certificaat wordt uitgereikt aan",
+              "pl-PL": "Niniejszy dyplom otrzymuje", "cs-CZ": "Tento certifikát získává",
+              "sk-SK": "Tento certifikát získava", "ro-RO": "Acest certificat este acordat lui"}
+
+
+def _certificate_lead(data: dict) -> str:
+    from app.tools import textlang
+    text = " ".join(str(data.get(k) or "") for k in ("title", "subtitle", "text", "recipient", "place", "date"))
+    return _CERT_LEAD.get(textlang.detect(text, min_hits=2, min_words=3) or "en-US", _CERT_LEAD["en-US"])
+
 def _theme(data: dict[str, Any], theme: Optional[dict], brand: Optional[Any]) -> dict[str, str]:
     """A sablon színei/betűi: alap → arculat (a katalógus neve, vagy a felhasználó arculata dictként) → kézi téma."""
     t = apply_brand(dict(DEFAULT_THEME), brand)
@@ -255,7 +269,7 @@ def _certificate(d: Doc, data, t, img):
     d.text(80, H * 0.13, title, size=round(tsize, 1), font=t["font_heading"], style="Bold",
            color=t["primary"], h=56, tracking=150 if len(title) <= 14 else 90, fit="shrinkText", **c)
     d.rect(W / 2 - 40, H * 0.255, 80, 3, t["accent"])
-    d.text(80, H * 0.3, data.get("lead", "This certificate is presented to"), size=15, font=t["font_body"], color=t["muted"], h=24, **c)
+    d.text(80, H * 0.3, data.get("lead") or _certificate_lead(data), size=15, font=t["font_body"], color=t["muted"], h=24, **c)
     d.text(80, H * 0.36, data.get("recipient", ""), size=38, font=t["font_heading"], style="Bold Italic",
            color=t["text"], h=56, fit="shrinkText", **c)
     d.text(80, H * 0.5, data.get("text", ""), size=15, font=t["font_body"], color=t["text"], h=H * 0.14,

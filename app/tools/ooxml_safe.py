@@ -174,6 +174,44 @@ def _targets(names: list[str], kind: str) -> list[str]:
     return [n for n in names if n == "xl/styles.xml"]
 
 
+def _fix_lang(zf: zipfile.ZipFile, new: dict[str, bytes]) -> None:
+    """A docx alapnyelve a szöveg nyelve legyen: a pandoc/LibreOffice/PdfCraft „en-US”-t ír, és akkor a Word,
+    Pages, WordCraft egy magyar levél minden szavát pirossal húzza alá (UI-próba 10-18). Csak biztos felismerésnél,
+    és csak az „en-US”/hiányzó alapot írja át — kifejezett más nyelvhez nem nyúl."""
+    from app.tools import textlang
+    names = set(zf.namelist())
+    if "word/document.xml" not in names or "word/styles.xml" not in names:
+        return
+    doc = etree.fromstring(new.get("word/document.xml") or zf.read("word/document.xml"))
+    lang = textlang.detect(" ".join(t.text or "" for t in doc.iter(f"{{{W}}}t")))
+    if not lang or lang == "en-US":
+        return
+    styles = etree.fromstring(new.get("word/styles.xml") or zf.read("word/styles.xml"))
+    q = lambda t: f"{{{W}}}{t}"
+    dd = styles.find(q("docDefaults"))
+    if dd is None:
+        dd = etree.Element(q("docDefaults")); styles.insert(0, dd)
+    rpd = dd.find(q("rPrDefault"))
+    if rpd is None:
+        rpd = etree.Element(q("rPrDefault")); dd.insert(0, rpd)
+    rpr = rpd.find(q("rPr"))
+    if rpr is None:
+        rpr = etree.SubElement(rpd, q("rPr"))
+    el = rpr.find(q("lang"))
+    if el is None:
+        el = etree.SubElement(rpr, q("lang"))
+        _reorder(rpr, _ORDER_W["rPr"], W)                 # sémasorrend: a lang a helyére
+    if el.get(q("val")) not in (None, "en-US"):
+        return
+    el.set(q("val"), lang)
+    new["word/styles.xml"] = etree.tostring(styles, xml_declaration=True, encoding="UTF-8", standalone=True)
+    runs = [e for e in doc.iter(q("lang")) if e.get(q("val")) == "en-US"]    # kifejezett en-US a futásokon is
+    for e in runs:
+        e.set(q("val"), lang)
+    if runs:
+        new["word/document.xml"] = etree.tostring(doc, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
 def fix(target: Union[str, os.PathLike]) -> list[str]:
     """Egy .docx/.xlsx helyben javítva. → a javított részek listája."""
     from app.tools.keynote_safe import _rewrite
@@ -190,6 +228,8 @@ def fix(target: Union[str, os.PathLike]) -> list[str]:
                 root = etree.fromstring(raw)
                 if (_fix_word_part(root) if kind == "docx" else _fix_xlsx_styles(root)):
                     new[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+            if kind == "docx":
+                _fix_lang(zf, new)
             if not new:
                 return []
             fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".ooxml-", suffix=p.suffix)

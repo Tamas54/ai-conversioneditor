@@ -184,6 +184,9 @@ RUN set -eux; cd /tmp; \
         mkdir -p /opt/${app}; \
         tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} \
             "${app}-${ver}-linux-x86_64/bin/${app}-cli" "${app}-${ver}-linux-x86_64/share/doc/${app}"; \
+        # a CLI saját adatai (pl. a PdfCraft OCR-modelljei: share/pdfcraft/models) — enélkül „models are not installed”
+        if tar tzf cli.tar.gz | grep -q "^${app}-${ver}-linux-x86_64/share/${app}/"; then \
+            tar xzf cli.tar.gz --strip-components=1 -C /opt/${app} "${app}-${ver}-linux-x86_64/share/${app}"; fi; \
         curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o web.zip "https://github.com/Tamas54/ai-conversioneditor/releases/download/${tag}/${tag}.zip"; \
         echo "$5  web.zip" | sha256sum -c -; \
         unzip -q web.zip; mv "${tag}" /opt/${app}-web; \

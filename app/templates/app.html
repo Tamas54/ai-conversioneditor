@@ -49,6 +49,10 @@
 {{SITE_FOOT}}
 
 <dialog class="merge-dlg" id="merge-dlg" aria-labelledby="merge-title"><button type="button" class="x-close drawer-x" id="merge-x" aria-label="Close" title="Close (Esc)">✕</button><div id="merge-body"></div></dialog>
+<dialog class="merge-dlg leave-dlg" id="leave-dlg" aria-labelledby="leave-title"><form method="dialog">
+  <h2 id="leave-title">Save your edits first?</h2><p class="muted" id="leave-text">You changed something in the editor since the last save.</p>
+  <div class="actions"><button class="btn ghost" value="stay">Stay</button><button class="btn" value="leave">Don't save</button><button class="btn primary" value="save" autofocus>Save and continue</button></div>
+</form></dialog>
 <dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><button type="button" class="x-close drawer-x" id="drawer-x" aria-label="Close" title="Close (Esc)">✕</button><form id="make-form" method="dialog"></form></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -306,6 +310,7 @@ const makeLink = (kind, mode, src, slot) => `/app/make/${SLUGS[kind]}` + (mode &
   + (src ? `?src=${encodeURIComponent(src)}` + (slot ? `&slot=${encodeURIComponent(slot)}` : "") : "");       // a Presentationnek van AI nélküli módja (New / Open a file)
 function accountCta(title, alt = "") {     // alt: fiók nélküli következő lépés (pl. Scan → üres dokumentum)
   const form = $("#make-form");
+  delete form.dataset.kind; delete form.dataset.initial;     // ez nem készítő-űrlap: bezáráskor nincs piszkozat
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
     <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>${alt}
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn" href="/login?next=${encodeURIComponent(here())}">Sign in</a><a class="btn primary" href="/signup?next=${encodeURIComponent(here())}">Create free account</a></div>`;
@@ -487,7 +492,7 @@ const views = {
         const btn = k === "free" ? (account.guest ? `<a class="btn" href="/signup?next=/app/plans">Create free account</a>` : `<span class="muted small">${cur === "free" ? "Your plan" : ""}</span>`)
           : cur === k ? `<span class="badge-cur">Your plan</span>`
           : P.enabled ? `<button class="btn primary" data-buy="${k}">Choose ${p.name}</button>` : `<button class="btn" disabled>Payments open soon</button>`;
-        return `<article class="plan${k === "plus" ? " pick" : ""}${cur === k ? " cur" : ""}"><h3>${p.name}</h3><div class="price">${price}</div>
+        return `<article class="plan${k === "plus" ? " featured" : ""}${cur === k ? " cur" : ""}"><h3>${p.name}</h3><div class="price">${price}</div>
           <ul>${FEATURES[k](p).map(f => `<li>${esc(f)}</li>`).join("")}</ul>${btn}</article>`;
       }).join("");
       $("#plan-cards").querySelectorAll("[data-buy]").forEach(b => b.addEventListener("click", () => buy(b.dataset.buy, iv)));
@@ -672,7 +677,9 @@ const views = {
       }
     } catch {}
     for (const a of [back, close]) a.addEventListener("click", e => {
-      if (editorDirty && !confirm("Close the editor? Changes you haven't saved will be lost.")) e.preventDefault();
+      if (!editorDirty) return;
+      e.preventDefault(); e.stopImmediatePropagation();       // előbb a kérdés; döntés után ugyanez a kattintás megy tovább
+      canLeaveEditor().then(ok => { if (ok) a.click(); });
     });
     back.addEventListener("click", e => {      // egy lépés vissza (mint a böngésző), ha az appon belül van hova; a mentetlen-változás kérdés UTÁN
       if (!e.defaultPrevented && !back.dataset.made && appSteps > 1) { e.preventDefault(); history.back(); }
@@ -700,8 +707,8 @@ const views = {
       $("#file-frame").src = `/editor/${app}/?src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}${flags}`;
       openApp = app; drawSeg();
     };
-    const showPreview = () => {
-      if (editorDirty && !confirm("Close the editor? Changes you haven't saved will be lost.")) return;
+    const showPreview = async () => {
+      if (!await canLeaveEditor()) return;
       editorDirty = false;
       history.replaceState(null, "", `/app/file/${encodeURIComponent(cur.file_id)}/preview`);   // saját link: újratöltéskor is előnézet
       $("#file-frame").src = previewSrc(cur); openApp = null; drawSeg();
@@ -759,8 +766,6 @@ async function route() {
   if (!["file", "make"].includes(name)) lastPlace = here();
   const navBack = document.getElementById("nav-back"), siteFoot = document.getElementById("site-foot");
   if (navBack) navBack.hidden = !name || name === "file";          // a fájlnézetnek saját „← Back” gombja van
-  for (const [id, base] of [["signin", "/login"], ["signup", "/signup"]])   // belépés / új fiók után vissza ugyanide
-    document.getElementById(id)?.setAttribute("href", `${base}?next=${encodeURIComponent(here())}`);
   if (siteFoot) siteFoot.hidden = name === "file";
   markNav();
   try { await (views[name || "home"] || views.home)(decodeURIComponent(arg || "")); if (name === "file" && cur?.file_id && location.pathname.includes(cur.file_id)) { baseTitle = cur.label; setTitle(baseTitle); } }
@@ -773,6 +778,10 @@ function markNav() {      // a fejléc aktív menüpontja; a Convert fiók a saj
 }
 // statikus linkek: History API; a belső <a href="/app…"> kattintás nem tölti újra az oldalt
 const here = () => location.pathname + location.search;
+for (const [id, base] of [["signin", "/login"], ["signup", "/signup"]])   // belépés / új fiók után vissza ugyanide —
+  document.getElementById(id)?.addEventListener("click", e => {        // a kattintás pillanatában (a fiók bezárása
+    e.currentTarget.setAttribute("href", `${base}?next=${encodeURIComponent(here())}`);   // route() nélkül is vált címet)
+  });
 function nav(url, replace = false) {
   if (url === here() && !replace) return;
   history[replace ? "replaceState" : "pushState"](null, "", url);
@@ -812,6 +821,19 @@ async function saveEditorFirst(say) {
   if (ok) return true;
   dirtyOverride = true;
   say("Couldn't save your edits automatically. Press it again to work on the last saved version — or save in the editor first (Ctrl+S).");
+  return false;
+}
+// Mentetlen szerkesztői változás mellett elhagyás: saját ablak (Mentés és tovább · Ne mentsen · Maradok), nem a
+// böngésző confirm()-ja (az az egész lapot blokkolja, és nem tud menteni). → true = mehet
+function askLeave(text) {
+  const d = $("#leave-dlg"); $("#leave-text").textContent = text;
+  return new Promise(res => { d.addEventListener("close", () => res(d.returnValue || "stay"), { once: true }); d.returnValue = ""; d.showModal(); });
+}
+async function canLeaveEditor(text = "You changed something in the editor since the last save.") {
+  if (!editorDirty) return true;
+  const a = await askLeave(text);
+  if (a === "leave") { editorDirty = false; return true; }
+  if (a === "save") { if (await saveEditorFirst(toast)) { editorDirty = false; return true; } }
   return false;
 }
 window.addEventListener("message", e => {
@@ -1257,7 +1279,7 @@ const QUICK = [
         if (!words.length && !patterns.length) { field(fm, "words").focus(); throw new Error("Type the words to black out, or tick emails, phone numbers or card numbers."); }
         return pdfJob("redact", [id], { words, patterns });
       } },
-    { label: "Make searchable", doing: "Reading the text…", hint: "Adds a text layer to a scanned PDF (English). For other languages use Scan to text.", run: id => pdfJob("ocr", [id]) },
+    { label: "Make searchable", doing: "Reading the text…", hint: "Adds a text layer to a scanned PDF, in the page's own language — the look stays the same. For an editable Word file use Scan to text.", run: id => pdfJob("ocr", [id]) },
     { label: "Password", doing: "Locking it…", form: () => `<label>Password to open it<input type="text" name="pw" autocomplete="off" placeholder="At least 4 characters"></label>`,
       run: (id, fm) => {
         const pw = field(fm, "pw").value;
@@ -1553,10 +1575,11 @@ async function subtitleSubmit(fd, form) {
   if (form.dataset.subsFor !== vid) {
     const job = await api("/api/video/transcript", { method: "POST", body: JSON.stringify({ file_id: vid, language }) });
     const t = await pollJob(job, () => "Listening to the video — about a minute for every few minutes of speech…");
-    if (!(t.sentences || []).length) throw new Error("No speech was found in this video.");
-    form.dataset.subsFor = vid; subRows(form, t.sentences);
+    const lines = t.subtitles || t.sentences || [];           // feliratméretű sorok (régi szerveren a mondatok)
+    if (!lines.length) throw new Error("No speech was found in this video.");
+    form.dataset.subsFor = vid; subRows(form, lines);
     form.dispatchEvent(new Event("change"));
-    throw new Error(`${t.sentences.length} line${t.sentences.length > 1 ? "s" : ""} heard — check them below, then press “Add the subtitles”.`);
+    throw new Error(`${lines.length} line${lines.length > 1 ? "s" : ""} heard — check them below, then press “Add the subtitles”.`);
   }
   const cues = subCues(form);
   if (!cues.length) throw new Error("No subtitle lines are left — choose the video again to listen to it again.");
@@ -1776,7 +1799,11 @@ const MAKERS = {
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
           ${seg("vnarr", [["female", "AI voice — female"], ["male", "AI voice — male"], ["none", "No voice"]], 0)}
           <p class="muted small" style="margin:6px 0 0">A natural voice reads the captions aloud, in the text's language; each scene lasts as long as its narration.</p></fieldset>
-        ${fileSlot("vmusic", { exts: EXT.audio, label: "Music (optional)" })}
+        <label>Music<select name="vmood"><option value="">No music</option>${[["calm", "Calm"], ["cinematic", "Cinematic"],
+          ["corporate", "Corporate"], ["dramatic", "Dramatic"], ["lofi", "Lo-fi"], ["playful", "Playful"], ["romantic", "Romantic"],
+          ["upbeat", "Upbeat"]].map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
+        <p class="muted small" style="margin:-6px 0 12px">From the built-in library — free to use, no credit line needed. It drops under the voice and comes back in the pauses.</p>
+        ${fileSlot("vmusic", { exts: EXT.audio, label: "Your own music (optional — used instead of the library)" })}
         ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — replaces the AI voice; the video follows its length)" })}
         ${swatches()}</div>`,
     wire(form, o = {}) {
@@ -1823,6 +1850,7 @@ const MAKERS = {
       [body.data_file_id = null] = await readSlot(form, "vdata");
       if (body.pictures === "mine" && !body.images.length) throw Object.assign(new Error("Add your pictures — or choose Stock photos."), { slot: "vpics" });
       [body.music_file_id = null] = await readSlot(form, "vmusic");
+      if (!body.music_file_id && fd.get("vmood")) body.music = fd.get("vmood");   // beépített tár (hangulat) — eddig csak MCP-n
       [body.voice_file_id = null] = await readSlot(form, "vvoice");
       const job = await api("/api/make/video", { method: "POST", body: JSON.stringify(body) });
       const STAGES = { "reading the source": "Reading it…", "writing the script": "Writing the script…", "finding pictures": "Finding pictures…",
@@ -1961,7 +1989,7 @@ const MAKERS = {
       if (!fd.get("title") && !many) fd.set("title", t0(t));   // üresen: a szerkesztőben írja be
       const lines = (fd.get("body") || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
       const data = t === "certificate"
-        ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", lead: "This certificate is presented to", text: fd.get("body"), date: fd.get("meta") }
+        ? { recipient: fd.get("title"), title: fd.get("subtitle") || "Certificate", text: fd.get("body"), date: fd.get("meta") }   // a kísérő mondatot a szerver a tartalom nyelvén írja
         : t === "card"
         ? { name: fd.get("title"), role: fd.get("subtitle"), organization: fd.get("meta"), email: lines.find(x => x.includes("@")),
             phone: lines.find(x => /^[+()\d][\d ()\-/.]{5,}$/.test(x)), web: lines.find(x => /^(https?:|www\.)|\.[a-z]{2,}$/i.test(x) && !x.includes("@")),
@@ -2275,8 +2303,8 @@ function commitDelete(id) {
   return fetch(`/api/files/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => {});
 }
 addEventListener("pagehide", () => { for (const id of [...pendingDel.keys()]) commitDelete(id); });
-function deleteWithUndo(f) {
-  if (editorDirty && !confirm("Delete it? Changes you haven't saved in the editor will be lost too.")) return;
+async function deleteWithUndo(f) {
+  if (editorDirty && await askLeave("Delete it? Changes you haven't saved in the editor will be lost too.") === "stay") return;
   editorDirty = false;
   const id = f.file_id;
   pendingDel.set(id, setTimeout(() => commitDelete(id), 8000));
@@ -2355,7 +2383,7 @@ async function wireRevise(f) {
 // A leletek egy „kosárba” kerülnek (Comment / Fix), és EGY mozdulattal mennek a dokumentumba — új változatként, a
 // szerkesztő margóján megjegyzésként, a javítás követett változásként (Accept / Reject). Figyelő módban a szerkesztő
 // egy gépelési szünet után csendes pillanatképet küld (nem új változat), és az ellenőrzés azon fut.
-const CK_KIND = { contradiction: ["Contradiction", "bad"], tone: ["Tone", "warn"], term: ["Wording", "warn"] };
+const CK_KIND = { contradiction: ["Contradiction", "bad"], tone: ["Tone", "warn"], term: ["Wording", "warn"], placeholder: ["Not filled in", "warn"] };
 const CK_VERDICT = { contradicted: ["Wrong", "bad"], outdated: ["Outdated", "warn"], unverified: ["Not settled", ""], supported: ["Confirmed", "ok"] };
 const CK_WATCH = "aice-watch";
 let ckAbort = null;
@@ -2545,7 +2573,7 @@ function wireChecks(f) {
     if (st.tab === "consistency") {
       const fs = visible(st.res?.findings);
       list.innerHTML = !st.res ? `<p class="ck-empty">${st.busy ? "" : "Contradictions between places, sudden changes of tone and the same thing named two ways."}</p>`
-        : !fs.length ? `<p class="ck-empty">No contradictions, tone breaks or wording slips found.</p>`
+        : !fs.length ? `<p class="ck-empty">No unfilled placeholders, contradictions, tone breaks or wording slips found.</p>`
         : fs.map(c => { const [lab, cls] = CK_KIND[c.kind] || [c.kind, ""];
             return `<article class="ck-card${st.picked.has(c.id) ? " picked" : ""}" data-id="${esc(c.id)}"><div class="ck-kind ${cls}">${esc(lab)}</div>
               <p>${esc(c.note)}</p>${c.places.map(p => q(p.quote)).join("")}
@@ -2733,15 +2761,23 @@ function openMaker(kind, opts = {}) {
   form.addEventListener("slotchange", label);    // fájl érkezett / kikerült
   m.wire?.(form, opts);
   wireSlots(form);
+  form.dataset.kind = kind;
   form.querySelector(".tool-switch").addEventListener("click", e => { const b = e.target.closest("[data-switch]"); if (b) switchTool(kind, b.dataset.switch, form); });
-  const back = opts.again || opts.draft;
+  // bezárt, be nem fejezett kitöltés (mellékattintás, ✕, Esc): ugyanennek az eszköznek az újranyitásakor visszajön
+  const unfinished = !opts.again && !opts.draft && !opts.source && drafts[kind]?.unfinished;
+  const back = opts.again || opts.draft || unfinished;
   if (back) {   // visszatérés: a beírt adatok + a fájlok (ugyanabban a munkamenetben a feltöltendők is)
     let st = drafts[kind];
     if (!st) { try { st = JSON.parse(sessionStorage.getItem("aice-mk:" + kind) || "null"); } catch {} }
     if (st) {
       restoreForm(form, st); restoreSlots(form, st.slots);
-      $("#make-status").textContent = (opts.draft ? "Your unfinished settings are back." : "Your last settings are filled in — change what you like and make it again.")
+      $("#make-status").textContent = (opts.draft || unfinished ? "Your unfinished settings are back." : "Your last settings are filled in — change what you like and make it again.")
         + (st.hadFiles && !st.slots ? " Pick the files again." : "");
+      if (unfinished) {
+        $("#make-status").insertAdjacentHTML("beforeend", ` <a href="#" data-start-over>Start over</a>`);
+        $("#make-status").querySelector("[data-start-over]").addEventListener("click", e => {
+          e.preventDefault(); delete drafts[kind]; openMaker(kind, { ...opts, again: false, draft: false }); });
+      }
     }
   }
   const [field, words] = MODES[kind] || [];
@@ -2757,6 +2793,7 @@ function openMaker(kind, opts = {}) {
     applyPreset(kind, form);
   }
   label();
+  form.dataset.initial = JSON.stringify(formState(form));
   form.onsubmit = async e => {
     if (!["go", "alt"].includes(e.submitter?.value)) return;
     e.preventDefault();
@@ -2781,6 +2818,8 @@ function openMaker(kind, opts = {}) {
       go.disabled = false; if (alt) alt.disabled = false; label();      // a gomb felirata a mostani állapothoz
       if (err.cta) return accountCta(m.title);                 // vendég AI-n: a fiók-ajánlat (nem zsákutca)
       $("#make-status").textContent = err.message;
+      if (/see Plans\.?$/.test(err.message))                   // a keret elfogyott: a csomagokhoz vigyen (nem zsákutca)
+        $("#make-status").innerHTML = esc(err.message.replace(/see Plans\.?$/, "")) + `<a href="/app/plans">see Plans</a>.`;
       if (err.slot) {                                          // hiányzó fájl: amint kiválasztja, magától folytatja
         const s = slotEl(form, err.slot), sub = e.submitter.value;
         const resume = () => {
@@ -2813,6 +2852,9 @@ $("#make-form").addEventListener("invalid", e => {      // a böngésző buboré
 }, true);
 let keepMakeLink = false;   // sikeres készítés után a fiók linkje marad az előzményekben (a Vissza oda hoz)
 $("#drawer").addEventListener("close", () => {
+  const form = $("#make-form"), kind = form.dataset.kind;   // be nem fejezett kitöltés: piszkozat (ne vesszen el)
+  if (!keepMakeLink && kind && MAKERS[kind] && JSON.stringify(formState(form)) !== form.dataset.initial)
+    drafts[kind] = { ...formState(form), slots: slotSnapshot(form), unfinished: true };
   if (keepMakeLink) { keepMakeLink = false; return; }
   if (here().startsWith("/app/make/")) { history.replaceState(null, "", underMaker); setTitle(baseTitle); markNav(); }
 });

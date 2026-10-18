@@ -88,6 +88,24 @@ app = FastAPI(
 )
 
 app.middleware("http")(auth_middleware)
+
+
+from fastapi.exception_handlers import http_exception_handler  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from starlette.exceptions import HTTPException as _StarletteHTTPException  # noqa: E402
+from app.filecheck import DamagedFile, scrub  # noqa: E402
+
+
+@app.exception_handler(_StarletteHTTPException)
+async def _http_error(request, exc):            # a felhasználó soha nem lát szerveroldali útvonalat
+    if isinstance(exc.detail, str):
+        exc.detail = scrub(exc.detail)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(DamagedFile)
+async def _damaged_file(request, exc):          # bármelyik feltöltési út: a sérült fájl azonnal, érthetően
+    return JSONResponse({"detail": str(exc)}, status_code=400)
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.include_router(auth_router)

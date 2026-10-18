@@ -101,6 +101,13 @@ async def convert(
 
     out_id = new_file_id(tgt_fmt)
     out_path = output_path(out_id)
+    left_out: list[str] = []
+    if backend in ("pdf2docx", "via_docx"):     # vízjel/fejléc/oldalszám (PDF-artifact) ne legyen törzsszöveg
+        from app.tools import pdf_prep
+        clean = temp_path(new_file_id("pdf"))
+        left_out = pdf_prep.strip_pagination(src_path, clean)
+        if left_out:
+            src_path = clean
 
     if backend == "noop":
         shutil.copy2(src_path, out_path)
@@ -309,6 +316,9 @@ async def convert(
     else:
         raise RuntimeError(f"Backend {backend} not implemented")
 
+    if left_out:
+        src_path.unlink(missing_ok=True)          # az előkészített másolat (az eredeti érintetlen)
+
     # Lineage metadata — csak sikeres konverzió után (különben árva sidecar marad).
     from app.storage import write_meta, display_label
     src_label = (display_label(file_id) if file_id else
@@ -330,4 +340,5 @@ async def convert(
         "backend": backend,
         "source_format": src_fmt,
         "target_format": tgt_fmt,
+        **({"msg": pdf_prep.left_out_note(left_out)} if left_out else {}),
     }

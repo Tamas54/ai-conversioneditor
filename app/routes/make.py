@@ -75,13 +75,16 @@ async def _credits_left() -> Optional[int]:
 
 def _fail(e: Exception) -> HTTPException:
     from app import db
+    if isinstance(e, HTTPException):         # pl. a havi keret 402-je: úgy, ahogy van (nem „500: 402: …”)
+        return e
     if isinstance(e, db.InsufficientCredits) and tenancy.is_guest():
         from app.auth import ACCOUNT_NEEDED
         return HTTPException(401, ACCOUNT_NEEDED)
     if isinstance(e, db.InsufficientCredits):
         return HTTPException(402, "Not enough credits — this step uses AI. Add credits, or use stock photos and the steps without AI.")
     log.exception("make failed")
-    return HTTPException(500, str(e)[:300])
+    from app.filecheck import public_message
+    return HTTPException(500, public_message(e))
 
 
 async def _llm_json(system: str, user: str) -> dict[str, Any]:
@@ -576,6 +579,41 @@ async def make_pdf(body: dict[str, Any]) -> dict[str, Any]:
         if action == "merge":
             steps[0]["args"]["paths"] = [str(crafts.existing(i)) for i in ids]
             await crafts.pdf_script([], steps, out, save=False)
+            if out.exists():                   # könyvjelzők: a fájlok saját neve, ne a belső azonosító
+                from app.tools import pdf_prep
+                pdf_prep.retitle_outline(out, {crafts.existing(i).stem: Path(display_label(i)).stem for i in ids})
+        elif action == "make_fillable":      # felismerés → a táblázat-keret fölé tett hamis mezők ki → felvétel
+            from app.tools import pdf_prep
+            src = crafts.existing(ids[0])
+            found = pdf_prep.json_objects(await crafts.pdf_script(ids[:1], [{"tool": "form_detect_fields", "args": {"add": False}}],
+                                                                  out, save=False))
+            fields = next((o["fields"] for o in reversed(found) if isinstance(o, dict) and "fields" in o), [])
+            fields, _ = pdf_prep.drop_table_edges(src, fields)
+            if not fields:
+                raise HTTPException(422, "No blanks to fill in were found — this looks like a document rather than a form. "
+                                         "To place fields by hand: Edit ▸ Prepare a form.")
+            import pymupdf
+            with pymupdf.open(src) as doc:
+                hs = [p.rect.height for p in doc]
+            kinds = {"text", "date", "checkbox", "radio", "combo", "list", "signature"}
+            await crafts.pdf_script(ids[:1], [{"tool": "form_add_field", "args": {
+                "page": f["page"], "name": f["name"], "type": f.get("kind") if f.get("kind") in kinds else "text",
+                "rect": [f["rect"][0], hs[f["page"] - 1] - f["rect"][3], f["rect"][2], hs[f["page"] - 1] - f["rect"][1]]}}
+                for f in fields], out, save=True)
+        elif action == "ocr":                # helyi OCRmyPDF + Tesseract a lap SAJÁT nyelvén (a PdfCraft-OCR csak angol)
+            from app.convert.service import ocr_pdf
+            from app.tools import pdf_prep
+            src = crafts.existing(ids[0])
+            await ocr_pdf(src, out, await pdf_prep.guess_ocr_language(src))
+        elif action == "to_word":            # vízjel/fejléc/oldalszám (PDF-artifact) nem kerül a Word törzsébe
+            from app.storage import temp_path
+            from app.tools import pdf_prep
+            clean = temp_path(new_file_id("pdf"))
+            try:
+                left_out = pdf_prep.strip_pagination(crafts.existing(ids[0]), clean)
+                await crafts.pdf_script([clean if left_out else ids[0]], steps, out, save=save)
+            finally:
+                clean.unlink(missing_ok=True)
         elif action == "redact":
             # a nem illeszkedő szó/minta a PdfCraftban hiba („nothing matched”) → előbb egyenként kipróbáljuk
             marks = []
@@ -591,8 +629,13 @@ async def make_pdf(body: dict[str, Any]) -> dict[str, Any]:
             await crafts.pdf_script(ids[:1], marks + steps[-2:], out, save=True)
         else:
             await crafts.pdf_script(ids[:need], steps, out, save=save)
+        if not out.exists() and action == "compress":     # a PdfCraft nem ír, ha nincs mit kisebbre venni
+            kb = crafts.existing(ids[0]).stat().st_size // 1024
+            raise HTTPException(422, f"This PDF is already as small as it gets ({kb} kB) — there's nothing left to shrink.")
         if not out.exists():
             raise RuntimeError("no output")
+        from app.tools import ios_safe
+        await ios_safe.finalize(out)          # mint minden kimenet: sémahelyes docx, a szöveg nyelve, iPhone
     except HTTPException:
         raise
     except Exception as e:
@@ -602,6 +645,8 @@ async def make_pdf(body: dict[str, Any]) -> dict[str, Any]:
     label = f"{stem}{' (' + tag + ')' if tag else ''}.{fmt}"
     write_meta(fid, source_file_id=ids[0], operation=f"pdf {action}", label=label)
     res = {"file_id": fid, "url": public_url(fid), "size_kb": out.stat().st_size // 1024, "label": label}
+    if action == "to_word" and left_out:
+        res["msg"] = pdf_prep.left_out_note(left_out)
     events.emit("tool_done", tool="make_pdf", params={"action": action}, result=res)
     return res
 

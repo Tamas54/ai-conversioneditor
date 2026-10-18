@@ -352,7 +352,7 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .plans .row-head .seg { margin: 0; }
 .plan-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 18px 0 40px; }
 .plan { background: var(--card); border: 1px solid var(--rule); border-radius: 16px; padding: 22px 22px 24px; display: grid; gap: 12px; align-content: start; }
-.plan.pick { border-color: var(--mat); box-shadow: 0 0 0 3px rgba(30, 68, 54, .12); }
+.plan.featured {   /* NEM .pick: az a képválasztó csempéje (all: unset) */ border-color: var(--mat); box-shadow: 0 0 0 3px rgba(30, 68, 54, .12); }
 .plan.cur { background: var(--paper-2); }
 .plan h3 { margin: 0; font: 700 20px/1 var(--f-display); }
 .plan .price { font: 800 38px/1 var(--f-display); letter-spacing: -.02em; }
@@ -631,6 +631,8 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
   background: var(--paper); color: var(--ink); box-shadow: var(--shadow); }
 .merge-dlg::backdrop { background: rgba(10, 20, 16, .45); }
 .merge-dlg h2 { font: 700 20px/1.2 var(--f-display); margin: 0 0 12px; }
+.leave-dlg { width: min(480px, calc(100vw - 32px)); }       /* mentetlen szerkesztői változás: Maradok · Ne mentsen · Mentés */
+.leave-dlg .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 .mg-pick { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
 .mg-pick label { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; }
 .mg-pick select { max-width: 360px; }

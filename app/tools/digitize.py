@@ -24,7 +24,7 @@ from app.storage.files import new_file_id
 
 log = logging.getLogger("aice.digitize")
 
-PROMPT_VER = "book-v6"
+PROMPT_VER = "book-v7"          # v7 (10-18): a lista és a levél záró/aláírás-sorai nem olvadnak egy bekezdésbe
 # Mérve 10-11 (tests/ocr_book_bench.py; etalon: Ammianus 1916 kézi átirat + 3 Jókai-fotó pontos szöveggel, 2048 px):
 #   DeepSeek-V4.1-Flash 1,8% régi / 4,6% össz., 14 s/oldal, ~0,09 ¢/oldal  ← alap
 #   Kimi-K2.6           2,2% / 4,5%, 37 s, ~0,65 ¢      GLM-5.3-Flash 3,5% / 5,8%, 30 s, ~0,16 ¢
@@ -51,6 +51,11 @@ Step 2 — transcribe the page:
   modernise or correct anything.
 - Join the lines of a paragraph into one line; rejoin words hyphenated at the end of a line.
 - Leave one blank line between paragraphs.
+- A list keeps its items: each printed item (starting with "-", "–", "•", "*", "1.", "a)" or similar) is its own
+  line as a Markdown list item ("- text" or "1. text"), with a blank line before the list. Never join list items
+  into the sentence before them.
+- Short separate lines are not a paragraph: the address block, date line, greeting, closing ("Üdvözlettel:",
+  "Yours sincerely,") and the signature lines (name, title) each stay on their own, with a blank line between them.
 - Mark a chapter title with "# " and a section heading with "## ".
 - Centred display text (title page, half-title, dedication, motto, imprint) goes between a line ":::center"
   and a line ":::", one printed line per line.

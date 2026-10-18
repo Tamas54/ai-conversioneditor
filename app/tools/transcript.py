@@ -150,3 +150,44 @@ def srt(tr: dict[str, Any]) -> str:
         return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
     return "".join(f"{i}\n{ts(s['start'])} --> {ts(s['end'])}\n{s['text']}\n\n"
                    for i, s in enumerate(tr.get("sentences") or [], 1))
+
+
+def _join(words: list[dict[str, Any]]) -> str:
+    """Szavak szöveggé: a kötőjellel/írásjellel kezdődő token az előzőhöz tapad („ilyen-olyan”, nem „ilyen -olyan”)."""
+    out = ""
+    for w in words:
+        t = w["w"]
+        out += t if not out or re.match(r"[-‐–,.;:!?…)\]”»]", t) or out.endswith(("(", "„", "«")) else " " + t
+    return out
+
+
+def cues(tr: dict[str, Any], max_chars: int = 84, max_dur: float = 6.5, gap: float = 0.8) -> list[dict[str, Any]]:
+    """Feliratsorok a szavak SAJÁT időbélyegeiből: legfeljebb két sor (~2×42 betű) és ~6,5 s; mondatvégen mindig, a
+    félúton túl vesszőnél/gondolatjelnél és hosszabb szünetnél is vág. (UI-próba 10-18: a Whisper-„mondatok” 10–18 s-osak
+    és 120–180 betűsek voltak — feliratnak, .srt-nek olvashatatlan blokk.) Szóidők nélkül a mondatok maradnak."""
+    words = tr.get("words") or []
+    if not words:
+        return [dict(s) for s in tr.get("sentences") or []]
+    out: list[dict[str, Any]] = []
+    cur: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        if cur:
+            out.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": _join(cur)})
+            cur.clear()
+
+    for w in words:
+        if cur:
+            joined = _join(cur)
+            soft = len(joined) >= max_chars * 0.55 and re.search(r"[,;:–—]$", cur[-1]["w"])
+            hard = (len(joined) + 1 + len(w["w"]) > max_chars or w["end"] - cur[0]["start"] > max_dur
+                    or w["start"] - cur[-1]["end"] > gap)
+            if soft or hard:
+                flush()
+        cur.append(w)
+        if re.search(r"[.!?…][\"”»)]*$", w["w"]):
+            flush()
+    flush()
+    for a, b in zip(out, out[1:]):              # a rövid felirat kicsit tovább marad, de a következőbe nem lóg bele
+        a["end"] = round(min(b["start"], max(a["end"], a["start"] + 1.0)), 2)
+    return out

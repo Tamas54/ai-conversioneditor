@@ -74,11 +74,15 @@
 
   // A dashboard ebből tudja, hogy elhagyás előtt rákérdezzen-e (a szerkesztő saját
   // „módosítva" jelzője a WASM-ban van, kívülről nem olvasható). Sikeres mentés nullázza.
+  // Csak nézelődés (nyíl, lapozás, Esc, Tab, F-gombok, másolás/keresés/nagyítás/nyomtatás, magában álló módosító):
+  // nem változtatás → nem jelez „touched”-ot (különben a puszta görgetés után is „mentetlen változás” kérdés jön)
+  const LOOK = /^(Arrow\w+|Page(Up|Down)|Home|End|Escape|Tab|F\d+|Shift|Control|Alt|Meta|CapsLock)$/;
+  const lookOnly = (e) => e.type === "keydown" && (LOOK.test(e.key) || ((e.ctrlKey || e.metaKey) && /^[cfap+=\-0]$/i.test(e.key)));
   const touch = (e) => {
     if (!e.isTrusted) return;
     const now = Date.now();
     if (now - lastActivity > 3000) { lastActivity = now; notify({ type: "activity" }); }   // a figyelő a szünetet várja
-    if (touched) return;
+    if (touched || lookOnly(e)) return;
     touched = true;
     notify({ type: "touched" });
   };
