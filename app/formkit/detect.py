@@ -4,7 +4,7 @@
     lapos PDF        vonalak és aláhúzás-sorok ("Név: ______"), üres keretek, jelölőnégyzet-keretek + a mellettük
                      álló felirat; a betűméretből számolt tűrésekkel (nincs AI)
     DOCX             "____", "……", "[   ]", ☐ minták, {{mező}} helyőrzők, tartalomvezérlők (SDT), táblázatban a
-                     felirat melletti / alatti üres cella
+                     felirat melletti üres cella, illetve fejléc + üres sorok (table_fields — szöveges cella soha)
     XLSX             felirat-cella melletti üres cella (űrlap-oszlop), "____" cellák, legördülő lista opciói
     fotó / szken     ha van látó modell (OCR_MODEL): a meglévő forms.read_layout; különben helyben: Tesseract-szavak
                      + OpenCV-vonalak és -négyzetek, ugyanazzal a címke-logikával, mint a lapos PDF
@@ -85,22 +85,145 @@ def _occupied(words: list[tuple], x0: float, x1: float, y: float, h: float) -> b
     return cover > 0.25 * (x1 - x0)
 
 
+# ---------------------------------------------------------------- közös: táblázatok
+
+numeric = S.numeric_label
+
+
+def table_fields(rows: list[list[Optional[str]]]) -> list[tuple[int, int, str]]:
+    """Egy táblázat mezői: CSAK üres cella lehet mező, szöveges cella soha. → [(sor, oszlop, felirat)].
+
+    rows: cellaszövegek soronként; None = egyesített cella folytatása (nem önálló cella). Két űrlap-alak:
+      felirat + üres cella mellette   „Név | ⎵” — a bal cella felirat (nem szám), a jobb üres
+      fejléc + üres sorok             az első sor felirat-fejléc, alatta üres (vagy csak az első oszlopban kitöltött)
+                                      sorok — pl. jelenléti ív napi sorai; a felirat: fejléc (+ a sor első cellája)
+    A kitöltött adattábla (minden sorban adat) üres cellája sem mező."""
+    def txt(r: int, c: int) -> str:
+        v = rows[r][c] if c < len(rows[r]) else None
+        return (v or "").strip()
+
+    def empty(r: int, c: int) -> bool:
+        return c < len(rows[r]) and rows[r][c] is not None and not BLANK_RE.sub("", txt(r, c)).strip()
+
+    out: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    n_cols = max((len(r) for r in rows), default=0)
+    header = [txt(0, c) for c in range(n_cols)] if rows else []
+    body = range(1, len(rows))
+    # fejléc: az első oszlop után minden oszlopnak van (nem szám) felirata — a „Név | ⎵” kétoszlopos tábla nem ilyen
+    gridlike = len(rows) >= 2 and n_cols >= 2 and all(header[c] and not numeric(header[c]) for c in range(1, n_cols)) and any(
+        all(empty(r, c) or (c == 0 and txt(r, 0)) for c in range(n_cols)) and any(empty(r, c) for c in range(1, n_cols))
+        for r in body)
+    if gridlike:
+        for r in body:
+            lab0 = txt(r, 0)
+            for c in range(n_cols):
+                if empty(r, c) and header[c] and not numeric(header[c]) and (r, c) not in seen:
+                    seen.add((r, c))
+                    out.append((r, c, f"{header[c]} – {lab0}" if lab0 and c else f"{header[c]} {r}"))
+        return out
+    for r in range(len(rows)):
+        for c in range(n_cols - 1):
+            lab = S.clean_label(txt(r, c))
+            if lab and len(lab) <= 80 and not numeric(lab) and not BLANK_RE.search(txt(r, c)) and empty(r, c + 1):
+                out.append((r, c + 1, lab))
+    return out
+
+
+def _merge_segs(segs: list[tuple], tol: float) -> list[list[float]]:
+    """Egy egyenesbe eső, összeérő szakaszok (a0, a1, c) összevonva."""
+    out: list[list[float]] = []
+    for a0, a1, c in sorted(segs, key=lambda s: (round(s[2] / tol), s[0])):
+        if out and abs(out[-1][2] - c) <= tol and a0 <= out[-1][1] + tol:
+            out[-1][1] = max(out[-1][1], a1)
+        else:
+            out.append([a0, a1, c])
+    return out
+
+
+def _cluster(vals: list[float], tol: float) -> list[float]:
+    out: list[float] = []
+    for v in sorted(vals):
+        if not out or v - out[-1] > tol:
+            out.append(v)
+    return out
+
+
+def find_tables(hlines: list[tuple], vlines: list[tuple], tol: float = 2.5) -> list[dict[str, Any]]:
+    """Rács a vonalakból: egymást metsző vízszintes (x0, x1, y) és függőleges (y0, y1, x) vonalak, ≥ 2 cella.
+    → [{"xs": oszlophatárok, "ys": sorhatárok, "box": (x0, y0, x1, y1)}]"""
+    H, V = _merge_segs(hlines, tol), _merge_segs(vlines, tol)
+    if len(H) < 2 or len(V) < 2:
+        return []
+    parent = list(range(len(H) + len(V)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i, (x0, x1, y) in enumerate(H):
+        for j, (y0, y1, x) in enumerate(V):
+            if x0 - tol <= x <= x1 + tol and y0 - tol <= y <= y1 + tol:
+                parent[root(i)] = root(len(H) + j)
+    comps: dict[int, tuple[list, list]] = {}
+    for i, h in enumerate(H):
+        comps.setdefault(root(i), ([], []))[0].append(h)
+    for j, v in enumerate(V):
+        comps.setdefault(root(len(H) + j), ([], []))[1].append(v)
+    out = []
+    for hs, vs in comps.values():
+        ys, xs = _cluster([h[2] for h in hs], tol), _cluster([v[2] for v in vs], tol)
+        if len(ys) >= 2 and len(xs) >= 2 and (len(ys) - 1) * (len(xs) - 1) >= 2:
+            out.append({"xs": xs, "ys": ys, "box": (xs[0], ys[0], xs[-1], ys[-1])})
+    return out
+
+
+def _inside(box: tuple, t: dict[str, Any], tol: float = 3.0) -> bool:
+    x0, y0, x1, y1 = t["box"]
+    return box[0] >= x0 - tol and box[2] <= x1 + tol and box[1] >= y0 - tol and box[3] <= y1 + tol
+
+
 def fields_from_layout(words: list[tuple], hlines: list[tuple], squares: list[tuple], boxes: list[tuple],
-                       page: int, kind_anchor: str) -> list[dict[str, Any]]:
-    """words: (x0, y0, x1, y1, szöveg, sorkulcs); hlines: (x0, x1, y); squares/boxes: (x0, y0, x1, y1)."""
+                       page: int, kind_anchor: str, vlines: Optional[list[tuple]] = None) -> list[dict[str, Any]]:
+    """words: (x0, y0, x1, y1, szöveg, sorkulcs); hlines: (x0, x1, y); vlines: (y0, y1, x); squares/boxes: (x0, y0, x1, y1).
+    A vonalakból összeálló táblázat cellái a table_fields szabálya szerint lesznek mezők (szöveges cella soha);
+    a rácsvonalak nem „aláhúzások”, a cellakeretek nem „üres keretek”."""
     hs = [w[3] - w[1] for w in words if w[4].strip() and not _is_blank_word(w[4])]
     h = statistics.median(hs) if hs else 12.0
     out: list[dict[str, Any]] = []
     taken: list[tuple] = []
+    tables = find_tables(hlines + [(b[0], b[2], y) for b in boxes for y in (b[1], b[3])],
+                         (vlines or []) + [(b[1], b[3], x) for b in boxes for x in (b[0], b[2])])
 
     def add(label: str, typ: str, box: tuple, extra: Optional[dict] = None):
         for t in taken:      # ugyanaz a hely kétszer (aláhúzás-szó + vonal)
             if abs(t[0] - box[0]) < h and abs(t[3] - box[3]) < h * 0.8 and abs(t[2] - box[2]) < 2 * h:
                 return
         taken.append(box)
+        num = numeric(label)
+        if num:                                  # „120” mellett üres hely: adat, nem felirat — a minőség sem „good”
+            label = ""
         label = label or f"Field {len(out) + 1}"
         out.append(S.field(S.slug(label), label, typ, page=page, box=list(box),
                            anchor={"kind": kind_anchor, "page": page, "rect": [round(v, 2) for v in box], **(extra or {})}))
+        if num:
+            out[-1]["_numeric_label"] = True
+
+    # 0) táblázatok: csak az űrlapjellegű tábla üres cellái
+    for ti, t in enumerate(tables):
+        xs, ys = t["xs"], t["ys"]
+        grid: list[list[Optional[str]]] = [[None] * (len(xs) - 1) for _ in range(len(ys) - 1)]
+        for r in range(len(ys) - 1):
+            for c in range(len(xs) - 1):
+                inside = [w for w in words if xs[c] <= (w[0] + w[2]) / 2 < xs[c + 1] and ys[r] <= (w[1] + w[3]) / 2 < ys[r + 1]]
+                grid[r][c] = " ".join(w[4] for w in sorted(inside, key=lambda w: (w[5], w[0])))
+        for r, c, lab in table_fields(grid):
+            box = (xs[c] + 1.5, ys[r] + 1.5, xs[c + 1] - 1.5, ys[r + 1] - 1.5)
+            add(lab, S.guess_type(lab, "multiline" if box[3] - box[1] > 3 * h else "text"), box,
+                {"table": ti, "row": r, "col": c})
+    hlines = [l for l in hlines if not any(_inside((l[0], l[2], l[1], l[2]), t) for t in tables)]
+    boxes = [b for b in boxes if not any(_inside(b, t) for t in tables)]
 
     # 1) aláhúzás- / pont-sorok a szövegben ("Név: ________")
     for w in words:
@@ -185,22 +308,26 @@ def _pdf_flat(doc) -> tuple[list[dict[str, Any]], int]:
     hints = 0
     for pi, page in enumerate(doc, 1):
         words = [(*w[:5], (w[5], w[6])) for w in page.get_text("words")]
-        hlines, squares, boxes = [], [], []
+        hlines, vlines, squares, boxes = [], [], [], []
         for d in page.get_drawings():
             for it in d["items"]:
                 if it[0] == "l":
                     p1, p2 = it[1], it[2]
                     if abs(p1.y - p2.y) < 1.5 and abs(p2.x - p1.x) >= 20:
                         hlines.append((min(p1.x, p2.x), max(p1.x, p2.x), (p1.y + p2.y) / 2))
+                    elif abs(p1.x - p2.x) < 1.5 and abs(p2.y - p1.y) >= 6:
+                        vlines.append((min(p1.y, p2.y), max(p1.y, p2.y), (p1.x + p2.x) / 2))
                 elif it[0] in ("re", "qu"):
                     r = it[1] if it[0] == "re" else it[1].rect
                     if r.height < 3 and r.width >= 20:
                         hlines.append((r.x0, r.x1, r.y1))
+                    elif r.width < 3 and r.height >= 6:
+                        vlines.append((r.y0, r.y1, (r.x0 + r.x1) / 2))
                     elif 5 <= r.width <= 24 and 5 <= r.height <= 24 and abs(r.width - r.height) < 4:
                         squares.append((r.x0, r.y0, r.x1, r.y1))
                     elif r.width >= 40 and 10 <= r.height <= 200 and r.width < page.rect.width * 0.95:
                         boxes.append((r.x0, r.y0, r.x1, r.y1))
-        out += fields_from_layout(words, hlines, squares, boxes, pi, "xy")
+        out += fields_from_layout(words, hlines, squares, boxes, pi, "xy", vlines)
         hints += _label_hints(words)
     return out, hints
 
@@ -215,6 +342,7 @@ def recognize_pdf(path: Path) -> dict[str, Any]:
         if fields:
             # az aláírás helye gyakran csak egy vonal ("Aláírás: ____") — azt is felvesszük, ha nincs ott mező
             for f in _pdf_flat(doc)[0]:
+                f.pop("_numeric_label", None)
                 if f["type"] == "signature" and not any(
                         g["page"] == f["page"] and g["box"][0] < f["box"][2] and g["box"][2] > f["box"][0]
                         and g["box"][1] < f["box"][3] and g["box"][3] > f["box"][1] for g in fields):
@@ -222,7 +350,13 @@ def recognize_pdf(path: Path) -> dict[str, Any]:
             return S.make("pdf", "acroform", pages, fields)
         has_text = any(p.get_text().strip() for p in doc)
         fields, hints = _pdf_flat(doc)
-    return S.make("pdf", "flat_pdf", pages, fields, label_hints=hints, **({} if has_text else {"scanned": True}))
+    return S.make("pdf", "flat_pdf", pages, fields, label_hints=hints, numeric_labels=_strip_numeric(fields),
+                  **({} if has_text else {"scanned": True}))
+
+
+def _strip_numeric(fields: list[dict[str, Any]]) -> int:
+    """Hány mező mellett állt felirat helyett csak szám (a minőség-becsléshez); a belső jelölő kikerül."""
+    return sum(1 for f in fields if f.pop("_numeric_label", False))
 
 
 # ---------------------------------------------------------------- DOCX
@@ -293,24 +427,14 @@ def recognize_docx(path: Path) -> dict[str, Any]:
                                   anchor={"kind": "docx_text", "loc": loc, "token": tok, "nth": n}))
         if text.strip():
             prev_text = text
-    # táblázat: felirat-cella melletti (vagy fejléc alatti) üres cella
+    # táblázat: csak üres cella, és csak űrlapjellegű táblában (felirat + üres cella, vagy fejléc + üres sorok)
     for ti, t in enumerate(doc.tables):
-        grid = [[c for c in row.cells] for row in t.rows]
-        for ri, row in enumerate(grid):
-            for ci, cell in enumerate(row):
-                txt = cell.text.strip()
-                if not txt or BLANK_RE.search(txt) or len(txt) > 80:
-                    continue
-                target = None
-                if ci + 1 < len(row) and row[ci + 1]._tc is not cell._tc and not row[ci + 1].text.strip():
-                    target = (ri, ci + 1)
-                elif ri == 0 and ri + 1 < len(grid) and ci < len(grid[1]) and not grid[1][ci].text.strip() \
-                        and all(c.text.strip() for c in row):
-                    target = (1, ci)
-                if target:
-                    lab = S.clean_label(txt)
-                    fields.append(S.field(S.slug(lab), lab, S.guess_type(lab),
-                                          anchor={"kind": "docx_cell", "t": ti, "r": target[0], "c": target[1]}))
+        grid: list[list[Optional[str]]] = []
+        for row in t.rows:
+            cells = row.cells
+            grid.append([None if ci and cells[ci]._tc is cells[ci - 1]._tc else cells[ci].text for ci in range(len(cells))])
+        for r, c, lab in table_fields(grid):
+            fields.append(S.field(S.slug(lab), lab, S.guess_type(lab), anchor={"kind": "docx_cell", "t": ti, "r": r, "c": c}))
     return S.make("docx", "docx", [], fields)
 
 
@@ -384,7 +508,7 @@ async def _tesseract_words(img: Path, lang: str) -> tuple[list[tuple], Optional[
     return words, (sum(confs) / len(confs) if confs else None)
 
 
-def _cv_shapes(img: Path) -> tuple[list, list, list]:
+def _cv_shapes(img: Path) -> tuple[list, list, list, list]:
     import cv2
     import numpy as np
     g = cv2.imdecode(np.frombuffer(img.read_bytes(), np.uint8), cv2.IMREAD_GRAYSCALE)
@@ -396,6 +520,12 @@ def _cv_shapes(img: Path) -> tuple[list, list, list]:
         x, y, w, h = cv2.boundingRect(c)
         if h <= max(6, H // 300) and w >= W // 20:
             hlines.append((x, x + w, y + h / 2))
+    vert = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, H // 60))))
+    vlines = []
+    for c in cv2.findContours(vert, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+        x, y, w, h = cv2.boundingRect(c)
+        if w <= max(6, W // 300) and h >= H // 60:
+            vlines.append((y, y + h, x + w / 2))
     squares, boxes = [], []
     for c in cv2.findContours(bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]:
         x, y, w, h = cv2.boundingRect(c)
@@ -407,7 +537,7 @@ def _cv_shapes(img: Path) -> tuple[list, list, list]:
             squares.append((x, y, x + w, y + h))
         elif w >= W / 8 and H / 60 <= h <= H / 4 and fill < 0.05 and w < 0.95 * W:
             boxes.append((x, y, x + w, y + h))
-    return hlines, squares, boxes
+    return hlines, squares, boxes, vlines
 
 
 async def recognize_image(path: Path, language: str = "hun+eng") -> dict[str, Any]:
@@ -422,12 +552,13 @@ async def recognize_image(path: Path, language: str = "hun+eng") -> dict[str, An
         W, H = im.size
     try:
         words, conf = await _tesseract_words(work, language)
-        hlines, squares, boxes = await asyncio.to_thread(_cv_shapes, work)
+        hlines, squares, boxes, vlines = await asyncio.to_thread(_cv_shapes, work)
     finally:
         work.unlink(missing_ok=True)
-    return S.make("image", "image", [{"page": 1, "width": W, "height": H}],
-                  fields_from_layout(words, hlines, squares, boxes, 1, "xy"), engine="offline",
-                  ocr_confidence=round(conf, 1) if conf is not None else None, label_hints=_label_hints(words))
+    fields = fields_from_layout(words, hlines, squares, boxes, 1, "xy", vlines)
+    return S.make("image", "image", [{"page": 1, "width": W, "height": H}], fields, engine="offline",
+                  ocr_confidence=round(conf, 1) if conf is not None else None, label_hints=_label_hints(words),
+                  numeric_labels=_strip_numeric(fields))
 
 
 def _label_hints(words: list[tuple]) -> int:
@@ -461,7 +592,7 @@ async def _scanned_pdf(path: Path, sch: dict[str, Any], language: str) -> dict[s
     """Képből álló PDF: oldalanként (legfeljebb 10) helyi felismerés, a dobozok pontra váltva."""
     import pymupdf
     from app.formkit.deep import MAX_PAGES
-    fields, confs, hints = [], [], 0
+    fields, confs, hints, nums = [], [], 0, 0
     with pymupdf.open(str(path)) as d:
         n = min(d.page_count, MAX_PAGES)
         for i in range(n):
@@ -480,7 +611,9 @@ async def _scanned_pdf(path: Path, sch: dict[str, Any], language: str) -> dict[s
             if im.get("ocr_confidence") is not None:
                 confs.append(im["ocr_confidence"])
             hints += im.get("label_hints") or 0
+            nums += im.get("numeric_labels") or 0
     sch["fields"] = S.unique_names(fields)
+    sch["numeric_labels"] = nums
     sch["engine"] = "offline"
     sch["ocr_confidence"] = round(sum(confs) / len(confs), 1) if confs else None
     sch["label_hints"] = hints

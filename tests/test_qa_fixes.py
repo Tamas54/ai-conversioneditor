@@ -247,3 +247,112 @@ def test_rest_convert_carries_the_coverage_check(api, tmp_path):
     r = api.post("/v1/convert", json={"file": data, "filename": "hibas.docx", "output_format": "pdf", "wait": 90}).json()
     assert _task(r, "convert")["files"][0]["check"]["status"] == "ok"
 
+
+# ---------- 3. forms recognize: a kitöltött adattáblából nem lesz mező ----------
+
+WANT_FIELDS = {"nev": "text", "szuletesi_datum": "date", "telefonszam": "phone"}
+
+
+def _fixture_as(client, put_file, fmt: str, engine: str | None = None) -> str:
+    """A fixtúra docx-ként (WordCraft) vagy PDF-ként (a docx LibreOffice-szal, vagy engine='wordcraft')."""
+    err, d = _call(client, "convert", {"file_id": put_file(FIX), "target_format": "docx"})
+    assert not err, d
+    if fmt == "docx":
+        return d["file_id"]
+    err, p = _call(client, "convert", {"file_id": d["file_id"], "target_format": "pdf", **({"engine": engine} if engine else {})})
+    assert not err, p
+    return p["file_id"]
+
+
+def _recognized(client, fid: str) -> dict:
+    err, r = _call(client, "forms", {"action": "recognize", "file_id": fid})
+    assert not err, r
+    return r["data"]
+
+
+@pytest.mark.parametrize("fmt,engine", [("docx", None), ("pdf", None), ("pdf", "wordcraft")])
+def test_forms_recognize_fixture_exactly_three_fields(client, put_file, fmt, engine):
+    _need("wordcraft", "soffice")
+    data = _recognized(client, _fixture_as(client, put_file, fmt, engine))
+    assert {f["name"]: f["type"] for f in data["fields"]} == WANT_FIELDS, data["fields"]
+    if fmt == "pdf":
+        assert data["quality"]["level"] == "good"
+
+
+def test_make_fillable_and_fill_assistant_use_the_same_three_fields(client, put_file):
+    _need("wordcraft", "soffice")
+    import fitz
+    fid = _fixture_as(client, put_file, "pdf")
+    err, r = _call(client, "forms", {"action": "make_fillable", "file_id": fid})
+    assert not err, r
+    out = r.get("file_id") or r["files"][0]["file_id"]
+    with fitz.open(_path(out)) as d:
+        names = {w.field_name for pg in d for w in pg.widgets()}
+    assert names == set(WANT_FIELDS), names
+    err, a = _call(client, "fill_assistant", {"file_id": fid})
+    assert not err, a
+    assert {q["name"] for q in a["questions"]} == set(WANT_FIELDS), a["questions"]
+
+
+def test_type_keywords_match_whole_words():
+    from app.formkit.schema import guess_type as g
+    assert [g(x) for x in ("Bevétel", "Kivétel", "Feltétel", "Tétel", "Vétel")] == ["text"] * 5
+    assert [g(x) for x in ("Telefonszám", "Tel.", "Mobil", "Mobilszám", "Phone")] == ["phone"] * 5
+    assert g("Privát cím") == "text" and g("Adószám") == "hu_vat" and g("Martin") == "text"
+    assert g("Update") == "text" and g("Mandátum") == "text" and g("Kezdődátum") == "date" and g("Zipper") == "text"
+
+
+def test_table_fields_rule():
+    from app.formkit.detect import table_fields
+    data = [["Év", "Bevétel", "Kiadás"], ["2023", "120", "95"], ["2024", "140", ""]]
+    assert table_fields(data) == []                               # adattábla: az üres cella sem mező
+    form = [["Név", ""], ["Telefonszám", ""]]
+    assert table_fields(form) == [(0, 1, "Név"), (1, 1, "Telefonszám")]
+    assert table_fields([["2023", ""], ["120", ""]]) == []          # szám nem felirat
+
+
+def test_form_like_table_empty_cells_stay_fields(tmp_path):
+    """Kiegészítés a 3. ponthoz: az űrlapjellegű tábla (jelenléti ív napi sorai) üres cellái továbbra is mezők."""
+    from docx import Document
+    from app.formkit import detect
+    d = Document()
+    d.add_paragraph("Jelenléti ív — 2026. október")
+    t = d.add_table(rows=4, cols=3)
+    for c, h in enumerate(("Nap", "Érkezés", "Távozás")):
+        t.cell(0, c).text = h
+    for r in range(1, 4):
+        t.cell(r, 0).text = f"{r}."
+    p = tmp_path / "jelenleti.docx"
+    d.save(str(p))
+    fields = detect.recognize_docx(p)["fields"]
+    assert len(fields) == 6
+    assert fields[0]["label"] == "Érkezés – 1." and fields[0]["anchor"] == {"kind": "docx_cell", "t": 0, "r": 1, "c": 1}
+    assert {f["anchor"]["c"] for f in fields} == {1, 2}
+
+
+def test_form_like_grid_in_pdf_and_numeric_label_lowers_quality(tmp_path):
+    """Lapos PDF: a rácsból felismert űrlaptábla üres cellái mezők; a kitöltött cellák nem. Szám mellett üres vonal:
+    a mezőnek nincs felirata, és a minőség nem „good”."""
+    import fitz
+    from app.formkit import deep, detect
+    pdf = tmp_path / "racs.pdf"
+    doc = fitz.open()
+    pg = doc.new_page()
+    xs, ys = [72, 172, 272, 372], [100, 120, 140, 160]
+    for y in ys:
+        pg.draw_line((xs[0], y), (xs[-1], y))
+    for x in xs:
+        pg.draw_line((x, ys[0]), (x, ys[-1]))
+    for c, h in enumerate(("Nap", "Erkezes", "Tavozas")):
+        pg.insert_text((xs[c] + 4, ys[0] + 14), h)
+    pg.insert_text((xs[0] + 4, ys[1] + 14), "1.")
+    pg.insert_text((xs[1] + 4, ys[1] + 14), "8:00")             # kitöltött cella: nem mező
+    pg.insert_text((xs[0] + 4, ys[2] + 14), "2.")
+    pg.insert_text((72, 260), "120")
+    pg.draw_line((100, 262), (250, 262))
+    doc.save(str(pdf))
+    sch = detect.recognize_pdf(pdf)
+    labels = [f["label"] for f in sch["fields"]]
+    assert "Tavozas – 1." in labels and "Erkezes – 2." in labels and "Erkezes – 1." not in labels
+    assert not any(detect.numeric(l) for l in labels)
+    assert sch["numeric_labels"] == 1 and deep.quality(sch)["level"] == "low"

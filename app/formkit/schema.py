@@ -37,22 +37,31 @@ def clean_label(text: str) -> str:
     return t.rstrip(":：*").strip()
 
 
-# címke (ékezet nélkül, kisbetűvel) → típus; a sorrend számít (az első találat nyer)
+# címke (ékezet nélkül, kisbetűvel) → típus; a sorrend számít (az első találat nyer). Szóhatárra illesztünk: a magyar
+# összetett szó VÉGÉN álló tag igen („szuletesi datum”, „kezdodatum”, „mobilszam”), a szó belsejébe esett betűsor nem —
+# a „bevetel”, „kivetel”, „feltetel”, „tetel” „-tel”-je nem telefon, a „privat” „vat”-ja nem adószám, az „update” nem dátum
 _TYPE_RULES: list[tuple[str, str]] = [
     (r"\b(alairas|signature|sign here|kezjegy|initials|szignal)", "signature"),
-    (r"adoazonosito|tax ?id|tin\b", "hu_tax_id"),
-    (r"\badoszam|vat (no|number)|vat\b", "hu_vat"),
-    (r"\btaj\b|tb ?szam|social security", "taj"),
+    (r"adoazonosito|\btax ?id\b|\btin\b", "hu_tax_id"),
+    (r"\badoszam|\bvat (no|number)\b|\bvat\b", "hu_vat"),
+    (r"\btaj\b|\btb ?szam|social security", "taj"),
     (r"\biban\b", "iban"),
-    (r"bankszamla|szamlaszam|bank account|account (no|number)", "hu_bank"),
-    (r"e-?mail", "email"),
-    (r"telefon|phone|mobil|tel\.?\b", "phone"),
-    (r"iranyitoszam|postcode|post code|zip", "postcode"),
-    (r"datum|date|\bkelt\b|szuletesi ido|date of birth|\bdob\b|ervenyes", "date"),
-    (r"megjegyzes|comment|remarks|indoklas|leiras|description|reason", "multiline"),
-    (r"osszeg|amount|\bdb\b|quantity|darabszam", "number"),
-    (r"hozzajarul|elfogad|agree|consent|igen/nem|yes/no", "checkbox"),
+    (r"bankszamla|szamlaszam|\bbank account\b|\baccount (no|number)\b", "hu_bank"),
+    (r"\be-?mail", "email"),
+    (r"\btelefon|\bphone|\bmobil|\btel\b\.?|\btelephone\b|\bcell(ular)? (phone|no|number)\b", "phone"),
+    (r"iranyitoszam|\bpost ?code\b|\bzip\b|\bzip ?code\b", "postcode"),
+    (r"(?<!man)datum|\bdates?\b|\bkelt\b|szuletesi ido|date of birth|\bdob\b|ervenyes", "date"),
+    (r"megjegyzes|\bcomments?\b|\bremarks?\b|indoklas|\bleiras|\bdescription\b|\breason\b", "multiline"),
+    (r"\bosszeg|\bamount\b|\bdb\b|\bquantity\b|darabszam", "number"),
+    (r"hozzajarul|\belfogad|\bagree|\bconsent\b|igen/nem|yes/no", "checkbox"),
 ]
+_NUMERIC_LABEL = re.compile(r"[\d\s.,:;/%()+\-–]+")
+
+
+def numeric_label(text: str) -> bool:
+    """Tisztán számból álló szöveg („120”, „2024.”, „1 200”) — táblázat-adat, nem mező-felirat."""
+    t = (text or "").strip()
+    return bool(t) and bool(_NUMERIC_LABEL.fullmatch(t)) and any(c.isdigit() for c in t)
 
 
 def guess_type(label: str, default: str = "text") -> str:
