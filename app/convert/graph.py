@@ -138,8 +138,10 @@ def _edges() -> list[Edge]:
                     E.append(Edge(s, d, engine, cost))
 
     # dokumentum
-    # WordCraft (Rust): dokumentumok ms-ok alatt, LibreOffice nélkül — a meglévő app is ezt használja (DOCX-célra nem)
+    # WordCraft (Rust): dokumentumok ms-ok alatt, LibreOffice nélkül — a meglévő app is ezt használja (DOCX-célra csak
+    # Markdownból: ott a pandoc-tábla szétesik; a WordCraft-nak nem való Markdownt a service a pandocra tereli)
     add(WORDCRAFT_IN, WORDCRAFT_OUT, "wordcraft", 0.5)
+    add({"md"}, {"docx"}, "wordcraft", 0.5)
     add(LO_WRITER_IN, LO_WRITER_OUT, "libreoffice", 1.0)
     add({"zabw"}, {"abw"}, "python", 0.1)
     # Pandoc a jelölőnyelvekhez; irodai forrásból irodai célra a LibreOffice tartja jobban az elrendezést

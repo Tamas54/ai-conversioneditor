@@ -700,7 +700,9 @@ async def convert(
 
     Set `engine="wordcraft"` for the Rust Word engine: no LibreOffice, a few
     ms per call. Sources docx/doc/odt/rtf/html/md/tex/txt; targets
-    docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page).
+    docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page). md → docx/odt uses
+    it by default (tables keep every column); Markdown with footnotes, pictures,
+    math or task lists goes through pandoc instead.
     engine="photocraft": images (psd/png/jpg/webp/tif/exr…, PSD layers kept
     when saving psd). engine="vectorcraft": svg/pdf/ai/eps → pdf/svg/png/eps.
     pptx → docx makes a Word HANDOUT: each slide's picture, title, text,

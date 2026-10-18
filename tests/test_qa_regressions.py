@@ -121,7 +121,7 @@ def _vision(monkeypatch, answer):
 def test_convert_md_docx_pdf_keep_accents(client, samples, put_file, lo):
     md, docx, pdf = put_file(samples.md()), put_file(samples.docx()), put_file(samples.pdf(pages=3))
     r = _ok(client, "convert", {"file_id": md, "target_format": "docx"})
-    assert r["backend"] == "pandoc" and r["check"]["status"] == "ok"
+    assert r["backend"] == "wordcraft" and r["check"]["status"] == "ok"      # 1. pont: md → docx alapból WordCraft
     paras = _docx_paras(r["file_id"])
     assert ("Heading 1", HU) in paras and any("félkövér ő ű" in t for _, t in paras)
 
