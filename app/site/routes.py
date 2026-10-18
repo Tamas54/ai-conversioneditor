@@ -124,6 +124,10 @@ def _add(r: APIRouter, lang: str) -> None:
         return _resp(lang, "connect_ai")
     get(f"{P}/{S('connect_ai')}", connect_ai)
 
+    async def pricing():
+        return _resp(lang, "pricing")
+    get(f"{P}/{S('pricing')}", pricing)
+
     async def units():
         return _resp(lang, "units_page")
     get(f"{P}/{S('units')}", units)
@@ -147,7 +151,7 @@ def all_paths(indexable_only: bool = True) -> dict[str, list[str]]:
     from app.catalog.units import CATEGORIES as UC
     for lang in i18n.langs():
         ps = [urls.agents(lang), urls.convert_hub(lang), urls.formats_hub(lang), urls.tools_hub(lang), urls.compare_hub(lang), urls.developers(lang),
-              urls.docs(lang), urls.job_builder(lang), urls.connect_ai(lang), urls.units(lang), urls.timezones(lang)]
+              urls.docs(lang), urls.job_builder(lang), urls.connect_ai(lang), urls.pricing(lang), urls.units(lang), urls.timezones(lang)]
         ps += [urls.category(lang, c) for c in CATEGORIES]
         ps += [urls.fmt(lang, k) for k, f in FORMATS.items() if not indexable_only or f.tier <= 2]
         ps += [urls.pair(lang, s, d) for s, d in (content.indexable_pairs() if indexable_only else graph.all_pairs(static=True))]

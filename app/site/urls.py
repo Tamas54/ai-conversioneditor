@@ -110,6 +110,10 @@ def connect_ai(lang: str) -> str:
     return f"{P(lang)}/{S(lang, 'connect_ai')}"
 
 
+def pricing(lang: str) -> str:
+    return f"{P(lang)}/{S(lang, 'pricing')}"
+
+
 def units(lang: str) -> str:
     return f"{P(lang)}/{S(lang, 'units')}"
 
@@ -153,7 +157,7 @@ def first_segments() -> frozenset[str]:
     segs: set[str] = set()
     for lang in i18n.langs():
         if lang == i18n.DEFAULT:
-            for k in ("convert", "formats", "tools", "compare", "developers", "connect_ai", "units", "timezones", "agents"):
+            for k in ("convert", "formats", "tools", "compare", "developers", "connect_ai", "units", "timezones", "agents", "pricing"):
                 segs.add(S(lang, k))
         else:
             segs.add(lang)

@@ -480,6 +480,50 @@ def connect_ai(lang: str) -> dict[str, Any]:
     return p
 
 
+def _num(lang: str, n: int) -> str:
+    """Ezres tagolás a nyelv szerint (en: 1,500 · hu: 1 500)."""
+    return f"{n:,}" if lang == "en" else f"{n:,}".replace(",", "\u00a0")
+
+
+def plan_features(lang: str, key: str) -> list[str]:
+    """Egy csomag pontjai a számlázás táblájából (billing.PLANS) — az app Plans oldala és a nyilvános árlap ugyanezt mutatja."""
+    from app import billing
+    p, n = billing.PLANS[key], lambda x: _num(lang, x)
+    tr = lambda k, **kw: t(lang, f"price.{k}", product=product(), **kw)  # noqa: E731
+    steps, batch, scan = tr("f_steps", n=n(p["ai_steps"])), tr("f_batch", n=p["batch"]), tr("f_scan", n=n(p["quota"]["scan_pages"]))
+    keep = tr("f_keep_year") if p["retention_days"] >= 365 else tr("f_keep_days", n=p["retention_days"])
+    if key == "free":
+        return [tr("f_credits_free", n=p["monthly_credits"]), tr("f_decks_free", d=p["quota"]["deck"], r=p["quota"]["revise"]),
+                scan, steps, batch, keep]
+    if key == "plus":
+        return [tr("f_credits", n=p["monthly_credits"]), tr("f_unlimited"), scan, steps, batch, keep]
+    return [tr("f_credits", n=p["monthly_credits"]), tr("f_pro"), scan, steps, batch, tr("f_mcp"), keep]
+
+
+def pricing(lang: str) -> dict[str, Any]:
+    """Árak — belépés nélkül, szerveroldalon (keresők, LLM-ek is látják), a számlázás táblájából: az ár egy helyen él."""
+    from app import billing
+    P_, c = billing.PLANS, billing.costs()
+    tr = lambda k, **kw: t(lang, f"price.{k}", product=product(), **kw)  # noqa: E731
+    eur = lambda x: tr("eur", n=x)  # noqa: E731
+    plans = [{"key": k, "name": P_[k]["name"], "price": eur(P_[k].get("month", 0)), "paid": k != "free",
+              "year": P_[k].get("year"), "features": plan_features(lang, k)} for k in ("free", "plus", "pro")]
+    costs_ = [(tr("c_image"), str(c["ai_image"])), (tr("c_restore"), str(c["restore"])), (tr("c_colour"), f"+{c['colourise']}"),
+              (tr("c_scan"), tr("c_scan_v", n=c["scan_pages_per_credit"])), (tr("c_steps"), tr("c_steps_v", n=c["ai_steps_per_credit"]))]
+    crumbs = crumbs_home(lang) + [(t(lang, "nav.pricing"), urls.pricing(lang))]
+    p = base_page(lang, "pricing", tr("title", plus=P_["plus"]["month"], pro=P_["pro"]["month"]),
+                  tr("desc", plus=P_["plus"]["month"], pro=P_["pro"]["month"]), urls.pricing(lang), alternates(urls.pricing), crumbs,
+                  h1=tr("h1"), lead=tr("lead"), plans=plans, pay=billing.enabled(), costs=costs_,
+                  packs=[{"credits": v["credits"], "price": eur(v["price"])} for v in billing.PACKS.values()],
+                  faq=_faq(lang, "price.faq", product=product(), per=c["ai_steps_per_credit"],
+                           **{f"steps_{k}": _num(lang, P_[k]["ai_steps"]) for k in P_}))
+    p["jsonld"].append({"@context": "https://schema.org", "@type": "Product", "name": product(),
+                        "offers": [{"@type": "Offer", "name": P_[k]["name"], "price": str(P_[k].get("month", 0)), "priceCurrency": "EUR",
+                                    "url": settings.PUBLIC_BASE_URL.rstrip("/") + urls.pricing(lang)} for k in ("free", "plus", "pro")]})
+    _add_faq_ld(p)
+    return p
+
+
 @functools.lru_cache(maxsize=1)
 def agent_counts() -> dict[str, int]:
     """Az app ügynökének eszközei (a még nem kész, „PLACEHOLDER” jelűek nélkül) és az MCP-eszközök száma."""

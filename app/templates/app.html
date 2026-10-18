@@ -36,6 +36,7 @@
     <a href="/app/brand" data-nav="brand">Brand</a>
     <a href="/app/connect" data-nav="connect">Connect your AI</a>
     <a href="{{AGENTS_URL}}" data-nav="agents">AI agents</a>
+    <a href="/app/plans" data-nav="plans">Pricing</a>
   </nav>
   <span class="spacer"></span>
   <a class="chip" id="credits" href="/app/plans" title="Your plan and credits">credits …</a>
@@ -465,11 +466,6 @@ function brandCard(b) {
 let BRAND_FONTS = null;
 
 // ---------- csomagok ----------
-const FEATURES = {
-  free: p => [`${p.monthly_credits} credits every month (30 to start)`, `${p.quota.deck} presentations · ${p.quota.revise} changes a month`, `${p.quota.scan_pages} scanned pages a month`, `${p.ai_steps} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
-  plus: p => [`${p.monthly_credits} credits every month`, "Presentations, documents and changes — as many as you need", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `${p.ai_steps.toLocaleString("en")} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, `Files kept ${p.retention_days} days`],
-  pro: p => [`${p.monthly_credits} credits every month`, "Everything in Plus, with room for heavy use", `${p.quota.scan_pages.toLocaleString("en")} scanned pages a month`, `${p.ai_steps.toLocaleString("en")} Studio AI steps a month for your connected AI`, `Up to ${p.batch} photos at once`, "Use it from Claude, ChatGPT and your scripts (MCP)", `Files kept a year`],
-};
 async function buy(item, interval) {
   if (account?.guest) { location.href = "/signup?next=/app/plans"; return; }
   try { const r = await api("/api/billing/checkout", { method: "POST", body: JSON.stringify({ item, interval }) }); location.href = r.url; }
@@ -491,15 +487,16 @@ const views = {
         const p = P.plans[k], price = k === "free" ? "€0" : iv === "year" ? `${eur(p.year)}<small>/year</small>` : `${eur(p.month)}<small>/month</small>`;
         const btn = k === "free" ? (account.guest ? `<a class="btn" href="/signup?next=/app/plans">Create free account</a>` : `<span class="muted small">${cur === "free" ? "Your plan" : ""}</span>`)
           : cur === k ? `<span class="badge-cur">Your plan</span>`
-          : P.enabled ? `<button class="btn primary" data-buy="${k}">Choose ${p.name}</button>` : `<button class="btn" disabled>Payments open soon</button>`;
+          : P.enabled ? `<button class="btn primary" data-buy="${k}">Choose ${p.name}</button>`
+          : `<p class="muted small">Paid plans open soon${account.guest ? " — start free today." : "."}</p>${account.guest ? `<a class="btn" href="/signup?next=/app/plans">Create free account</a>` : ""}`;
         return `<article class="plan${k === "plus" ? " featured" : ""}${cur === k ? " cur" : ""}"><h3>${p.name}</h3><div class="price">${price}</div>
-          <ul>${FEATURES[k](p).map(f => `<li>${esc(f)}</li>`).join("")}</ul>${btn}</article>`;
+          <ul>${(p.features || []).map(f => `<li>${esc(f)}</li>`).join("")}</ul>${btn}</article>`;
       }).join("");
       $("#plan-cards").querySelectorAll("[data-buy]").forEach(b => b.addEventListener("click", () => buy(b.dataset.buy, iv)));
     };
     document.querySelectorAll("[name=iv]").forEach(r => r.addEventListener("change", draw)); draw();
     $("#packs").innerHTML = Object.entries(P.packs).map(([k, p]) => `<article class="pack"><b>${p.credits}</b> credits<span>${eur(p.price)}</span>
-      ${P.enabled ? `<button class="btn" data-pack="${k}">Buy</button>` : `<button class="btn" disabled>Soon</button>`}</article>`).join("");
+      ${P.enabled ? `<button class="btn" data-pack="${k}">Buy</button>` : `<span class="muted small">Soon</span>`}</article>`).join("");
     $("#packs").querySelectorAll("[data-pack]").forEach(b => b.addEventListener("click", () => buy(b.dataset.pack)));
     const c = P.costs;
     $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
