@@ -890,3 +890,19 @@ async def test_live_vision_reads_98_percent_of_the_distorted_photo(tmp_path):
     texts, _ = await T.read_cells(flat, g, tmp_path)
     same = sum(texts[r][c] == truth[r][c] for r in range(39) for c in range(6))
     assert (g.rows, g.cols) == (39, 6) and same / 234 >= 0.98
+
+
+# ---------- 9. photo_edit: a terv lépéskulcsa „op”, hibánál az engedélyezett értékek ----------
+
+def test_photo_edit_plan_errors_name_the_allowed_values(client, put_file, samples):
+    fid = put_file(samples.jpg())
+    for plan, msg in (([{"type": "crop", "aspect": "4:5"}], 'the step key is "op" (not "type")'),
+                      ([{"op": "blur", "amount": 3}], "unknown op 'blur' — ops: ai_edit, background, crop"),
+                      ([{"op": "crop", "aspect": "5:7"}], "aspect is one of 1:1, 4:5"),
+                      ([{"op": "logo", "position": "top"}], "give logo_file_id")):
+        err, r = _call(client, "photo_edit", {"file_ids": [fid], "plan": plan})
+        assert err and msg in str(r), (plan, r)
+    err, r = _call(client, "photo_edit", {"file_ids": [fid], "plan": [{"op": "background", "ai": "tengerpart"}]})
+    assert err and "doesn't generate AI pictures" in str(r)
+    tools = _tools(client)
+    assert '{"op": "<name>"' in tools["photo_edit"]["description"]

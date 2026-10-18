@@ -1387,21 +1387,25 @@ async def photo_edit(
     layers, the logo as an embedded layer), plus a JPG. All file_ids get the
     SAME edit (batch). instruction e.g. "Instagram 4:5, warmer, darker sky,
     headline 'Summer sale' at the top, logo bottom right".
-    Or pass your own plan (skip our planner): steps from
-      crop {aspect 1:1|4:5|16:9|9:16|3:2|4:3, focus center|top|bottom|left|right},
+    Or pass your own plan (skip our planner): a list of steps, each {"op": "<name>", …its fields}, e.g.
+      [{"op": "crop", "aspect": "4:5"}, {"op": "color", "warmth": 20}, {"op": "text", "text": "Nyári akció"}].
+      An unknown op or key is an error that lists the allowed values. ops:
+      crop {aspect 1:1|4:5|5:4|16:9|9:16|3:2|2:3|4:3|3:4, focus center|top|bottom|left|right},
       resize {long_edge}, auto, sharpen {amount}, light {exposure, contrast,
       brightness}, color {vibrance, saturation, warmth}, look {name warm|cool|
       tealOrange|bleachBypass|fadedFilm|monoContrast|crossProcess, strength},
       black_white, sky {exposure, saturation, contrast}, vignette {amount},
-      background {remove | stock | ai | color, blur}, logo {position,
+      background {remove | stock | color, blur}, logo {position,
       width_pct, margin_pct}, text {text, position, size small|medium|large|
-      huge, color, weight, shadow}.
+      huge, color, weight, shadow}, ai_edit {instruction}.
     Returns a job: call again with job_id until status "done"; result.plan
     is the plan used — tweak it and send it back as plan to adjust.
     """
     from app import jobs
     if job_id:
         return await jobs.job_status(job_id)
+    if plan and any(isinstance(st, dict) and st.get("op") == "background" and st.get("ai") for st in plan):
+        _no_ai_pictures({"generate": "background"})       # MCP-n generált hátteret nem készítünk
     from app.routes.make import make_photo_edit
     return await make_photo_edit({"file_ids": file_ids or [], "instruction": instruction, "plan": plan,
                                   "logo_file_id": logo_file_id, "formats": formats})

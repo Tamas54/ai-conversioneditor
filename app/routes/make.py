@@ -809,6 +809,11 @@ async def make_photo_edit(body: dict[str, Any]) -> dict[str, Any]:
     if not instruction and not steps:
         raise HTTPException(400, "Describe the edit, e.g. “crop to 4:5, warmer, headline ‘Summer sale’ at the top, logo bottom right”.")
     formats = [f for f in body.get("formats") or ["psd", "jpg"] if f in ("psd", "jpg", "png", "webp")] or ["psd", "jpg"]
+    if steps is not None:
+        try:                                      # a hívó saját terve: hiba a munka előtt, az engedélyezett értékekkel
+            photo_edit.validate_plan(steps, bool(body.get("logo_file_id")))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
     from app import billing
     plan = await billing.plan_of(tenancy.current_user_id())
     if len(ids) > billing.batch_limit(plan):
