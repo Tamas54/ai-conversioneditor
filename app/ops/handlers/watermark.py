@@ -50,7 +50,8 @@ async def pdf(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
                     pg.insert_image(pymupdf.Rect(x, y, x + lw, y + lh), filename=str(logo), overlay=True, keep_proportion=True)
                 if o.get("text"):
                     size = float(o.get("font_size") or max(18, min(W, H) / 10))
-                    font = pymupdf.Font(fontfile=fp) if fp else pymupdf.Font("helv")
+                    from app.tools import pdffonts           # csak a vízjel jelei (nem a teljes DejaVu)
+                    font = pymupdf.Font(fontbuffer=pdffonts.subset_for(o["text"], fp)) if fp else pymupdf.Font("helv")
                     tw = font.text_length(o["text"], fontsize=size)
                     x, y = _anchor(pos, W, H, tw, size, 36)
                     tw_writer = pymupdf.TextWriter(pg.rect, opacity=opacity, color=rgb(o.get("color"), (0.5, 0.5, 0.5)))

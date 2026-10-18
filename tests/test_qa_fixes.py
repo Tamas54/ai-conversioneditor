@@ -568,3 +568,88 @@ def test_upload_from_url_wikimedia(client):
         "url": "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png"})
     assert not err, res                                   # a régi kliens „python-httpx” UA-jára 403 jött
     assert res["file_id"].endswith(".png") and res["size_kb"] > 100
+
+
+# ---------- 8. betű-részhalmaz minden PDF-író úton ----------
+
+def _fonts(pdf: Path) -> list[tuple[str, int]]:
+    """A beágyazott betűk: (név, a betűfájl hossza bájtban)."""
+    import fitz
+    out = []
+    with fitz.open(pdf) as d:
+        for x in range(1, d.xref_length()):
+            if d.xref_get_key(x, "FontFile2")[0] == "xref":
+                ff = int(d.xref_get_key(x, "FontFile2")[1].split()[0])
+                out.append((d.xref_get_key(x, "FontName")[1], len(d.xref_stream(ff))))
+    return out
+
+
+def _text(pdf: Path) -> str:
+    import fitz
+    with fitz.open(pdf) as d:
+        return "".join(p.get_text() for p in d)
+
+
+def _out_file(res: dict) -> Path:
+    fid = res.get("file_id") or (res.get("files") or [{}])[0].get("file_id") or res["result"]["files"][0]["file_id"]
+    return _path(fid)
+
+
+def test_page_numbers_and_watermark_stay_small(client, put_file):
+    _need("wordcraft", "soffice")
+    fid = _fixture_as(client, put_file, "pdf")
+    base = _path(fid).stat().st_size
+    err, r = _call(client, "file_tools", {"tool": "page-numbers", "file_ids": [fid], "options": {"text_format": "{n}. oldal ő"}})
+    assert not err, r
+    p = _out_file(r)
+    assert p.stat().st_size < base + 30_000, (base, p.stat().st_size, _fonts(p))
+    assert "1. oldal ő" in _text(p)
+    err, r = _call(client, "file_tools", {"tool": "watermark-pdf", "file_ids": [fid], "options": {"text": "Bizalmas – ű"}})
+    assert not err, r
+    p = _out_file(r)
+    assert p.stat().st_size < base + 30_000, (base, p.stat().st_size, _fonts(p))
+    assert "Bizalmas – ű" in _text(p)
+
+
+def test_fillable_filled_and_flattened_under_100kb_with_accents(client, put_file):
+    _need("wordcraft", "soffice")
+    import fitz
+    fid = _fixture_as(client, put_file, "pdf")
+    err, r = _call(client, "forms", {"action": "make_fillable", "file_id": fid})
+    assert not err, r
+    fillable = r.get("file_id") or r["files"][0]["file_id"]
+    assert _path(fillable).stat().st_size < 100_000, _fonts(_path(fillable))
+    vals = {"nev": "Kőváry Ödön Űrsula", "szuletesi_datum": "1990-05-17", "telefonszam": "+36 30 123 4567"}
+    for flatten in (False, True):
+        err, r = _call(client, "forms", {"action": "fill", "file_id": fillable, "values": vals, "flatten": flatten})
+        assert not err, r
+        out = _out_file(r)
+        assert out.stat().st_size < 100_000, (flatten, out.stat().st_size, _fonts(out))
+        if flatten:
+            assert "Kőváry Ödön Űrsula" in _text(out)
+        else:
+            with fitz.open(out) as d:
+                assert {w.field_name: w.field_value for p in d for w in p.widgets()}["nev"] == "Kőváry Ödön Űrsula"
+                d.bake()                                  # a megjelenés (amit a néző lát) is a részhalmaz-betűvel helyes
+                assert "Kőváry Ö" in "".join(p.get_text() for p in d)        # a „____” mező keskeny: a vége levágva
+    # a mező betűje a gépelési részhalmaz: a később begépelt ékezet is benne van
+    from fontTools.ttLib import TTFont
+    import io
+    from app.tools import pdffonts
+    cmap = TTFont(io.BytesIO(pdffonts.typing_font())).getBestCmap()
+    assert all(ord(c) in cmap for c in "őűŐŰșțéáüöß€✓")
+
+
+def test_rebuilt_fillable_form_stays_small(tmp_path):
+    """A digitize fillable_pdf útja (forms.build_pdf): a lapszöveg betűje szűkül, a mezőké a gépelési részhalmaz."""
+    from PIL import Image
+    from app.tools import forms
+    img = tmp_path / "lap.png"
+    Image.new("RGB", (1240, 1754), "white").save(img)
+    layout = {"items": [{"type": "text", "text": "Jelentkezési lap — árvíztűrő tükörfúrógép", "box": [80, 60, 900, 90], "size": 16},
+                        {"type": "text", "text": "Név:", "box": [80, 150, 200, 175]},
+                        {"type": "field", "name": "nev", "label": "Név", "box": [210, 150, 800, 175]}]}
+    dst = tmp_path / "kitoltheto.pdf"
+    names = forms.build_pdf([layout], [img], dst)
+    assert names == ["nev"] and dst.stat().st_size < 100_000, _fonts(dst)
+    assert "árvíztűrő tükörfúrógép" in _text(dst)
