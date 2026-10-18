@@ -64,6 +64,31 @@ def numeric_label(text: str) -> bool:
     return bool(t) and bool(_NUMERIC_LABEL.fullmatch(t)) and any(c.isdigit() for c in t)
 
 
+def acro_native(typ: str, label: str = "") -> dict[str, Any]:
+    """A szemantikus típus natív AcroForm-alakja (a PDF-néző ellenőrzi és formázza a beírt értéket):
+    dátum → AFDate (éééé.hh.nn), szám → AFNumber (tizedesvessző; összegnél 2 tizedes), irányítószám / adóazonosító /
+    TAJ → számmaszk és hosszkorlát. → {"format": js, "keystroke": js, "maxlen": n} (ami kell)."""
+    if typ == "date":
+        return {"format": 'AFDate_FormatEx("yyyy.mm.dd");', "keystroke": 'AFDate_KeystrokeEx("yyyy.mm.dd");'}
+    if typ == "number":
+        dec = 2 if re.search(r"osszeg|amount|ar\b|dij|fee|price", ascii_fold(label)) else 0
+        return {"format": f'AFNumber_Format({dec}, 3, 0, 0, "", true);', "keystroke": f'AFNumber_Keystroke({dec}, 3, 0, 0, "", true);'}
+    masks = {"postcode": "9999", "hu_tax_id": "9999999999", "taj": "999 999 999"}
+    if typ in masks:
+        return {"keystroke": f'AFSpecial_KeystrokeEx("{masks[typ]}");', "maxlen": len(masks[typ])}
+    return {}
+
+
+def native_type(script_format: str, label: str, name: str = "") -> str:
+    """A kitölthető PDF mezőjének szemantikus típusa: a natív formátumból (AFDate/AFNumber), különben a feliratból."""
+    f = script_format or ""
+    if "AFDate_" in f:
+        return "date"
+    if "AFNumber_" in f:
+        return "number"
+    return guess_type(label or name.replace("_", " "))
+
+
 def guess_type(label: str, default: str = "text") -> str:
     a = ascii_fold(label)
     for pat, typ in _TYPE_RULES:

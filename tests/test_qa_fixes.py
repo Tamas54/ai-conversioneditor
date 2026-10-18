@@ -991,3 +991,31 @@ def test_tiny_file_size_is_not_zero(client):
     err, r = _call(client, "upload_file", {"filename": "apró ű.txt", "content_base64": base64.b64encode(("ő" * 150).encode()).decode()})
     assert not err, r
     assert r["size_bytes"] == 300 and r["size_kb"] == 0.3
+
+
+# ---------- 13. AcroForm: a szemantikus típus natív mezőformátumként ----------
+
+def test_fillable_fields_have_native_types_and_listing_says_so(client, put_file, tmp_path):
+    _need("wordcraft", "soffice")
+    import fitz
+    md = tmp_path / "osszeg.md"
+    md.write_text(FIX.read_text("utf-8") + "\nÖsszeg: ____\n\nIrányítószám: ____\n", "utf-8")
+    err, d = _call(client, "convert", {"file_id": put_file(md), "target_format": "docx"})
+    err, p = _call(client, "convert", {"file_id": d["file_id"], "target_format": "pdf"})
+    err, r = _call(client, "forms", {"action": "make_fillable", "file_id": p["file_id"]})
+    assert not err, r
+    out = r.get("file_id") or r["files"][0]["file_id"]
+    with fitz.open(_path(out)) as doc:
+        w = {x.field_name: x for pg in doc for x in pg.widgets()}
+    assert "AFDate_FormatEx" in w["szuletesi_datum"].script_format
+    assert "AFNumber_Format(2" in w["osszeg"].script_format and "AFNumber_Keystroke" in w["osszeg"].script_stroke
+    assert "AFSpecial_KeystrokeEx(\"9999\")" in w["iranyitoszam"].script_stroke and w["iranyitoszam"].text_maxlen == 4
+    assert not w["nev"].script_format
+    err, lst = _call(client, "pdf_form", {"file_id": out})
+    assert not err, lst
+    sem = {f["name"]: f["semantic_type"] for f in lst["fields"]}
+    assert sem == {"nev": "text", "szuletesi_datum": "date", "telefonszam": "phone", "osszeg": "number", "iranyitoszam": "postcode"}
+    vals = {"nev": "Kőváry Ödön", "szuletesi_datum": "1990-05-17", "telefonszam": "+36 30 123 4567", "osszeg": "1200",
+            "iranyitoszam": "9021"}
+    err, f = _call(client, "forms", {"action": "fill", "file_id": out, "values": vals})
+    assert not err and not f["data"].get("errors"), f

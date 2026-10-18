@@ -191,6 +191,18 @@ async def bulk_fill(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[st
     return {"files": [res], "data": {"copies": len(parts), "errors": errors}}
 
 
+def native_field(w, typ: str, label: str) -> None:
+    """A felismert típus natív PDF-alakja (dátum-, számformátum, maszk) — nem minden mező sima szöveg."""
+    from app.formkit.schema import acro_native
+    nat = acro_native(typ, label)
+    if nat.get("format"):
+        w.script_format = nat["format"]
+    if nat.get("keystroke"):
+        w.script_stroke = nat["keystroke"]
+    if nat.get("maxlen"):
+        w.text_maxlen = nat["maxlen"]
+
+
 async def make_fillable(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[str, Any]:
     """Lapos nyomtatvány (PDF, DOCX, fotó, szken) → valódi mezőkkel kitölthető PDF."""
     import pymupdf
@@ -224,6 +236,7 @@ async def make_fillable(inputs: list[Path], o: dict[str, Any], out: Path) -> dic
                 w.text_fontsize = 0 if f["type"] == "multiline" else max(6.0, min(11.0, w.rect.height * 0.7))
                 if f["type"] == "multiline":
                     w.field_flags |= pymupdf.PDF_TX_FIELD_IS_MULTILINE
+                native_field(w, f["type"], f.get("label") or "")
             if f["type"] == "signature":
                 w.field_label = (f.get("label") or "Signature")
             page.add_widget(w)

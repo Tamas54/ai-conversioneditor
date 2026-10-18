@@ -241,6 +241,9 @@ def build_pdf(layouts: list[dict[str, Any]], pages: list[Path], dst: Path,
                 page.draw_line(fitz.Point(r.x0, r.y1), fitz.Point(r.x1, r.y1), width=0.7)
                 r = fitz.Rect(r.x0, r.y1 - 15, r.x1, r.y1 - 1)
                 w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+                from app.formkit.schema import guess_type
+                from app.ops.handlers.forms import native_field
+                native_field(w, kind if kind not in ("text", "field") else guess_type(it.get("label") or name), it.get("label") or "")
             if r.width < 4 or r.height < 4:
                 continue
             w.rect = r
@@ -326,12 +329,35 @@ def unicode_fields(path: Path) -> None:
 # ---------- mezők, kitöltés ----------
 
 async def fields(file_id: str) -> list[dict[str, Any]]:
+    """A kitölthető PDF mezői; mindegyik a szemantikus típusával is (date, number, phone, email…: a natív formátumból
+    vagy a feliratból) — a kitöltő és az ügynök ennek megfelelő értéket adjon."""
+    import pymupdf
+    from app.formkit.schema import native_type
     from app.tools import crafts
     out = await crafts.pdf_script([file_id], [{"tool": "form_fields", "args": {}}], Path("/dev/null"), save=False)
     found = _last_json(out)
     items = found.get("fields") if isinstance(found, dict) else found
-    return [{k: f.get(k) for k in ("name", "type", "value", "options", "page", "required", "read_only", "tooltip")}
-            for f in (items or []) if isinstance(f, dict) and f.get("name")]
+    meta: dict[str, tuple[str, str]] = {}
+    try:
+        with pymupdf.open(str(crafts.existing(file_id))) as d:
+            for pg in d:
+                for w in pg.widgets() or []:
+                    meta.setdefault(w.field_name, (w.script_format or "", w.field_label or ""))
+    except Exception as e:
+        log.info("form field formats unread (%s): %s", file_id, e)
+    res = []
+    for f in items or []:
+        if not isinstance(f, dict) or not f.get("name"):
+            continue
+        row = {k: f.get(k) for k in ("name", "type", "value", "options", "page", "required", "read_only", "tooltip")}
+        if f.get("type") in ("text", "Text", "tx", None):
+            fmt, lab = meta.get(f["name"], ("", ""))
+            row["semantic_type"] = native_type(fmt, lab or f.get("tooltip") or "", f["name"])
+        else:
+            row["semantic_type"] = {"checkbox": "checkbox", "radio": "choice", "combo": "choice", "list": "choice",
+                                    "signature": "signature"}.get(str(f.get("type")).lower(), str(f.get("type")))
+        res.append(row)
+    return res
 
 
 def _last_json(out: str) -> Any:

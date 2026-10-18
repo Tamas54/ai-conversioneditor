@@ -1387,7 +1387,9 @@ async def pdf_form(
 ) -> dict:
     """
     Fillable PDF forms. With only file_id: lists the fields (name, type,
-    value, options, page). With values {field: value}: fills them (check
+    value, options, page, semantic_type — date, number, phone, email,
+    postcode… from the field's native format or its label: give values in
+    that kind). With values {field: value}: fills them (check
     boxes take true/false; keys may be field names or close spellings) and
     returns a NEW file_id. With data_file_id (CSV/XLSX, first row = field
     names): one filled copy per row, combined into one PDF. flatten=true
