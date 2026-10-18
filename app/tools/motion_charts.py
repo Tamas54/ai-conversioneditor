@@ -133,9 +133,12 @@ def parse(typ: str, c: dict[str, Any], source: str) -> tuple[Optional[dict[str, 
             out["forecast_from"] = ff
         return out, f"Forecast band “{title}”: {len(items)} points, {ranged} with a range, every value is in the source."
     if typ in ("lines", "race"):
-        labs = period_labels(c.get("labels"), 2 if typ == "lines" else 3, 16 if typ == "lines" else 12)
+        need = 2 if typ == "lines" else 3
+        labs = period_labels(c.get("labels"), need, 16 if typ == "lines" else 12)
         if not labs:
-            return None, f"⚠ The {typ} chart “{title}” was left out: give labels (the periods, in order)."
+            got = len([x for x in (c.get("labels") or []) if str(x).strip()]) if isinstance(c.get("labels"), list) else 0
+            return None, (f"⚠ The {typ} chart “{title}” was left out: give labels (the periods, in order)" + (
+                f" — at least {need}, got {got}." if got else "."))
         bad = [x for x in labs if not S.has_label(x)]
         if bad:
             return None, f"⚠ The {typ} chart “{title}” was left out: “{bad[0]}” is not in the source."

@@ -185,7 +185,8 @@ def cues(tr: dict[str, Any], max_chars: int = 84, max_dur: float = 6.5, gap: flo
             if soft or hard:
                 flush()
         cur.append(w)
-        if re.search(r"[.!?…][\"”»)]*$", w["w"]):
+        # mondatvég — de a sorszámnév pontja („a XV. században”, „3. helyen”) nem az (10-18: „XV.” / „században” kettévágva)
+        if re.search(r"[.!?…][\"”»)]*$", w["w"]) and not re.fullmatch(r"(?:\d+|[IVXLCDM]+)\.", w["w"]):
             flush()
     flush()
     for a, b in zip(out, out[1:]):              # a rövid felirat kicsit tovább marad, de a következőbe nem lóg bele

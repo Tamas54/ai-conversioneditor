@@ -36,3 +36,9 @@ def test_hyphen_tokens_and_pause():
 def test_without_word_times_sentences_stay():
     s = [{"start": 0, "end": 3, "text": "Egy mondat."}]
     assert cues({"words": [], "sentences": s}) == s
+
+
+def test_ordinal_dot_is_not_a_sentence_end():
+    """10-18: „a XV. században” a római sorszámnév pontjánál kettévágódott."""
+    cs = cues({"words": _words("és a XV. században itt ekkora volt, a 3. helyen pedig.")})
+    assert len(cs) == 1 and "XV. században" in cs[0]["text"] and "3. helyen" in cs[0]["text"]
