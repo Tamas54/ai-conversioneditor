@@ -1859,10 +1859,11 @@ async def video(
       in gentle motion, headlines, timed captions, end card with picture credits → a video project (.ecproj) + the
       MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
       (result.project / result.video, each with edit_url) or "failed".
-      format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds
-      (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
-      when you give duration — the video is that long: scenes hold longer, the narration is read up to 1.2× faster;
-      what still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
+      format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds,
+      4–180 (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
+      when you give duration — the video is that long INCLUDING the title card and the end card, which get shorter on a
+      short video: scenes hold longer or get shorter (down to 1.2 s), the narration is read up to 1.2× faster; what
+      still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
       length). Every result has duration = {requested, actual, mode}; a gap beyond a second or so is a check finding
       ("Asked for 24 s, it is 17 s (…)"), never "ok". images: pictures in order —
       file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where

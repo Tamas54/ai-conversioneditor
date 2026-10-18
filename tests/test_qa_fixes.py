@@ -927,3 +927,22 @@ def test_page_number_position_aliases(client, put_file, samples):
     err, r = _call(client, "file_tools", {"tool": "page-numbers", "file_ids": [fid], "options": {"position": "sehol"}})
     assert err and "position: one of center, top-left" in str(r)
     assert "bottom-center → bottom" in _tools(client)["file_tools"]["description"]
+
+
+# ---------- 11. video fixed mód: a kért hossz a cím- és zárókártyával együtt ----------
+
+@pytest.mark.parametrize("n,dur", [(1, 8), (3, 8), (6, 8), (2, 5)])
+def test_fixed_video_length_includes_title_and_end_cards(client, n, dur):
+    _need("ffprobe")
+    from app.tools import video
+    if not video.available():
+        pytest.skip("the video engine (EffectCraft) is only in the production image")
+    from test_qa_regressions import _ok, _wait
+    sc = [{"headline": f"Ősz {i + 1}", "caption": f"Győrben {i + 1}. ültetés ű."} for i in range(n)]
+    job = _ok(client, "video", {"action": "make", "text": " ".join(s["caption"] for s in sc), "scenes": sc, "title": "Ősz",
+                                "format": "square", "duration": dur, "pictures": "none", "narration": "none"})
+    res = _wait(client, "video", job)["result"]
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                            str(_path(res["video"]["file_id"]))], capture_output=True, text=True).stdout
+    assert abs(float(probe) - dur) <= 0.5 and abs(res["duration"]["actual"] - dur) <= 0.5, (n, dur, probe, res["duration"])
+    assert res["check"]["status"] == "ok", res["check"]
