@@ -66,6 +66,10 @@ def period_matches(req: str, d: dict[str, Any]) -> bool:
         return got.startswith(req + "-")
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", req):
         return d.get("period_requested") == req and got <= req
+    if re.fullmatch(r"\d{4}-Q[1-4]", req):           # negyedév: az összesített (átlag / negyedév végi) érték
+        q = int(req[-1])
+        months = {f"{req[:4]}-{m:02d}" for m in range(3 * q - 2, 3 * q + 1)}
+        return d.get("period_requested") == req and d.get("aggregation") in ("avg", "end") and got[:7] in months
     return False
 
 

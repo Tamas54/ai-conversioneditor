@@ -458,6 +458,8 @@ def test_period_matching_rules():
     assert period_matches("2025-12", {"period_returned": "2025-12-31"})            # lépcsős kamat: a hónap utolsó napja
     assert not period_matches("2025-12", {"period": "2026-09"})
     assert period_matches("2025-12-31", {"period_returned": "2025-09-24", "period_requested": "2025-12-31"})
+    assert period_matches("2025-Q4", {"period_returned": "2025-12-31", "period_requested": "2025-Q4", "aggregation": "end"})
+    assert not period_matches("2025-Q4", {"period_returned": "2026-03-31", "period_requested": "2025-Q4", "aggregation": "end"})
 
 
 # ---------- 6. a tool-leírás azt ígéri, amit a szerver MCP-n tud ----------
