@@ -356,3 +356,34 @@ def test_form_like_grid_in_pdf_and_numeric_label_lowers_quality(tmp_path):
     assert "Tavozas – 1." in labels and "Erkezes – 2." in labels and "Erkezes – 1." not in labels
     assert not any(detect.numeric(l) for l in labels)
     assert sch["numeric_labels"] == 1 and deep.quality(sch)["level"] == "low"
+
+
+# ---------- 4. extract: a DOCX-táblák is ----------
+
+def test_extract_docx_text_has_cells_in_order_and_tables_mode(client, put_file):
+    _need("wordcraft")
+    fid = _fixture_as(client, put_file, "docx")
+    err, r = _call(client, "extract", {"file_id": fid, "mode": "text"})
+    assert not err, r
+    lines = r["text"].split("\n")
+    i = lines.index("Év\tBevétel\tKiadás")
+    assert lines[i + 1:i + 3] == ["2023\t120\t95", "2024\t140\t110"]
+    assert lines.index("A kísérleti program bevételei és kiadásai ezer forintban:") < i < lines.index("Jelentkezési adatlap")
+    assert "árvíztűrő tükörfúrógép" in r["text"]
+    err, r = _call(client, "extract", {"file_id": fid, "mode": "tables"})
+    assert not err, r
+    assert r["tables"] == [{"page": 1, "rows": [["Év", "Bevétel", "Kiadás"], ["2023", "120", "95"], ["2024", "140", "110"]]}]
+
+
+def test_extract_docx_merged_cells_like_pdfplumber(tmp_path, put_file, client):
+    from docx import Document
+    d = Document()
+    t = d.add_table(rows=2, cols=3)
+    t.cell(0, 0).merge(t.cell(0, 1)).text = "Összevont fejléc"
+    t.cell(0, 2).text = "Ű"
+    t.cell(1, 0).text, t.cell(1, 1).text, t.cell(1, 2).text = "a", "b", "c"
+    p = tmp_path / "osszevont.docx"
+    d.save(str(p))
+    err, r = _call(client, "extract", {"file_id": put_file(p), "mode": "tables"})
+    assert not err, r
+    assert r["tables"][0]["rows"] == [["Összevont fejléc", None, "Ű"], ["a", "b", "c"]]

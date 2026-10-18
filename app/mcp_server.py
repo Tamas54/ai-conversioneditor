@@ -1470,7 +1470,8 @@ async def merge(file_ids: list[str], target_format: str = "pdf") -> dict:
 @linked
 async def extract(file_id: str, mode: str = "text") -> dict:
     """Extract text (PDF, DOCX, PPTX, MD, TXT, HTML) or tables (PDF, DOCX) — reads only, no new file.
-    mode: 'text' | 'tables'."""
+    mode: 'text' (DOCX: in document order, each table row on its own line, cells tab-separated) | 'tables'
+    ([{page, rows}] for PDF and DOCX; a merged cell's continuation is null)."""
     return await t_extract(file_id, mode)
 
 
