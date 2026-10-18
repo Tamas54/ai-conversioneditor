@@ -491,3 +491,80 @@ def test_ai_picture_requests_get_one_clear_error_before_any_work(client, put_fil
         assert err and msg in str(res), (name, res)
     err, res = _call(client, "generate_image", {"stock_search": ""})
     assert err and "stock_search" in str(res)
+
+
+# ---------- 7. közös kimenő HTTP-kliens: leíró User-Agent, SSRF-védelem ----------
+
+@pytest.fixture()
+def local_http():
+    """127.0.0.1-en futó apró szerver: /ua visszaadja a User-Agentet, /to-meta átirányít a metaadat-címre."""
+    import http.server
+    import threading
+    seen = {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["ua"] = self.headers.get("User-Agent")
+            if self.path == "/to-meta":
+                self.send_response(302)
+                self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
+                self.end_headers()
+                return
+            body = "árvíztűrő".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}", seen
+    srv.shutdown()
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8000/x", "http://localhost/x", "http://169.254.169.254/latest/meta-data/",
+                                 "http://metadata.google.internal/computeMetadata/v1/", "http://[::1]/x",
+                                 "http://100.100.100.200/latest/meta-data/", "file:///etc/passwd"])
+def test_upload_from_url_refuses_internal_addresses(client, url):
+    err, res = _call(client, "upload_from_url", {"url": url})
+    assert err and ("internal addresses" in str(res) or "only http(s)" in str(res)), res
+
+
+async def test_redirect_to_metadata_and_internal_peer_are_refused(local_http, monkeypatch):
+    from app import net
+    base, seen = local_http
+    real = net.check_url
+
+    async def as_if_public(url):                     # a helyi szervert „nyilvánosnak” vesszük, minden mást a valódi szabály
+        if not url.startswith(base):
+            await real(url)
+    monkeypatch.setattr(net, "check_url", as_if_public)
+    with pytest.raises(net.UnsafeURL):
+        await net.fetch(base + "/to-meta")           # az átirányítás célját is ellenőrizzük
+    with pytest.raises(net.UnsafeURL):
+        await net.fetch(base + "/ua")                # a kapcsolat tényleges címe (127.0.0.1) belső
+
+
+async def test_outbound_requests_carry_a_descriptive_user_agent(local_http, monkeypatch):
+    from app import net
+    base, seen = local_http
+    monkeypatch.setenv("ALLOW_PRIVATE_URLS", "1")
+    got = await net.fetch(base + "/ua")
+    assert got.content.decode() == "árvíztűrő"
+    assert seen["ua"].startswith("AIConversionEditor-Studio/1.0 (+") and "github.com" in seen["ua"]
+
+
+def test_upload_from_url_wikimedia(client):
+    """A stock_search Wikimedia-linkjei letölthetők (a leíró UA nélkül a Wikimedia 403-at ad)."""
+    import socket
+    try:
+        socket.getaddrinfo("upload.wikimedia.org", 443)
+    except OSError:
+        pytest.skip("no network")
+    err, res = _call(client, "upload_from_url", {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png"})
+    assert not err, res                                   # a régi kliens „python-httpx” UA-jára 403 jött
+    assert res["file_id"].endswith(".png") and res["size_kb"] > 100

@@ -49,14 +49,14 @@ async def _resolve_input(
             raise FileNotFoundError(f"file_id not found: {file_id}")
         return p
     if source_url:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.get(source_url)
-            r.raise_for_status()
-            ext = source_format or Path(source_url.split("?")[0]).suffix or "bin"
-            fid = new_file_id(ext)
-            p = input_path(fid)
-            await save_bytes(p, r.content)
-            return p
+        from app import net
+        from app.api_v1.operations import max_bytes
+        got = await net.fetch(source_url, max_bytes=max_bytes(False), timeout=120)   # SSRF-védett közös kliens
+        ext = source_format or Path(source_url.split("?")[0]).suffix or "bin"
+        fid = new_file_id(ext)
+        p = input_path(fid)
+        await save_bytes(p, got.content)
+        return p
     raise ValueError("Either file_id or source_url is required")
 
 

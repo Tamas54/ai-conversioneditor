@@ -303,22 +303,28 @@ async def fetch_article(url: str) -> dict[str, Any]:
     """Egy weboldal cikk-szövege (címsorok + bekezdések), címe, fő képe (og:image) és a webhely neve."""
     import httpx
     from bs4 import BeautifulSoup
-    from app.tools.images import _UA as polite_ua
+    from app import net
     browser = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
     host = (httpx.URL(url).host or "").lower()
     # 10-12 élesben: a Wikipedia 403-mal tiltja az adatközpontból jövő, böngészőnek álcázott kérést — a Wikimedia
-    # a kapcsolatot megadó, őszinte User-Agentet kéri; máshol a böngésző-UA az első, 403/429 után az őszinte
-    uas = [polite_ua, browser] if host.endswith(("wikipedia.org", "wikimedia.org", "wikinews.org", "wikivoyage.org")) else [browser, polite_ua]
-    r = None
-    async with httpx.AsyncClient(timeout=25, follow_redirects=True) as c:
-        for ua in uas:
-            r = await c.get(url, headers={"User-Agent": ua, "Accept-Language": "en,hu;q=0.8,*;q=0.5"})
-            if r.status_code not in (401, 403, 429):
+    # a kapcsolatot megadó, őszinte User-Agentet kéri; máshol a böngésző-UA az első, 403/429 után az őszinte.
+    # A letöltés a közös kimenő klienssel megy (SSRF-védelem: belső címre nem kér).
+    uas = ([net.user_agent(), browser] if host.endswith(("wikipedia.org", "wikimedia.org", "wikinews.org", "wikivoyage.org"))
+           else [browser, net.user_agent()])
+    got, code = None, "no answer"
+    for ua in uas:
+        try:
+            got = await net.fetch(url, max_bytes=max(MAX_FETCH, 5 * 1024 * 1024), timeout=25, retries=1,
+                                  headers={"User-Agent": ua, "Accept-Language": "en,hu;q=0.8,*;q=0.5"})
+            break
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code not in (401, 403, 429):
                 break
-    if r is None or r.status_code >= 400:
-        code = r.status_code if r is not None else "no answer"
+    if got is None:
         raise ValueError(f"That page wouldn't let us read it ({code}) — paste the article's text instead.")
-    html = r.content[:MAX_FETCH].decode(r.encoding or "utf-8", "replace")
+    m = re.search(r"charset=([\w-]+)", got.content_type or "")
+    html = got.content[:MAX_FETCH].decode(m.group(1) if m else "utf-8", "replace")
     soup = BeautifulSoup(html, "lxml")
     meta = lambda *keys: next((m.get("content") for k in keys for m in soup.find_all("meta", attrs={"property": k}) + soup.find_all("meta", attrs={"name": k}) if m.get("content")), None)
     title = meta("og:title", "twitter:title") or (soup.title.string.strip() if soup.title and soup.title.string else "")

@@ -321,21 +321,21 @@ async def upload_from_url(url: Optional[str] = None, filename: Optional[str] = N
     Returns: same shape as upload_file: {file_id, url, size_kb, original_name, edit_url}.
     """
     import httpx
+    from app import net
+    from app.api_v1 import operations as O
     if file is not None:
         url = file.download_url
         filename = filename or file.name
     if not url:
         raise ValueError("Give url, or attach the file in the chat (file).")
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.content
+    try:                                  # a közös kimenő kliens: SSRF-védelem, leíró User-Agent, méretkorlát
+        got = await net.fetch(url, max_bytes=O.max_bytes(False), timeout=120)
+    except httpx.HTTPStatusError as e:
+        raise ValueError(f"The server of that URL answered HTTP {e.response.status_code} — check the link "
+                         "(or download it and upload_file it).") from None
+    data = got.content
     if not filename:
-        import re as _re
-        cd = r.headers.get("content-disposition", "")
-        m = _re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", cd, _re.I)
-        from urllib.parse import unquote
-        filename = unquote(m.group(1)) if m else (url.rstrip("/").split("/")[-1].split("?")[0] or "downloaded.bin")
+        filename = got.name if got.name != "download" else "downloaded.bin"
     ext = Path(filename).suffix.lstrip(".").lower()
     if not ext or ext == "bin":            # név kiterjesztés nélkül (csetfájl-link): a tartalomból
         ext = _sniff_ext(data)

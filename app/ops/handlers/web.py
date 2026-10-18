@@ -5,8 +5,6 @@ SSRF-védelem: a cím és minden betöltött erőforrás (képek, szkriptek…) 
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -16,22 +14,8 @@ from app.ops.handlers import out_name
 
 
 def _host_ok(url: str) -> bool:
-    import os
-    u = urlparse(url)
-    if u.scheme in ("data", "blob", "about"):
-        return True
-    if u.scheme not in ("http", "https") or not u.hostname:
-        return False
-    if os.getenv("ALLOW_PRIVATE_URLS", "").lower() in ("1", "true", "yes"):
-        return True
-    try:
-        for info in socket.getaddrinfo(u.hostname, None):
-            ip = ipaddress.ip_address(info[4][0].split("%")[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-                return False
-    except socket.gaierror:
-        return False
-    return True
+    from app import net
+    return net.url_ok(url)            # a közös szabály (belső, metaadat-, nem globális cím tiltva)
 
 
 async def _page(url: str, width: int, wait_ms: int):
@@ -42,7 +26,11 @@ async def _page(url: str, width: int, wait_ms: int):
     import os
     exe = os.getenv("CHROMIUM_EXECUTABLE") or None       # egyéni Chromium (pl. ha a Playwright-verzió eltér)
     browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"], executable_path=exe)
-    ctx = await browser.new_context(viewport={"width": width, "height": 900}, device_scale_factor=1, java_script_enabled=True)
+    ua = await browser.new_page()                       # a böngésző saját UA-ja + a mienk (kik vagyunk, hol érnek el)
+    agent = f"{await ua.evaluate('navigator.userAgent')} {net.APP}/{net.VERSION}"
+    await ua.close()
+    ctx = await browser.new_context(viewport={"width": width, "height": 900}, device_scale_factor=1, java_script_enabled=True,
+                                    user_agent=agent)
     page = await ctx.new_page()
 
     async def guard(route):
