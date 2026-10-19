@@ -263,7 +263,8 @@ def test_webhook_off_without_secret(client, monkeypatch):
 
 
 def test_polling_fallback_and_cancel(db_client, fake):
-    """Senki nem vár rá (újraindítás): a lekérdezés (resume) fejezi be; a megszakítás a holdot visszaadja."""
+    """Senki nem vár rá (újraindítás): a lekérdezés (resume) fejezi be. Megszakítás: el nem indult op → a hold visszajár;
+    a már a szolgáltatónál lévő → a hold marad, a végén a tényleges költség (a megszakítás szabálya, app/tools/ai_video.py)."""
     from app import db
     from app.tools import ai_video
     call = db_client.portal.call
@@ -276,8 +277,21 @@ def test_polling_fallback_and_cancel(db_client, fake):
     assert call(db.user_get, uid)["credits"] == 34           # ceil(40 × 0.15) = 6
     op2 = call(_as(uid, lambda: ai_video.submit("t_gen", "m", [{"prompt": "y"}], hold=17, meta={"units": 4})))
     assert call(db.user_get, uid)["credits"] == 17
-    assert call(_as(uid, lambda: ai_video.cancel(op2)))["status"] == "cancelled"
-    assert call(db.user_get, uid)["credits"] == 34
+    st = call(_as(uid, lambda: ai_video.cancel(op2)))
+    assert st["status"] == "cancelling" and "can't be stopped" in st["note"]
+    assert call(db.user_get, uid)["credits"] == 17                      # a kie fut és számláz: a foglalás marad
+    tid2 = call(db._rows, "SELECT provider_task_id FROM provider_tasks WHERE id = %s", (op2,))[0]["provider_task_id"]
+    fake.finish(tid2, cost=40)
+    rows = call(db._rows, "SELECT * FROM provider_tasks WHERE id = %s", (op2,))
+    call(lambda: ai_video.poll(rows))
+    st = call(_as(uid, lambda: ai_video.get(op2)))
+    assert st["status"] == "cancelled" and st["credits_charged"] == 6 and call(db.user_get, uid)["credits"] == 28
+    op3 = call(_as(uid, lambda: ai_video.reserve("t_gen", "m", hold=17, meta={"units": 4})))      # még nincs a kie-nél
+    assert call(_as(uid, lambda: ai_video.cancel(op3)))["status"] == "cancelled"
+    assert call(db.user_get, uid)["credits"] == 28
+    with pytest.raises(ai_video.AIVideoError, match="cancelled before it started"):
+        call(lambda: ai_video.launch(op3, [{"prompt": "z"}]))
+    assert len(fake.created) == 2                                        # a megszakított op el sem indult
 
 
 def test_feature_flag(monkeypatch):

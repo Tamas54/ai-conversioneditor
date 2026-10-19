@@ -71,48 +71,78 @@ async def apply_many(uid: str, entries: list[dict[str, Any]]) -> list[dict[str, 
     if kind_bad := [e["kind"] for e in entries if e["kind"] not in KINDS]:
         raise ValueError(f"unknown ledger kind: {kind_bad}")
     from psycopg.rows import dict_row
-    from psycopg.types.json import Jsonb
     out: list[dict[str, Any]] = []
     async with db._pool.connection() as conn:
         async with conn.transaction():
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("SELECT credits FROM users WHERE id = %s FOR UPDATE", (uid,))
                 row = await cur.fetchone()
-                if not row:
+                if not row:                    # vendég / ismeretlen fiók: levonásnál „nincs fedezet” (mint régen)
+                    if any(int(e.get("delta") or 0) < 0 for e in entries):
+                        raise InsufficientCredits(needed=-min(int(e.get("delta") or 0) for e in entries), available=0)
                     raise ValueError(f"no such user: {uid}")
-                bal = int(row["credits"])
+                bal = start = int(row["credits"])
                 for e in entries:
-                    key = e.get("idempotency_key")
-                    if key:
-                        await cur.execute("SELECT id FROM credit_ledger WHERE idempotency_key = %s", (key,))
-                        dup = await cur.fetchone()
-                        if dup:
-                            out.append({"balance": bal, "delta": 0, "id": dup["id"], "duplicate": True, "kind": e["kind"]})
-                            continue
-                    delta = 0 if e["kind"] == "admin_usage" else int(e["delta"])
-                    if e.get("top_up_to") is not None:
-                        delta = max(0, int(e["top_up_to"]) - bal)
-                        if not delta:
-                            out.append({"balance": bal, "delta": 0, "id": None, "duplicate": False, "kind": e["kind"]})
-                            continue
-                    if delta < 0 and bal + delta < 0:
-                        raise InsufficientCredits(needed=-delta, available=bal)
-                    bal += delta
-                    await cur.execute(
-                        """INSERT INTO credit_ledger (user_id, workspace_id, delta, balance_after, reason, ref, kind, operation,
-                                                      provider, provider_task_id, provider_cost, idempotency_key, meta)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (uid, e.get("workspace_id"), delta, bal, e.get("reason") or e["kind"], e.get("ref"), e["kind"],
-                         e.get("operation"), e.get("provider"), e.get("provider_task_id"), e.get("provider_cost"), key,
-                         Jsonb(e["meta"]) if e.get("meta") else None))
-                    out.append({"balance": bal, "delta": delta, "id": (await cur.fetchone())["id"], "duplicate": False,
-                                "kind": e["kind"]})
-                if bal != int(row["credits"]):
+                    bal = await _book(cur, uid, bal, e, out)
+                if bal != start:
                     await cur.execute("UPDATE users SET credits = %s WHERE id = %s", (bal, uid))
     for r in out:
         if not r["duplicate"]:
             _note(uid, r["delta"], r["kind"], r["balance"])
     return out
+
+
+async def _book(cur, uid: str, bal: int, e: dict[str, Any], out: list[dict[str, Any]]) -> int:
+    """Egy könyvsor a zárolt egyenlegre (idempotencia-kulcs, fedezet) → az új egyenleg."""
+    from psycopg.types.json import Jsonb
+    key = e.get("idempotency_key")
+    if key:
+        await cur.execute("SELECT id FROM credit_ledger WHERE idempotency_key = %s", (key,))
+        dup = await cur.fetchone()
+        if dup:
+            out.append({"balance": bal, "delta": 0, "id": dup["id"], "duplicate": True, "kind": e["kind"]})
+            return bal
+    delta = 0 if e["kind"] == "admin_usage" else int(e["delta"])
+    if e.get("top_up_to") is not None:
+        delta = max(0, int(e["top_up_to"]) - bal)
+        if not delta:
+            out.append({"balance": bal, "delta": 0, "id": None, "duplicate": False, "kind": e["kind"]})
+            return bal
+    if delta < 0 and bal + delta < 0:
+        raise InsufficientCredits(needed=-delta, available=bal)
+    bal += delta
+    await cur.execute(
+        """INSERT INTO credit_ledger (user_id, workspace_id, delta, balance_after, reason, ref, kind, operation,
+                                      provider, provider_task_id, provider_cost, idempotency_key, meta)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (uid, e.get("workspace_id"), delta, bal, e.get("reason") or e["kind"], e.get("ref"), e["kind"],
+         e.get("operation"), e.get("provider"), e.get("provider_task_id"), e.get("provider_cost"), key,
+         Jsonb(e["meta"]) if e.get("meta") else None))
+    out.append({"balance": bal, "delta": delta, "id": (await cur.fetchone())["id"], "duplicate": False, "kind": e["kind"]})
+    return bal
+
+
+async def free_topup(uid: str, month: str, amount: int) -> int:
+    """Ingyenes csomag: hónaponként egyszer feltöltés legalább `amount` kreditre — a hónap jelölése és a jóváírás EGY
+    tranzakcióban, a sorzár alatt (közben levonás is jöhet). Vissza: a jóváírt összeg."""
+    from psycopg.rows import dict_row
+    out: list[dict[str, Any]] = []
+    async with db._pool.connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT credits FROM users WHERE id = %s AND plan = 'free' AND topup_month IS DISTINCT FROM %s "
+                                  "FOR UPDATE", (uid, month))
+                row = await cur.fetchone()
+                if not row:
+                    return 0
+                bal = await _book(cur, uid, int(row["credits"]), dict(
+                    delta=0, kind="grant", reason="free monthly credits", ref=month, top_up_to=amount,
+                    idempotency_key=f"topup:{uid}:{month}"), out)
+                await cur.execute("UPDATE users SET credits = %s, topup_month = %s WHERE id = %s", (bal, month, uid))
+    for r in out:
+        if not r["duplicate"]:
+            _note(uid, r["delta"], r["kind"], r["balance"])
+    return out[0]["delta"] if out else 0
 
 
 async def balance(uid: str) -> Optional[int]:
@@ -124,10 +154,22 @@ async def balance(uid: str) -> Optional[int]:
 
 
 async def history(uid: str, limit: int = 50, before: Optional[int] = None) -> list[dict[str, Any]]:
+    """A felhasználó saját tranzakciói — a szolgáltatói költség, a szolgáltató feladat-azonosítója és a meta (becslés,
+    szorzó) NEM: az a mi költségalapunk (az admin a /api/admin/credits/status-ban látja)."""
     return await db._rows(
-        """SELECT id, created_at, kind, delta, balance_after, reason, ref, operation, provider, provider_task_id, provider_cost, meta
+        """SELECT id, created_at, kind, delta, balance_after, reason, operation
            FROM credit_ledger WHERE user_id = %s AND (%s::bigint IS NULL OR id < %s::bigint)
            ORDER BY id DESC LIMIT %s""", (uid, before, before, max(1, min(200, limit))))
+
+
+PRIVATE_ESTIMATE_KEYS = ("provider_cost", "provider", "multiplier")
+
+
+def public_estimate(est: dict[str, Any], uid: Optional[str] = None) -> dict[str, Any]:
+    """Becslés a felhasználónak: a szolgáltatói költség (a mi költségalapunk) csak az adminnak."""
+    if (uid or tenancy.current_user_id()) == tenancy.ADMIN_ID:
+        return est
+    return {k: v for k, v in est.items() if k not in PRIVATE_ESTIMATE_KEYS}
 
 
 # ---------- fizetős művelet: hold → capture / release ----------
@@ -154,13 +196,13 @@ async def settle(uid: str, op_id: str, held: int, charge: int, *, operation: str
                  meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Siker: a foglalás feloldása (+held) és a tényleges ár levonása (−charge, legfeljebb a foglalt összeg) EGY
     tranzakcióban. Hiba: charge=0 → csak a feloldás. Admin: egy admin_usage sor (delta 0) a „kiszámlázandó” összeggel."""
-    charge = max(0, min(int(charge), int(held))) if held else max(0, int(charge))
     if _who(uid) == "admin":
         if db.enabled():
             await apply(uid, 0, "admin_usage", operation, operation=operation, provider=provider,
                         provider_task_id=provider_task_id, provider_cost=provider_cost, idempotency_key=f"admin:{op_id}",
-                        meta={**(meta or {}), "would_charge": charge})
+                        meta={**(meta or {}), "would_charge": max(0, int(charge))})
         return {"balance": None, "charged": 0}
+    charge = max(0, min(int(charge), int(held)))      # sosem több, mint amit foglaltunk (foglalás nélkül: semmi)
     if not db.enabled():
         return {"balance": None, "charged": 0}
     entries = []
@@ -193,6 +235,7 @@ _RULES_TTL_S = 30
 # Studio-kredit / kie-kredit (a haszonnal együtt). 1 kie-kredit = $0.005 ≈ €0.0046; a legolcsóbban eladott Studio-kredit a
 # Pro csomagé (€19 / 400 = €0.0475, ÁFÁ-val együtt) → 0.15-nél a Pro-kreditből is ~1.2–1.5× az önköltség, a kreditcsomagból
 # (€0.10) ~3×. Tulajdonosi döntés: KIE_CREDIT_MULTIPLIER (vagy soronként az adminban).
+# FIGYELEM: csak az induló (még nem létező) sorokba kerül be — a meglévő árakat az admin-felületen kell módosítani.
 KIE_MULTIPLIER = float(os.getenv("KIE_CREDIT_MULTIPLIER", "0.15"))
 
 
@@ -241,7 +284,7 @@ async def rules() -> list[dict[str, Any]]:
     if id(db._pool) not in _seeded:                  # az induló árak az első olvasáskor (a lifespan is meghívja)
         _seeded.add(id(db._pool))
         await seed_rules()
-    rows = await db._rows("SELECT * FROM pricing_rules ORDER BY operation, model, tier")
+    rows = await db._rows("SELECT * FROM pricing_rules WHERE deleted_at IS NULL ORDER BY operation, model, tier")
     _rules_cache = (time.monotonic(), rows)
     return rows
 
@@ -287,7 +330,7 @@ async def rule_save(r: dict[str, Any]) -> dict[str, Any]:
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
            ON CONFLICT (operation, model, tier) DO UPDATE SET unit = EXCLUDED.unit, provider = EXCLUDED.provider,
              provider_cost = EXCLUDED.provider_cost, multiplier = EXCLUDED.multiplier, min_charge = EXCLUDED.min_charge,
-             note = EXCLUDED.note, updated_at = now() RETURNING *""",
+             note = EXCLUDED.note, deleted_at = NULL, updated_at = now() RETURNING *""",
         (str(r["operation"]).strip(), (r.get("model") or "").strip(), (r.get("tier") or "").strip(), r.get("unit") or "job",
          r.get("provider") or None, r.get("provider_cost") or 0, r.get("multiplier") if r.get("multiplier") is not None else 1,
          int(r.get("min_charge") or 0), r.get("note")))
@@ -296,7 +339,9 @@ async def rule_save(r: dict[str, Any]) -> dict[str, Any]:
 
 
 async def rule_delete(rule_id: int) -> bool:
-    ok = bool(await db._rows("DELETE FROM pricing_rules WHERE id = %s RETURNING id", (rule_id,)))
+    """Sírkő (deleted_at), nem DELETE: az induló árak újra-seedelése így nem hozza vissza a törölt sort."""
+    ok = bool(await db._rows("UPDATE pricing_rules SET deleted_at = now(), updated_at = now() WHERE id = %s AND deleted_at IS NULL "
+                             "RETURNING id", (rule_id,)))
     _forget_rules()
     return ok
 
@@ -460,10 +505,10 @@ async def start() -> None:
     except Exception:
         log.exception("induló árak")
     _tasks.append(asyncio.create_task(_reconcile_loop()))
-    from app import providers
-    if providers.active():
-        from app.tools import ai_video
-        _tasks.append(asyncio.create_task(ai_video.resume_loop()))
+    # a félbemaradt AI-feladatok MINDIG folytatódnak (a kapcsoló kikapcsolása után is: a foglalás és a szolgáltató által
+    # már kiszámlázott eredmény nem ragadhat be)
+    from app.tools import ai_video
+    _tasks.append(asyncio.create_task(ai_video.resume_loop()))
 
 
 async def stop() -> None:

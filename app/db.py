@@ -316,6 +316,12 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
 );
 -- külső AI-feladatok (kie.ai…): a mi azonosítónk (a hold kulcsa is), a szolgáltatóé, állapot, a tárolt eredményfájlok —
 -- újraindítás után is innen folytatódik (lekérdezés), a webhook a provider_task_id-vel talál ide
+-- törölt árszabály = sírkő (különben az induló árak újra-seedelése visszahozná) — csak ha hiányzik (ADD COLUMN zár)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pricing_rules' AND column_name = 'deleted_at') THEN
+    ALTER TABLE pricing_rules ADD COLUMN deleted_at timestamptz;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS provider_tasks (
     id                text PRIMARY KEY,
     user_id           text NOT NULL,
@@ -809,14 +815,8 @@ async def usage_add(uid: str, month: str, kind: str, n: int, limit: Optional[int
 
 async def free_topup(uid: str, month: str, amount: int) -> int:
     """Ingyenes csomag: hónaponként egyszer feltöltés legalább `amount` kreditre (nem halmozódik). Vissza: jóváírt."""
-    rows = await _rows("""UPDATE users SET topup_month = %s WHERE id = %s AND plan = 'free' AND topup_month IS DISTINCT FROM %s
-                          RETURNING id""", (month, uid, month))
-    if not rows:
-        return 0
-    from app import credits                      # a hiány a sorzár alatt számolva (közben levonás is jöhet)
-    res = await credits.apply(uid, 0, "grant", "free monthly credits", ref=month, idempotency_key=f"topup:{uid}:{month}",
-                              top_up_to=amount)
-    return res["delta"]
+    from app import credits                      # egy tranzakció: a hónap jelölése és a jóváírás (app/credits.py)
+    return await credits.free_topup(uid, month, amount)
 
 
 async def user_set_billing(uid: str, *, plan: Optional[str] = None, customer: Optional[str] = None,

@@ -25,6 +25,20 @@ router = APIRouter()
 log = logging.getLogger("aice.ai_video.routes")
 
 
+class _NoWebhookToken(logging.Filter):
+    """A /webhooks/kie?token=… titka ne kerüljön a uvicorn hozzáférési naplójába (a kérés sora: args[2])."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "token=" in args[2]:
+            import re
+            record.args = (*args[:2], re.sub(r"token=[^&\s]*", "token=***", args[2]), *args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_NoWebhookToken())
+
+
 def _fail(e: Exception) -> HTTPException:
     from app import db
     from app.tools import ai_video
@@ -104,13 +118,14 @@ async def ai_estimate(body: dict[str, Any]) -> dict[str, Any]:
     from app import credits
     from app.tools import ai_video
     try:
+        ai_video.require_enabled()
         if (body.get("action") or "") == "enhance":
             est = await ai_video.estimate_enhance(await ai_video._source_video(body.get("file_id") or ""), body.get("factor"))
         else:
             est = await ai_video.estimate_clip(body)
     except Exception as e:
         raise _fail(e)
-    return {**est, "balance": await credits.balance(tenancy.current_user_id())}
+    return {**credits.public_estimate(est), "balance": await credits.balance(tenancy.current_user_id())}
 
 
 @router.post("/api/ai/enhance")
