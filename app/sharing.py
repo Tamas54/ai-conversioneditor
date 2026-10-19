@@ -757,8 +757,8 @@ async def mcp_action(action: str, file_id: Optional[str], *, email: Optional[str
 # MCP-referencia (a „schema” akcióba köthető — a vezető dönt, hová): a files eszköz megosztó akciói
 SHARE_SCHEMA_REF = """Sharing (files tool; when the server has sharing on):
   files(action="share", file_id, email, role="viewer"|"editor"|"owner"|"none") — invite someone (an e-mail without an
-    account waits until they sign up; no e-mail is sent), change their role, or remove them (role="none"). Without
-    email: who has access + recent activity (who changed what).
+    account waits until they sign up; no e-mail is sent), change their role, or remove them (role="none"). GPS/location
+    is removed from the shared footage and photos. Without email: who has access + recent activity (who changed what).
   files(action="share_link", file_id, role="viewer"|"editor") — a link that works only for signed-in people.
   files(action="list") — your files, plus shared_with_me [{file_id, name, shared_by, role}].
   Editing a shared file works like your own: every edit is a new version in the owner's workspace, paid by you.

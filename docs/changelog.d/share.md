@@ -26,3 +26,13 @@
   Files → "Shared with me" (owner's name on each card, "By <name>" on versions others made in your workspace); the file
   header tag "<Owner>'s · you can edit"; a "Two versions" bar that lets the user choose the current version after a
   parallel save; a "<Name> is editing this right now" bar from the edit-lock heartbeat.
+- **Privacy — GPS / location stripped on share and on export** (`app/storage/privacy.py`, `STRIP_LOCATION=1` default):
+  video via `ffmpeg -c copy` with the location keys blanked (`location`, `location-eng`, `©xyz`,
+  `com.apple.quicktime.location.ISO6709`; data tracks dropped) — rotation (display matrix), creation time and the other
+  metadata are kept, the mtime too; photos via ExifTool (EXIF GPS IFD, XMP/IPTC location fields), Pillow fallback for
+  JPEG/PNG without touching pixels. On share the shared family's media is cleaned in place (opt-out `keep_location`);
+  on export every outgoing copy is cleaned and cached (`/files/…` downloads incl. Range, image `/preview`, cloud export,
+  Save to Photos). If location is present but can't be removed, the file isn't sent (422).
+  **Measured: the spec's "pipeline outputs are already clean" is false for the ffmpeg tools** — resize-video,
+  trim-video, compress-video, rotate-video and merge-files keep `location`/`location-eng` from an iPhone-like input
+  (ffmpeg 4.4 copies global metadata by default; `ios_safe` uses `-map_metadata 0`). The export guard covers them.

@@ -23,6 +23,11 @@ async def get_file(file_id: str, t: str = Query(..., description="signed token")
         p = input_path(file_id)
     if not p.exists():
         raise HTTPException(404, "file not found")
+    from app.storage import privacy
+    try:
+        p = await privacy.export_path(p)        # export: helyadat (GPS) nélkül — iPhone-felvétel, fotó (STRIP_LOCATION)
+    except privacy.LocationNotRemoved as e:
+        raise HTTPException(422, str(e)) from None
     # Use the human label as the download filename so the user gets
     # `page28.docx` instead of `f09de87…docx`. Falls back to file_id.
     download_name, media_type = download_meta(file_id, display_label(file_id) or file_id)
