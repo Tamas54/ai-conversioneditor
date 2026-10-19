@@ -102,7 +102,8 @@ mcp = FastMCP(
         "but a step where this server runs its OWN AI model (choosing stock photos with a vision model, finding image search "
         "words, writing a video script from an article, describe_image / ocr_image / extract_table_from_image, "
         "edit_with_instruction, facts checks) is a Studio AI step: a monthly allowance, then credits (result field "
-        "`studio_ai`). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
+        "`studio_ai`: steps, credits_used, balance; without enough credits a paid call fails with insufficient_credits "
+        "before anything starts). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
         "finished scenes=[…] plan, look at pictures with files(action=\"preview\"), and use the editing commands directly."
     ),
     streamable_http_path="/",
@@ -167,25 +168,39 @@ def linked(fn):
     async def w(*a, **k):
         import time
         from app import tenancy
-        from app import billing
+        from app import billing, credits
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
         t0 = time.monotonic()
         try:
-            with billing.count_steps() as used:        # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
-                res = await _finalize(fn.__name__, k, await fn(*a, **k))
-            if used[0] and isinstance(res, dict):
-                res["studio_ai"] = {"steps": used[0], "credits": used[1],
-                                    "note": "Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
-                                            f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions."}
+            # a kreditút (OMLETT 1.5): a token felhasználója fizet, mint a webes felületen; fedezet nélkül el sem indul
+            async with credits.mcp_call(fn.__name__, k) as acct:
+                with billing.count_steps() as used:    # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
+                    res = await _finalize(fn.__name__, k, await fn(*a, **k))
+                acct["steps"] = used[0]
+            if isinstance(res, dict) and (used[0] or acct["used"] or acct["held"] or acct["would"]):
+                res["studio_ai"] = {"steps": used[0], "credits": used[1], **_credit_report(acct)}
+                if used[0]:
+                    res["studio_ai"]["note"] = ("Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
+                                                f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions.")
             st = (res.get("check") or {}).get("status") if isinstance(res, dict) else None
             log.info("mcp %s(%s) ok %.1fs%s", fn.__name__, _arg_brief(k), time.monotonic() - t0, f" check={st}" if st else "")
             return res
         except Exception as e:
             log.warning("mcp %s(%s) FAILED %.1fs: %s", fn.__name__, _arg_brief(k), time.monotonic() - t0, str(e)[:300])
+            if isinstance(e, credits.InsufficientCredits):
+                raise ValueError(credits.insufficient_message(e)) from None
             raise
         finally:
             tenancy.client_makes_images.reset(tok)
     return w
+
+
+def _credit_report(acct: dict) -> dict:
+    """studio_ai bővítése: a hívásban felhasznált (és lefoglalt) kredit, az egyenleg utána; admin: nem fizet."""
+    from app import tenancy
+    if acct.get("uid") == tenancy.ADMIN_ID:
+        return {"credits_used": 0, "balance": None, "admin": True, **({"would_charge": acct["would"]} if acct["would"] else {})}
+    return {"credits_used": acct["used"], **({"credits_held": acct["held"]} if acct["held"] else {}), "balance": acct["balance"]}
 
 
 # a közvetlen szerkesztők (edits.py) eredménye eddig címke nélkül maradt („3fa8c1e2.docx") — itt kap nevet
