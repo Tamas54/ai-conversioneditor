@@ -211,7 +211,7 @@ async def auth_middleware(request: Request, call_next):
         except sharing.AccessDenied as e:
             if e.mcp:                   # MCP: az eszköz hibája a JSON-RPC válaszban (nem HTTP-hiba)
                 return JSONResponse(e.mcp)
-            return JSONResponse({"detail": str(e), "not_shared": True}, status_code=403)
+            return JSONResponse({"detail": str(e), "not_shared": True}, status_code=getattr(e, "status", 403))
         resp = await call_next(request)
     finally:
         sharing.leave_request(shared_tok)

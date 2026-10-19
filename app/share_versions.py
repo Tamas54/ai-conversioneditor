@@ -81,6 +81,18 @@ async def _check_fork(fid: str, owner: Optional[str], actor: Optional[str]) -> O
     return await conflict_for(actor, fid)
 
 
+def _can_see(fid: str) -> bool:
+    from app.sharing import AccessDenied
+    sh = tenancy.shared()
+    if sh is None or sh.owner == sh.actor:
+        return True
+    try:
+        sh.root_for(fid)
+        return True
+    except (AccessDenied, FileNotFoundError):
+        return False
+
+
 async def conflict_for(actor: str, fid: str) -> Optional[dict[str, Any]]:
     """Nyitott ütközés ehhez a fájlhoz: a te változatod és a másiké, nevekkel (a választó felülethez)."""
     from app import db
@@ -98,6 +110,8 @@ async def conflict_for(actor: str, fid: str) -> Optional[dict[str, Any]]:
             return None
         mine, theirs = rows[0]["file_id"], fid
     if not theirs:
+        return None
+    if not (_can_see(mine) and _can_see(theirs)):        # megosztott kérésben csak a család változatairól beszélünk
         return None
     mm, tm = read_meta(mine) or {}, read_meta(theirs) or {}
     owner = tenancy.workspace_id()

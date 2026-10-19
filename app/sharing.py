@@ -71,13 +71,18 @@ def _exists_in(uid: str, fid: str) -> bool:
 class Shared:
     """Egy kérés megosztott munkaterülete: kié (owner), ki dolgozik benne (actor), fájlonként milyen joggal (roles).
 
-    root_for(fid) adja a fájl helyét: a megosztott család és az e kérésben létrehozott fájlok a tulajdonosnál; a
-    belépett felhasználó SAJÁT fájljai (pl. a projekthez hozott új felvétel) a sajátjában; új fájlt a tulajdonosnál
-    csak szerkesztő hozhat létre. A kérés minden fájl-azonosítóját a belépéskor ellenőriztük (resolve) — a tulajdonos
-    további fájljait itt csak a szerver saját kódja éri el (névadás, verziófa), nem a kérés."""
+    root_for(fid) adja a fájl helyét — ZÁRTAN: a tulajdonos munkaterülete CSAK a megosztott családnak (roles: a
+    belépéskor ellenőrzött fájlok és családjuk; created: amit ez a kérés hozott létre; és a közben készült új
+    változat, amelynek forrás-lánca a családba vezet), a belépett felhasználó SAJÁT fájljai a sajátjában, új fájl a
+    tulajdonosnál csak írási (szerkesztői) kérésben. A tulajdonos minden más fájlja: AccessDenied — akkor is, ha az
+    azonosítója a kérés-szkenner elől rejtve jött. A munkaterület-szintű kód (lista, temp) a belépett felhasználóé
+    marad (tenancy.user_root); a tulajdonos fájljait csak fájlonként, ezen át lehet elérni."""
 
-    def __init__(self, owner: str, actor: str, roles: dict[str, str], denied: Optional[dict[str, str]] = None):
+    def __init__(self, owner: str, actor: str, roles: dict[str, str], denied: Optional[dict[str, str]] = None,
+                 down: Optional[dict[str, str]] = None, write: bool = False):
         self.owner, self.actor, self.roles = owner, actor, dict(roles)
+        self.down = dict(down or {})              # a 'down' tagok (változat-öröklés csak ezekből)
+        self.write = write                        # írási kérés: a szerkesztő új fájlt hozhat létre a tulajdonosnál
         self.created: set[str] = set()
         self.denied = denied or {}
 
@@ -86,13 +91,23 @@ class Shared:
         return max(self.roles.values(), key=_rank, default="viewer") if self.owner != self.actor else "owner"
 
     def can_edit(self) -> bool:
-        return _rank(self.role) >= _RANK["editor"]
+        return self.write and _rank(self.role) >= _RANK["editor"]
+
+    def visible(self) -> set[str]:
+        """A tulajdonos munkaterületéből látható fájlok (listázáshoz, verziófához)."""
+        return set(self.roles) | self.created
 
     def root_for(self, fid: str) -> Path:
         if fid in self.denied:
             raise AccessDenied(self.denied[fid])
         own = tenancy.user_root(self.owner)
-        if self.owner == self.actor or fid in self.roles or fid in self.created or _exists_in(self.owner, fid):
+        if self.owner == self.actor or fid in self.roles or fid in self.created:
+            return own
+        if _exists_in(self.owner, fid):
+            r = _inherit(self.owner, fid, self.down)     # a kérés közben készült új változat (a sora még íródik)
+            if r is None:
+                raise AccessDenied(NOT_SHARED)
+            self.roles[fid] = r
             return own
         if _exists_in(self.actor, fid):
             return tenancy.user_root(self.actor)
@@ -102,21 +117,23 @@ class Shared:
         raise AccessDenied(VIEW_ONLY)
 
     def workspace_of(self, fid: str) -> str:
+        """Kinek a nevében írjuk alá a linket — zártan: amihez nincs jog, arra a saját munkaterület (→ 404)."""
         try:
             root = self.root_for(fid)
         except (AccessDenied, FileNotFoundError):
-            return self.owner
+            return self.actor
         return self.actor if root == tenancy.user_root(self.actor) and self.actor != self.owner else self.owner
 
     def can_write(self, fid: str) -> bool:
-        if self.owner == self.actor or fid in self.created:
+        if self.owner == self.actor:
             return True
-        r = self.roles.get(fid)
-        if r is not None:
-            return _rank(r) >= _RANK["editor"]
-        if _exists_in(self.actor, fid):
+        try:
+            root = self.root_for(fid)
+        except (AccessDenied, FileNotFoundError):
+            return False
+        if fid in self.created or (root == tenancy.user_root(self.actor) and self.actor != self.owner):
             return True
-        return self.can_edit()
+        return self.write and _rank(self.roles.get(fid)) >= _RANK["editor"]
 
 
 # ---------- család: egy megosztott fájl és ami hozzá tartozik ----------
@@ -253,27 +270,54 @@ async def resolve(actor: str, fids: set[str], need: str = "viewer") -> Optional[
             raise AccessDenied(NOT_SHARED)
         if _rank(r) < _rank(need):
             raise AccessDenied(VIEW_ONLY if need == "editor" else OWNER_ONLY)
-    return Shared(owner, actor, roles)
+    return Shared(owner, actor, roles, down=down, write=_rank(need) >= _RANK["editor"])
 
 
 # ---------- a belépési pont: minden kérés (web, szerkesztő, render, MCP) ----------
 
-_SKIP = ("/static/", "/editor/", "/v1/", "/share/", "/api/events", "/api/account", "/api/jobs/", "/api/billing")
+_SKIP = ("/static/", "/editor/", "/v1/", "/share/", "/api/events", "/api/account", "/api/jobs/", "/api/billing",
+         "/api/upload", "/upload")            # a feltöltés új fájlt hoz a SAJÁT munkaterületre, meglévőt nem érint
+# a törzs maga a fájl (a szerkesztő mentése, a videó médiafájlja) — az azonosítók a query-ben, azt nézzük
+_RAW_BODY = ("/api/editor/save", "/api/video/asset")
 _MCP_VIEW_TOOLS = {"extract", "ocr_image", "describe_image", "extract_table_from_image", "validate_document", "catalog", "units"}
 _MCP_VIEW_ACTIONS = {"files": {"list", "find", "search", "preview", "compare", "share", "shared"},
                      "history": {"lineage", "branches", "compare", "inbox"},
                      "video": {"info", "status", "job", "schema"}, "jobs": {"status"}}
 _MCP_DEFAULT_ACTION = {"files": "list", "history": "inbox", "video": "make", "jobs": "create"}
+FID_FIND = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}\.[A-Za-z0-9]{1,12}")
+BODY_CAP = 64 * 1024 * 1024               # ennél nagyobb törzs megosztott kérésben: nem nézhető át → 413
+
+
+class Unscannable(AccessDenied):
+    """Megosztott kérés olyan törzzsel, amit nem tudunk átnézni (túl nagy / ismeretlen típus) — zárva."""
+
+    def __init__(self, msg: str, status: int):
+        super().__init__(msg)
+        self.status = status
+
+
+def _find(text: str, out: set[str]) -> None:
+    """Azonosítók egy szövegben bárhol (URL, vesszős lista, beágyazott JSON, %-kódolt)."""
+    out.update(FID_FIND.findall(text))
+    if "%" in text:
+        out.update(FID_FIND.findall(unquote(text)))
 
 
 def _collect(obj: Any, out: set[str], depth: int = 0) -> None:
-    if depth > 8 or len(out) > 200:
+    """Értékek ÉS kulcsok, rekurzívan; a JSON-t tartalmazó szöveget kibontva is (\\u-val írt azonosító)."""
+    if depth > 12:
         return
     if isinstance(obj, str):
-        if FID_RE.match(obj):
-            out.add(obj)
+        _find(obj, out)
+        t = obj.strip()
+        if t[:1] in ("{", "[") and len(t) < BODY_CAP:
+            try:
+                _collect(json.loads(t), out, depth + 1)
+            except ValueError:
+                pass
     elif isinstance(obj, dict):
-        for v in obj.values():
+        for k, v in obj.items():
+            _collect(k, out, depth + 1)
             _collect(v, out, depth + 1)
     elif isinstance(obj, (list, tuple)):
         for v in obj:
@@ -287,49 +331,71 @@ def mcp_need(tool: str, args: dict[str, Any]) -> str:
     return "viewer" if act in _MCP_VIEW_ACTIONS.get(tool, ()) else "editor"
 
 
-async def _request_ids(request) -> tuple[set[str], str, Optional[str], Any]:
-    """→ (fájl-azonosítók, kellő szerep, if_version, MCP-n a JSON-RPC üzenet(ek) azonosítója — webes kérésnél False)."""
+async def _scan_body(request, ids: set[str]) -> tuple[Any, Optional[Unscannable]]:
+    """A törzs átnézése: JSON (szerkezet + szöveg), urlencoded (dekódolva), multipart és szöveg (nyers szövegként).
+    → (a JSON, ha az volt; és a hiba, ha NEM nézhető át — ezt a hívó csak megosztott kérésnél érvényesíti)."""
+    ctype = request.headers.get("content-type", "").lower()
+    clen = int(request.headers.get("content-length") or 0)
+    if clen > BODY_CAP:
+        return None, Unscannable("This request is too large to check against what is shared with you.", 413)
+    raw = await request.body()
+    if not raw:
+        return None, None
+    text = raw.decode("latin-1")             # veszteségmentes: a nyers bájtokban is keresünk
+    _find(text, ids)
+    if "json" in ctype:
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return None, Unscannable("This request's body isn't valid JSON.", 415)
+        _collect(body, ids)
+        return body, None
+    if "x-www-form-urlencoded" in ctype:
+        from urllib.parse import parse_qsl
+        for k, v in parse_qsl(raw.decode("utf-8", "replace"), keep_blank_values=True):
+            _find(k, ids)
+            _find(v, ids)
+        return None, None
+    if ctype.startswith(("multipart/form-data", "text/")):
+        return None, None                      # a nyers szövegben (a mezők értékei is) már kerestünk
+    return None, Unscannable("This kind of request body can't be checked against what is shared with you.", 415)
+
+
+async def _request_ids(request) -> tuple[set[str], str, Optional[str], Any, Optional[Unscannable]]:
+    """→ (fájl-azonosítók, kellő szerep, if_version, MCP-n a JSON-RPC üzenet(ek) azonosítója — webes kérésnél False,
+    és ha a törzs nem nézhető át: a hiba). Útvonal, query (kulcs és érték), törzs: mind."""
     path, method = request.url.path, request.method
     ids: set[str] = set()
     if_version = request.query_params.get("if_version")
+    for seg in path.split("/"):
+        _find(unquote(seg), ids)
+    for k, v in request.query_params.multi_items():
+        _find(k, ids)
+        _find(v, ids)
+    bad: Optional[Unscannable] = None
     if path.startswith("/mcp"):
-        need, body, rpc_ids = "viewer", None, []
-        if method == "POST" and int(request.headers.get("content-length") or 0) <= 64 * 1024 * 1024:
-            try:
-                body = json.loads(await request.body() or b"null")
-            except ValueError:
-                body = None
+        need, rpc_ids = "viewer", []
+        body = None
+        if method == "POST":
+            body, bad = await _scan_body(request, ids)
         for msg in body if isinstance(body, list) else [body]:
             if not isinstance(msg, dict) or msg.get("method") != "tools/call":
                 continue
             rpc_ids.append(msg.get("id"))
             p = msg.get("params") or {}
             args = p.get("arguments") if isinstance(p.get("arguments"), dict) else {}
-            _collect(args, ids)
             if_version = if_version or (args.get("if_version") if isinstance(args.get("if_version"), str) else None)
             n = mcp_need(str(p.get("name") or ""), args)
             need = n if _rank(n) > _rank(need) else need
-        return ids, need, if_version, (rpc_ids if not isinstance(body, list) else [])
-    for seg in path.split("/"):
-        s = unquote(seg)
-        if FID_RE.match(s):
-            ids.add(s)
-    for _, v in request.query_params.multi_items():
-        if FID_RE.match(v):
-            ids.add(v)
-    if method in ("POST", "PUT", "PATCH", "DELETE") and "json" in request.headers.get("content-type", "") \
-            and int(request.headers.get("content-length") or 0) <= 2 * 1024 * 1024:
-        try:
-            body = json.loads(await request.body() or b"null")
-        except ValueError:
-            body = None
-        _collect(body, ids)
+        return ids, need, if_version, (rpc_ids if not isinstance(body, list) else []), bad
+    if method in ("POST", "PUT", "PATCH", "DELETE") and not path.startswith(_RAW_BODY):
+        body, bad = await _scan_body(request, ids)
         if isinstance(body, dict) and isinstance(body.get("if_version"), str):
             if_version = if_version or body["if_version"]
     need = "viewer" if method in ("GET", "HEAD") else "editor"
     if method == "DELETE" and path.startswith("/api/files/"):
         need = "owner"
-    return ids, need, if_version, False
+    return ids, need, if_version, False, bad
 
 
 async def enter_request(request, actor: str):
@@ -341,7 +407,7 @@ async def enter_request(request, actor: str):
     path = request.url.path
     if path == "/app" or path.startswith(("/app/",) + _SKIP):
         return None
-    ids, need, if_version, is_mcp = await _request_ids(request)
+    ids, need, if_version, is_mcp, bad = await _request_ids(request)
     toks: list = []
     if isinstance(if_version, str) and FID_RE.match(if_version):     # optimista zárolás: amiből a kliens kiindult
         toks.append((_if_version.reset, _if_version.set(if_version)))
@@ -359,6 +425,9 @@ async def enter_request(request, actor: str):
         toks = []
         sh = Shared(actor, actor, {}, denied={f: str(e) for f in ids if not _exists_in(actor, f)})
     if sh is not None:
+        if bad is not None and sh.owner != sh.actor:     # megosztott kérés, de a törzs nem nézhető át: zárva
+            leave_request(toks)
+            raise bad
         toks.append((tenancy.leave_shared, tenancy.enter_shared(sh)))
     return toks or None
 
@@ -377,7 +446,7 @@ class workspace:
     """`with sharing.workspace(owner, actor, roles):` — szerveroldali kód a tulajdonos munkaterületén (lista, napló)."""
 
     def __init__(self, owner: str, actor: str, roles: dict[str, str]):
-        self.sh = Shared(owner, actor, roles)
+        self.sh = Shared(owner, actor, roles)               # csak olvas (write=False)
 
     def __enter__(self):
         self.tok = tenancy.enter_shared(self.sh)
@@ -646,6 +715,8 @@ async def people(actor: str, fid: str) -> dict[str, Any]:
         if fid in fam:
             rows.append(s)
             fam_all |= set(fam)
+    if role != "owner":                  # a meghívott csak a NEKI megosztott fájlok naplóját látja (más ágakét nem)
+        fam_all &= set(await family_roles(owner, actor)) | {fid}
     nm = await names({owner, *[r["grantee_id"] for r in rows if r["grantee_id"]]})
     out: dict[str, Any] = {
         "file_id": fid, "owner": {"id": owner, "name": nm.get(owner, owner)}, "your_role": role, "can_manage": role == "owner",
