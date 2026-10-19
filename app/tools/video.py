@@ -3035,10 +3035,11 @@ async def _cut_clip(src: Path, span: tuple[float, float], dst: Path) -> Path:
     """Egy másik felvétel része a grafikába (bevágás): span = (kezdet, hossz) mp; a kép NÉMÁN (a hangja külön sáv:
     _cut_sound), az elforgatás szerint egyenesen, a hosszabb oldal legfeljebb 1920 px."""
     from app.convert.engines import run
+    from app.tools import encoding
     a, n = span
     await run("ffmpeg", "-v", "error", "-y", "-ss", f"{a:.3f}", "-i", str(src), "-t", f"{n:.3f}", "-map", "0:v:0", "-an",
               "-vf", "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'", "-c:v", "libx264",
-              "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst),
+              "-preset", "veryfast", "-crf", str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst),
               timeout=settings.VIDEO_TIMEOUT_S)
     return dst
 
@@ -3699,8 +3700,9 @@ async def _upright(src: Path) -> str:
     fid = new_file_id("mp4")
     k = (await probe_movie(src)).get("audio_stream")
     aud = ["-map", f"0:a:{k}"] if k is not None else []      # csak az első dekódolható hangsáv (térhang nélkül)
+    from app.tools import encoding
     await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud, "-c:v", "libx264", "-preset", "veryfast",
-              "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path(fid)),
+              "-crf", str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p", *encoding.aac(), "-movflags", "+faststart", str(output_path(fid)),
               timeout=settings.VIDEO_TIMEOUT_S)
     write_meta(fid, operation="footage set upright", source_file_id=None, extra={"ephemeral": True})
     return fid
@@ -4025,17 +4027,27 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
                          mode: Optional[str] = None, why: Optional[str] = None) -> dict[str, Any]:
     """A projekt fő kompozíciója → MP4 (WebM / GIF) + check. A kért hossz (requested) és a mód a projekt metájából is
     jön (újrarenderelésnél): az eredmény duration = {requested, actual (a fájl mért hossza), mode}."""
+    from app.tools import encoding
     ext = "webm" if fmt == "webm" else "gif" if fmt == "gif" else "mp4"
     out = project_path.parent / f"render.{ext}"
-    args = ["render", "--project", project_path.name, "--comp", _main_comp(project_path), "--out", out.name,
-            "--format", {"mp4": "h264", "webm": "webm", "gif": "gif"}[ext], "--json"]
-    if ext == "mp4":
+    # OMLETT 1.2: a végső MP4 = a renderelő ProRes LT köztes fájlja → x264 CRF (app/tools/encoding.py)
+    master = project_path.parent / "render-master.mov" if ext == "mp4" and not draft and encoding.final_encoder() == "x264" else None
+    args = ["render", "--project", project_path.name, "--comp", _main_comp(project_path), "--out", (master or out).name,
+            "--format", "prores" if master else {"mp4": "h264", "webm": "webm", "gif": "gif"}[ext], "--json"]
+    if master:
+        args += ["--prores", "lt", "--audio", "auto"]
+    elif ext == "mp4":
         args += ["--bitrate", "2500" if draft else "8000", "--audio", "auto"]
     if draft:
         args += ["--resolution", "half", "--quality", "draft"]
     t0 = time.time()
     async with _render_gate():
         await _run(*args, cwd=project_path.parent)
+    if master is not None and master.exists():
+        try:
+            await encoding.final_from_master(master, out, timeout=settings.VIDEO_TIMEOUT_S)
+        finally:
+            master.unlink(missing_ok=True)
     if not out.exists():
         raise RuntimeError("The render produced no file")
     from app.tools import ios_safe

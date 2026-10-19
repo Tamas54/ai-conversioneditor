@@ -30,7 +30,8 @@ def _vcodec_for(fmt: str) -> list[str]:
         return ["-c:v", "wmv2", "-q:v", "4"]
     if fmt == "ogv":
         return ["-c:v", "libtheora", "-q:v", "7"]
-    return ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
+    from app.tools import encoding
+    return encoding.x264("intermediate")                 # egységes profil (OMLETT 1.2): CRF 17, env-ből felülírható
 
 
 def _acodec_for(fmt: str) -> list[str]:
@@ -47,11 +48,13 @@ def _acodec_for(fmt: str) -> list[str]:
     from app.convert.steps import _AUDIO_DEF
     if fmt in _AUDIO_DEF:
         return list(_AUDIO_DEF[fmt][0])
-    return ["-c:a", "aac", "-b:a", "160k"]
+    from app.tools import encoding
+    return encoding.aac()
 
 
 def _faststart(fmt: str) -> list[str]:
-    return ["-movflags", "+faststart"] if fmt in ("mp4", "m4v", "mov") else []
+    from app.tools import encoding
+    return encoding.faststart(fmt)
 
 
 async def _video(src: Path, dst: Path, vf: Optional[list[str]] = None, extra: Optional[list[str]] = None,
@@ -242,8 +245,8 @@ async def gif_to_video(inputs: list[Path], o: dict[str, Any], out: Path) -> list
     for src in inputs:
         dst = out_name(out, src, "", "mp4")
         loops = int(o.get("loops") or 1)
-        await run(*_FF, "-stream_loop", str(loops - 1), "-i", str(src), "-movflags", "+faststart", "-pix_fmt", "yuv420p",
-                  "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "20", "-an", str(dst), timeout=VIDEO_TIMEOUT)
+        await run(*_FF, "-stream_loop", str(loops - 1), "-i", str(src), "-movflags", "+faststart",
+                  "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", *_vcodec_for("mp4"), "-an", str(dst), timeout=VIDEO_TIMEOUT)
         res.append(dst)
     return res
 

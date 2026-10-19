@@ -9,3 +9,26 @@
 - resize-video: `aspect_mode = blur` (same helper).
 - Shared modules: `app/tools/mediaprobe.py` (duration, display size, rotation, fps, codecs, audio, HDR, bitrate) and
   `app/tools/videonorm.py` (canvas size, fit chains).
+
+## 1.2 One encoding profile (generation loss)
+- `app/tools/encoding.py`: intermediate x264 CRF 17 (tool ops: resize, merge, trim, crop, rotate, watermark,
+  gif-to-video, footage set upright, cut-ins), final x264 CRF 19, preset medium, AAC 192k, +faststart. Env:
+  `VIDEO_CRF_INTERMEDIATE`, `VIDEO_CRF_FINAL`, `VIDEO_X264_PRESET`, `VIDEO_AUDIO_BITRATE`, `VIDEO_FINAL_ENCODER`.
+- Final render: the engine's own H.264 only does a fixed bitrate (8 Mbps; its "quality" mode is HEVC/AV1 only), so
+  the engine now writes a ProRes LT master (~100 Mbps, temp, deleted) and x264 CRF 19 makes the MP4 (tagged BT.709).
+  `VIDEO_FINAL_ENCODER=engine` restores the old path; draft renders stay on the engine's fast H.264.
+- merge-files was already one pass (scale + concat in one filtergraph); it stays one pass.
+- Omlett chain, measured (synthetic 1080×1920 30 fps testsrc2 + blur + temporal grain, ~12.6 Mbps x264 source,
+  4 s; resize-video → merge-files → video overlay; SSIM/PSNR vs the source over 114 frames, ffmpeg ssim/psnr):
+
+  | stage | before (main a9abf31) | after |
+  |---|---|---|
+  | resize-video | 6.58 Mbps · SSIM 0.98638 · PSNR 46.56 dB | 13.09 Mbps · SSIM 0.98979 · PSNR 48.56 dB |
+  | merge-files | 6.54 Mbps · SSIM 0.98451 · PSNR 45.44 dB | 12.41 Mbps · SSIM 0.98723 · PSNR 47.21 dB |
+  | final render | 8.36 Mbps · SSIM 0.97666 · PSNR 35.32 dB (Y: 0.98020 / 37.88) | 5.52 Mbps · SSIM 0.97781 · PSNR 35.29 dB (Y: 0.98104 / 37.73) |
+
+  The final PSNR has a ~35 dB ceiling that no bitrate lifts: the engine resamples the footage (4:2:0 → RGB →
+  4:2:0, different chroma interpolation at sharp colour edges) — even its ProRes HQ output or its H.264 at 20 Mbps
+  stay at 34.4 dB on this content. The final step's gain is SSIM at a smaller file; removing the ceiling needs the
+  graphics composited onto the original footage in ffmpeg (alpha render + overlay), a renderer change.
+  Grainier source (testsrc2 + strong noise): final 8.31 → 11.34 Mbps, SSIM 0.97284 → 0.97486.
