@@ -41,3 +41,14 @@
 - The check samples every Lottie element (its comp rendered transparent at 25/50/75 % of its loop): an animation that
   fills its whole box (opaque background) or sits on a measured text is a named finding; a clean one is in `verified`.
 - Tests mock LottieFiles (no network); the sampling test renders synthetic Lottie JSONs with the engine.
+
+## 3.4 (overlay side) — end card that extends the footage
+- `video(action="overlay", …, end_card={"title", "subtitle"?, "kicker"?, "dur"?})` (or `end_title` / `end_subtitle`):
+  the footage is extended by `dur` seconds (default 4) — last frame frozen with `tpad=stop_mode=clone`, sound padded
+  with `apad=pad_dur` (one x264 CRF 17 pass, a hidden work file) — and a full-frame card (80 % veil over the frozen
+  frame, kicker / title / accent bar / subtitle, the picture and animation credits) sits on the added seconds.
+  An overlay may have only an end card.
+- Edits: `changes.end_card` changes only the given fields (a new length re-extends from the plain footage; the same
+  length reuses the extension); `"none"` removes it and the video is back to the footage's length.
+- Measured: 3.0 s clip + `dur: 2` → 5.0 s video, audio 5.0 s; frames at 3.6 s and 4.6 s are identical under the card.
+- The general extend-video / image-to-video operations belong to lane "media".

@@ -66,8 +66,12 @@ quotes in the layers are checked against it (one that isn't there drops that lay
 they are kept and the check says "not checked against a source". title, accent, brand, music as for make (the music
 drops under the footage's own speech). camera=[{"at": time, "zoom", "to"?, "dur"?}] punches in on the footage (back
 out with zoom 1); changes.camera in an edit.
-The result's duration is the footage's (mode "footage"). render=false saves the project only (the layout check still
-comes back).
+END CARD: end_card={"title", "subtitle"?, "kicker"?, "dur"? (seconds, 1.5–20, default 4)} — or end_title (+ end_subtitle)
+— adds a closing card AFTER the footage: the last frame is held (frozen) under it and the sound padded with silence, so
+the video gets that much longer; the credits of pictures and animations go on it. An overlay with only an end card is
+fine. In an edit: changes.end_card = {…} (only the fields that change) | "none" (removes it).
+The result's duration is the footage's (mode "footage"; + the end card — result.end_card says where it starts).
+render=false saves the project only (the layout check still comes back).
 Example: video(action="overlay", file_id="ab12.mov", text="…", layers=[{"at": "00:02", "type": "lower_third", "name":
 "Anna Kovács", "role": "Mayor"}, {"at": 9, "dur": 5, "type": "column", "title": "Budget", "unit": "bn Ft", "items":
 [{"label": "2024", "value": 44.8}, {"label": "2025", "value": 47.5}]}])"""
@@ -201,7 +205,7 @@ true}], "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption",
 "narration_voice"?, "duration_mode"?, "layers"?: [{"id": "L2", …} | {"id": "L2", "remove": true}], "add_layers"?: […]}.
 Untouched layers stay as they are; the AI narration is recorded again from the changed captions. Numbers in a new chart
 or stat must be in the video's source or in `text`. An overlay project takes layers, add_layers, accent, title, music,
-camera and subtitles. alpha=… renders the transparent version again.
+camera, subtitles and end_card. alpha=… renders the transparent version again.
 Faster turns: render=false saves the new version without rendering (render it later with action="render");
 action="render" with scene="s3" (a scene) or scene="L2" (a layer's span) renders just that part as a short draft clip.
 video(action="info") shows the scenes and layers (id, at, dur, type, text); files(action="preview", file_id,
@@ -210,7 +214,7 @@ action="to_pptx": put the video on a slide — a new one-slide deck, or deck_fil
 to an existing deck; the MP4 is embedded (first frame as its poster)."""
 
 _ABOUT = {"make": "a video from a text / your scene plan: formats, duration, pictures, narration, music",
-          "overlay": "graphics and subtitles on the person's own footage",
+          "overlay": "graphics, subtitles and an end card on the person's own footage",
           "layers": "time-coded layers: types, timing, position, alpha — read before your first overlay",
           "graphic": "draw your own: shapes, the text box rule, move_to, images, Lottie (search + pick), real maps",
           "chart": "every chart type, explainer diagrams, three.js, script",

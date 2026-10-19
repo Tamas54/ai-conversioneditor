@@ -2283,8 +2283,13 @@ def _layer_box(ly: dict[str, Any], W: int, H: int, safe: float, acc: list[float]
         slide = [0, 0]
     elif t == "fullscreen":
         w, h, cx, cy, slide = W, H, W / 2, H / 2, [0, 0]
-        if ly.get("kind") != "image":
-            els = [{"k": "rect", "name": "Background", "size": [W, H], "pos": [W / 2, H / 2], "color": [0.055, 0.06, 0.08], "opacity": 100, "round": 0}]
+        if ly.get("kind") != "image":                 # zárókártya: a kimerevített utolsó kocka halványan átlátszik
+            els = [{"k": "rect", "name": "Background", "size": [W, H], "pos": [W / 2, H / 2], "color": [0.055, 0.06, 0.08],
+                    "opacity": 80 if ly.get("end") else 100, "round": 0}]
+        if ly.get("credits"):
+            fs = max(12, round(m * 0.022))
+            els.append(_tx("Picture credits", ly["credits"], fs, W * 0.05, H - mg - fs * 2.6, W * 0.9, lines=2, align="center",
+                           font="regular", color=[0.75, 0.76, 0.8], t0=0.3))
     else:                                                          # split: az alapsáv a fél képre, a grafika a másikra
         side = side or ("bottom" if vert else "right")
         if side in ("left", "right"):
@@ -3589,11 +3594,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             if voice_s + 1.0 > total + 0.5:
                 why = f"fixed mode: your voice file is {voice_s:.0f} s long"
         anim = any(c.startswith("Animation ") for c in credit_list)
-        label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else "Pictures: "
-        credits = (label + " · ".join(credit_list)) if credit_list else ""     # teljes (linkekkel): a projekt metájába
-        # a képernyőn rövid: név + licenc, linkek nélkül („Photo: X (Wikimedia Commons), CC BY 4.0 — https://…”)
-        short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", c)).strip() for c in credit_list]
-        on_screen = (label + " · ".join(dict.fromkeys(s for s in short if s)))[:300] if short else ""
+        # teljes (linkekkel) a projekt metájába; a képernyőn rövid: név + licenc, linkek nélkül
+        credits, on_screen = _credit_line(credit_list, anim)
         kb = str(opts.get("ken_burns") or "some").lower()
         kb = kb if kb in ("some", "all", "off") else "some"
         focus = {nm: await asyncio.to_thread(_focus, work / nm) for slot in names for nm in _slots(slot) if nm}
@@ -3765,7 +3767,8 @@ def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
                          + (f" (not .{ext})" if ext else "") + ". To make a video from a text, use action=\"make\".")
     crafts.existing(fid)
     alpha_kinds(body.get("alpha"))
-    if not body.get("layers") and not body.get("subtitles"):
+    card = end_card_of(body)                                                   # a zárókártya alakja is most derüljön ki
+    if not body.get("layers") and not body.get("subtitles") and not card:
         raise ValueError("overlay needs layers=[…] and/or subtitles=[…] (or \"auto\"), e.g. [{\"at\": \"00:02\", \"type\": "
                          "\"lower_third\", \"name\": \"Anna Kovács\", \"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, "
                          "\"type\": \"chart\", \"chart\": {…}}].")
@@ -3794,7 +3797,8 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         layers = layers_from(raw, body.get("text") or "", notes)
         subs = await _auto_subtitles(fid, body.get("language"), step) if body.get("subtitles") == "auto" \
             else subtitle_cues(body.get("subtitles"))
-        if not layers and not subs:
+        card = end_card_of(body)
+        if not layers and not subs and not card:
             raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
                              "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}]"
                              + (" — every layer given was left out: " + "; ".join(n[2:] for n in notes if n.startswith("⚠ ")) if notes else "") + ".")
@@ -3806,6 +3810,9 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
             step(0, 4, "turning the footage upright")
             base["media_id"], base["asset"] = await _upright(crafts.existing(fid)), "footage.mp4"
             base["rotated"] = int(info["rotation"])
+        if card:                                              # zárókártya: a felvétel vége kimerevítve, a hang csenddel
+            step(0, 4, "holding the last frame for the end card")
+        base = await _with_end_card(base, card)
         opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": body.get("music"),
                 "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
                 "camera": _footage_camera(body.get("camera")), "subtitles": subs}
@@ -3947,6 +3954,72 @@ async def _music_under(opts: dict[str, Any], work: Path, total: float, speech: O
         return orig, "music-ducked.wav", verified, []
     verified.append(f"{label} — there is no speech, so it plays on its own.")
     return orig, orig, verified, []
+
+
+def end_card_of(body: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Zárókártya az overlay végére: end_card = {"title", "subtitle"?, "kicker"?, "dur"?} | "Cím" — vagy end_title
+    (+ end_subtitle). {} / "none" / false: nincs. → {title, subtitle, kicker, dur} | None"""
+    raw = body.get("end_card")
+    if raw in (None, "", False, {}, [], "none", "off") and not body.get("end_title"):
+        return None
+    if raw in ("none", "off", False) and "end_card" in body:
+        return None
+    raw = {"title": raw} if isinstance(raw, str) else dict(raw) if isinstance(raw, dict) else {}
+    title = _clean(raw.get("title") or raw.get("text") or body.get("end_title"), 60, "End title")
+    if not title:
+        raise ValueError('end_card: give its title, e.g. {"title": "Thanks for watching", "subtitle": "Tamás TV", "dur": 4} '
+                         '(or end_title="…").')
+    dur = timecode(raw.get("dur") if raw.get("dur") is not None else raw.get("duration", 4.0), "end_card dur")
+    if not 1.5 <= dur <= 20:
+        raise ValueError(f"end_card dur: 1.5–20 seconds — not {dur:g}.")
+    return {"title": title, "subtitle": _clean(raw.get("subtitle") or body.get("end_subtitle"), 90, "End subtitle"),
+            "kicker": _clean(raw.get("kicker"), 30, "Kicker"), "dur": round(dur, 2)}
+
+
+async def _extend(src: Path, secs: float) -> str:
+    """A felvétel vége kimerevítve secs másodpercre (tpad: az utolsó kocka marad), a hang csenddel kitöltve (apad) —
+    a zárókártya alá (az overlay hossza különben mindig a felvételé). → a meghosszabbított munkafájl file_id-ja."""
+    from app.convert.engines import run
+    fid = new_file_id("mp4")
+    k = (await probe_movie(src)).get("audio_stream")
+    aud = ["-map", f"0:a:{k}", "-af", f"apad=pad_dur={secs:.3f}", "-c:a", "aac", "-b:a", "192k"] if k is not None else []
+    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud,
+              "-vf", f"tpad=stop_mode=clone:stop_duration={secs:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17",
+              "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output_path(fid)), timeout=settings.VIDEO_TIMEOUT_S)
+    write_meta(fid, operation="footage held for the end card", source_file_id=None, extra={"ephemeral": True})
+    return fid
+
+
+async def _with_end_card(base: dict[str, Any], card: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Az overlay alapsávja a zárókártyához: a kártya hosszával meghosszabbított felvétel (új asset-névvel, hogy a
+    szerkesztés ne a régi hosszút vegye át), vagy — ha a kártya kikerült — újra az eredeti. base["plain"] = a
+    meghosszabbítás előtti felvétel (asset, media_id, duration)."""
+    b = dict(base)
+    plain = b.pop("plain", None) or {k: b.get(k) for k in ("asset", "media_id", "duration")}
+    old = b.pop("end_card", None)
+    b.update(asset=plain["asset"], duration=plain["duration"])
+    if plain.get("media_id"):
+        b["media_id"] = plain["media_id"]
+    else:
+        b.pop("media_id", None)
+    if not card:
+        return b
+    name = f"footage-end-{card['dur']:g}s.mp4"
+    if old and old.get("dur") == card["dur"] and base.get("asset") == name and base.get("media_id"):
+        b["media_id"] = base["media_id"]                                # ugyanolyan hosszú kártya: a meglévő marad
+    else:
+        b["media_id"] = await _extend(crafts.existing(plain.get("media_id") or b["file_id"]), card["dur"])
+    b.update(asset=name, duration=round(float(plain["duration"]) + card["dur"], 3), end_card=card, plain=plain)
+    return b
+
+
+def _credit_line(credit_list: list[str], anim: bool) -> tuple[str, str]:
+    """A kreditsor → (teljes, linkekkel: a projekt metájába; rövid, a képernyőre: név + licenc, linkek nélkül)."""
+    if not credit_list:
+        return "", ""
+    label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else "Pictures: "
+    short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", c)).strip() for c in credit_list]
+    return label + " · ".join(credit_list), (label + " · ".join(dict.fromkeys(x for x in short if x)))[:300]
 
 
 async def _upright(src: Path) -> str:
@@ -4109,7 +4182,14 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             Lc = _layout(W, H)
             D["L"] = {k: Lc[k] for k in ("capW", "capSize", "capY", "capPad")}
             D["captions"] = caption_track(subs, W, H, total)
-        D["layers"], rows, problems = layer_comps(layers, W, H, total, lang, acc, safe)
+        card, all_layers = base.get("end_card"), layers
+        if card:                                              # zárókártya a kimerevített vég fölött, a kreditekkel
+            _, on_screen = _credit_line(credit_list, any(c.startswith("Animation ") for c in credit_list))
+            all_layers = layers + [{"id": "end_card", "type": "fullscreen", "kind": "text", "end": True,
+                                    "at": float(base["plain"]["duration"]), "dur": card["dur"], "text": card["title"],
+                                    "subtitle": card.get("subtitle") or "", "kicker": card.get("kicker") or "",
+                                    **({"credits": on_screen} if on_screen else {})}]
+        D["layers"], rows, problems = layer_comps(all_layers, W, H, total, lang, acc, safe)
         cuts = _clip_sounds(layers)                           # bevágott felvételek hangja (teljes képen a felvételé helyett)
         if cuts:
             D["audio"]["clips"] = cuts
@@ -4143,7 +4223,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         group = _new_group()
         credits = ("Pictures and animations: " + " · ".join(credit_list)) if credit_list else ""
         spec = {"kind": "overlay", "story": _without_runtime(story),
-                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio")
+                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio",
+                                                  "end_card", "plain")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
                          "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera"),
@@ -4167,6 +4248,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                   "layers": layer_listing([ly for ly in layers if ly["id"] in placed]), "credits": credits or None}
         if _lottie_picks(story):
             result["lottie_picks"] = _lottie_picks(story)
+        if card:
+            result["end_card"] = {**card, "at": float(base["plain"]["duration"]), "until": total}
         srt_entry = None
         if subs:                                              # a javított feliratok fájlként is (lejátszók, YouTube)
             sid = new_file_id("srt")
@@ -4187,6 +4270,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         chk["verified"] = m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}"
                            + (", with its own sound." if base.get("audio") else " (it has no sound track).")
                            + (f" It was stored turned by {base['rotated']}°, so it was set upright first." if base.get("rotated") else "")] \
+            + ([f"End card “{card['title']}”: the footage's last frame is held for {card['dur']:g} s under it"
+                 + (", the sound padded with silence" if base.get("audio") else "")
+                 + f" — {_tc(base['plain']['duration'])} → {_tc(total)}."] if card else []) \
             + chk.get("verified", []) + [f"{len(rows)} layer(s) on the timeline: " + ", ".join(f"{r_['id']} {_tc(r_['start'])}" for r_ in rows) + "."] \
             + lay_v + ([f"Fitted to their boxes: {len(fitted)} text(s) set smaller, e.g. " + "; ".join(fitted[:4]) + "."] if fitted else [])
         chk["findings"] = chk.get("findings", []) + lay_f + problems + gfx_findings + script_findings + \
@@ -4843,7 +4929,8 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
-    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera", "subtitles"}
+    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera", "subtitles", "end_card", "end_title",
+               "end_subtitle"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
@@ -4867,9 +4954,20 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
         changes = {**changes, "layers": await said_to_times(changes.get("layers"), footage, notes, step),
                    "add_layers": await said_to_times(changes.get("add_layers"), footage, notes, step)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
-    if not layers and not opts["subtitles"]:
+    base = dict(spec["base"])
+    card = base.get("end_card")
+    if any(k in changes for k in ("end_card", "end_title", "end_subtitle")):
+        ec = changes.get("end_card")
+        if "end_card" in changes and not (isinstance(ec, dict) and ec):          # {} / "none" / null: ki; "Cím": új
+            merged = ec
+        else:                                                                    # részleges: a régi kártya mezői maradnak
+            merged = {**(card or {}), **(ec if isinstance(ec, dict) else {})}
+            merged.update({k_: changes[f"end_{k_}"] for k_ in ("title", "subtitle") if changes.get(f"end_{k_}")})
+        card = end_card_of({"end_card": merged})
+    if not layers and not opts["subtitles"] and not card:
         raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
-    return await _assemble_overlay(dict(spec["base"]), layers, opts, source=source,
+    base = await _with_end_card(base, card)                    # új / más hosszú kártya: a felvétel újra meghosszabbítva
+    return await _assemble_overlay(base, layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
                                    label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid, render=render)
 
