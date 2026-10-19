@@ -291,3 +291,19 @@ def test_feature_flag(monkeypatch):
     assert providers.enabled_for("abc123def") and list(providers.active()) == ["kie"]
     monkeypatch.delenv("KIE_API_KEY")
     assert not providers.enabled_for("admin")
+
+
+def test_callback_url_only_with_a_secret_on_a_public_server(monkeypatch):
+    from app.config import settings
+    from app.tools import ai_video
+    monkeypatch.delenv("KIE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("KIE_WEBHOOK_HMAC_KEY", raising=False)
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://studio.example")
+    assert ai_video.callback_url() is None                         # titok nélkül: csak lekérdezés
+    monkeypatch.setenv("KIE_WEBHOOK_SECRET", "s3")
+    assert ai_video.callback_url() == "https://studio.example/webhooks/kie?token=s3"
+    monkeypatch.delenv("KIE_WEBHOOK_SECRET")
+    monkeypatch.setenv("KIE_WEBHOOK_HMAC_KEY", "hk")
+    assert ai_video.callback_url() == "https://studio.example/webhooks/kie"
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "http://localhost:8000")
+    assert ai_video.callback_url() is None                         # helyben a kie nem érne el ide

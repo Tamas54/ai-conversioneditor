@@ -434,12 +434,13 @@ async def _reconcile_loop() -> None:
     await asyncio.sleep(float(os.getenv("RECONCILE_FIRST_S", "300")))
     while True:
         try:
-            got = await db._rows("SELECT pg_try_advisory_lock(7351902) AS ok")     # több példány: egy egyeztet
-            if got and got[0]["ok"]:
-                try:
-                    log.info("egyeztetés: %s", json.dumps(await reconcile(), default=str)[:500])
-                finally:
-                    await db._rows("SELECT pg_advisory_unlock(7351902)")
+            async with db._pool.connection() as conn:          # több példány: egy egyeztet (a zár ugyanazon a kapcsolaton)
+                ok = (await (await conn.execute("SELECT pg_try_advisory_lock(7351902)")).fetchone())[0]
+                if ok:
+                    try:
+                        log.info("egyeztetés: %s", json.dumps(await reconcile(), default=str)[:500])
+                    finally:
+                        await conn.execute("SELECT pg_advisory_unlock(7351902)")
         except asyncio.CancelledError:
             raise
         except Exception:

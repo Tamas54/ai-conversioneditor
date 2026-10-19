@@ -1146,7 +1146,7 @@ async function openCredits() {
   const d = await refreshCredits();
   const pr = await fetch("/api/admin/pricing").then(x => x.ok ? x.json() : { rules: [] });
   if (!d) { toast("credits need the database", "err"); return; }
-  const inp = (r, k, w) => `<input data-k="${k}" value="${escapeHtml(r[k] === null || r[k] === undefined ? "" : String(r[k]))}" style="width:${w}px">`;
+  const inp = (r, k, w) => `<td><input data-k="${k}" value="${escapeHtml(r[k] === null || r[k] === undefined ? "" : String(r[k]))}" style="width:${w}px"></td>`;
   const rows = [...pr.rules, { operation: "", model: "", tier: "", unit: "job", provider: "", provider_cost: 0, multiplier: 1, min_charge: 0, note: "" }];
   $("cr-body").innerHTML =
     `<h4>Alerts</h4>` + (d.notices.length ? d.notices.map(n => `<div class="hist-row">⚠ ${escapeHtml(n.message)}

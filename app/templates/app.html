@@ -505,6 +505,14 @@ const views = {
     $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
       [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`],
       [`Studio AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps`, `1 per ${c.ai_steps_per_credit} steps`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+    if (account.ai_video) {                                         // AI-videó (kie.ai): az árszabályokból, 10 mp-re
+      const per10 = (op, model, tier) => api(`/api/estimate?operation=${op}&model=${encodeURIComponent(model)}&tier=${encodeURIComponent(tier)}&units=10`).then(e => e.credits).catch(() => null);
+      const rows = [["AI video clip, 480p (also drafts)", "ai_clip", "bytedance/seedance-2-5", "480p"], ["AI video clip, 720p", "ai_clip", "bytedance/seedance-2-5", "720p"],
+        ["AI video clip, 1080p", "ai_clip", "bytedance/seedance-2-5", "1080p"], ["Enhance a video 1×–2× (Topaz)", "enhance", "topaz/video-upscale", "2x"],
+        ["Enhance a video 4× (Topaz)", "enhance", "topaz/video-upscale", "4x"]];
+      const got = await Promise.all(rows.map(([, ...a]) => per10(...a)));
+      $("#costs").insertAdjacentHTML("beforeend", rows.map(([l], i) => got[i] === null ? "" : `<tr><td>${l}</td><td>${got[i]} per 10 s</td></tr>`).join(""));
+    }
     if (account.usage && Object.keys(account.usage).length) {
       $("#usage-box").hidden = false;
       const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages", ai_steps: "Studio AI steps (connected AI)" };
@@ -1278,12 +1286,12 @@ async function videoRender(file_id, draft, st = $("#quick-status")) {
 // AI-videó (kie.ai — csak ha be van kapcsolva: account.ai_video): a becslés a gombon, a foglalt kredit a fejlécben
 async function aiEstimate(panel, body) {
   const b = panel.querySelector(".qp-actions .btn.primary"); if (!b) return;
-  b.dataset.base ??= b.textContent;
+  b.dataset.base ??= b.innerHTML;                                // a címke + az AI-jelvény marad, mögé az ár
   try {
     const e = await api("/api/ai/estimate", { method: "POST", body: JSON.stringify(body) });
-    b.textContent = `${b.dataset.base} — ${e.credits} credit${e.credits === 1 ? "" : "s"}`;
+    b.innerHTML = `${b.dataset.base} <span class="est">— ${e.credits} credit${e.credits === 1 ? "" : "s"}</span>`;
     b.title = e.what + (e.balance !== null && e.balance !== undefined ? ` · you have ${e.balance}` : "");
-  } catch (e) { b.textContent = b.dataset.base; b.title = e.message; }
+  } catch (e) { b.innerHTML = b.dataset.base; b.title = e.message; }
 }
 const aiOn = () => !!account?.ai_video;
 const AI_ENHANCE = { label: "Enhance…", ai: true, show: aiOn, doing: "Enhancing with AI — usually a minute or two…",

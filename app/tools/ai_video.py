@@ -53,13 +53,14 @@ def require_enabled() -> None:
 
 
 def callback_url() -> Optional[str]:
-    """A kie callback-címe: csak ha van titok (KIE_WEBHOOK_SECRET) és nyilvános a szerver — különben lekérdezés."""
+    """A kie callback-címe: csak ha van titok (KIE_WEBHOOK_SECRET az URL-ben és/vagy a kie HMAC-kulcsa,
+    KIE_WEBHOOK_HMAC_KEY) és nyilvános a szerver — különben csak lekérdezés."""
     from app.config import settings
-    secret = os.getenv("KIE_WEBHOOK_SECRET", "")
+    secret, hkey = os.getenv("KIE_WEBHOOK_SECRET", ""), os.getenv("KIE_WEBHOOK_HMAC_KEY", "")
     base = settings.PUBLIC_BASE_URL.rstrip("/")
-    if not secret or "localhost" in base or "127.0.0.1" in base or "testserver" in base:
+    if not (secret or hkey) or "localhost" in base or "127.0.0.1" in base or "testserver" in base:
         return None
-    return f"{base}/webhooks/kie?token={secret}"
+    return f"{base}/webhooks/kie" + (f"?token={secret}" if secret else "")
 
 
 # ---------- nyilvántartás ----------
@@ -189,8 +190,11 @@ def _friendly(e: Exception) -> str:
     return f"The AI video service didn't take the job ({str(e)[:160]}). Your credits were not used."
 
 
-async def _abort(op: str, error: str, status: str = "fail") -> None:
-    """Az egész op lezárása eredmény nélkül: a hold teljesen visszajár."""
+async def _abort(op: str, error: str, status: str = "fail", *, locked: bool = False) -> None:
+    """Az egész op lezárása eredmény nélkül: a hold teljesen visszajár (az op zárja alatt — a befejezéssel nem versenyez)."""
+    if not locked:
+        async with _lock(op):
+            return await _abort(op, error, status, locked=True)
     rows = await _rows_of(op)
     if not rows or all(r["settled"] for r in rows):
         return
@@ -251,16 +255,22 @@ async def on_state(row: dict[str, Any], st: TaskState) -> None:
         else:
             await _update(fresh["id"], status="fail", provider_cost=st.cost, error=(st.error or "failed")[:500],
                           finished_at=_now())
-        await _finish_op(op)
+    await _finish_op(op)
 
 
 async def _finish_op(op: str) -> None:
+    """Ha az op minden része végállapotban van: utófeldolgozás és elszámolás — egyszer (az op zárja alatt)."""
+    async with _lock(op):
+        await _finish_op_locked(op)
+
+
+async def _finish_op_locked(op: str) -> None:
     rows = await _rows_of(op)
     if not rows or all(r["settled"] for r in rows) or any(r["status"] not in ("success", "fail") for r in rows):
         return
     head = rows[0]
     if any(r["status"] == "fail" for r in rows):
-        await _abort(op, next(r["error"] for r in rows if r["status"] == "fail") or "failed")
+        await _abort(op, next(r["error"] for r in rows if r["status"] == "fail") or "failed", locked=True)
         return
     cost = sum(float(r["provider_cost"] or 0) for r in rows)
     tok = tenancy.set_user(head["user_id"])
@@ -270,7 +280,7 @@ async def _finish_op(op: str) -> None:
             {"files": [f for r in rows for f in r["result"] or []]}
     except Exception as e:
         log.exception("AI-utófeldolgozás hiba (%s)", op)
-        await _abort(op, f"the result couldn't be finished: {str(e)[:200]}")
+        await _abort(op, f"the result couldn't be finished: {str(e)[:200]}", locked=True)
         return
     finally:
         tenancy.reset(tok)

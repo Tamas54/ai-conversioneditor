@@ -98,10 +98,10 @@ def _as(uid, fn):
     return run
 
 
-def _job(call, prov, uid, fn, ok=True, limit=1200):
+def _job(call, prov, uid, fn, ok=True, limit=6000):
     from app import jobs
 
-    async def go():
+    async def go():                                   # a timeline-ra tétel renderel: terhelt gépen percekig is tarthat
         job = await _as(uid, fn)()
         for _ in range(limit):
             if any(t.state == "running" for t in prov.tasks.values()):

@@ -181,3 +181,33 @@ def test_free_topup_goes_through_the_ledger(db_client):
     assert call(db.free_topup, u, "2099-01", 10) == 0            # ugyanabban a hónapban nem még egyszer
     assert _balance(call, u) == 10 and _ledger_sum(call, u) == (10, 2)
     assert billing.PLANS["free"]["monthly_credits"] == 10
+
+
+def test_reconcile_loop_runs_under_an_advisory_lock(db_client, monkeypatch):
+    """A napi egyeztetés a lifespan háttérhurkában fut; a zár ugyanazon a kapcsolaton fog és enged (több példány: egy fut)."""
+    from app import credits
+    ran = []
+
+    async def fake():
+        ran.append(1)
+        return {}
+    monkeypatch.setattr(credits, "reconcile", fake)
+    monkeypatch.setenv("RECONCILE_FIRST_S", "0")
+
+    async def once():
+        t = asyncio.create_task(credits._reconcile_loop())
+        for _ in range(100):
+            if ran:
+                break
+            await asyncio.sleep(0.02)
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+        from app import db
+        async with db._pool.connection() as conn:                                  # a zár elengedve
+            free = (await (await conn.execute("SELECT pg_try_advisory_lock(7351902)")).fetchone())[0]
+            await conn.execute("SELECT pg_advisory_unlock(7351902)")
+        return free
+    assert db_client.portal.call(once) is True and ran == [1]
