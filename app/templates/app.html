@@ -207,6 +207,8 @@
       <div id="usage-box" hidden><h3 class="plans-h">This month</h3><div id="usage"></div></div>
     </div>
     <p class="muted small" id="manage"></p>
+    <div id="ledger-box" hidden><h3 class="plans-h">Credit history <span class="muted small">— every change to your balance</span></h3>
+      <table class="costs ledger" id="ledger"></table><p><button class="btn ghost" id="ledger-more" hidden>Older</button></p></div>
   </section>
 </template>
 
@@ -507,6 +509,22 @@ const views = {
       const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages", ai_steps: "Studio AI steps (connected AI)" };
       $("#usage").innerHTML = Object.entries(account.usage).map(([k, u]) => `<div class="use"><span>${names[k] || k}</span><span class="mono small">${u.used} / ${u.limit.toLocaleString("en")}</span>
         <i style="--w:${Math.min(100, 100 * u.used / Math.max(1, u.limit))}%"></i></div>`).join("");
+    }
+    if (!account.guest && account.credits !== null) {           // tranzakciótörténet (a kreditkönyv sorai)
+      $("#ledger-box").hidden = false;
+      const KIND = { grant: "Added", purchase: "Bought", hold: "Reserved", capture: "Used", release: "Reservation returned",
+        refund: "Refund", adjust: "Adjustment", admin_usage: "Admin use" };
+      let before = null;
+      const more = async () => {
+        const r = await api(`/api/account/ledger?limit=30${before ? `&before=${before}` : ""}`);
+        $("#ledger").insertAdjacentHTML("beforeend", r.entries.map(e => `<tr class="k-${esc(e.kind)}"><td class="mono small">${esc(new Date(e.created_at).toLocaleString())}</td>
+          <td>${esc(KIND[e.kind] || e.kind)} · ${esc(e.reason || e.operation || "")}</td><td class="mono">${e.delta > 0 ? "+" : ""}${e.delta}</td>
+          <td class="mono muted">${e.balance_after ?? ""}</td></tr>`).join("") || (before ? "" : `<tr><td class="muted">Nothing yet.</td></tr>`));
+        before = r.entries.length ? r.entries[r.entries.length - 1].id : before;
+        $("#ledger-more").hidden = r.entries.length < 30;
+      };
+      $("#ledger-more").addEventListener("click", () => more().catch(e => toast(e.message)));
+      more().catch(() => {});
     }
     if (account.has_subscription && P.enabled) {
       $("#manage").innerHTML = `<button class="btn ghost" id="portal">Manage subscription, invoices and card</button>`;

@@ -387,6 +387,7 @@
   .modal .field { margin-bottom: 10px; }
   .modal .field label { display: block; color: var(--muted); margin-bottom: 4px; font-size: 11px; }
   .modal .field input, .modal .field textarea, .modal .field select { width: 100%; }
+  table.cr { border-collapse: collapse; margin: 4px 0 10px; } table.cr td, table.cr th { padding: 2px 6px; border-bottom: 1px solid #0001; text-align: left; }
   .modal .actions-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 
   .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel);
@@ -410,6 +411,7 @@
     <span class="pill" id="status-events">events: …</span>
     <span class="pill" id="status-wc" title="WordCraft (Rust Word-motor)">wordcraft: ?</span>
     <span class="pill" id="status-inbox" title="Open review requests for Claude" style="cursor:pointer">📨 –</span>
+    <span class="pill" id="status-credits" title="Credits: pricing, alerts, reconciliation" style="cursor:pointer">💳 –</span>
   </div>
   <span style="flex:1"></span>
   <div class="toolbar">
@@ -574,6 +576,14 @@
     <h3>🕘 Version history</h3>
     <div id="hist-body" style="max-height:60vh;overflow:auto;font-size:13px"></div>
     <div class="actions"><button onclick="closeModal('modal-history')">Close</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-credits">
+  <div class="modal" style="width:min(1100px,96vw)">
+    <h3>💳 Credits — pricing, alerts, reconciliation</h3>
+    <div id="cr-body" style="max-height:70vh;overflow:auto;font-size:12.5px"></div>
+    <div class="actions"><button id="cr-reconcile">Reconcile now</button><button onclick="closeModal('modal-credits')">Close</button></div>
   </div>
 </div>
 
@@ -1119,6 +1129,63 @@ $("status-inbox").addEventListener("click", async () => {
   openModal("modal-history");
 });
 setInterval(refreshInbox, 15000); refreshInbox();
+
+// ----- kreditek: árszabályok (szerkeszthető), figyelmeztetések, egyeztetés, a könyv utolsó sorai -----
+async function refreshCredits() {
+  try {
+    const r = await fetch("/api/admin/credits/status");
+    if (!r.ok) { $("status-credits").textContent = "💳 –"; return null; }
+    const d = await r.json();
+    $("status-credits").textContent = d.notices.length ? `💳 ⚠ ${d.notices.length}` : `💳 ${d.provider_flag}`;
+    $("status-credits").className = "pill " + (d.notices.length ? "err" : "ok");
+    return d;
+  } catch (e) { $("status-credits").textContent = "💳 –"; return null; }
+}
+const crCell = (v) => `<td>${escapeHtml(v === null || v === undefined ? "" : String(v))}</td>`;
+async function openCredits() {
+  const d = await refreshCredits();
+  const pr = await fetch("/api/admin/pricing").then(x => x.ok ? x.json() : { rules: [] });
+  if (!d) { toast("credits need the database", "err"); return; }
+  const inp = (r, k, w) => `<input data-k="${k}" value="${escapeHtml(r[k] === null || r[k] === undefined ? "" : String(r[k]))}" style="width:${w}px">`;
+  const rows = [...pr.rules, { operation: "", model: "", tier: "", unit: "job", provider: "", provider_cost: 0, multiplier: 1, min_charge: 0, note: "" }];
+  $("cr-body").innerHTML =
+    `<h4>Alerts</h4>` + (d.notices.length ? d.notices.map(n => `<div class="hist-row">⚠ ${escapeHtml(n.message)}
+       <span style="color:var(--muted)"> · ${escapeHtml(n.created_at)}</span> <button data-resolve="${n.id}">Done</button></div>`).join("") : "<i>None.</i>")
+    + `<h4>AI provider</h4><div>AI_VIDEO = <b>${escapeHtml(d.provider_flag)}</b> · active: ${escapeHtml(d.providers.join(", ") || "none")}</div>`
+    + `<table class="cr"><tr><th>when</th><th>provider</th><th>balance</th><th>ledger cost since</th><th>expected</th><th>drift</th></tr>`
+    + d.balances.map(b => `<tr>${[b.created_at, b.provider, b.balance, b.ledger_cost, b.expected, b.drift].map(crCell).join("")}</tr>`).join("") + `</table>`
+    + `<h4>Pricing rules <span style="color:var(--muted)">— price = ceil(provider_cost × units × multiplier), at least min_charge; MCP tools: operation "mcp:&lt;tool&gt;[.&lt;action&gt;]" (default 0)</span></h4>`
+    + `<table class="cr" id="cr-rules"><tr><th>operation</th><th>model</th><th>tier</th><th>unit</th><th>provider</th><th>provider_cost</th><th>multiplier</th><th>min</th><th>note</th><th></th></tr>`
+    + rows.map(r => `<tr data-id="${r.id || ""}">${inp(r, "operation", 140)}${inp(r, "model", 170)}${inp(r, "tier", 90)}${inp(r, "unit", 60)}${inp(r, "provider", 50)}${inp(r, "provider_cost", 60)}${inp(r, "multiplier", 60)}${inp(r, "min_charge", 40)}${inp(r, "note", 160)}
+        <td><button data-save>${r.id ? "Save" : "Add"}</button>${r.id ? ` <button data-del="${r.id}">✕</button>` : ""}</td></tr>`).join("") + `</table>`
+    + `<h4>Open AI tasks</h4><table class="cr"><tr><th>id</th><th>user</th><th>model</th><th>status</th><th>hold</th><th>created</th></tr>`
+    + d.open_tasks.map(t => `<tr>${[t.id, t.user_id, t.model, t.status, t.hold, t.created_at].map(crCell).join("")}</tr>`).join("") + `</table>`
+    + `<h4>Ledger (latest)</h4><table class="cr"><tr><th>when</th><th>user</th><th>kind</th><th>delta</th><th>balance</th><th>reason</th><th>provider cost</th></tr>`
+    + d.ledger.map(l => `<tr>${[l.created_at, l.email || l.user_id, l.kind, l.delta, l.balance_after, l.reason, l.provider_cost].map(crCell).join("")}</tr>`).join("") + `</table>`;
+  $("cr-body").querySelectorAll("[data-resolve]").forEach(b => b.addEventListener("click", async () => {
+    await fetch(`/api/admin/notices/${b.dataset.resolve}/resolve`, { method: "POST" }); openCredits();
+  }));
+  $("cr-body").querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm("Delete this pricing rule?")) return;
+    await fetch(`/api/admin/pricing/${b.dataset.del}`, { method: "DELETE" }); openCredits();
+  }));
+  $("cr-body").querySelectorAll("[data-save]").forEach(b => b.addEventListener("click", async () => {
+    const tr = b.closest("tr"), body = {};
+    tr.querySelectorAll("input[data-k]").forEach(i => body[i.dataset.k] = i.value.trim());
+    for (const k of ["provider_cost", "multiplier"]) body[k] = body[k] === "" ? null : Number(body[k]);
+    body.min_charge = Number(body.min_charge || 0);
+    const r = await fetch("/api/admin/pricing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { toast((await r.json()).detail || "not saved", "err"); return; }
+    toast("saved", "ok"); openCredits();
+  }));
+  openModal("modal-credits");
+}
+$("status-credits").addEventListener("click", openCredits);
+$("cr-reconcile").addEventListener("click", async () => {
+  const r = await fetch("/api/admin/credits/reconcile", { method: "POST" });
+  toast(r.ok ? "reconciled" : "reconcile failed", r.ok ? "ok" : "err"); openCredits();
+});
+setInterval(refreshCredits, 60000); refreshCredits();
 
 // initial load
 refreshFiles();

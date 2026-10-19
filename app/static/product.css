@@ -367,6 +367,7 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .plans-grid2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; }
 .costs { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
 .costs td { padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 14.5px; } .costs td:last-child { text-align: right; font: 600 13px/1 var(--f-mono); }
+.ledger td { padding: 7px 8px 7px 0; vertical-align: top; } .ledger tr.k-hold, .ledger tr.k-release { opacity: .6; }
 .use { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; margin-bottom: 12px; font-size: 14px; }
 .use i { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--mat) var(--w), var(--rule) var(--w)); }
 @media (max-width: 900px) { .plan-cards, .plans-grid2 { grid-template-columns: 1fr; } }

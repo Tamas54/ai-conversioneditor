@@ -335,8 +335,6 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     except ValueError as e:
         return _signup_form(nxt, str(e), name, email, 400)
     _signups[ip].append(time.time())
-    if settings.SIGNUP_CREDITS:
-        await db.credits_add(user["id"], 0, "signup")  # napló-sor a kezdő egyenlegről
     await _adopt_guest(request, user["id"])
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(user["id"]), max_age=SESSION_TTL_S, httponly=True,
@@ -432,5 +430,8 @@ async def api_admin_credits(body: dict) -> dict:
     rows = await db._rows("SELECT id FROM users WHERE email = lower(%s) OR id = %s", (body.get("email") or "", body.get("user_id") or ""))
     if not rows:
         raise HTTPException(404, "no such user")
-    bal = await db.credits_add(rows[0]["id"], int(body.get("delta", 0)), body.get("reason") or "admin grant")
+    try:
+        bal = await db.credits_add(rows[0]["id"], int(body.get("delta", 0)), body.get("reason") or "admin grant", kind="adjust")
+    except db.InsufficientCredits as e:
+        raise HTTPException(400, f"The balance is only {e.available} credits.")
     return {"user_id": rows[0]["id"], "credits": bal}
