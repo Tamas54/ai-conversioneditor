@@ -65,3 +65,39 @@ def test_overlay_end_card_extends_the_footage_and_edits_follow(tmp_path, put_fil
     ed2 = asyncio.run(video.edit(ed["file_id"], {"end_card": "none", "add_layers": [{"at": 1, "type": "source", "text": "Forrás: teszt"}]},
                                  render=False))
     assert "end_card" not in ed2 and video.info(ed2["file_id"])["video"]["duration"] == pytest.approx(3.0, abs=0.1)
+
+
+def test_end_card_and_adjust_together(tmp_path, put_file):
+    """Integráció (3.2 × 3.4): a korrekció a kimerevített vég nélküli felvételen fut, a zárókártya utána a korrigált
+    felvételre kerül vissza — és a kártya levétele után is a korrigált felvétel marad."""
+    if not _engine_ok():
+        pytest.skip("no render engine")
+    import numpy as np
+    from PIL import Image
+    from app.storage import read_meta
+    from app.tools import crafts, video
+    clip = tmp_path / "c.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(clip)], check=True)
+    res = asyncio.run(video.overlay({"file_id": put_file(clip), "brand": "none", "render": False,
+                                     "end_card": {"title": "Vége", "dur": 2}}))
+    pid = res.get("file_id") or res["project"]["file_id"]
+    ed = asyncio.run(video.edit(pid, {"adjust": {"lut": "black_white"}}, render=False))
+    eid = ed.get("file_id") or ed["project"]["file_id"]
+    b = read_meta(eid)["spec"]["base"]
+    assert b["adjust"] == {"lut": "black_white"} and b["end_card"]["dur"] == 2
+    assert b["plain"]["asset"].startswith("footage-fx-") and b["duration"] == pytest.approx(4.0, abs=0.15)
+
+    def sat_at(media_id: str, t: float) -> float:
+        png = tmp_path / f"s{t}.png"
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", str(t), "-i", str(crafts.existing(media_id)), "-frames:v", "1",
+                        str(png)], check=True)
+        return float(np.asarray(Image.open(png).convert("HSV"))[..., 1].mean())
+
+    assert sat_at(b["media_id"], 3.2) < 10                               # a kártya alatti kimerevített kocka is fekete-fehér
+    ed2 = asyncio.run(video.edit(eid, {"end_card": "none", "add_layers": [{"at": 0.5, "type": "source", "text": "Forrás: teszt"}]},
+                                 render=False))
+    b2 = read_meta(ed2.get("file_id") or ed2["project"]["file_id"])["spec"]["base"]
+    assert "end_card" not in b2 and b2["adjust"] == {"lut": "black_white"} and b2["asset"].startswith("footage-fx-")
+    assert b2["duration"] == pytest.approx(2.0, abs=0.15)
