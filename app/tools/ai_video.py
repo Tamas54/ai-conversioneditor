@@ -553,6 +553,36 @@ ASPECTS = ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive")
 CLIP_MIN_S, CLIP_MAX_S = 4, 30
 FACTORS = (1, 2, 4)
 TOPAZ_MAX_MB = 50                                 # a kie API bemeneti korlátja (mp4 / mov / mkv)
+# élesítő motorok (ENHANCE_ENGINE): név → (szolgáltató, modell, a bemenet többi mezője, egy darab legfeljebb MB).
+# A szerveren nincs GPU: mindegyik a szolgáltatónál fut. Alap: SeedVR2 a fal-on, ha van FAL_KEY (a tömörített, kicsinyített
+# régi anyag referenciája), különben a kie Topaza.
+ENGINES: dict[str, tuple[str, str, dict[str, Any], Optional[float]]] = {
+    "seedvr": ("fal", "fal-ai/seedvr/upscale/video", {}, 95),
+    "topaz-starlight": ("fal", "fal-ai/topaz/upscale/video", {"topaz_model": "Starlight Precise 2.5"}, 95),
+    "topaz-proteus": ("fal", "fal-ai/topaz/upscale/video", {"topaz_model": "Proteus"}, 95),
+    "topaz": ("kie", UPSCALE_MODEL, {}, None),     # None = TOPAZ_MAX_MB (hívás idején olvasva)
+}
+
+
+def enhance_engine() -> str:
+    from app import providers
+    e = os.getenv("ENHANCE_ENGINE", "").strip().lower()
+    if e in ENGINES:
+        return e
+    return "seedvr" if providers.configured("fal") else "topaz"
+
+
+def _enhance_units(engine: str, f: int, info: dict[str, Any], secs: int) -> tuple[str, float]:
+    """Az élesítés árának szintje és egységei a motor árlapja szerint: SeedVR2 = kimeneti megapixel (szélesség × magasság ×
+    képkockák), a fal Topaza = mp a kimenet felbontásának sávjában, a kie Topaza = mp a szorzó szerint."""
+    w, h = int(info["width"]) * f, int(info["height"]) * f
+    if engine == "seedvr":
+        fps = float(info.get("fps") or 30) or 30.0
+        return "any", float(math.ceil(w * h * fps * secs / 1e6))
+    if ENGINES[engine][0] == "fal":
+        short = min(w, h)
+        return ("720p" if short <= 720 else "1080p" if short <= 1080 else "4k"), float(secs)
+    return f"{f}x", float(secs)
 REF_LIMITS = {"reference_images": 30, "reference_videos": 10, "reference_audios": 10}
 
 
@@ -631,9 +661,12 @@ async def estimate_enhance(file_id: str, factor: Any) -> dict[str, Any]:
     path = crafts.existing(file_id)
     info = await video.probe_movie(path)
     secs = max(1, math.ceil(await true_seconds(path) - 1e-6))
-    est = await credits.estimate("enhance", UPSCALE_MODEL, f"{f}x", secs)
+    engine = enhance_engine()
+    tier, units = _enhance_units(engine, f, info, secs)
+    est = await credits.estimate("enhance", ENGINES[engine][1], tier, units)
     return {**est, "what": f"{f}x enhance of {secs} s ({info['width']}×{info['height']} → "
-                           f"{info['width'] * f}×{info['height'] * f})", "seconds": secs}
+                           f"{info['width'] * f}×{info['height'] * f})", "seconds": secs, "engine": engine, "tier": tier,
+            "units": units}
 
 
 def _factor(v: Any) -> int:
@@ -681,11 +714,11 @@ async def _ffmpeg(*args: str) -> None:
     await run("ffmpeg", "-v", "error", "-y", *args, timeout=settings.VIDEO_TIMEOUT_S)
 
 
-async def _topaz_inputs(src_path, info: dict[str, Any], work, paid_s: float) -> list:
-    """A Topaz-bemenet(ek) ≤ 50 MB, legfeljebb a KIFIZETETT másodpercek (-t: a fejlécben hamisított hossz mögötti képet
+async def _topaz_inputs(src_path, info: dict[str, Any], work, paid_s: float, max_mb: Optional[float] = None) -> list:
+    """Az élesítő bemenete(i) ≤ max_mb (a kie Topaza 50 MB, a fal 95), legfeljebb a KIFIZETETT másodpercek (-t: a fejlécben hamisított hossz mögötti képet
     sem töltjük fel): mp4/mov/mkv → kép-másolással; WebM / m4v → mp4; nagyobb → időben darabolva, kép-másolással
     (kulcskockánál vágva), a túl nagy darab célbitrátára kódolva. Vissza: a darabok útvonalai."""
-    limit = TOPAZ_MAX_MB * 1024 * 1024 * 0.9
+    limit = (max_mb or TOPAZ_MAX_MB) * 1024 * 1024 * 0.9
     ext = src_path.suffix.lower().lstrip(".")
     base = work / "in.mp4"
     if ext not in ("mp4", "mov", "mkv"):          # webm / m4v → mp4 (H.264, jó minőségben; a hang külön jön vissza)
@@ -746,8 +779,9 @@ async def start_enhance(file_id: str, factor: Any) -> dict[str, Any]:
     f = _factor(factor)
     src = await _source_video(file_id)
     est = await estimate_enhance(src, f)
-    op = await reserve("enhance", UPSCALE_MODEL, hold=est["credits"],
-                       meta={"units": est["units"], "tier": f"{f}x", "source": src, "factor": f})
+    prov_name, model, extra, max_mb = ENGINES[est["engine"]]
+    op = await reserve("enhance", model, hold=est["credits"], provider=prov_name,
+                       meta={"units": est["units"], "tier": est["tier"], "source": src, "factor": f, "engine": est["engine"]})
 
     async def prepare() -> list[dict[str, Any]]:
         import shutil
@@ -757,9 +791,9 @@ async def start_enhance(file_id: str, factor: Any) -> dict[str, Any]:
         tmp = temp_path(f"enh_{uuid.uuid4().hex[:10]}")
         tmp.mkdir(parents=True)
         try:
-            parts = await _topaz_inputs(path, await _probe(path), tmp, float(est["seconds"]))
-            prov = _provider()
-            return [{"video": await prov.upload(p), "factor": f} for p in parts]
+            parts = await _topaz_inputs(path, await _probe(path), tmp, float(est["seconds"]), max_mb)
+            prov = _provider(prov_name)
+            return [{"video": await prov.upload(p), "factor": f, **extra} for p in parts]
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -804,9 +838,16 @@ async def _post_enhance(rows: list[dict[str, Any]], files: list[list[str]]) -> d
                               "-preset", "veryfast", "-pix_fmt", "yuv420p", str(video_only))
         orig = crafts.existing(src)
         k = (await _probe(orig)).get("audio_stream")          # az első dekódolható hangsáv (iPhone: a térhang nem)
-        if k is not None:
-            await _ffmpeg("-i", str(video_only), "-i", str(orig), "-map", "0:v:0", "-map", f"1:a:{k}", "-c:v", "copy",
-                          "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(output_path(out_id)))
+        if k is not None:                             # az eredeti hang változatlanul (ha az MP4 befogadja), különben AAC
+            from app.tools import encoding
+            for audio in (["-c:a", "copy"], encoding.aac()):
+                try:
+                    await _ffmpeg("-i", str(video_only), "-i", str(orig), "-map", "0:v:0", "-map", f"1:a:{k}", "-c:v", "copy",
+                                  *audio, "-shortest", "-movflags", "+faststart", str(output_path(out_id)))
+                    break
+                except Exception:
+                    if audio != ["-c:a", "copy"]:
+                        raise
         else:
             await _ffmpeg("-i", str(video_only), "-map", "0:v:0", "-c", "copy", "-movflags", "+faststart",
                           str(output_path(out_id)))
@@ -830,10 +871,11 @@ POST["enhance"] = _post_enhance
 # a video eszköz action="schema" referenciája (a "video" sáv köti be: topic "enhance" / "ai_clip")
 AI_VIDEO_REFERENCE: dict[str, str] = {
     "enhance": (
-        'video(action="enhance", file_id=<video or project>, factor=1|2|4) — Topaz AI upscale via kie.ai: 1 = clean up at '
-        "the same size, 2 / 4 = sharper and bigger. Costs credits by length (1x/2x: 8, 4x: 14 kie credits a second × the "
-        "Studio multiplier); the estimate is reserved first, only the real cost is taken, a failed job costs nothing. Long or "
-        "big videos (> 50 MB) are cut into parts and joined back; the original sound is kept. The result is a NEW version of "
+        'video(action="enhance", file_id=<video or project>, factor=1|2|4) — AI upscale on the AI service\'s GPUs (SeedVR2 '
+        "or Topaz via fal.ai, or Topaz via kie.ai — the server picks): 1 = clean up at the same size, 2 / 4 = sharper and "
+        "bigger; best on old, small or compressed footage. Costs credits by the output's size and length; the estimate is "
+        "reserved first, only the real cost is taken, a failed job costs nothing. Long or big videos are cut into parts and "
+        "joined back; the original sound is kept as it is. The result is a NEW version of "
         "the file (made_from = the source) — use its file_id like any video: overlay, merge-files, edit. "
         'action="estimate" with the same arguments → {credits, what, balance} without starting anything. Returns a job: '
         'video(action="status", job_id=…). Cancelling (jobs cancel) before the upload reaches the AI service costs nothing; '

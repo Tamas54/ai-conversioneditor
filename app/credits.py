@@ -240,10 +240,13 @@ KIE_MULTIPLIER = float(os.getenv("KIE_CREDIT_MULTIPLIER", "0.15"))
 
 
 def default_rules() -> list[dict[str, Any]]:
-    """A szolgáltatói modellek induló árai (a kie ellenőrzött árlapjából, app/providers/kie.py PRICES)."""
-    from app.providers.kie import PRICES
-    return [{"operation": op, "model": model, "tier": tier, "unit": unit, "provider": "kie", "provider_cost": cost,
-             "multiplier": KIE_MULTIPLIER, "min_charge": 1, "note": note} for op, model, tier, unit, cost, note in PRICES]
+    """A szolgáltatói modellek induló árai (a kie és a fal ellenőrzött árlapjából: app/providers/kie.py és fal.py PRICES).
+    A fal dollárban számláz: ugyanaz a Studio-kredit / dollár arány, mint a kie-nél (1 kie-kredit = $0.005)."""
+    from app.providers import fal, kie
+    return [{"operation": op, "model": model, "tier": tier, "unit": unit, "provider": name, "provider_cost": cost,
+             "multiplier": mult, "min_charge": 1, "note": note}
+            for name, prices, mult in (("kie", kie.PRICES, KIE_MULTIPLIER), ("fal", fal.PRICES, KIE_MULTIPLIER / 0.005))
+            for op, model, tier, unit, cost, note in prices]
 
 
 def _num(v: Any) -> float:
@@ -440,6 +443,8 @@ async def reconcile() -> dict[str, Any]:
     from app import providers
     out: dict[str, Any] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "providers": {}}
     for name, prov in providers.active().items():
+        if not getattr(prov, "has_balance", True):      # a fal-nak nincs egyenleg-API-ja
+            continue
         try:
             bal = float(await prov.balance())
         except Exception as e:

@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-10-19 — Own music on own footage
+
+From the owner's product test ("Tamás TV – Reggeli különkiadás"). Music is the person's own; what we offer ourselves has
+to be right ("korrekt"), and quality never goes down.
+- **Own music on an overlay (own footage).** Until now an overlay only took the built-in library and ignored
+  `music_file_id`. Now `music={"file_id", "start"?, "level"?}` (or `music_file_id`) works on `overlay` and in its edits:
+  - `start`: where the song begins (seconds or "MM:SS");
+  - `level`: `background` (default, 14 dB under the footage's speech) | `even` (6 dB under it) | `front` (the song as it
+    is, the footage's sound 14 dB lower) | `only` (the footage's sound muted);
+  - the song is kept lossless (WAV) until the single final encode and isn't looped (a shorter song ends, then silence);
+  - the project keeps its own copy of the song, so an edit (`changes.music = {"level": "front"}`) still works after the
+    upload expired.
+  `make` takes the same object (file or mood); `start` / `level` there are refused with a pointer to `overlay`.
+- **Built-in music library off by default** (`MUSIC_LIBRARY=1` turns it on). Its 24 loops are CC0 but synthesised, not
+  the quality we put our name on. A mood request without the library gives a video without music and a check finding
+  that says to ask for the person's own. The web form's mood picker is gone; the music slot takes their own file.
+- **Video audio is AAC 256k** (was 192k; `VIDEO_AUDIO_BITRATE`), so a song the person brings doesn't lose quality.
+  An enhanced video keeps its original sound as it is (copied, not re-encoded).
+
+## 2026-10-19 — Enhance through fal.ai (no GPU on our server)
+
+kie's Topaz failed with failCode 500 on every upscale all day on 2026-10-19, kie's own sample included, and kie has no
+other upscaler for arbitrary video. The server has no GPU, so the enhancer stays a hosted service: a second provider
+behind the same interface (`app/providers/fal.py`).
+- **fal.ai provider**: queue API (submit → status → result, cancel), upload to fal's CDN (fal's official client's
+  protocol), the result downloaded to our storage at once. fal returns no per-job cost, so the charge is the estimate from
+  its price list; it has no balance API, so the daily reconciliation skips it.
+- **Engines** (`ENHANCE_ENGINE`): `seedvr` (SeedVR2, the default when `FAL_KEY` is set — the reference for old, small,
+  compressed footage), `topaz-starlight`, `topaz-proteus` (Topaz on fal) and `topaz` (kie, the old path and the default
+  without `FAL_KEY`).
+- **Prices** from fal's pages (2026-10-19), same Studio credits per dollar as kie: SeedVR2 $0.001 per output megapixel
+  (1080×1920 @30 ≈ $0.062/s); Topaz $0.01 / $0.02 / $0.08 a second for output ≤720p / ≤1080p / above. The Starlight
+  price isn't listed separately — check it before `AI_VIDEO=1`.
+- `FAL_KEY` env only; without it nothing changes.
+
 ## 2026-10-19 — OPERATION OMLETT
 
 Studio development package from the 2026-10-19 live MCP test (the "omlett" news video) and the owner's requests.
