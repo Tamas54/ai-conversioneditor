@@ -70,6 +70,24 @@ MODELS: dict[str, dict[str, Any]] = {
 }
 
 
+# kie-árak (a kie.ai/pricing adatforrása, ellenőrizve 2026-10-19; 1 kie-kredit = $0.005) — a pricing_rules induló sorai:
+# (művelet, modell, szint, egység, kie-kredit/egység, megjegyzés). A draft (draft=true, 480p) élesben mérve a 480p ára
+# (4 s = 112). A véglegesítés (seedance-2-5-draft, csak 1080p) ára nincs kiírva: a foglalás az 1080p-s ár, a levonás a
+# tényleges creditsConsumed. Videóreferenciával a díjköteles mp = a referencia-videók + a kimenet hossza.
+PRICES: list[tuple[str, str, str, str, float, str]] = [
+    ("ai_clip", "bytedance/seedance-2-5", "480p", "second", 28, "Seedance 2.5 480p (also draft), $0.14/s"),
+    ("ai_clip", "bytedance/seedance-2-5", "720p", "second", 63, "Seedance 2.5 720p, $0.315/s"),
+    ("ai_clip", "bytedance/seedance-2-5", "1080p", "second", 158, "Seedance 2.5 1080p, $0.79/s"),
+    ("ai_clip", "bytedance/seedance-2-5", "480p+video", "second", 17, "with reference video: (ref + output) s, $0.085/s"),
+    ("ai_clip", "bytedance/seedance-2-5", "720p+video", "second", 38, "with reference video: (ref + output) s, $0.19/s"),
+    ("ai_clip", "bytedance/seedance-2-5", "1080p+video", "second", 95, "with reference video: (ref + output) s, $0.475/s"),
+    ("ai_clip", "bytedance/seedance-2-5-draft", "1080p", "second", 158, "draft → final 1080p; price not published, held at 1080p"),
+    ("enhance", "topaz/video-upscale", "1x", "second", 8, "Topaz video upscale 1x/2x, $0.04/s"),
+    ("enhance", "topaz/video-upscale", "2x", "second", 8, "Topaz video upscale 1x/2x, $0.04/s"),
+    ("enhance", "topaz/video-upscale", "4x", "second", 14, "Topaz video upscale 4x, $0.07/s"),
+]
+
+
 def map_input(model: str, data: dict[str, Any]) -> dict[str, Any]:
     """A saját bemenet → a modell mezői (a táblából). Ismeretlen modell vagy mező → ProviderError (nem megy ki)."""
     spec = MODELS.get(model)

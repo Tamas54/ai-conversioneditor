@@ -190,7 +190,17 @@ async def release(uid: str, op_id: str, held: int, *, operation: str, provider: 
 
 _rules_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
 _RULES_TTL_S = 30
-DEFAULT_RULES: list[dict[str, Any]] = []        # a szolgáltatói modellek induló árai (app/providers: seed_rules)
+# Studio-kredit / kie-kredit (a haszonnal együtt). 1 kie-kredit = $0.005 ≈ €0.0046; a legolcsóbban eladott Studio-kredit a
+# Pro csomagé (€19 / 400 = €0.0475, ÁFÁ-val együtt) → 0.15-nél a Pro-kreditből is ~1.2–1.5× az önköltség, a kreditcsomagból
+# (€0.10) ~3×. Tulajdonosi döntés: KIE_CREDIT_MULTIPLIER (vagy soronként az adminban).
+KIE_MULTIPLIER = float(os.getenv("KIE_CREDIT_MULTIPLIER", "0.15"))
+
+
+def default_rules() -> list[dict[str, Any]]:
+    """A szolgáltatói modellek induló árai (a kie ellenőrzött árlapjából, app/providers/kie.py PRICES)."""
+    from app.providers.kie import PRICES
+    return [{"operation": op, "model": model, "tier": tier, "unit": unit, "provider": "kie", "provider_cost": cost,
+             "multiplier": KIE_MULTIPLIER, "min_charge": 1, "note": note} for op, model, tier, unit, cost, note in PRICES]
 
 
 def _num(v: Any) -> float:
@@ -202,7 +212,7 @@ async def seed_rules(rules: Optional[list[dict[str, Any]]] = None) -> int:
     if not db.enabled():
         return 0
     n = 0
-    for r in rules if rules is not None else DEFAULT_RULES:
+    for r in rules if rules is not None else default_rules():
         got = await db._rows(
             """INSERT INTO pricing_rules (operation, model, tier, unit, provider, provider_cost, multiplier, min_charge, note)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (operation, model, tier) DO NOTHING RETURNING id""",

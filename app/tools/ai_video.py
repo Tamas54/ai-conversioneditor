@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import logging
 import os
 import time
@@ -355,3 +356,105 @@ async def resume_loop() -> None:
 def _ts(v: Any) -> float:
     from datetime import datetime
     return datetime.fromisoformat(str(v)).timestamp()
+
+
+# ---------- modellek és becslés (OMLETT 2.2) ----------
+
+CLIP_MODEL = "bytedance/seedance-2-5"             # szöveg→videó, kép→videó (első / első+utolsó kocka), referencia mód
+FINAL_MODEL = "bytedance/seedance-2-5-draft"      # egy draft (480p) véglegesítése 1080p-re, ugyanazzal a mozgással
+UPSCALE_MODEL = "topaz/video-upscale"             # 1x / 2x / 4x
+RESOLUTIONS = ("480p", "720p", "1080p")
+ASPECTS = ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive")
+CLIP_MIN_S, CLIP_MAX_S = 4, 30
+FACTORS = (1, 2, 4)
+TOPAZ_MAX_MB = 50                                 # a kie API bemeneti korlátja (mp4 / mov / mkv)
+REF_LIMITS = {"reference_images": 30, "reference_videos": 10, "reference_audios": 10}
+
+
+def _ids(v: Any) -> list[str]:
+    if v is None:
+        return []
+    return [str(x.get("file_id") if isinstance(x, dict) else x) for x in (v if isinstance(v, list) else [v]) if x]
+
+
+def clip_options(o: dict[str, Any]) -> dict[str, Any]:
+    """Az AI-klip beállításai, ellenőrizve: mode = text | first_frame | first_last | reference (nem keverhető)."""
+    o = dict(o or {})
+    prompt = str(o.get("prompt") or "").strip()
+    if not prompt and not o.get("finalize"):
+        raise AIVideoError('Say what should happen in the clip: ai={"prompt": "…"} (or text=…).')
+    draft = bool(o.get("draft"))
+    res = str(o.get("resolution") or ("480p" if draft else "720p")).lower().replace("p", "") + "p"
+    if res not in RESOLUTIONS:
+        raise AIVideoError(f"resolution: {' | '.join(RESOLUTIONS)}")
+    if draft and res != "480p":
+        raise AIVideoError("A draft is always 480p (cheap preview) — finalise it to 1080p afterwards.")
+    try:
+        dur = int(round(float(o.get("duration") or 5)))
+    except (TypeError, ValueError):
+        raise AIVideoError("duration: seconds, 4–30") from None
+    if not CLIP_MIN_S <= dur <= CLIP_MAX_S:
+        raise AIVideoError(f"duration: {CLIP_MIN_S}–{CLIP_MAX_S} seconds (got {dur})")
+    first = o.get("first_frame") or o.get("image")
+    last = o.get("last_frame")
+    refs = {k: _ids(o.get(k)) for k in REF_LIMITS}
+    if last and not first:
+        raise AIVideoError("A last frame needs a first frame too (first_frame / image).")
+    if (first or last) and any(refs.values()):
+        raise AIVideoError("First/last-frame mode and reference mode can't be mixed — use one: first_frame (+ last_frame) "
+                           "OR reference_images / reference_videos / reference_audios.")
+    for k, n in REF_LIMITS.items():
+        if len(refs[k]) > n:
+            raise AIVideoError(f"{k}: at most {n}")
+    aspect = str(o.get("aspect") or ("adaptive" if first or any(refs.values()) else "16:9"))
+    if aspect not in ASPECTS:
+        raise AIVideoError(f"aspect: {' | '.join(ASPECTS)}")
+    mode = "reference" if any(refs.values()) else "first_last" if last else "first_frame" if first else "text"
+    return {"prompt": prompt, "resolution": res, "duration": dur, "audio": bool(o.get("audio", False)), "draft": draft,
+            "aspect": aspect, "mode": mode, "first_frame": first, "last_frame": last, **refs}
+
+
+async def _ref_video_seconds(ids: list[str]) -> float:
+    from app.tools import crafts, video
+    total = 0.0
+    for fid in ids:
+        total += float((await video.probe_movie(crafts.existing(fid)))["duration"] or 0)
+    if total > 30:
+        raise AIVideoError(f"Reference videos may be 30 seconds in total (these are {total:.1f} s).")
+    return total
+
+
+async def estimate_clip(o: dict[str, Any]) -> dict[str, Any]:
+    """Az AI-klip ára (Studio-kredit) a becsült maximumra — ezt foglaljuk le; a levonás a tényleges költség."""
+    if o.get("finalize"):
+        src = await _rows_of(str(o["finalize"]))
+        dur = int(((src[0]["input"] if src else {}) or {}).get("duration") or 5)
+        est = await credits.estimate("ai_clip", FINAL_MODEL, "1080p", dur)
+        return {**est, "what": f"final 1080p of the draft ({dur} s)"}
+    c = clip_options(o)
+    ref_s = await _ref_video_seconds(c["reference_videos"]) if c["reference_videos"] else 0.0
+    tier = c["resolution"] + ("+video" if ref_s else "")
+    units = c["duration"] + (math.ceil(ref_s) if ref_s else 0)
+    est = await credits.estimate("ai_clip", CLIP_MODEL, tier, units)
+    return {**est, "what": f"{'draft ' if c['draft'] else ''}{c['resolution']} {c['duration']} s clip"
+                           + (f" (+{ref_s:.0f} s reference video)" if ref_s else "")}
+
+
+async def estimate_enhance(file_id: str, factor: Any) -> dict[str, Any]:
+    from app.tools import crafts, video
+    f = _factor(factor)
+    info = await video.probe_movie(crafts.existing(file_id))
+    secs = max(1, math.ceil(float(info["duration"] or 0)))
+    est = await credits.estimate("enhance", UPSCALE_MODEL, f"{f}x", secs)
+    return {**est, "what": f"{f}x enhance of {secs} s ({info['width']}×{info['height']} → "
+                           f"{info['width'] * f}×{info['height'] * f})", "seconds": secs}
+
+
+def _factor(v: Any) -> int:
+    try:
+        f = int(float(str(v or 2).lower().rstrip("x")))
+    except ValueError:
+        f = 0
+    if f not in FACTORS:
+        raise AIVideoError("factor: 1 (clean up, same size) | 2 | 4")
+    return f

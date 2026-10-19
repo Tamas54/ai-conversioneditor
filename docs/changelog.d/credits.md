@@ -50,3 +50,17 @@
 - Live (2026-10-19): a request kie rejects at create time costs nothing; an accepted task that fails reports
   `creditsConsumed: 0` and the balance didn't move (4 failed Topaz tasks, 0 credits) → failed tasks are not billed.
   kie has no cancel endpoint: cancel is local (hold released; a late provider charge shows up in reconciliation).
+
+## 2.2 Models and prices (verified 2026-10-19 on kie.ai/pricing's own data source; 1 kie credit = $0.005)
+| Operation | Model | Unit | kie credits | Studio credits @ ×0.15 |
+|---|---|---|---|---|
+| Seedance 2.5 480p / 720p / 1080p, no video input | `bytedance/seedance-2-5` | s | 28 / 63 / 158 | 4.2 / 9.45 / 23.7 per s |
+| … with reference video ((ref + output) s) | same | s | 17 / 38 / 95 | |
+| Seedance 2.5 draft (480p only) | same, `draft: true` | s | 28 (live: 4 s = 112) | 4 s → 17 |
+| Draft → final 1080p | `bytedance/seedance-2-5-draft` | s | not published (held at 158) | |
+| Topaz video upscale 1x–2x / 4x | `topaz/video-upscale` | s | 8 / 14 | |
+| Topaz image upscale 2K / 4K (not wired) | `topaz/image-upscale` | image | 10 / 20 | |
+- Seeded into `pricing_rules` only where missing (admin edits survive restarts). Default multiplier `0.15` Studio
+  credits per kie credit (`KIE_CREDIT_MULTIPLIER`), `min_charge` 1 — owner decision, see the lane report.
+- Estimates: `ai_video.estimate_clip` (resolution, 4–30 s, reference video seconds) and `estimate_enhance` (probed
+  length rounded up × factor tier). Seedance modes (text | first frame | first+last | reference) can't be mixed.
