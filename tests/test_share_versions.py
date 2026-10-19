@@ -94,3 +94,19 @@ def test_edit_lock_tells_who_is_editing(world):
     assert w.req("a", "POST", "/api/share/lock", json={"file_id": v2}).json()["yours"] is True
     # C nem is kérdezheti
     assert w.req("c", "POST", "/api/share/lock", json={"file_id": pid}).status_code == 403
+
+
+def test_owner_if_version_on_own_file(world):
+    """A tulajdonos saját fájljánál is él az if_version (nincs megosztott munkaterület a kérésben)."""
+    w = world
+    doc = w.upload("a", "lista.md", "# Bevásárlás\n\ntojás".encode())
+    w.req("a", "POST", "/api/share", json={"file_id": doc, "email": w.u["b"]["email"], "role": "editor"})
+    err, vb = w.mcp("b", "find_replace", {"file_id": doc, "pattern": "tojás", "replacement": "10 tojás"})
+    assert not err, vb
+    _settle(w, vb["file_id"], w.u["a"]["id"])
+    # A kimondja, hogy B változatát már látta (if_version = az él) → nem ütközés, pedig a forrásnak van más ága
+    err, ok = w.mcp("a", "find_replace", {"file_id": doc, "pattern": "tojás", "replacement": "8 tojás", "if_version": vb["file_id"]})
+    assert not err and "conflict" not in ok, ok
+    # if_version nélkül (vagy a régivel) ugyanez ütközés: „Tamás's version”
+    err, va = w.mcp("a", "find_replace", {"file_id": doc, "pattern": "tojás", "replacement": "6 tojás", "if_version": doc})
+    assert not err and va["conflict"]["fork"]["by"] == "Tamás" and va["conflict"]["other"]["file_id"] == vb["file_id"], va

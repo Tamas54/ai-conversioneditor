@@ -60,7 +60,9 @@ async def _check_fork(fid: str, owner: Optional[str], actor: Optional[str]) -> O
     base = meta.get("source_file_id")
     if not base or not _is_version(meta.get("operation") or "", fid, base):
         return None
-    ref = sh.if_version if sh is not None and sh.if_version and sh.if_version != fid else base
+    from app.sharing import request_if_version
+    iv = request_if_version()
+    ref = iv if iv and iv != fid else base
     rows = await db._rows("""SELECT file_id, operation, extra->>'edited_by' AS by, extract(epoch FROM created_at) AS t
                              FROM file_versions WHERE owner_id = %s AND source_file_id = %s AND file_id <> %s
                              AND deleted_at IS NULL ORDER BY created_at""", (owner, ref, fid))

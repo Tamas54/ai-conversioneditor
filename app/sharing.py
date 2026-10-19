@@ -25,6 +25,7 @@ import re
 import secrets
 import time
 from pathlib import Path
+from contextvars import ContextVar
 from typing import Any, Optional
 from urllib.parse import unquote
 
@@ -44,6 +45,9 @@ MIXED = "These files are in different people's workspaces — work on one shared
 def enabled() -> bool:
     from app import db
     return os.getenv("SHARING_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on") and db.enabled()
+
+
+_if_version: ContextVar[Optional[str]] = ContextVar("aice_if_version", default=None)
 
 
 class AccessDenied(PermissionError):
@@ -76,7 +80,6 @@ class Shared:
         self.owner, self.actor, self.roles = owner, actor, dict(roles)
         self.created: set[str] = set()
         self.denied = denied or {}
-        self.if_version: Optional[str] = None
 
     @property
     def role(self) -> str:
@@ -331,7 +334,7 @@ async def _request_ids(request) -> tuple[set[str], str, Optional[str], Any]:
 
 async def enter_request(request, actor: str):
     """Az auth-middleware hívja a belépett felhasználóval: más munkaterületének fájlja → jogellenőrzés, és a kérés
-    idejére a tulajdonos munkaterülete. → token (leave_request-nek) vagy None. Webes kérésnél AccessDenied → 403;
+    idejére a tulajdonos munkaterülete (+ az if_version a kérés idejére). → tokenek (leave_request-nek) vagy None. Webes kérésnél AccessDenied → 403;
     MCP-n a hívott eszköz kapja a hibát (érthető üzenettel, a JSON-RPC válaszban)."""
     if not enabled():
         return None
@@ -339,26 +342,35 @@ async def enter_request(request, actor: str):
     if path == "/app" or path.startswith(("/app/",) + _SKIP):
         return None
     ids, need, if_version, is_mcp = await _request_ids(request)
+    toks: list = []
+    if isinstance(if_version, str) and FID_RE.match(if_version):     # optimista zárolás: amiből a kliens kiindult
+        toks.append((_if_version.reset, _if_version.set(if_version)))
     if not ids:
-        return None
+        return toks or None
     try:
         sh = await resolve(actor, ids, need)
     except AccessDenied as e:
+        leave_request(toks)
         if is_mcp is False:
             raise
         if len(is_mcp) == 1:           # egy eszközhívás: a válasz maga az eszköz hibája
             raise AccessDenied(str(e), mcp={"jsonrpc": "2.0", "id": is_mcp[0], "result": {
                 "content": [{"type": "text", "text": str(e)}], "isError": True}}) from None
+        toks = []
         sh = Shared(actor, actor, {}, denied={f: str(e) for f in ids if not _exists_in(actor, f)})
-    if sh is None:
-        return None
-    sh.if_version = if_version if isinstance(if_version, str) and FID_RE.match(if_version) else None
-    return tenancy.enter_shared(sh)
+    if sh is not None:
+        toks.append((tenancy.leave_shared, tenancy.enter_shared(sh)))
+    return toks or None
 
 
-def leave_request(token) -> None:
-    if token is not None:
-        tenancy.leave_shared(token)
+def leave_request(toks) -> None:
+    for reset, tok in reversed(toks or []):
+        reset(tok)
+
+
+def request_if_version() -> Optional[str]:
+    """A kérés if_version-je (webes query/JSON vagy MCP-argumentum) — a háttérmunka is örökli."""
+    return _if_version.get()
 
 
 class workspace:
