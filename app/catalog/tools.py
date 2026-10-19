@@ -109,6 +109,7 @@ TOOLS_LIST: list[Tool] = [
     _t("add-subtitles", "video", f"{_VID} srt vtt ass", f"{_H}.media:subtitles", ("burn", "language"), min_files=2, max_files=2, engines=("ffmpeg",), tier=2, related=("trim-video",)),
     _t("extend-video", "video", _VID, f"{_H}.media:extend_video", ("duration", "at"), engines=("ffmpeg",), tier=2, related=("trim-video", "image-to-video", "merge-files")),
     _t("image-to-video", "video", _IMG, f"{_H}.media:image_to_video", ("duration", "motion", "canvas", "fit", "fps"), output="mp4", engines=("ffmpeg", "pillow"), tier=2, related=("extend-video", "merge-files", "gif-to-video")),
+    _t("adjust-video", "video", _VID, f"{_H}.media:adjust_video", ("auto", "brightness", "contrast", "gamma", "saturation", "shadows", "highlights", "highlight_rolloff", "temperature", "vibrance", "lut", "denoise", "sharpen", "sharpen_method", "stabilize", "preview"), engines=("ffmpeg",), tier=2, related=("resize-video", "trim-video", "compress-video")),
     _t("trim-audio", "audio", _AUD, f"{_H}.media:trim", ("start", "end", "fade_in", "fade_out"), engines=("ffmpeg",), related=("adjust-volume", "compress-mp3", "merge-files")),
     _t("adjust-volume", "audio", f"{_AUD} {_VID}", f"{_H}.media:volume", ("volume", "normalize"), engines=("ffmpeg",), related=("trim-audio", "mute-video")),
     # ---------- vízjel ----------

@@ -332,3 +332,109 @@ def test_new_video_tools_are_in_the_catalog_rest_and_mcp(client, samples, put_fi
         job = client.get(f"/api/jobs/{job['id']}").json()
     assert job["status"] == "done", job
     assert job["result"]["file_id"].endswith(".mp4")
+
+
+# ---------------------------------------------------------------- 3.2 videóeffektek (adjust-video, changes.adjust)
+
+def test_adjust_settings_are_checked_and_luts_are_tables(tmp_path):
+    from app.convert.options import OptionError
+    from app.tools import video_fx
+    adj = video_fx.normalize({"auto": "true", "lut": "Meleg konyha", "contrast": 1, "sharpen": 0.3, "denoise": "fast"})
+    assert adj == {"auto": True, "lut": "warm_kitchen", "sharpen": 0.3, "denoise": "fast"}     # a semleges contrast=1 kimarad
+    assert video_fx.normalize({"lut": "Hírstúdió"})["lut"] == "news_studio" and video_fx.normalize("none") == {}
+    for bad in ({"glow": 1}, {"gamma": 9}, {"lut": "neon"}, {"denoise": "max"}, "bright"):
+        with pytest.raises(OptionError):
+            video_fx.normalize(bad)
+    lines = video_fx.cube_text("black_white").splitlines()
+    assert "LUT_3D_SIZE 17" in lines and len(lines) == 4 + 17 ** 3
+    r, g, b = (float(x) for x in lines[4 + 5].split())                  # R=5/16, G=B=0 → szürke
+    assert r == g == b > 0
+    assert "only toned down" in video_fx.REFERENCE and all(k in video_fx.REFERENCE for k in ("auto", "lut", "stabilize"))
+    dull = video_fx.auto_params({"YAVG": 70, "YMIN": 45, "YMAX": 190, "YLOW": 55, "YHIGH": 170, "SATAVG": 12})
+    assert dull["gamma"] > 1 and dull["saturation"] > 1 and dull["levels"][0] > 0 and dull["levels"][1] < 1
+    assert video_fx.auto_params({"YAVG": 118, "YMIN": 16, "YMAX": 233, "YLOW": 40, "YHIGH": 200, "SATAVG": 40}) == {}
+
+
+def _dull_clip(path: Path, seconds: float = 2, extra: str = "") -> Path:
+    """Sötét, fakó, lapos (kis kontrasztú) klip — ezen kell az Auto-nak javítania."""
+    _ff("-f", "lavfi", "-i", f"testsrc2=size=320x240:rate=15:duration={seconds}", "-f", "lavfi", "-i",
+        f"anoisesrc=duration={seconds}:color=pink:amplitude=0.2", "-vf",
+        "eq=brightness=-0.12:contrast=0.55:saturation=0.35" + extra, "-c:v", "libx264", "-preset", "ultrafast",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", "-shortest", str(path))
+    return path
+
+
+@pytest.mark.asyncio
+async def test_adjust_video_auto_lut_and_before_after_preview(tmp_path, put_file):
+    src = _dull_clip(tmp_path / "fako.mp4")
+    v = put_file(src)
+    y0, s0 = _stats(src)
+    r = await _run("adjust-video", [v], auto=True)
+    out = _out(r["file_id"])
+    y1, s1 = _stats(out)
+    assert y1 > y0 + 8 and s1 > s0 * 1.15, (y0, y1, s0, s1)              # világosabb és élénkebb
+    assert r["data"]["measured"]["YAVG"] and r["data"]["auto"]["gamma"] > 1 and r["data"]["applied"]
+    a = next(s for s in _probe(out)["streams"] if s["codec_type"] == "audio")
+    assert a["codec_name"] == "aac"                                      # a hang átmásolva
+    r = await _run("adjust-video", [v], lut="Fekete-fehér")
+    assert _stats(_out(r["file_id"]))[1] < 2                             # fekete-fehér: nincs telítettség
+    r = await _run("adjust-video", [v], auto=True, lut="news_studio", sharpen=0.4, denoise="fast", preview=True)
+    assert r["file_id"].endswith(".png")
+    from PIL import Image
+    with Image.open(_out(r["file_id"])) as im:
+        im = im.convert("RGB")
+        assert im.width > im.height and im.width >= 2 * 320              # 2×2 osztott kocka
+        tile_w = (im.width - 6) // 2
+        left, right = im.crop((10, 30, tile_w // 2 - 10, 100)), im.crop((tile_w // 2 + 10, 30, tile_w - 10, 100))
+        assert abs(_mean(left) - _mean(right)) > 5                       # a két fél tényleg más
+    r = await _run("adjust-video", [v], brightness=0.02, contrast=1.1, gamma=1.1, saturation=1.1, shadows=0.3,
+                   highlights=-0.3, highlight_rolloff=0.5, temperature=3500, vibrance=0.5, denoise="quality", sharpen=0.5,
+                   sharpen_method="unsharp")                             # minden szűrő egyszerre (érvényes ffmpeg-szintaxis)
+    vf = " ".join(r["data"]["settings"])
+    assert "temperature" in vf and _stats(_out(r["file_id"]))[0] > 0
+    from app.convert.options import OptionError
+    with pytest.raises(OptionError):
+        await _run("adjust-video", [v])                                  # beállítás nélkül nincs mit csinálni
+
+
+def _motion(p: Path) -> float:
+    """Az egymást követő kockák átlagos eltérése (a remegés mértéke)."""
+    import re
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(p), "-vf",
+                          "format=gray,tblend=all_mode=difference,crop=iw*0.6:ih*0.6,signalstats,metadata=print:file=-",
+                          "-f", "null", "-"], capture_output=True, text=True).stdout
+    v = [float(x) for x in re.findall(r"signalstats.YAVG=([\d.]+)", out)][2:]
+    return sum(v) / len(v)
+
+
+@pytest.mark.asyncio
+async def test_adjust_video_stabilizes_a_shaky_clip(tmp_path, put_file):
+    from app.tools import video_fx
+    shaky = tmp_path / "remeg.mp4"
+    _ff("-f", "lavfi", "-i", "testsrc2=size=400x300:rate=15:duration=3", "-vf",
+        "crop=340:240:30+22*sin(n*1.9):30+22*cos(n*2.3),scale=320:240", "-c:v", "libx264", "-preset", "ultrafast",
+        "-pix_fmt", "yuv420p", str(shaky))
+    r = await _run("adjust-video", [put_file(shaky)], stabilize=True)
+    out = _out(r["file_id"])
+    assert any("Stabilized" in x for x in r["data"]["applied"])
+    assert abs(float(_probe(out)["format"]["duration"]) - 3) < 0.3
+    if video_fx.has_filter("vidstabtransform"):
+        assert _motion(out) < 0.8 * _motion(shaky), (_motion(shaky), _motion(out))
+
+
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI (EFFECTCRAFT_CLI) needed")
+@pytest.mark.asyncio
+async def test_video_edit_changes_adjust_corrects_the_footage(tmp_path, put_file):
+    """`video` edit: changes.adjust az overlay-videó alapklipjét korrigálja (új változat), a rétegek maradnak."""
+    from app.storage import read_meta
+    from app.tools import video
+    fid = put_file(_clip(tmp_path / "felvetel.mp4", 320, 240, seconds=2, fps=15))
+    res = await video.overlay({"file_id": fid, "brand": "none", "title": "Korrekció",
+                               "layers": [{"at": 0.2, "dur": 0.8, "type": "source", "text": "Forrás: teszt"}]})
+    s_before = _stats(_out(res["video"]["file_id"]))[1]
+    ed = await video.edit(res["project"]["file_id"], {"adjust": {"lut": "black_white"}})
+    out = _out(ed["video"]["file_id"])
+    assert _stats(out)[1] < 0.2 * s_before                              # a felvétel fekete-fehér lett
+    spec = read_meta(ed["project"]["file_id"])["spec"]
+    assert spec["base"]["adjust"] == {"lut": "black_white"} and [ly["id"] for ly in spec["story"]["layers"]] == ["L1"]
+    assert any("Your footage" in v for v in ed["check"]["verified"])

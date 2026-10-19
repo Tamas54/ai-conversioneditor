@@ -52,3 +52,22 @@
   pan_up | pan_down, `canvas`, `fit`, `fps`): a still (EXIF-rotated) → MP4 clip with an optional Ken Burns move
   (zoompan on a 2× upscale, no jitter) and a silent stereo track (so merge-files keeps the other clips' sound).
 - Both are catalog tools: web page + REST (`tool/extend-video`, `tool/image-to-video`) + MCP `file_tools` + agent.
+
+## 3.2 Video effects (CPU, ffmpeg)
+- `app/tools/video_fx.py`: stabilise (vidstabdetect + vidstabtransform, two passes; deshake where vidstab is
+  missing — the image has vidstab), denoise (hqdn3d fast / nlmeans quality), sharpen (cas / unsharp), colour and light
+  (eq brightness/contrast/gamma/saturation; curves for levels, shadows, highlights and highlight roll-off;
+  colortemperature with preserved lightness; vibrance), LUT looks via lut3d from generated 17³ .cube tables
+  ("Meleg konyha" warm_kitchen, "Hírstúdió" news_studio, "Mozi" cinema, "Fekete-fehér" black_white).
+- Auto: signalstats on the keyframes (YAVG, YMIN/YMAX, YLOW/YHIGH, SATAVG) → black/white point, gamma, saturation and
+  roll-off for hot highlights — bounded, only for visible faults; the user's own values win.
+- Preview: 4 frames, left half before / right half after, as one PNG (before the full render).
+- New tool `adjust-video` (web, REST, MCP file_tools; flat options auto, brightness, contrast, gamma, saturation,
+  shadows, highlights, highlight_rolloff, temperature, vibrance, lut, denoise, sharpen, sharpen_method, stabilize,
+  preview). Audio is copied (AAC), video at the intermediate profile.
+- `video` edit: `changes.adjust` (same keys) corrects an overlay video's footage — always from the clean
+  (upright / tone-mapped) original, `{}` resets; layers stay. A made (scene) video says to use adjust-video instead.
+- Wording everywhere: clipped highlights can't be recovered, only toned down.
+- Reference text for the video tool's `action="schema"`: `app.tools.video_fx.REFERENCE`.
+- Measured on synthetic clips: shaky testsrc2 (±22 px jitter) frame-to-frame difference 43.5 → 14.9 with vidstab;
+  a dim, flat clip gets levels 0.07–0.82 → 0–1 and gamma 1.2 from Auto.

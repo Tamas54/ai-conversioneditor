@@ -414,3 +414,27 @@ async def image_to_video(inputs: list[Path], o: dict[str, Any], out: Path) -> li
         png.unlink(missing_ok=True)
         res.append(dst)
     return res
+
+
+# ---------- korrekció: színek, fények, zaj, élesség, stabilizálás (OMLETT 3.2, app/tools/video_fx.py) ----------
+
+async def adjust_video(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[str, Any]:
+    """A video_fx beállításai lapos opciókként; preview=true: előtte/utána kép 4 kockáról a teljes kódolás helyett."""
+    from app.tools import video_fx
+    adj = video_fx.normalize({k: v for k, v in o.items() if k in video_fx.KEYS})
+    if not adj:
+        raise OptionError('give at least one adjustment, e.g. auto=true, lut="news_studio", sharpen=0.3, denoise="fast"')
+    files, data = [], []
+    for src in inputs:
+        work = out / f"_fx-{src.stem}"
+        if o.get("preview"):
+            png, info = await video_fx.preview(src, adj, work)
+            dst = out_name(out, src, "-before-after", "png")
+            shutil.move(str(png), dst)
+        else:
+            dst = out_name(out, src, "-adjusted", _fmt(src) if _fmt(src) in ("mp4", "mov", "m4v", "mkv") else "mp4")
+            info = await video_fx.apply(src, dst, adj, work)
+        shutil.rmtree(work, ignore_errors=True)
+        files.append(dst)
+        data.append({k: info.get(k) for k in ("settings", "auto", "measured", "applied")})
+    return {"files": files, "data": data[0] if len(data) == 1 else data}

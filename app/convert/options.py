@@ -215,6 +215,17 @@ TOOL_OPTIONS: dict[str, Opt] = {o.key: o for o in [
     # meghosszabbítás, kép → videó (extend-video, image-to-video)
     Opt("duration", "float", None, min=0.1, max=600),
     Opt("motion", "enum", "still", ("still", "zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down")),
+    # korrekció (adjust-video — app/tools/video_fx.py; a `video` eszközben changes.adjust ugyanezekkel a kulcsokkal)
+    Opt("auto", "bool", False),
+    Opt("brightness", "float", 0, min=-1, max=1), Opt("contrast", "float", 1, min=0, max=3),
+    Opt("gamma", "float", 1, min=0.1, max=3), Opt("saturation", "float", 1, min=0, max=3),
+    Opt("shadows", "float", 0, min=-1, max=1), Opt("highlights", "float", 0, min=-1, max=1),
+    Opt("highlight_rolloff", "float", 0, min=0, max=1), Opt("temperature", "int", 6500, min=1000, max=40000),
+    Opt("vibrance", "float", 0, min=-2, max=2),
+    Opt("lut", "str", None, pattern=r"^[^\x00-\x1f]{1,40}$"),
+    Opt("denoise", "enum", "off", ("off", "fast", "quality")),
+    Opt("sharpen", "float", 0, min=0, max=1), Opt("sharpen_method", "enum", "cas", ("cas", "unsharp")),
+    Opt("stabilize", "bool", False), Opt("preview", "bool", False),
 ]}
 
 

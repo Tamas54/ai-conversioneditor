@@ -3893,7 +3893,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         group = _new_group()
         credits = ("Pictures and animations: " + " · ".join(credit_list)) if credit_list else ""
         spec = {"kind": "overlay", "story": _without_runtime(story),
-                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "hdr", "width", "height", "fps", "duration", "audio")
+                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "hdr", "adjust", "clean_media_id", "width", "height", "fps", "duration", "audio")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
                          "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera"),
@@ -4482,6 +4482,9 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
         res["notes"] = ["Rebuilt from the layer list: changes made by hand in the video editor are not in this version "
                         "(they stay in the previous one)."] if meta.get("hand_edited") else []
         return res
+    if changes.get("adjust"):
+        raise ValueError("adjust corrects your own footage: it works on an overlay video (action=\"overlay\"). For a "
+                         "clip before it goes in, use file_tools(tool=\"adjust-video\").")
     alpha_kinds(alpha)
     duration_mode(changes.get("duration_mode"), changes.get("duration"))
     story = copy.deepcopy(spec["story"])
@@ -4602,11 +4605,12 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
-    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera", "subtitles"}
+    allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera", "subtitles", "adjust"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
-                         f"changes.add_layers), accent or title — not {', '.join(other)}. To recut the footage itself, use "
+                         f"changes.add_layers), accent, title or the footage's colour and light (changes.adjust, e.g. "
+                         f"{{\"auto\": true}}) — not {', '.join(other)}. To recut the footage itself, use "
                          "file_tools (trim-video…) and run overlay again.")
     opts = dict(spec.get("opts") or {})
     if "camera" in changes:
@@ -4628,7 +4632,22 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
     if not layers and not opts["subtitles"]:
         raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
-    return await _assemble_overlay(dict(spec["base"]), layers, opts, source=source,
+    base = dict(spec["base"])
+    if "adjust" in changes:                     # OMLETT 3.2: a felvétel korrekciója (app/tools/video_fx.py), mindig az eredetiből
+        from app.tools import video_fx
+        adj = video_fx.normalize(changes["adjust"])
+        clean = base.get("clean_media_id") if base.get("adjust") else base.get("media_id")
+        for k in ("adjust", "clean_media_id", "media_id"):
+            base.pop(k, None)
+        base["asset"] = "footage.mp4" if clean else f"footage.{str(base['file_id']).rsplit('.', 1)[-1].lower()}"
+        if clean:
+            base["media_id"] = clean
+        if adj:
+            step(0, 4, "adjusting the footage")
+            fx, info = await video_fx.render_file(crafts.existing(clean or base["file_id"]), adj)
+            base.update(media_id=fx, asset=f"footage-fx-{fx[:8]}.mp4", adjust=adj, clean_media_id=clean)
+            notes.append("Your footage — " + " ".join(info["applied"]))
+    return await _assemble_overlay(base, layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
                                    label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid)
 
