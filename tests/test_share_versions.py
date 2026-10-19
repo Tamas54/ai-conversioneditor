@@ -35,7 +35,11 @@ def test_parallel_edits_fork_and_the_user_chooses(world):
     assert (out / v2a["file_id"]).exists() and (out / v2b["file_id"]).exists()
     # A is látja az ütközést (a saját változatánál), és választ: Zolié legyen az aktuális
     _settle(w, v2b["file_id"], w.u["a"]["id"])
-    seen = w.req("a", "GET", f"/api/share/conflict?file_id={v2a['file_id']}").json()["conflict"]
+    for _ in range(100):                 # a fork-jelölés a verzió-sorba a háttérben is íródik
+        seen = w.req("a", "GET", f"/api/share/conflict?file_id={v2a['file_id']}").json()["conflict"]
+        if seen:
+            break
+        time.sleep(0.02)
     assert seen and seen["fork"]["file_id"] == v2b["file_id"]
     r = w.req("a", "POST", "/api/share/choose", json={"file_id": v2b["file_id"]}).json()
     assert r["resolved"] is True and r["current"] is True

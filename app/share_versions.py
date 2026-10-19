@@ -8,6 +8,7 @@ nincs; a szerkesztési zár tanácsadó (szívverés, LOCK_STALE_S után lejár)
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any, Optional
@@ -75,8 +76,11 @@ async def _check_fork(fid: str, owner: Optional[str], actor: Optional[str]) -> O
     who = nm.get(actor, actor)
     label = display_label(fid, meta)
     stem, ext = (label.rsplit(".", 1) + [""])[:2] if "." in label else (label, fid.rsplit(".", 1)[-1])
-    write_meta(fid, label=f"{stem} – {who}'s version.{ext}",
-               extra={"fork_of": ref, "fork_by": actor, "fork_theirs": [r["file_id"] for r in theirs]})
+    fork = {"fork_of": ref, "fork_by": actor, "fork_theirs": [r["file_id"] for r in theirs]}
+    write_meta(fid, label=f"{stem} – {who}'s version.{ext}", extra=fork)
+    # a másik fél (a választó sáv) a verzió-sorból keresi: ha a sor már megvan, most rögtön, ne a háttér-írásra várjon
+    await db._rows("UPDATE file_versions SET extra = extra || %s::jsonb, label = %s WHERE file_id = %s",
+                   (json.dumps(fork), f"{stem} – {who}'s version.{ext}", fid))
     await audit(owner, actor, fid, "conflict", {"base": ref, "theirs": [r["file_id"] for r in theirs]})
     return await conflict_for(actor, fid)
 
