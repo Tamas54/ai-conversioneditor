@@ -445,8 +445,8 @@ def request_if_version() -> Optional[str]:
 class workspace:
     """`with sharing.workspace(owner, actor, roles):` — szerveroldali kód a tulajdonos munkaterületén (lista, napló)."""
 
-    def __init__(self, owner: str, actor: str, roles: dict[str, str]):
-        self.sh = Shared(owner, actor, roles)               # csak olvas (write=False)
+    def __init__(self, owner: str, actor: str, roles: dict[str, str], write: bool = False):
+        self.sh = Shared(owner, actor, roles, write=write)  # alapból csak olvas; write: szerkesztő új fájlt hozhat létre
 
     def __enter__(self):
         self.tok = tenancy.enter_shared(self.sh)

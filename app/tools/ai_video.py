@@ -15,7 +15,7 @@ import logging
 import os
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable, Optional
 
 from app import credits, db, tenancy
@@ -126,16 +126,20 @@ async def get(op: str) -> dict[str, Any]:
     return public(rows)
 
 
-@contextmanager
-def _context(row: dict[str, Any]):
+@asynccontextmanager
+async def _context(row: dict[str, Any], files: Optional[list[str]] = None):
     """A művelet gazdája és — megosztott fájlnál — a tulajdonos munkaterülete (app/sharing.py): a webhook és az újraindítás
-    utáni folytatás is ott keresi a forrást és oda teszi az eredményt, ahol a kérés tette volna."""
+    utáni folytatás is ott keresi a forrást és oda teszi az eredményt, ahol a kérés tette volna. A jogot MOST kérdezzük
+    le (nem a foglaláskori másolatból): ha a megosztást közben visszavonták, a tulajdonosnál már nem ír. files: amit ez
+    a művelet maga hozott létre ott (a letöltött nyers eredmények — a saját DB-sorainkból), azokhoz hozzáfér."""
     tok = tenancy.set_user(row["user_id"])
     ws = row["meta"].get("workspace")
     try:
         if ws and ws.get("owner") and ws["owner"] != row["user_id"]:
             from app import sharing
-            with sharing.workspace(ws["owner"], row["user_id"], ws.get("roles") or {}):
+            roles = await sharing.family_roles(ws["owner"], row["user_id"])
+            with sharing.workspace(ws["owner"], row["user_id"], roles, write=True) as sh:
+                sh.created.update(f for f in files or () if f)
                 yield
         else:
             yield
@@ -263,7 +267,7 @@ async def _abort(op: str, error: str, status: str = "fail", *, locked: bool = Fa
     for r in rows:
         await _update(r["id"], status=r["status"] if r["status"] in ("success", "fail") and status == "fail" else status,
                       settled=True, error=r["error"] or error[:500], finished_at=_now())
-    _cleanup(head, rows, None)                    # amit nem fizetett ki, az nem marad nála (pl. félkész darabok)
+    await _cleanup(head, rows, None)                    # amit nem fizetett ki, az nem marad nála (pl. félkész darabok)
     _wake(op)
 
 
@@ -298,7 +302,7 @@ async def on_state(row: dict[str, Any], st: TaskState) -> None:
                           finished_at=_now())
         elif st.state == SUCCESS:
             try:
-                with _context(fresh):
+                async with _context(fresh):
                     files = await _provider(fresh["provider"]).fetch_result(st)
             except Exception as e:
                 log.warning("AI-eredmény letöltése nem sikerült (%s): %s", fresh["id"], e)
@@ -335,7 +339,7 @@ async def _finish_op_locked(op: str) -> None:
     output = head["meta"].get("output")
     if not failed and not output:             # utófeldolgozás EGYSZER: az eredmény a meta-ban, mielőtt elszámolunk
         try:
-            with _context(head):
+            async with _context(head, [f for r in rows for f in r["result"] or []]):
                 post = POST.get(head["operation"])
                 output = await post(rows, [list(r["result"] or []) for r in rows]) if post else \
                     {"files": [f for r in rows for f in r["result"] or []]}
@@ -358,17 +362,17 @@ async def _finish_op_locked(op: str) -> None:
         await _update(head["id"], charged=res["charged"])
     for r in rows:
         await _update(r["id"], settled=True)
-    _cleanup(head, rows, output)
+    await _cleanup(head, rows, output)
     log.info("AI-feladat kész: %s %s — %s kredit (szolgáltató: %s)%s", head["operation"], op, res["charged"], cost,
              " — megszakítva" if cancelled else "")
     _wake(op)
 
 
-def _cleanup(head: dict[str, Any], rows: list[dict[str, Any]], output: Optional[dict[str, Any]]) -> None:
+async def _cleanup(head: dict[str, Any], rows: list[dict[str, Any]], output: Optional[dict[str, Any]]) -> None:
     """A nyers szolgáltatói letöltések, amik nem lettek maguk az eredmény (pl. a felskálázás darabjai)."""
     from app.storage import output_path
     keep = {(output or {}).get("file_id")} | set((output or {}).get("files") or [])
-    with _context(head):
+    async with _context(head, [f for r in rows for f in r["result"] or []] + [f for f in keep if f]):
         for r in rows:
             for fid in r["result"] or []:
                 if fid not in keep:

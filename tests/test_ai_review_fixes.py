@@ -214,6 +214,40 @@ def test_shared_enhance_finished_by_the_webhook_lands_in_the_owners_workspace(db
     assert (tenancy.user_root(a) / "outputs" / out["file_id"]).exists()                         # A munkaterületén
 
 
+def test_shared_enhance_after_the_share_was_revoked_never_writes_into_the_owners_workspace(db_client, prov, tmp_path,
+                                                                                           monkeypatch):
+    """Integráció (share × kie): a befejezéskor a jogot újra lekérdezzük — visszavont megosztás után a webhook nem ír A
+    munkaterületére, és B a lefoglalt kreditjét visszakapja."""
+    from app import db, sharing, tenancy
+    from app.auth import COOKIE, new_session
+    from app.tools import ai_video
+    monkeypatch.setenv("SHARING_ENABLED", "1")
+    monkeypatch.setattr(ai_video, "POLL_FIRST_S", 60.0)
+    call = db_client.portal.call
+    a = call(db.user_create, f"a{os.urandom(3).hex()}@example.com", "jelszó12345", "A", 5)["id"]
+    b = call(db.user_create, f"b{os.urandom(3).hex()}@example.com", "jelszó12345", "B", 20)["id"]
+    fid = _put_as(a, _clip(tmp_path))
+    call(lambda: sharing.share(a, fid, user_id=b, role="editor"))
+    db_client.cookies.clear()
+    r = db_client.post("/api/ai/enhance", json={"file_id": fid, "factor": 2}, headers={"Cookie": f"{COOKIE}={new_session(b)}"})
+    assert r.status_code == 200, r.text
+    op = r.json()["task_id"]
+    before = set(p.name for p in (tenancy.user_root(a) / "outputs").glob("*"))
+
+    async def go():
+        assert await _until(lambda: prov.tasks)
+        await asyncio.sleep(0.3)
+        await sharing.share(a, fid, user_id=b, role="none")                       # A visszavonja
+        prov.finish_all(True)
+        return await ai_video.on_webhook(next(iter(prov.tasks)))
+    call(go)
+    rows = call(lambda: ai_video._rows_of(op))
+    assert rows[0]["settled"] and not (rows[0]["meta"].get("output") or {}).get("file_id")
+    assert call(db.user_get, b)["credits"] == 20                                    # visszakapta
+    after = set(p.name for p in (tenancy.user_root(a) / "outputs").glob("*"))
+    assert not {n for n in after - before if not n.endswith(".json")}                # A-nál nem keletkezett fájl
+
+
 # ---------- 6: hamis hossz a fejlécben ----------
 
 def _spoofed(tmp_path, secs=20):
