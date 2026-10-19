@@ -60,3 +60,26 @@
 - Overlay `transcript={"prompt", "vocabulary", "model"}` (MCP param `transcript`) is passed to the speech recognition
   behind `subtitles="auto"` and `at: {"say": …}` (also kept for edits) — only the keys `transcript.transcribe` accepts,
   so it is a no-op until lane transcript's new parameters are merged.
+
+## Phase 5 — video tool details
+- `make`: new `scrim` (0–1, also per scene; `0` = no darkening) controls the veil over title card, scenes, chart / number
+  scenes and end card — `backdrop: 0` alone left a 70 % shade before. The title card's kicker gets a dark pill sized to
+  its rendered text (engine `sourceRectAtTime`) over a photo, so the red accent is readable.
+- Fixed length compensates the crossfades: when every scene has its own `duration` and they come out short, they are
+  stretched to the asked length (main: 10 s asked, 3 × 2.5 s scenes → 8.9 s; now 10.0 s). Scene lengths stay minimums
+  (too long is still reported, never cut).
+- `opacity` is 0–1 everywhere and stored that way (0.94 was stored as 94.0); 0–100 is read as percent; old saved specs
+  keep working. Diagram graphics now emit 0–1 too. Documented in the `graphic` schema topic.
+- Layer listings / comp names: a graphic is labelled by its title or first text (`graphic “RENDKÍVÜLI KIADÁS”`), else
+  `graphic (3 elements)` — no more `graphic “”`.
+- `video(action="status", job_id, wait=30)` waits up to 30 s (≤ 55) while the job runs. The `jobs` MCP tool now finds
+  Studio jobs (video, render, transcript) too, with a note, instead of "No such job.".
+- Faster turns: `render=false` (save only, layout check still returned), `draft=true` on make / overlay / edit (half size,
+  2.5 Mbps draft; previews use it until a full render; `info.last_render.draft`). Re-rendering only the changed section
+  into the existing MP4 is NOT done: the engine renders spans, but splicing separately encoded H.264 pieces without
+  re-encoding needs keyframe-aligned cuts and identical encoder parameters, which the CLI doesn't expose — the existing
+  `action="render", scene="L2"` clip covers checking one part.
+- Credits: "Pictures and animations:" whenever a Lottie is in the video (main only looked for a credit starting with
+  "Animation ", so a Lottie with its own credit got "Pictures:").
+- A graphic image / Lottie / cut-in that couldn't be loaded is now a named finding (it was only logged; the check said
+  `ok`).

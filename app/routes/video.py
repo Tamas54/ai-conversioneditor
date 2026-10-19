@@ -58,6 +58,7 @@ async def make_video(body: dict[str, Any]) -> dict[str, Any]:
     try:
         video.fmt_name(body.get("format"))
         video.check_music(body.get("music"))
+        video.scrim_of(body.get("scrim"))
     except ValueError as e:
         raise HTTPException(400, str(e))
     if str(body.get("pictures") or "").lower() == "ai" and not tenancy.client_makes_images.get():
@@ -149,7 +150,8 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
     async def work(progress):
         try:
             res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress,
-                                   alpha=body.get("alpha"), render=body.get("render", True) is not False)
+                                   alpha=body.get("alpha"), render=body.get("render", True) is not False,
+                                   draft=bool(body.get("draft")))
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})

@@ -161,16 +161,28 @@ function camera(L, keys, t0) {   // a jelenet (vagy a saját felvétel) virtuál
   ease(S); ease(P);
 }
 var SHADES = {};
-function shade(comp, dur, kind) {   // alul sötétedő átmenet: előre megrajzolt PNG (olcsó); „even” = egyenletes sötétítés
-  if (D.alpha) return null;
+function shade(comp, dur, kind, scrim) {   // alul sötétedő átmenet: előre megrajzolt PNG (olcsó); „even” = egyenletes sötétítés
+  // scrim (0–1): a sötétítés erőssége — 0 = semmi (10-19: backdrop:0 mellett is sötét maradt a jelenet); nincs = a beépített
+  if (D.alpha || scrim === 0) return null;
+  var own = scrim !== undefined && scrim !== null;
   if (kind === "even" || !D.shade || !D.shade[kind]) {
     var s = comp.layers.addSolid([0, 0, 0], "Shade", D.W, D.H, 1, dur);
-    tp(s).property("ADBE Opacity").setValue(kind === "even" ? 70 : 60);
+    tp(s).property("ADBE Opacity").setValue(own ? scrim * 100 : kind === "even" ? 70 : 60);
     return s;
   }
   SHADES[kind] = SHADES[kind] || app.project.importFile(new ImportOptions(new File(D.shade[kind])));
   var L = comp.layers.add(SHADES[kind]); L.name = "Shade";
+  if (own) tp(L).property("ADBE Opacity").setValue(Math.min(100, scrim / 0.9 * 100));   // a PNG maga ~0,9-ig sötétedik
   return L;
+}
+function backdropFor(comp, t, name) {   // sötét, lekerekített alap egy szöveg mögé (a tényleges, kirajzolt méretére)
+  try {
+    var r = t.sourceRectAtTime(0, false), P = tp(t).property("ADBE Position").value, pad = Math.max(6, r.height * 0.45);
+    var b = rect(comp, name, [r.width + pad * 2.4, r.height + pad * 2], [P[0] + r.left + r.width / 2, P[1] + r.top + r.height / 2],
+      D.dark, 74, (r.height + pad * 2) / 2);
+    b.moveAfter(t);
+    return b;
+  } catch (e) { return null; }
 }
 function accentBar(comp, x, y, t0, center) {
   var w = D.L.bar[0], h = D.L.bar[1];
@@ -186,10 +198,15 @@ function accentBar(comp, x, y, t0, center) {
 function titleScene(sc) {
   var c = app.project.items.addComp("Title", D.W, D.H, 1, sc.dur, D.fps);
   background(c, sc, sc.dur);
-  shade(c, sc.dur, "title");
+  shade(c, sc.dur, "title", sc.scrim);
   var L = D.L;
-  if (sc.kicker) fadeIn(textLayer(c, [L.titleW, L.kickerSize * 1.6], sc.kicker.toUpperCase(),
-    { size: L.kickerSize, color: D.accent, align: L.titleAlign, pos: [L.titleX, L.kickerY], tracking: 80, name: "Kicker", font: D.font.semibold }), 0.2, 0.5, 0);
+  if (sc.kicker) {
+    var kt = textLayer(c, [L.titleW, L.kickerSize * 1.6], sc.kicker.toUpperCase(),
+      { size: L.kickerSize, color: D.accent, align: L.titleAlign, pos: [L.titleX, L.kickerY], tracking: 80, name: "Kicker", font: D.font.semibold });
+    fadeIn(kt, 0.2, 0.5, 0);
+    // a piros felcím a fotón sötét alapon (10-19: a képen alig volt olvasható)
+    if ((sc.image || sc.pics) && !D.alpha) { var kb = backdropFor(c, kt, "Kicker backdrop"); if (kb) fadeIn(kb, 0.2, 0.5, 0); }
+  }
   accentBar(c, L.titleAlign === "center" ? D.W / 2 : L.titleX - L.titleW / 2, L.barY, 0.15, L.titleAlign === "center");
   fadeIn(textLayer(c, [L.titleW, L.titleH], sc.text, { size: sc.size, align: L.titleAlign, pos: [L.titleX, L.titleY],
     leading: sc.size * 1.08, shadow: 24, name: "Title" }), 0.35, 0.7, D.H * 0.025);
@@ -402,7 +419,7 @@ function contentScene(sc, i) {
   background(host, sc, sc.dur);
   var L = D.L;
   if (sc.chart) {        // mozgó grafikon: sötétített kép, fent a cím, alatta a grafikon
-    shade(host, sc.dur, "even");
+    shade(host, sc.dur, "even", sc.scrim);
     // + egyenletes sötét fátyol: zsúfolt képen (10-12: EEG-görbe az idővonal mögött) is olvasható maradjon az ábra
     var bd = sc.chart.backdrop === undefined || sc.chart.backdrop === null ? 58 : Math.round(sc.chart.backdrop * 100);
     if (bd > 0 && !D.alpha) rect(host, "Chart backdrop", [D.W, D.H], [D.W / 2, D.H / 2], [0.03, 0.035, 0.05], bd);
@@ -415,14 +432,14 @@ function contentScene(sc, i) {
     return c;
   }
   if (sc.stat) {
-    shade(c, sc.dur, "even");
+    shade(c, sc.dur, "even", sc.scrim);
     var ss = sc.stat.size || L.statSize;
     fadeIn(textLayer(c, [D.W * 0.94, ss * 1.3], sc.stat.value, { size: ss, color: D.accent, align: "center",
       pos: [D.W / 2, L.statY + (L.statSize - ss) * 0.4], name: "Number" }), 0.2, 0.6, D.H * 0.03);
     fadeIn(textLayer(c, [D.W * 0.8, L.statLabelSize * 3.2], sc.stat.label, { size: L.statLabelSize, align: "center",
       pos: [D.W / 2, L.statLabelY], name: "Number label", font: D.font.semibold }), 0.5, 0.6, D.H * 0.02);
   } else {
-    shade(c, sc.dur, "scene");
+    shade(c, sc.dur, "scene", sc.scrim);
     accentBar(c, L.headX - L.headW / 2, L.headBarY, 0.1, false);
     fadeIn(textLayer(c, [L.headW, L.headH], sc.headline, { size: sc.size, align: "left", pos: [L.headX, L.headY],
       leading: sc.size * 1.12, name: "Headline" }), 0.25, 0.6, D.H * 0.02);
@@ -432,7 +449,7 @@ function contentScene(sc, i) {
 function endScene(sc) {
   var c = app.project.items.addComp("End", D.W, D.H, 1, sc.dur, D.fps);
   background(c, sc, sc.dur);              // a kép itt előre elmosott (a Python készíti), nincs képkockánkénti blur
-  if (sc.image) shade(c, sc.dur, "even");
+  if (sc.image) shade(c, sc.dur, "even", sc.scrim);
   var L = D.L;
   fadeIn(textLayer(c, [D.W * 0.84, L.titleH], sc.title, { size: sc.size, align: "center", pos: [D.W / 2, L.endY],
     leading: sc.size * 1.1, name: "End title" }), 0.2, 0.6, D.H * 0.02);

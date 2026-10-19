@@ -1359,7 +1359,7 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
         d_ = dim(t_e)
         dash = {"dash": [round(DASH[e["certainty"]][0] * st["width"], 2), round(DASH[e["certainty"]][1] * st["width"], 2)]} \
             if e["certainty"] in DASH else {}
-        line = {"stroke": col, "width": st["width"], "opacity": 100, **dash, **d_}
+        line = {"stroke": col, "width": st["width"], "opacity": 1, **dash, **d_}
         pts = e["pts"]
         draw = 0.45
         if st["sym"]:                                   # irány nélküli kapcsolat: középről kifelé, két fél vonal
@@ -1381,7 +1381,7 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
             if st["head"] == "dots":
                 for p in (pts[0], pts[-1]):
                     out.append({"shape": "circle", "x": fx(p[0]), "y": fy(p[1]), "r": round(wpx * 1.5 / m, 5), "fill": col,
-                                "opacity": 100, "anim": "pop", "at": round(t_e + draw * 0.9, 3), "dur": 0.25, **d_})
+                                "opacity": 1, "anim": "pop", "at": round(t_e + draw * 0.9, 3), "dur": 0.25, **d_})
         else:
             segs = [math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
             tot = sum(segs) or 1
@@ -1400,25 +1400,25 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
                 lft = [bx_ - L_ * math.cos(ang) + L_ * 0.7 * math.sin(ang), by_ - L_ * math.sin(ang) - L_ * 0.7 * math.cos(ang)]
                 rgt = [bx_ - L_ * math.cos(ang) - L_ * 0.7 * math.sin(ang), by_ - L_ * math.sin(ang) + L_ * 0.7 * math.cos(ang)]
                 out.append({"shape": "path", "points": [pt(lft), pt([bx_, by_]), pt(rgt)], "stroke": col, "width": st["width"],
-                            "opacity": 100, "anim": "appear", "at": round(t_ + d1 * 0.85, 3), "dur": 0.2, **d_})
+                            "opacity": 1, "anim": "appear", "at": round(t_ + d1 * 0.85, 3), "dur": 0.2, **d_})
         if e["certainty"] == "disputed" or e.get("label"):
             lb = e.get("label")
             fs = s * LAB
             if lb:
                 top.append({"shape": "rect", "x": fx(lb["x"]), "y": fy(lb["y"]), "w": round(lb["w"] / W, 5), "h": round(lb["h"] / H, 5),
-                            "fill": _PANEL, "stroke": col, "width": 2, "radius": u(lb["h"] / 2), "opacity": 100,
+                            "fill": _PANEL, "stroke": col, "width": 2, "radius": u(lb["h"] / 2), "opacity": 1,
                             "anim": "pop", "at": round(t_e + 0.2, 3), "dur": 0.3, **d_})
                 top.append({"shape": "text", "x": fx(lb["x"]), "y": fy(lb["y"] - (len(lb["lines"]) - 1) * 0.59 * fs),
                             "w": round((lb["w"] - 0.2 * s) / W, 5), "text": "\n".join(lb["lines"]), "size": u(fs), "weight": "semibold",
-                            "align": "center", "color": readable(col, _PANEL), "opacity": 100, "anim": "appear",
+                            "align": "center", "color": readable(col, _PANEL), "opacity": 1, "anim": "appear",
                             "at": round(t_e + 0.28, 3), "dur": 0.3, **d_})
             if e["certainty"] == "disputed":            # „?” jelvény: a címke bal szélén, címke nélkül az él közepén
                 r = 0.52 * s
                 c = [lb["x"] - lb["w"] / 2 - r * 0.55, lb["y"] - lb["h"] / 2 + r * 0.3] if lb else _along(pts, 0.5)
-                top.append({"shape": "circle", "x": fx(c[0]), "y": fy(c[1]), "r": round(r / m, 5), "fill": BADGE, "opacity": 100,
+                top.append({"shape": "circle", "x": fx(c[0]), "y": fy(c[1]), "r": round(r / m, 5), "fill": BADGE, "opacity": 1,
                             "anim": "pop", "at": round(t_e + 0.3, 3), "dur": 0.25, **d_})
                 top.append({"shape": "text", "x": fx(c[0]), "y": fy(c[1]), "w": round(2 * r / W, 5), "text": "?", "size": u(r * 1.35),
-                            "weight": "bold", "align": "center", "color": "#16181D", "opacity": 100, "anim": "appear",
+                            "weight": "bold", "align": "center", "color": "#16181D", "opacity": 1, "anim": "appear",
                             "at": round(t_e + 0.35, 3), "dur": 0.2, **d_})
     # csúcsok: a dobozuk felpattan, a szöveg utána
     for n in spec["nodes"]:
@@ -1428,7 +1428,7 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
         d_ = dim(at[n["id"]] + (0.25 if spec["type"] == "network" else 0.0))
         fs = s * b["font"]
         sw = 4 if b["kind"] in ("question", "decision") or b["bold"] else 3
-        common = {"fill": fill, "stroke": stroke, "width": sw, "opacity": 100, **d_}
+        common = {"fill": fill, "stroke": stroke, "width": sw, "opacity": 1, **d_}
         if b["shape"] == "hex":                         # döntés: hatszög (két csúcsos vég), sokszögként
             cx, cy, w2, h2 = b["x"], b["y"], b["w"] / 2, b["h"] / 2
             cut = min(h2, 0.9 * s)
@@ -1444,7 +1444,7 @@ def to_graphic(spec: dict[str, Any], W: int, H: int, accent: Optional[list[float
         for j, ch_ in enumerate(chunks):          # a graphic szövegdoboza legfeljebb 3 sort fogad: 4 sor = 2 + 2
             out.append({"shape": "text", "x": fx(b["x"]), "y": fy(y_first + 2 * j * 1.18 * fs), "w": round((b["tw"] + 0.5 * s) / W, 5),
                         "text": "\n".join(ch_), "size": u(fs), "weight": "bold" if b["bold"] else "semibold", "align": "center",
-                        "color": tcol, "opacity": 100, "anim": "appear", "at": round(t_n + 0.12, 3), "dur": 0.3, **d_})
+                        "color": tcol, "opacity": 1, "anim": "appear", "at": round(t_n + 0.12, 3), "dur": 0.3, **d_})
     out += top
     # jelmagyarázat: minden tétele akkor jelenik meg, amikor a fajtája először
     fs = max(s * LEG, 18 * k)

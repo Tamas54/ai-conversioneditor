@@ -1868,9 +1868,11 @@ async def video(
     render: bool = True,
     end_card: Optional[Any] = None,
     transcript: Optional[dict] = None,
+    scrim: Optional[float] = None,
+    wait: Optional[float] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (edit_url opens an After Effects-like editor): made from a text, or
-    graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id=…) until "done".
+    graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
     FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit.
     Read topic "layers" before your first overlay and "graphic" before drawing your own.
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
@@ -1886,7 +1888,7 @@ async def video(
     action="transcript": what is said, with times (+ .srt). action="lottie": text="words" → free animations.
     action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
     alpha=true | "webm" | "both": also a transparent graphics-only video (ProRes 4444 .mov / WebM VP9).
-    render=false (make / overlay / edit): save the project only; the layout check still comes back.
+    render=false (make / overlay / edit): save the project only (the layout check still comes back); draft=true: fast.
     Every result has a check (status, findings, verified); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs
@@ -1898,7 +1900,7 @@ async def video(
     if act in ("status", "job") or (act == "info" and job_id):
         if not job_id:
             raise ValueError("status needs job_id")
-        return await jobs.job_status(job_id)
+        return await jobs.wait_status(job_id, wait)              # wait: legfeljebb ennyi mp-ig vár, amíg fut
     if act == "info":
         if not file_id:
             raise ValueError("info needs file_id (a video project or movie)")
@@ -1917,7 +1919,7 @@ async def video(
     if act == "edit":
         from app.routes.video import edit_video
         return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha,
-                                 "render": render})
+                                 "render": render, "draft": draft})
     if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
         from app.routes.video import transcript_video
         return await transcript_video({"file_id": file_id or "", "language": language})
@@ -1927,7 +1929,7 @@ async def video(
                                     "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera,
                                     "subtitles": subtitles, "language": language, "render": render,
                                     "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
-                                    "transcript": transcript})
+                                    "transcript": transcript, "draft": draft})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
@@ -1950,7 +1952,8 @@ async def video(
             "language": language, "narration": narration, "narration_voice": narration_voice,
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
             "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle,
-            "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode, "render": render}
+            "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode, "render": render, "scrim": scrim,
+            "draft": draft}
     return await make_video(body)
 
 

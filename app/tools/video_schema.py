@@ -15,7 +15,7 @@ action="make" — a short video from a text: an article (url, or its text in tex
 person's own words (text + keep_wording=true ONLY when they want their own sentences word for word as the captions)
 → title card, scenes with full-screen pictures in gentle motion, headlines, timed captions, end card with picture
 credits → a video project (.ecproj) + the MP4. Takes 1–3 minutes, so it returns a job: video(action="status",
-job_id=…) until status is "done" (result.project / result.video, each with edit_url) or "failed".
+job_id=…, wait=30 — waits up to that many seconds while it runs) until status is "done" (result.project / result.video, each with edit_url) or "failed".
 
 YOUR OWN SCENE PLAN (most reliable): scenes=[{"headline", "caption", "image"? (file_id | URL — e.g. a picture you made —
 | {"stock": "words"}), "image_query"? (English words for a stock photo — give it for every scene without an image:
@@ -37,7 +37,8 @@ source in text too: chart numbers are checked against it (without it, against yo
 format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds, 4–180
 (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default when you
 give duration — the video is that long INCLUDING the title and end cards; scenes hold longer or get shorter, down to
-1.2 s; the narration is read up to 1.2× faster; what still doesn't fit is said in
+1.2 s; when every scene has its own duration and together they come out shorter, they are stretched
+to the asked length — the 0.5 s crossfades are compensated; the narration is read up to 1.2× faster; what still doesn't fit is said in
 the check) | "narration" (the default without duration — the voice sets the length). Every result has duration =
 {requested, actual, mode}; a gap beyond a second or so is a check finding, never "ok".
 images: pictures in order — file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1… (the check lists
@@ -51,6 +52,10 @@ or a track id → built-in CC0 music fitted to the length; music_file_id = the p
 drops and comes back in the pauses; "none" = no music. voice_file_id: the person's own voice-over (replaces the AI
 narration). accent: a hex colour for bars and numbers. brand: a saved brand (name, "mine"); "none" = off.
 ken_burns: some (default — every other scene a clear Ken Burns move) | all | off.
+scrim: 0–1, how dark the veil over the pictures is (title card, scenes, chart scenes, end card; default: the built-in
+gradients and a 0.7 veil behind charts and numbers; 0 = none, the picture as it is). A scene's own "scrim" overrides it.
+A chart's "backdrop" is a separate panel behind the chart itself (0 = none). The title card's kicker sits on a dark pill
+over a photo, so the accent colour stays readable.
 data_file_id: CSV/XLSX → a chart per column, values from the cells.
 layers=[…] (topic "layers") put time-coded graphics on the made video too, at absolute times on its timeline.
 The result's check also reports COVERAGE (which source sentences and numbers made it in), shortened texts, where your
@@ -200,28 +205,31 @@ TOPICS["edit"] = """\
 action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
 changes = {"scenes": [{"id": "s3" (stable — info lists the ids; or "scene": n, 1 = first after the title card),
 "headline"?, "caption"?, "image"? (file_id | URL | {"stock": "words"} | "none"), "stat"? {value, label} | null, "chart"?
-(WITHOUT "type" it is a fix of the scene's chart — e.g. {"unit": "million"}) | null, "duration"?, "remove"?
+(WITHOUT "type" it is a fix of the scene's chart — e.g. {"unit": "million"}) | null, "duration"?, "scrim"?, "remove"?
 true}], "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?,
 "chart"?, "duration"?}], "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"?, "duration"?, "ken_burns"?,
-"accent"?, "music"? | "music_file_id"? | "none", "voice_file_id"? | "none", "narration"? "ai" | "none",
+"accent"?, "scrim"?, "music"? | "music_file_id"? | "none", "voice_file_id"? | "none", "narration"? "ai" | "none",
 "narration_voice"?, "duration_mode"?, "layers"?: [{"id": "L2", …} | {"id": "L2", "remove": true}], "add_layers"?: […]}.
 Untouched layers stay as they are; the AI narration is recorded again from the changed captions. Numbers in a new chart
 or stat must be in the video's source or in `text`. An overlay project takes layers, add_layers, accent, title, music,
 camera, subtitles and end_card. alpha=… renders the transparent version again.
-Faster turns: render=false saves the new version without rendering (render it later with action="render");
-action="render" with scene="s3" (a scene) or scene="L2" (a layer's span) renders just that part as a short draft clip.
-video(action="info") shows the scenes and layers (id, at, dur, type, text); files(action="preview", file_id,
+Faster turns (an edit re-renders the whole video, ~1–2 minutes): render=false saves the new version without rendering
+(the layout check still comes back; render it later with action="render"); draft=true (make, overlay, edit) renders it
+half size and fast — previews use the draft until a full render; action="render" with scene="s3" (a scene) or
+scene="L2" (a layer's span) renders just that part as a short draft clip. Re-rendering only the changed part into the
+full video is not done (separately encoded H.264 pieces can't be joined without re-encoding).
+video(action="info") shows the scenes and layers (id, at, dur, type, label — a graphic by its title or first text); files(action="preview", file_id,
 scene="s3" | "L2" | "all") shows them.
 action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a slide
 to an existing deck; the MP4 is embedded (first frame as its poster)."""
 
-_ABOUT = {"make": "a video from a text / your scene plan: formats, duration, pictures, narration, music",
+_ABOUT = {"make": "a video from a text / your scene plan: formats, duration, pictures, narration, music, scrim",
           "overlay": "graphics, subtitles and an end card on the person's own footage",
           "layers": "time-coded layers: types, timing, position, alpha — read before your first overlay",
           "graphic": "draw your own: shapes, the text box rule, move_to, images, Lottie (search + pick), real maps",
           "chart": "every chart type, explainer diagrams, three.js, script",
           "subtitles": "subtitles on footage and the transcript",
-          "edit": "changing a finished video, faster re-renders, to_pptx"}
+          "edit": "changing a finished video, faster re-renders (render=false, draft), to_pptx"}
 
 
 def register(refs: dict[str, str]) -> None:
