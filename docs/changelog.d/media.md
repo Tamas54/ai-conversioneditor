@@ -32,3 +32,13 @@
   stay at 34.4 dB on this content. The final step's gain is SSIM at a smaller file; removing the ceiling needs the
   graphics composited onto the original footage in ffmpeg (alpha render + overlay), a renderer change.
   Grainier source (testsrc2 + strong noise): final 8.31 → 11.34 Mbps, SSIM 0.97284 → 0.97486.
+
+## 3.3 HDR input (HLG / PQ)
+- `color_transfer` arib-std-b67 (HLG, iPhone) or smpte2084 (PQ) → zscale to linear (npl 100) → BT.709 primaries →
+  `tonemap` → BT.709 transfer, 8-bit 4:2:0, in the shared normalisation (`videonorm.head_filters`): merge-files,
+  resize-video, the overlay's base footage (set upright / mapped once before the engine) and cut-in clips.
+- Algorithm `VIDEO_TONEMAP` (default mobius; hable, reinhard, clip… allowed), `VIDEO_HDR_TONEMAP=0` turns it off.
+  Measured on a synthetic 10-bit HEVC HLG clip (SDR testsrc2 → BT.2020/HLG, reference white 75%), signalstats vs the
+  SDR original (YAVG 125 / SATAVG 112): untouched (main) 126 / 44 — saturation 39%, washed out, still tagged HLG;
+  mobius 121.5 / 95.3 (97% / 85%); hable 101.3 / 77.8 (81% / 69%, darker) — hence mobius as the default.
+- zimg/zscale is in the image's ffmpeg 4.4.2 (checked); the test skips where it isn't.

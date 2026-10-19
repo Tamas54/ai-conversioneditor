@@ -1,5 +1,11 @@
-"""Közös képkocka-normalizálás a videós lépésekhez (merge-files, resize-video, a renderelő bemenete): vászonméret és
-illesztés (contain | cover | blur | stretch).
+"""Közös képkocka-normalizálás a videós lépésekhez (merge-files, resize-video, a renderelő bemenete): HDR → SDR
+tónusleképezés, vászonméret és illesztés (contain | cover | blur | stretch).
+
+HDR (OMLETT 3.3): az iPhone HDR-videója HLG (color_transfer arib-std-b67), a HDR10 PQ (smpte2084). Leképezés nélkül
+a 10 bites BT.2020 jel BT.709-ként kerül a kimenetbe: fakó, szürkés kép (mérve, szintetikus HLG-klip: átlagos telítettség
+az SDR-eredeti 39%-a). Most: zscale lineárisra (npl=100) → BT.709 alapszínek → tonemap → BT.709 átvitel, 8 bit. Az
+algoritmus VIDEO_TONEMAP (alap: mobius — a középtónusokat tartja, a csúcsfényeket lágyan hajlítja; mérve az SDR-
+eredeti fényerejének 97%-a, telítettségének 85%-a; a hable ugyanott 81% / 69%, sötétebb). VIDEO_HDR_TONEMAP=0: ki.
 
 A vászon (canvas): auto = az ELSŐ klip megjelenítési (elforgatás utáni) mérete — 10-19: két álló iPhone-klip (kódolva
 1920×1080, rotation 90) + egy fekvő → a régi kód a kódolt méretből 1920×1080-as fekvő vásznat csinált, az álló klipek
@@ -11,6 +17,7 @@ a klip saját elmosott, kitöltő másolata adja (a telefonos videók szokásos 
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Optional
 
@@ -72,9 +79,27 @@ def fit_chain(W: int, H: int, fit: str, tag: str = "f") -> str:
     return f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
 
 
+TONEMAPS = ("mobius", "hable", "reinhard", "clip", "linear", "gamma")
+
+
+def tonemap_filters(m: dict[str, Any]) -> list[str]:
+    """HDR (HLG / PQ) bemenet → SDR BT.709 8 bit; SDR bemenetnél üres."""
+    kind = m.get("hdr")
+    if kind not in ("hlg", "pq") or os.getenv("VIDEO_HDR_TONEMAP", "1").strip() in ("0", "off", "false", "no"):
+        return []
+    algo = os.getenv("VIDEO_TONEMAP", "mobius").strip().lower()
+    algo = algo if algo in TONEMAPS else "mobius"
+    tin = "arib-std-b67" if kind == "hlg" else "smpte2084"
+    pin = m.get("color_primaries") if m.get("color_primaries") in ("bt2020", "bt709") else "bt2020"
+    mat = "bt2020c" if m.get("color_space") == "bt2020c" else "bt2020nc"
+    rin = "pc" if m.get("color_range") == "pc" else "tv"
+    return [f"zscale=tin={tin}:pin={pin}:min={mat}:rin={rin}:t=linear:npl=100", "format=gbrpf32le", "zscale=p=bt709",
+            f"tonemap=tonemap={algo}:desat=0", "zscale=t=bt709:m=bt709:r=tv", "format=yuv420p"]
+
+
 def head_filters(m: dict[str, Any]) -> list[str]:
-    """A bemenet elejére tett szűrők (a vászonra illesztés előtt): egységes pixelformátum."""
-    return ["format=yuv420p"]
+    """A bemenet elejére tett szűrők (a vászonra illesztés előtt): HDR-nél tónusleképezés, mindig 8 bites 4:2:0."""
+    return tonemap_filters(m) or ["format=yuv420p"]
 
 
 def input_chain(m: dict[str, Any], W: int, H: int, fit: str, tag: str = "f") -> str:

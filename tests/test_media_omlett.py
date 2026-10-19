@@ -195,3 +195,60 @@ async def test_final_render_is_x264_crf_from_a_prores_master(tmp_path, put_file,
     assert st["audio"]["codec_name"] == "aac" and int(st["audio"]["bit_rate"]) > 150_000
     assert st["video"].get("color_primaries") == "bt709" and st["video"]["pix_fmt"] == "yuv420p"
     assert not list(tmp_path.glob("**/render-master.mov"))
+
+
+# ---------------------------------------------------------------- 3.3 HDR-bemenet (HLG / PQ → SDR BT.709)
+
+def _hlg_clip(path: Path, w: int = 320, h: int = 180) -> tuple[Path, Path]:
+    """Szintetikus iPhone-szerű HLG-klip: SDR testsrc2 → lineáris → BT.2020 + HLG (a referenciafehér 203 nit = 75%),
+    10 bites HEVC (libx265 nélkül 10 bites H.264), HLG-jelöléssel. → (SDR-eredeti, HLG)"""
+    sdr = path.with_name("sdr-" + path.name)
+    _ff("-f", "lavfi", "-i", f"testsrc2=size={w}x{h}:rate=10:duration=1", "-c:v", "libx264", "-crf", "10", "-pix_fmt",
+        "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", str(sdr))
+    vf = ("zscale=tin=bt709:min=bt709:pin=bt709:rin=tv:t=linear:npl=100,format=gbrpf32le,"
+          "zscale=p=bt2020:t=arib-std-b67:m=bt2020nc:r=tv:npl=203,format=yuv420p10le")
+    encs = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    codec = (["-c:v", "libx265", "-x265-params", "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc",
+              "-tag:v", "hvc1"] if "libx265" in encs else ["-c:v", "libx264", "-profile:v", "high10"])
+    _ff("-i", str(sdr), "-vf", vf, *codec, "-color_primaries", "bt2020", "-color_trc", "arib-std-b67",
+        "-colorspace", "bt2020nc", str(path))
+    return sdr, path
+
+
+def _stats(p: Path) -> tuple[float, float]:
+    """Átlagos fényerő (YAVG) és telítettség (SATAVG), 8 bites skálán."""
+    import re
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(p), "-vf", "format=yuv420p,signalstats,metadata=print:file=-",
+                          "-f", "null", "-"], capture_output=True, text=True).stdout
+    y = [float(x) for x in re.findall(r"signalstats.YAVG=([\d.]+)", out)]
+    s = [float(x) for x in re.findall(r"signalstats.SATAVG=([\d.]+)", out)]
+    return sum(y) / len(y), sum(s) / len(s)
+
+
+def _zscale() -> bool:
+    return "zscale" in subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+
+
+@pytest.mark.skipif(not _zscale(), reason="ffmpeg without zimg (zscale)")
+@pytest.mark.asyncio
+async def test_hlg_footage_is_tone_mapped_to_bt709_not_washed_out(tmp_path, put_file):
+    """Elfogadás (3.3): 10 bites HLG-klip → resize / merge / az overlay alapsávja BT.709, és nem fakó: a fényerő és a
+    telítettség az SDR-eredeti közelében (leképezés nélkül a telítettség az eredeti ~40%-a volt)."""
+    from app.tools import mediaprobe, video
+    sdr, hlg = _hlg_clip(tmp_path / "hlg.mp4")
+    m = await mediaprobe.info(hlg)
+    assert m["hdr"] == "hlg" and m["bit_depth"] == 10
+    y0, s0 = _stats(sdr)
+    fid = put_file(hlg)
+    r = await _run("resize-video", [fid], resolution="320x180")
+    outs = [_out(r["file_id"])]
+    r = await _run("merge-files", [fid, put_file(sdr)])
+    outs.append(_out(r["file_id"]))
+    outs.append(_out(await video._upright(hlg)))                          # az overlay alapsávja (renderelő bemenete)
+    for out in outs:
+        v = next(s for s in _probe(out)["streams"] if s["codec_type"] == "video")
+        assert v.get("color_transfer") == "bt709" and v["pix_fmt"] == "yuv420p", (out.name, v.get("color_transfer"))
+    for out in outs[:1] + outs[2:]:
+        y, s = _stats(out)
+        assert 0.8 * y0 <= y <= 1.15 * y0, f"luma {y:.0f} vs SDR {y0:.0f}"
+        assert s >= 0.72 * s0, f"washed out: saturation {s:.0f} vs SDR {s0:.0f}"
