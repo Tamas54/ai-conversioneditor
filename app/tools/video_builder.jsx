@@ -205,7 +205,8 @@ function titleScene(sc) {
       { size: L.kickerSize, color: D.accent, align: L.titleAlign, pos: [L.titleX, L.kickerY], tracking: 80, name: "Kicker", font: D.font.semibold });
     fadeIn(kt, 0.2, 0.5, 0);
     // a piros felcím a fotón sötét alapon (10-19: a képen alig volt olvasható)
-    if ((sc.image || sc.pics) && !D.alpha) { var kb = backdropFor(c, kt, "Kicker backdrop"); if (kb) fadeIn(kb, 0.2, 0.5, 0); }
+    var kb = (sc.image || sc.pics) && !D.alpha ? backdropFor(c, kt, "Kicker backdrop") : null;
+    if (kb) { var ko = tp(kb).property("ADBE Opacity"); ko.setValueAtTime(0.2, 0); ko.setValueAtTime(0.7, 74); ease(ko); }
   }
   accentBar(c, L.titleAlign === "center" ? D.W / 2 : L.titleX - L.titleW / 2, L.barY, 0.15, L.titleAlign === "center");
   fadeIn(textLayer(c, [L.titleW, L.titleH], sc.text, { size: sc.size, align: L.titleAlign, pos: [L.titleX, L.titleY],

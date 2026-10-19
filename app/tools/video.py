@@ -2987,7 +2987,7 @@ def _text_report(out: str, D: dict[str, Any]) -> list[str]:
             if iw > 2 and ih > max(2.0, 0.1 * min(fs, u["fs"])) and ((wrapped and not u_wrapped) or (wrapped == u_wrapped and i < j)):
                 where = "" if u["h"] == t["h"] else f" of {u['who']}"
                 issues.append(f"runs into element {u['n']}{where} (text {q(str(u['e'].get('str') or ''))})")
-                if not wrapped and u["ink"][1] >= y0 and u["h"] == t["h"]:          # két egysoros egymáson: az alsót lejjebb
+                if u["ink"][1] >= y0 and u["h"] == t["h"] and not move:            # a lejjebb kezdődőt még lejjebb
                     dy = y1 + 0.25 * u["fs"] - u["ink"][1]
                     move = (u["n"], (u["e"]["pos"][1] - u["fs"] * 1.15 + dy) / u["H"])
         if not issues and not (wrapped and e.get("auto_w")):
@@ -2999,12 +2999,12 @@ def _text_report(out: str, D: dict[str, Any]) -> list[str]:
         if wrapped and one + 0.01 * t["W"] <= avail:
             fix = f"give it \"w\": {math.ceil((one + 0.01 * t['W']) / t['W'] * 100) / 100:.2f} (one line) or a smaller \"size\": " \
                   f"{max(8, math.floor(size_u * e['box'][0] / one))}"
+        elif move and not (wrapped and e.get("auto_w")):        # a kért (w-s) tördelés marad: a másik szöveg kerüljön lejjebb
+            fix = f"move element {move[0]} lower (\"y\": {math.ceil(move[1] * 1000) / 1000:.3f}) or give this one a smaller \"size\""
         elif wrapped or one > avail:
             fix = f"give it a smaller \"size\": {max(8, math.floor(size_u * avail / one))} (one line)"
         elif box and y1 - y0 > (box[1][3] - box[1][1]) * 0.9:
             fix = f"give it a smaller \"size\": {max(8, math.floor(size_u * (box[1][3] - box[1][1]) * 0.8 / (y1 - y0)))} or a taller rect"
-        elif move:
-            fix = f"move element {move[0]} lower (\"y\": {math.ceil(move[1] * 1000) / 1000:.3f}) or give a smaller \"size\""
         else:
             fix = "move it (x, y) or give a smaller \"size\""
         what = ([f"broke into {t['lines']} lines"] if wrapped else []) + issues
