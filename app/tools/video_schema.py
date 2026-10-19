@@ -248,7 +248,9 @@ def _autoload() -> None:
             ref = getattr(importlib.import_module(mod), attr, None)
         except Exception:
             continue
-        register({name: ref} if isinstance(ref, str) else (ref or {}))
+        for k, v in ({name: ref} if isinstance(ref, str) else (ref or {})).items():
+            if v:
+                TOPICS.setdefault(str(k).strip().lower(), str(v))    # a kézzel beírt téma marad
 
 
 def reference(topic: Optional[str] = None) -> dict[str, Any]:

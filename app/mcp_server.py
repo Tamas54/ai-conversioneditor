@@ -1906,10 +1906,10 @@ async def video(
     factor: Optional[float] = None,
     ai: Optional[dict] = None,
 ) -> dict:
-    """Short videos with an EDITABLE timeline (edit_url opens an After Effects-like editor): made from a text, or
+    """Short videos with an EDITABLE timeline (edit_url: an After Effects-like editor): made from a text, or
     graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
     FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit |
-    transcript | adjust | ai_clip | enhance. Read "layers" before your first overlay, "graphic" before your own.
+    transcript | adjust | ai_clip | enhance. Read "layers" before a first overlay, "graphic" before your own.
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
       scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
       MP4. format vertical|landscape|square; duration (s) + duration_mode fixed|narration.
@@ -1917,15 +1917,15 @@ async def video(
     action="overlay": file_id = their mp4|mov|webm|m4v (kept as is) + layers=[{"at", "dur"|"until", "type", …}]
       and/or subtitles=[{start, end, text}] | "auto". Types: lower_third · title · chapter · source · stat · quote ·
       chart (a layer with a "chart" object) · graphic · fullscreen · split. text = the source: numbers and quotes
-      are checked against it.
+      are checked against it (else "not checked against a source").
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again (draft=true: half size); scene="s3" / scene="L2": just that scene / layer.
     action="transcript": what is said, with times (+ .srt; vocabulary=[names]). action="lottie": text → animations.
     action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
     AI video (credits): action="ai_clip" (ai={…}) · "enhance" (factor 1|2|4) · "estimate".
-    alpha=true | "webm" | "both": also a transparent graphics-only video (ProRes 4444 .mov / WebM VP9).
-    render=false (make / overlay / edit): save the project only (the layout check still comes back); draft=true: fast.
-    Every result has a check (status, findings, verified); files(action="preview", file_id, scene=…) shows it.
+    alpha=true | "webm" | "both": also transparent graphics only (ProRes 4444 / WebM).
+    render=false (make / overlay / edit): save the project only (the layout check still runs); draft=true: fast.
+    Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs
     from app.tools import video as vid
