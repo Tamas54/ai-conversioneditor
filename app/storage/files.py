@@ -21,14 +21,26 @@ def new_file_id(ext: str) -> str:
     return f"{uuid.uuid4().hex}.{ext.lstrip('.')}"
 
 
-# Minden útvonal az aktuális felhasználó munkaterületén belül (app/tenancy.py).
+# Minden útvonal az aktuális felhasználó munkaterületén belül (app/tenancy.py). Megosztott fájlnál (app/sharing.py)
+# a tulajdonos munkaterületén — a megosztás dönti el fájlonként, hol él (és új fájlt csak szerkesztő hozhat létre).
+
+def _root(file_id: str) -> Path:
+    s = tenancy.shared()
+    return s.root_for(file_id) if s is not None else tenancy.user_root()
+
 
 def input_path(file_id: str) -> Path:
-    return tenancy.user_root() / "inputs" / _safe(file_id)
+    return _root(_safe(file_id)) / "inputs" / file_id
 
 
 def output_path(file_id: str) -> Path:
-    return tenancy.user_root() / "outputs" / _safe(file_id)
+    return _root(_safe(file_id)) / "outputs" / file_id
+
+
+def file_workspace(file_id: str) -> str:
+    """Kinek a munkaterületén van a fájl (az aláírt link ezt a felhasználót írja alá)."""
+    s = tenancy.shared()
+    return s.workspace_of(file_id) if s is not None else tenancy.current_user_id()
 
 
 def temp_path(name: str | None = None) -> Path:
@@ -60,7 +72,7 @@ def sign_file_id(file_id: str, ttl_seconds: int | None = None, uid: str | None =
     if ttl_seconds is None:
         ttl_seconds = settings.FILE_TTL_HOURS * 3600
     exp = int(time.time()) + ttl_seconds
-    msg = _msg(file_id, exp, uid or tenancy.current_user_id())
+    msg = _msg(file_id, exp, uid or file_workspace(file_id))
     sig = hmac.new(
         settings.FILE_SIGNING_KEY.encode(), msg, hashlib.sha256
     ).hexdigest()[:32]
@@ -84,7 +96,7 @@ def verify_file_token(file_id: str, token: str, uid: str = tenancy.ADMIN_ID) -> 
 
 def public_url(file_id: str) -> str:
     """Return the full public URL for a file_id (with signed token)."""
-    uid = tenancy.current_user_id()
+    uid = file_workspace(file_id)
     token, _ = sign_file_id(file_id, uid=uid)
     user = "" if uid == tenancy.ADMIN_ID else f"&u={uid}"
     return f"{settings.PUBLIC_BASE_URL.rstrip('/')}/files/{file_id}?t={token}{user}"

@@ -39,8 +39,8 @@ def can_preview(file_id: str) -> bool:
 
 def preview_url(file_id: str, page: int = 1) -> str:
     """Nyilvános, aláírt PNG-előnézet linkje (a token a fájlé — ugyanaz a jog, mint a letöltésé)."""
-    from app.storage.files import sign_file_id
-    uid = tenancy.current_user_id()
+    from app.storage.files import file_workspace, sign_file_id
+    uid = file_workspace(file_id)
     token, _ = sign_file_id(file_id, uid=uid)
     user = "" if uid == tenancy.ADMIN_ID else f"&u={uid}"
     pg = f"&p={int(page)}" if page and int(page) > 1 else ""

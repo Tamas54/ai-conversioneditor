@@ -202,9 +202,18 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/dashboard") and uid != tenancy.ADMIN_ID:
         return RedirectResponse("/app", status_code=303)
     token = tenancy.set_user(uid)
+    from app import sharing
+    shared_tok = None
     try:
+        try:   # más munkaterületének fájlja (megosztás): EZ a jogellenőrzés minden fájl-, projekt-, render- és MCP-kérésre
+            shared_tok = await sharing.enter_request(request, uid)
+        except sharing.AccessDenied as e:
+            if e.mcp:                   # MCP: az eszköz hibája a JSON-RPC válaszban (nem HTTP-hiba)
+                return JSONResponse(e.mcp)
+            return JSONResponse({"detail": str(e), "not_shared": True}, status_code=403)
         resp = await call_next(request)
     finally:
+        sharing.leave_request(shared_tok)
         tenancy.reset(token)
     if new_guest:
         resp.set_cookie(COOKIE, new_session(new_guest, ttl=GUEST_TTL_S), max_age=GUEST_TTL_S, httponly=True,
@@ -297,6 +306,7 @@ async def login(request: Request, password: str = Form(...), email: str = Form("
         return _login_form(nxt, "Wrong email or password.", email.strip(), 401)
     _fails[ip].clear()
     await _adopt_guest(request, uid)
+    await _claim_invites(uid, email)
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(uid), max_age=SESSION_TTL_S, httponly=True,
                     secure=request.url.scheme == "https", samesite="lax")
@@ -338,6 +348,7 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     if settings.SIGNUP_CREDITS:
         await db.credits_add(user["id"], 0, "signup")  # napló-sor a kezdő egyenlegről
     await _adopt_guest(request, user["id"])
+    await _claim_invites(user["id"], user.get("email"))
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(user["id"]), max_age=SESSION_TTL_S, httponly=True,
                     secure=request.url.scheme == "https", samesite="lax")
@@ -355,6 +366,19 @@ async def _adopt_guest(request: Request, uid: str) -> None:
         except Exception:
             log.warning("vendég-verziók átírása nem sikerült", exc_info=True)
         log.info("vendég %s → %s: %d fájl", guest, uid, moved)
+
+
+async def _claim_invites(uid: str, email: Optional[str]) -> None:
+    """Az e-mail címre szóló függő megosztások (app/sharing.py) a fiókhoz kerülnek — regisztrációkor és belépéskor."""
+    from app import sharing
+    if not sharing.enabled() or not email or "@" not in email:
+        return
+    try:
+        n = await sharing.claim_invites(uid, email)
+        if n:
+            log.info("függő megosztás feloldva: %s (%d)", uid, n)
+    except Exception:
+        log.warning("függő megosztások feloldása nem sikerült", exc_info=True)
 
 
 @router.get("/logout", include_in_schema=False)
@@ -398,8 +422,14 @@ async def api_account(request: Request) -> dict:
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
         "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
         "keys": await db.api_key_list(uid) if db.enabled() and not guest else [],
+        "sharing": _sharing_on() and not guest,
         "mcp_url": f"{base}/mcp", "product": settings.PRODUCT_NAME,
     }
+
+
+def _sharing_on() -> bool:
+    from app import sharing
+    return sharing.enabled()
 
 
 @router.post("/api/account/keys")
