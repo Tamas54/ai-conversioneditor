@@ -36,3 +36,15 @@
   **Measured: the spec's "pipeline outputs are already clean" is false for the ffmpeg tools** — resize-video,
   trim-video, compress-video, rotate-video and merge-files keep `location`/`location-eng` from an iPhone-like input
   (ffmpeg 4.4 copies global metadata by default; `ios_safe` uses `-map_metadata 0`). The export guard covers them.
+
+## 3.1 — Save to Photos (iOS)
+
+- File view **"Save to Photos"** button for videos and pictures, shown where the browser can share files (phones): on
+  tap it fetches the file with a progress readout, wraps it as a `File` and calls `navigator.share({files})` → the
+  share sheet's "Save Video" / "Save Image" puts it in Photos. If the tap's user activation ran out during the
+  download (Safari), the button turns into "Ready — tap to save to Photos"; if this file can't be shared, it downloads.
+- `GET /api/photos/<file_id>` → `{url, name, type, size, converted}`: MP4/MOV with H.264/HEVC + AAC and
+  JPEG/PNG/HEIC/HEIF/GIF go as they are; WebM/MKV/other codecs are transcoded to MP4 (H.264 CRF 20 + AAC 192k,
+  faststart) and WebP/TIFF/BMP/PSD to JPEG (PNG with alpha) first, as a job; a video project uses its last render.
+  `GET /api/photos/<file_id>/file` serves it with the right Content-Type and file name, location-free. Guests too.
+- Native app variant (Capacitor/Expo, PHPhotoLibrary "add only") is left for later.

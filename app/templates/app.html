@@ -221,6 +221,7 @@
       <span class="view-seg" id="edit-btns" role="group" aria-label="View or edit"></span>
       <span class="menu-wrap dl-split"><a class="btn" id="btn-download" download>Download</a><button type="button" class="btn dl-more" id="dl-more" aria-haspopup="menu" aria-expanded="false" aria-label="Other formats" hidden>▾</button>
         <div class="menu" id="dl-menu" role="menu" hidden></div></span>
+      <button type="button" class="btn" id="btn-photos" hidden title="Opens the share sheet — choose “Save Video” or “Save Image”">Save to Photos</button>
       <button type="button" class="btn ghost" id="btn-check" aria-expanded="false" aria-controls="checks" hidden title="Check the content: contradictions, tone, wording and facts">Check<span class="ck-badge" id="ck-badge" hidden></span></button>
       <span class="menu-wrap"><button type="button" class="btn ghost" id="btn-more" aria-haspopup="menu" aria-expanded="false">More ▾</button>
         <div class="menu menu-right" id="more-menu" role="menu" hidden></div></span>
@@ -725,6 +726,7 @@ const views = {
     });
     $("#file-frame").src = previewSrc(f); drawSeg();
     wireDownload(f, sibs);
+    wirePhotos(f);
     wireMore(f, eds.slice(1), openEditor);
     // PDF-nél, képnél és saját dizájnnál a szerkesztő a központ: széles képernyőn rögtön abban nyílik (Preview = sima nézet);
     // telefonon az előnézet marad (a szerkesztők asztali felületek), a gyors-eszközsáv ott is működik
@@ -2261,6 +2263,53 @@ function wireDownload(f, sibs) {
     const b = e.target.closest("[data-act]"); if (!b) return;
     if (b.dataset.self != null) saveUrl(cur.url, cur.label); else getAs(b.dataset.fmt);
   });
+}
+// Mentés a Fotókba (iOS): gesztusra letölti (folyamatjelzővel), File-ként a megosztó lapra adja → „Videó/Kép mentése”.
+// Csak ott látszik, ahol a böngésző fájlt tud megosztani (telefon); ha a konkrét fájlt mégsem tudja, sima letöltés.
+// A WebM-et (és ami nem fér a Fotókba) a szerver előbb MP4-re / JPEG-re alakítja; helyadat nélkül. Natív app: később.
+const PHOTO_EXTS = ["mp4", "mov", "m4v", "webm", "mkv", "ecproj", "jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tif", "tiff"];
+function canShareFiles() {
+  try { return !!(navigator.canShare && navigator.share) && navigator.canShare({ files: [new File([new Uint8Array(8)], "probe.mp4", { type: "video/mp4" })] }); }
+  catch { return false; }
+}
+function wirePhotos(f) {
+  const btn = $("#btn-photos"); if (!btn) return;
+  btn.hidden = !(PHOTO_EXTS.includes(f.ext) && canShareFiles());
+  btn.addEventListener("click", () => saveToPhotos(btn));
+}
+async function fetchBlob(url, onProgress) {
+  const r = await fetch(url);
+  if (!r.ok) { let m = `Download failed (${r.status})`; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+  const total = +r.headers.get("content-length") || 0, type = r.headers.get("content-type") || "";
+  if (!r.body || !total) return r.blob();
+  const reader = r.body.getReader(), parts = [];
+  let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.length; onProgress(got / total); }
+  return new Blob(parts, { type });
+}
+async function saveToPhotos(btn) {
+  const label = "Save to Photos";
+  if (btn._file) { const file = btn._file; btn._file = null; btn.textContent = label; return sharePhoto(file, btn); }   // 2. koppintás
+  btn.disabled = true;
+  try {
+    let p = await api(`/api/photos/${encodeURIComponent(cur.file_id)}`);
+    if (p.status === "running") { btn.textContent = "Converting for Photos…"; p = await pollJob(p, () => "Converting for Photos…", null); }
+    const blob = await fetchBlob(p.url, x => { btn.textContent = `Preparing… ${Math.round(x * 100)}%`; });
+    const file = new File([blob], p.name, { type: p.type });
+    btn.textContent = label;
+    if (!(navigator.canShare && navigator.canShare({ files: [file] }))) {      // ez a fájl nem megy a megosztó lapra: letöltés
+      saveUrl(URL.createObjectURL(blob), p.name); toast("Downloaded — this browser can't hand the file to Photos"); return;
+    }
+    await sharePhoto(file, btn);
+  } catch (e) { btn.textContent = label; toast(e.message); }
+  finally { btn.disabled = false; }
+}
+async function sharePhoto(file, btn) {
+  try { await navigator.share({ files: [file] }); }
+  catch (e) {
+    if (e.name === "NotAllowedError") { btn._file = file; btn.textContent = "Ready — tap to save to Photos"; }   // a letöltés alatt lejárt a koppintás
+    else if (e.name !== "AbortError") { saveUrl(URL.createObjectURL(file), file.name); toast("Downloaded instead"); }
+  }
 }
 // „Use in…”: másik eszköz ablaka a fájllal — vagy közvetlen művelet (Word-kivonat, videó egy diára)
 async function useIn([kind, mode, slot]) {

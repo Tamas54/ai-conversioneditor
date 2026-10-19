@@ -58,6 +58,7 @@ _GUEST_OK = (
     ("GET", "/api/design/columns"),                                     # tömeges személyre szabás: a táblázat oszlopai
     ("GET", "/api/video/assets"), ("POST", "/api/video/asset"),         # a videószerkesztő médiafájljai (a projekt mellé)
     ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),                # (eddig egy komment végére csúszva — vendég nem tudott törölni)
+    ("GET", "/api/photos/"),                                            # Mentés a Fotókba (iOS): a saját fájl a megosztó lapra
 )
 GUEST_MAX_UPLOAD_MB = 25
 _GUEST_POSTS, _GUEST_WINDOW_S = 60, 10 * 60          # vendég POST-ok IP-nként (feltöltés + gyártás)
