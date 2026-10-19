@@ -100,3 +100,8 @@
   recorded in the file's metadata (`extra.ai`: provider, model, prompt).
 - Live test spend (budget 250): 224 kie credits (two 480p 4 s drafts — the first one's download failed in the test
   harness, not the app); 5 failed / refused tasks cost 0.
+
+## Tests
+- Full suite in the prod-like image on a throwaway Postgres: 618 passed, 9 skipped (main: 572 / 9) — 46 new tests in
+  `test_credits.py`, `test_mcp_credits.py`, `test_kie_provider.py`, `test_ai_models.py`, `test_ai_enhance.py`,
+  `test_ai_clip.py`; kie is always mocked (no network), the timeline tests render with the real engine.
