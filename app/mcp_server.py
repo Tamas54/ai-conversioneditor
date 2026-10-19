@@ -258,6 +258,11 @@ async def _finalize(tool: str, args: dict, res):
         _sizes(res)
     except Exception as e:
         log.info("méret kimaradt (%s): %s", tool, e)
+    try:                                 # megosztott projekt: ütközés (más közben új változatot mentett) → conflict
+        from app import share_versions
+        await share_versions.annotate(res)
+    except Exception as e:
+        log.info("megosztás-jelzés kimaradt (%s): %s", tool, e)
     from app.tools import checks
     check, page = await checks.run(tool, args, res)
     pages = {}
@@ -454,8 +459,10 @@ async def files(
     at: Optional[Union[float, list[float]]] = None,
     frames: Optional[int] = None,
     versions: bool = False,
+    email: Optional[str] = None,
+    role: Optional[str] = None,
 ) -> dict:
-    """The person's files, and empty new ones; see a file; compare two versions.
+    """The person's files, and empty new ones; see a file; compare two versions; share.
 
     action="list": their files (uploads and results, newest first) — {file_id, name, ext, size_kb, when, made_from,
       edit_url}, plus total. To FIND a file ("the application form photo", "my contract"), pass query = words from
@@ -479,6 +486,9 @@ async def files(
       deck or PDF: validate_document checks it for you (pictures + a machine-checked list of problems).
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
       changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
+    action="share": file_id + email + role (viewer|editor|owner|none) — share a file or video project (none = remove);
+      without email: who has access and who changed what. action="share_link" (role) — a link for signed-in people.
+      action="choose": after a version conflict, make file_id the current version. list also returns shared_with_me.
     """
     if action in ("list", "find", "search"):
         import datetime
@@ -505,11 +515,17 @@ async def files(
         hint = ({"hint": "Nothing has those words in its name — names are often in the person's own language (or a "
                          "camera name like IMG_1234): try other words, or list by kind (e.g. kind=\"image\") and look."}
                 if query and query.strip() and not items else {})
+        from app import sharing
+        mine = sharing.mcp_shared_items(d.get("shared") or [], query=query, kind=kinds, ext=ext, versions=versions)
         return {**hint, "total": len(items), "offset": o, "more": o + n < len(items), "files": [{
             "file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
             "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "made_from": f.get("source_label"),
-            **({"older_versions": f["older_versions"]} if f.get("older_versions") and not versions else {})} for f in page]}
+            **({"older_versions": f["older_versions"]} if f.get("older_versions") and not versions else {})} for f in page],
+            **({"shared_with_me": mine} if mine else {})}
+    if action in ("share", "share_link", "choose", "shared"):
+        from app import sharing
+        return await sharing.mcp_action(action, file_id, email=email, role=role)
     if action == "preview":
         return await _preview_content(file_id, page or 1, scene, at, frames)
     if action == "compare":
@@ -521,7 +537,7 @@ async def files(
             raise ValueError("Give other_file_id — this file wasn't made from another one.")
         return await cmp.compare(other, file_id) if not other_file_id else await cmp.compare(file_id, other_file_id)
     if action != "new":
-        raise ValueError('action: "list", "new", "preview" or "compare"')
+        raise ValueError('action: "list", "new", "preview", "compare", "share", "share_link" or "choose"')
     k = (kind or "").lower()
     if k in ("document", "doc", "word"):
         from app.routes.make import make_document

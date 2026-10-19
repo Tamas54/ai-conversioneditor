@@ -251,8 +251,9 @@ async def push(provider: str, p: dict[str, Any], file_ids: list[str],
     validate_spec(provider, p, export=True)
     out = []
     async with httpx.AsyncClient(timeout=600, transport=transport) as c:
+        from app.storage import privacy
         for fid in file_ids:
-            src = crafts.existing(fid)
+            src = await privacy.export_path(crafts.existing(fid))    # export: helyadat (GPS) nélkül
             name = display_label(fid)
             data = src.read_bytes()
             loc = await _push_one(c, provider, p, name, data)

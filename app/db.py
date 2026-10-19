@@ -232,6 +232,53 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     data            bytea NOT NULL,
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
+-- ---- megosztás (OMLETT 4, 10-19), csak additív: ki mit lát / szerkeszt más munkaterületén (app/sharing.py) ----
+-- shares: egy fájl/projekt (és a családja: ősei, változatai, médiafájljai) egy meghívottnak; grantee_id NULL = függő
+-- meghívó e-mailre (regisztráláskor / belépéskor oldódik fel); share_links: szerepkörös link (csak belépve ér valamit)
+CREATE TABLE IF NOT EXISTS shares (
+    id              bigserial PRIMARY KEY,
+    owner_id        text NOT NULL,
+    file_id         text NOT NULL,
+    grantee_id      text,
+    grantee_email   text,
+    role            text NOT NULL,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    accepted_at     timestamptz,
+    revoked_at      timestamptz
+);
+CREATE INDEX IF NOT EXISTS shares_grantee_idx ON shares (grantee_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS shares_owner_idx ON shares (owner_id, file_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS shares_email_idx ON shares (lower(grantee_email)) WHERE grantee_id IS NULL AND revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS share_links (
+    id              bigserial PRIMARY KEY,
+    token_hash      text NOT NULL UNIQUE,
+    owner_id        text NOT NULL,
+    file_id         text NOT NULL,
+    role            text NOT NULL,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    revoked_at      timestamptz
+);
+-- napló: ki, mit, mikor (megosztás, változat, ütközés, választás, törlés) a tulajdonos munkaterületén
+CREATE TABLE IF NOT EXISTS share_audit (
+    id              bigserial PRIMARY KEY,
+    owner_id        text NOT NULL,
+    actor_id        text NOT NULL,
+    file_id         text,
+    action          text NOT NULL,
+    detail          jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS share_audit_owner_idx ON share_audit (owner_id, created_at DESC);
+-- szerkesztési zár (tanácsadó): a változatlánc gyökerén, szívveréssel; lejárt szívverés = szabad
+CREATE TABLE IF NOT EXISTS edit_locks (
+    owner_id        text NOT NULL,
+    file_id         text NOT NULL,
+    holder_id       text NOT NULL,
+    heartbeat_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (owner_id, file_id)
+);
 """
 
 _pool = None
@@ -290,8 +337,8 @@ async def record_version(file_id: str, meta: dict[str, Any]) -> None:
     p = output_path(file_id) if output_path(file_id).exists() else input_path(file_id)
     size = p.stat().st_size if p.exists() else None
     extra = {k: v for k, v in meta.items() if k not in _KNOWN}
-    from app import tenancy
-    await _rows(
+    from app.storage.files import file_workspace
+    rows = await _rows(
         """INSERT INTO file_versions (file_id, source_file_id, operation, label, ext, size_bytes, extra, owner_id)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
            ON CONFLICT (file_id) DO UPDATE SET
@@ -300,11 +347,15 @@ async def record_version(file_id: str, meta: dict[str, Any]) -> None:
              label = COALESCE(EXCLUDED.label, file_versions.label),
              size_bytes = COALESCE(EXCLUDED.size_bytes, file_versions.size_bytes),
              extra = file_versions.extra || EXCLUDED.extra,
-             updated_at = now()""",
+             updated_at = now()
+           RETURNING (xmax = 0) AS inserted, owner_id""",
         (file_id, meta.get("source_file_id"), meta.get("operation"), meta.get("label") or meta.get("original_filename"),
          file_id.rsplit(".", 1)[-1].lower() if "." in file_id else None, size, json.dumps(extra, ensure_ascii=False, default=str),
-         tenancy.current_user_id()),
+         file_workspace(file_id)),     # a fájl munkaterülete (megosztott projektben a tulajdonosé, nem a szerkesztőé)
     )
+    if rows and rows[0]["inserted"]:
+        from app import sharing
+        await sharing.on_new_version(file_id, rows[0]["owner_id"], meta)    # megosztott családban: napló + ütközés
 
 
 def record_version_bg(file_id: str, meta: dict[str, Any]) -> None:
@@ -391,7 +442,7 @@ async def review_resolve(review_id: int, resolution_file_id: Optional[str], note
 
 def _owner() -> str:
     from app import tenancy
-    return tenancy.current_user_id()
+    return tenancy.workspace_id()         # megosztott fájlnál a tulajdonos munkaterülete
 
 
 async def _owns(file_id: str) -> bool:

@@ -6,6 +6,10 @@
 A storage/files.py minden útvonala (input/output/temp) ezen át megy, így egy felhasználó fizikailag sem
 éri el a másik fájljait — a modulok egyenként nem ellenőriznek tulajdonjogot. Az auth-middleware állítja
 be (süti vagy MCP-kulcs alapján); háttérfeladatok a létrehozó kérés kontextusát öröklik.
+
+Megosztás (OMLETT 4, app/sharing.py): egy kérés idejére a munkaterület egy MÁSIK felhasználóé lehet (aki megosztotta
+a fájlt) — a fájlok ott élnek (workspace_id, user_root), a művelet gazdája (kredit, napló, jobok) viszont a belépett
+felhasználó marad (current_user_id). Ilyenkor a fájl-útvonalakat a megosztás-objektum adja (shared().root_for).
 """
 from __future__ import annotations
 
@@ -25,10 +29,31 @@ CLIENT_IMAGE_MSG = ("This server doesn't generate AI pictures for connected AIs.
                     "tool, then pass its public URL (image_url, or {\"url\": …} in a spec) or upload it (upload_from_url / "
                     "upload_file) and use the file_id. Free stock photos: {\"stock\": \"words\"} or generate_image(stock_search=…).")
 _ready: set[Path] = set()
+# a kérés idejére megnyitott megosztott munkaterület (app/sharing.Shared) — None: a saját
+_shared: ContextVar[object] = ContextVar("aice_shared", default=None)
 
 
 def current_user_id() -> str:
+    """A művelet gazdája (aki belépett): kredit, keret, jobok, saját beállítások."""
     return _current.get()
+
+
+def workspace_id() -> str:
+    """Akinek a tárhelyén a fájlok élnek: megosztott fájlnál a tulajdonos, különben a belépett felhasználó."""
+    s = _shared.get()
+    return s.owner if s is not None else _current.get()
+
+
+def shared():
+    return _shared.get()
+
+
+def enter_shared(s):
+    return _shared.set(s)
+
+
+def leave_shared(token) -> None:
+    _shared.reset(token)
 
 
 def set_user(uid: str):
@@ -42,7 +67,7 @@ def reset(token) -> None:
 
 
 def user_root(uid: str | None = None) -> Path:
-    uid = uid or _current.get()
+    uid = uid or workspace_id()
     root = settings.DATA_DIR if uid == ADMIN_ID else settings.DATA_DIR / "u" / uid
     if root not in _ready:
         for sub in ("inputs", "outputs", "temp"):
