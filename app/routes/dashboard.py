@@ -185,8 +185,11 @@ async def api_files(include_ephemeral: bool = False) -> dict[str, Any]:
 @router.delete("/api/files/{file_id}")
 async def api_delete_file(file_id: str) -> dict[str, Any]:
     removed = []
-    for d in (tenancy.user_root() / "inputs", tenancy.user_root() / "outputs"):
-        p = d / file_id
+    try:                 # fájlonként feloldva: megosztott fájlt csak owner szereppel (a middleware ellenőrzi), mást nem
+        paths = (input_path(file_id), output_path(file_id))
+    except FileNotFoundError:
+        raise HTTPException(404, "not found") from None
+    for p in paths:
         if p.exists():
             p.unlink()
             removed.append(str(p))

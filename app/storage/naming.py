@@ -36,7 +36,7 @@ def root_name(source_label: Optional[str], fallback: str = "file") -> str:
 def _taken() -> set[str]:
     """A munkaterület összes címkéjének kisbetűs törzse (kiterjesztés nélkül)."""
     out: set[str] = set()
-    root = tenancy.user_root()
+    root = tenancy.workspace_root()     # az új fájl ott születik (megosztott projektben a tulajdonosnál); csak a név számít
     for d in (root / "inputs", root / "outputs"):
         if not d.exists():
             continue

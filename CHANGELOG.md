@@ -376,3 +376,22 @@ master + x264 CRF 19; downloads/exports drop GPS/location metadata (`STRIP_LOCAT
   faststart) and WebP/TIFF/BMP/PSD to JPEG (PNG with alpha) first, as a job; a video project uses its last render.
   `GET /api/photos/<file_id>/file` serves it with the right Content-Type and file name, location-free. Guests too.
 - Native app variant (Capacitor/Expo, PHPhotoLibrary "add only") is left for later.
+
+#### Sharing — ACL hardening after the independent review
+
+- **Fail closed per file**: inside a shared request the owner's workspace resolves only for the shared family (plus
+  files the request creates and new versions whose source chain leads into the family); any other owner file is
+  403 even if its id slipped past the request scan. Signed links are never minted for such a file.
+- **Request scan everywhere**: path, query keys/values, JSON (keys, values, ids inside URLs / comma lists /
+  JSON-in-a-string, `\u`-escaped), form-urlencoded (decoded), multipart and text bodies, MCP arguments — up to 64 MB.
+  In a shared request a body that can't be checked is refused (413 too large, 415 unknown type); raw-file bodies
+  (editor save, video asset) carry their ids in the query. Uploads never enter a shared context.
+- **Workspace-wide code stays in the actor's workspace**: `tenancy.user_root()` without an argument is always the
+  signed-in user's (listing, temp, delete); the owner's tree only explicitly — `workspace_root()` for new-file naming,
+  `visible_root()` (family only) for the version tree and the digitize sibling lookup; pdfcraft `--root` is the
+  narrowest root covering the script's (ACL-resolved) paths, owner-side paths must be family members.
+- Review inbox / resolve are the actor's own; lineage, live-data bindings, the share activity log (for non-owners)
+  and conflict info are filtered to the shared family.
+- **Retention on a DB error**: every successful round saves the shared-file list in the workspace root
+  (`.shared-keep.json`); if Postgres doesn't answer, the last list (≤ 7 days old) keeps the shared files and the rest
+  of the workspace is cleaned as usual; with no list that round skips the workspace — logged as an error.

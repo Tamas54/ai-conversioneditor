@@ -476,6 +476,10 @@ async def lineage(file_id: str) -> dict[str, Any]:
            SELECT file_id, source_file_id, operation, label, size_bytes, created_at, deleted_at, depth FROM down
            ORDER BY created_at LIMIT 200""",
         (file_id, _owner()))
+    vis = _visible()                     # megosztott fájlnál csak a megosztott család (a nyersanyag más ágai nem)
+    if vis is not None:
+        ancestors = [r for r in ancestors if r["file_id"] in vis]
+        descendants = [r for r in descendants if r["file_id"] in vis]
     return {"file_id": file_id, "ancestors": ancestors, "descendants": descendants}
 
 
@@ -494,7 +498,7 @@ async def review_create(file_id: str, note: Optional[str], requested_by: Optiona
 async def review_list(status: Optional[str] = "open", file_id: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
     if not enabled():
         raise RuntimeError("No database configured (DATABASE_URL).")
-    where, params = ["v.owner_id IS NOT DISTINCT FROM %s"], [_owner()]
+    where, params = ["v.owner_id IS NOT DISTINCT FROM %s"], [_actor()]    # a SAJÁT bejövő kérései (megosztott kérésben is)
     if status:
         where.append("r.status = %s"); params.append(status)
     if file_id:
@@ -511,7 +515,7 @@ async def review_resolve(review_id: int, resolution_file_id: Optional[str], note
                             resolution_file_id = %s, resolution_note = %s
                           FROM file_versions v
                           WHERE r.id = %s AND v.file_id = r.file_id AND v.owner_id IS NOT DISTINCT FROM %s
-                          RETURNING r.*""", (resolution_file_id, note, review_id, _owner()))
+                          RETURNING r.*""", (resolution_file_id, note, review_id, _actor()))
     if not rows:
         raise ValueError(f"No such review request: {review_id}")
     return rows[0]
@@ -519,7 +523,18 @@ async def review_resolve(review_id: int, resolution_file_id: Optional[str], note
 
 def _owner() -> str:
     from app import tenancy
-    return tenancy.workspace_id()         # megosztott fájlnál a tulajdonos munkaterülete
+    return tenancy.workspace_id()         # megosztott fájlnál a tulajdonos munkaterülete (fájlonkénti műveletekhez)
+
+
+def _actor() -> str:
+    from app import tenancy
+    return tenancy.current_user_id()      # a belépett felhasználó saját munkaterülete (listákhoz, azonosító szerinti eléréshez)
+
+
+def _visible() -> Optional[set]:
+    """Megosztott kérésben a tulajdonos munkaterületéből látható fájlok (a család) — különben None (minden a sajátja)."""
+    from app import tenancy
+    return tenancy.visible_root()[1]
 
 
 async def _owns(file_id: str) -> bool:
@@ -701,7 +716,8 @@ async def bindings_get(ids: list[str]) -> dict[str, dict[str, Any]]:
         return {}
     rows = await _rows("SELECT * FROM data_bindings WHERE id = ANY(%s) AND owner_id IS NOT DISTINCT FROM %s",
                        (list(ids), _owner()))
-    return {r["id"]: r for r in rows}
+    vis = _visible()                     # megosztott dokumentum: csak a családhoz tartozó kötések
+    return {r["id"]: r for r in rows if vis is None or r.get("file_id") in vis}
 
 
 async def reassign_owner(src_uid: str, dst_uid: str) -> None:

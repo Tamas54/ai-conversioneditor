@@ -48,6 +48,21 @@ def shared():
     return _shared.get()
 
 
+def workspace_root() -> Path:
+    """A fájlok munkaterületének gyökere (megosztott kérésben a tulajdonosé) — CSAK belső, nem kiadott adatra
+    (pl. az új fájl egyedi nevéhez a meglévő címkék); fájlt kiadni, listázni ezen át nem szabad."""
+    return user_root(workspace_id())
+
+
+def visible_root():
+    """Listázáshoz: (gyökér, csak-ezek). Saját munkaterület: (a saját, None); megosztottban: (a tulajdonosé, a
+    megosztott család fájljai) — a tulajdonos többi fájlja kimarad."""
+    s = _shared.get()
+    if s is None or s.owner == s.actor:
+        return user_root(), None
+    return user_root(s.owner), s.visible()
+
+
 def enter_shared(s):
     return _shared.set(s)
 
@@ -67,7 +82,10 @@ def reset(token) -> None:
 
 
 def user_root(uid: str | None = None) -> Path:
-    uid = uid or workspace_id()
+    """A munkaterület gyökere. Argumentum nélkül MINDIG a belépett felhasználóé — megosztott kérésben is (lista,
+    temp, törlés így nem érheti el a tulajdonos egész munkaterületét); a tulajdonos fájljai fájlonként a
+    storage/files.py-n (Shared.root_for) át, egészben csak kimondva: workspace_root() / visible_root()."""
+    uid = uid or _current.get()
     root = settings.DATA_DIR if uid == ADMIN_ID else settings.DATA_DIR / "u" / uid
     if root not in _ready:
         for sub in ("inputs", "outputs", "temp"):

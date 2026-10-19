@@ -116,7 +116,7 @@ from app.sharing import AccessDenied  # noqa: E402
 
 @app.exception_handler(AccessDenied)
 async def _not_shared(request, exc):            # megosztott munkaterület: csak megtekintés / nincs megosztva → 403
-    return JSONResponse({"detail": str(exc), "not_shared": True}, status_code=403)
+    return JSONResponse({"detail": str(exc), "not_shared": True}, status_code=getattr(exc, "status", 403))
 
 
 from fastapi.staticfiles import StaticFiles  # noqa: E402

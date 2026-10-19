@@ -282,8 +282,10 @@ def _docx_source(pdf_id: str) -> Optional[str]:
         return src
     if m.get("operation") == "digitize" and src:
         from app import tenancy
-        out = tenancy.user_root() / "outputs"
-        for p in out.glob("*.docx"):
+        root, only = tenancy.visible_root()          # megosztott fájlnál csak a megosztott család
+        for p in (root / "outputs").glob("*.docx"):
+            if only is not None and p.name not in only:
+                continue
             mm = _meta(p.name)
             if mm.get("source_file_id") == src and mm.get("operation") == "digitize":
                 return p.name

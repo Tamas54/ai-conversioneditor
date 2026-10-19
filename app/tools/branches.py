@@ -29,8 +29,8 @@ log = logging.getLogger("aice.branches")
 def _items() -> list[dict[str, Any]]:
     from app import tenancy
     from app.routes.dashboard import _list_dir
-    root = tenancy.user_root()
-    return _list_dir(root / "inputs", "input") + _list_dir(root / "outputs", "output")
+    root, only = tenancy.visible_root()          # megosztott fájlnál csak a megosztott család
+    return _list_dir(root / "inputs", "input", only=only) + _list_dir(root / "outputs", "output", only=only)
 
 
 def tree(file_id: str) -> dict[str, Any]:

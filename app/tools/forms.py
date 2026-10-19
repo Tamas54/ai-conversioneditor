@@ -470,14 +470,14 @@ def _bake(path: Path) -> None:
 
 
 async def _run_script(script: list[dict[str, Any]]) -> str:
-    from app import tenancy
     from app.storage import temp_path
     from app.storage.files import new_file_id
     from app.tools import crafts
     tmp = temp_path(new_file_id("json"))
     tmp.write_text(json.dumps(script, ensure_ascii=False))
     try:
-        return await crafts.run_cli(crafts.office_cli("pdf"), "pdfcraft-cli", "run", "--script", str(tmp), "--root", str(tenancy.user_root()))
+        return await crafts.run_cli(crafts.office_cli("pdf"), "pdfcraft-cli", "run", "--script", str(tmp), "--root",
+                                    str(crafts.script_root(script)))
     finally:
         tmp.unlink(missing_ok=True)
 
