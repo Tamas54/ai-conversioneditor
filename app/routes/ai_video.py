@@ -4,6 +4,11 @@
                                    (KIE_WEBHOOK_HMAC_KEY) kell; a taskId a saját nyilvántartásunkkal egyeztetve
     GET  /api/ai/task/{id}         egy AI-feladat állapota (a hívó saját feladata)
     DELETE /api/ai/task/{id}       megszakítás (a foglalt kredit visszajár)
+    GET  /api/ai/config            be van-e kapcsolva, választható értékek
+    POST /api/ai/estimate          ár (Studio-kredit) — a gombon
+    POST /api/ai/enhance           Topaz minőségjavítás → job (új változat)
+    POST /api/ai/clip              Seedance klip → job (draft, véglegesítés, a timeline-ra: at / after_scene)
+    GET  /api/ai/draft-of          egy fájl AI-feladata (a draft véglegesítéséhez)
 """
 from __future__ import annotations
 
@@ -114,5 +119,25 @@ async def ai_enhance(body: dict[str, Any]) -> dict[str, Any]:
     from app.tools import ai_video
     try:
         return await ai_video.start_enhance(body.get("file_id") or "", body.get("factor") or 2)
+    except Exception as e:
+        raise _fail(e)
+
+
+@router.post("/api/ai/clip")
+async def ai_clip(body: dict[str, Any]) -> dict[str, Any]:
+    """{prompt, resolution?, duration?, audio?, aspect?, draft?, image? | first_frame? (+ last_frame?) — file_id vagy
+    {frame: mp} a file_id videójából —, reference_*?, finalize?: draft task_id, file_id?: a projekt, at? | after_scene?} → job."""
+    from app.tools import ai_video
+    try:
+        return await ai_video.start_clip({k: v for k, v in body.items() if k != "file_id"}, project=body.get("file_id"))
+    except Exception as e:
+        raise _fail(e)
+
+
+@router.get("/api/ai/draft-of")
+async def ai_task_of_file(file_id: str) -> dict[str, Any]:
+    from app.tools import ai_video
+    try:
+        return await ai_video.task_of_file(file_id)
     except Exception as e:
         raise _fail(e)

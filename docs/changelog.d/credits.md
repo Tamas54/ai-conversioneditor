@@ -79,3 +79,24 @@
 - Live: kie's Topaz video upscale answered "internal error" (failCode 500) for every input on 2026-10-19 — also for
   kie's own documentation example — and billed 0; the flow is covered by tests with a fake provider that really
   upscales with ffmpeg.
+
+## 2.4 AI clip (Seedance 2.5)
+- `video(action="ai_clip", ai={prompt, resolution, duration 4–30, audio, aspect, draft, image | first_frame (+ last_frame)
+  | reference_images/videos/audios, at | after_scene}, file_id=<project>)`, `POST /api/ai/clip`, and an "AI clip… AI"
+  quick tool on video projects and videos (estimate on the button; "Make final (1080p)" on a draft clip).
+- Text→video; image→video from an uploaded picture or `{"frame": seconds}` of the current video/project (its last
+  render) — the frame is prepared to kie's rules (JPEG, 300–6000 px, aspect 0.4–2.5); first/last-frame mode vs.
+  reference mode are refused when mixed.
+- Draft (480p, cheap) → `ai={"finalize": task_id}` → `bytedance/seedance-2-5-draft` with the draft's kie task id at
+  1080p (kie keeps drafts 7 days); the final clip is a new version of the draft file.
+- On the timeline (the existing edit path, a new project version): `at` → a full-screen cut-in layer (its sound mixed
+  when the clip has sound); `after_scene` → a scene of its own (a graphic with the clip as a full-frame video element).
+  If placing fails, the paid clip is still returned with the exact `changes` to place it by hand.
+- The estimate is reserved inside the request (MCP `studio_ai.credits_held`), so `insufficient_credits` comes back
+  before anything is uploaded or started.
+- Live, through the full app path (ledger + kie, polling): 480p 4 s draft → kie charged 112 credits
+  (`creditsConsumed`), the Studio captured 17, clip 854×480 24 fps H.264, downloaded from kie's CDN into our storage.
+- Deferred: AI Act art. 50 / C2PA / IPTC `DigitalSourceType` marking (legal is out of scope for now); the AI origin is
+  recorded in the file's metadata (`extra.ai`: provider, model, prompt).
+- Live test spend (budget 250): 224 kie credits (two 480p 4 s drafts — the first one's download failed in the test
+  harness, not the app); 5 failed / refused tasks cost 0.

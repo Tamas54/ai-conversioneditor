@@ -1299,6 +1299,57 @@ const AI_ENHANCE = { label: "Enhance…", ai: true, show: aiOn, doing: "Enhancin
     await loadAccount();
     return { file_id: r.file_id, view: "preview", msg: `Enhanced — ${r.width}×${r.height}, ${r.credits_charged} credits` };
   } };
+const AI_CLIP = { label: "AI clip…", ai: true, show: aiOn, doing: "Generating the clip — usually 1–3 minutes…",
+  hint: "A generated clip (Seedance 2.5): from words, from this frame or a picture",
+  form: () => `<p class="muted small" style="margin:0 0 10px">A new clip made by AI (Seedance 2.5). Start with a cheap 480p draft, then make the one you like final. Only what the AI service really charges is taken; a failed job costs nothing.</p>
+    <label>What happens in the clip<textarea name="prompt" rows="3" placeholder="The camera slowly pushes in on the pan as the omelette is flipped, warm kitchen light"></textarea></label>
+    <label>Start from<select name="from"><option value="text">Only the words</option><option value="frame">This video's frame at…</option><option value="pic">A picture</option></select></label>
+    <label data-show="frame" hidden>Frame at (seconds)<input type="number" name="at_frame" min="0" step="0.1" value="0"></label>
+    <div data-show="pic" hidden>${fileSlot("pic", { exts: EXT.image, label: "First frame" })}</div>
+    <div class="row2"><label>Quality<select name="res"><option value="draft">Draft (480p, cheap)</option><option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option></select></label>
+    <label>Seconds<input type="number" name="dur" min="4" max="30" value="5"></label></div>
+    <div class="checks"><label><input type="checkbox" name="audio"> With sound</label></div>
+    ${cur?.ext === "ecproj" ? `<label>Put it<select name="place"><option value="">Only make the clip</option><option value="at">As a cut-in at…</option><option value="after">As a new scene after…</option></select></label>
+    <label data-show="at" hidden>At (seconds)<input type="number" name="at" min="0" step="0.1" value="0"></label>
+    <label data-show="after" hidden>After scene (e.g. s2; 0 = first)<input type="text" name="after" value="0"></label>` : ""}`,
+  wire: fm => {
+    const body = () => { const r = field(fm, "res").value;
+      return { action: "ai_clip", prompt: field(fm, "prompt").value.trim() || "preview", duration: +field(fm, "dur").value || 5,
+        ...(r === "draft" ? { draft: true } : { resolution: r }) }; };
+    const show = () => { const on = new Set([field(fm, "from").value, field(fm, "place")?.value || ""]);
+      fm.querySelectorAll("[data-show]").forEach(x => x.hidden = !on.has(x.dataset.show)); };
+    let t = null; const go = () => { clearTimeout(t); t = setTimeout(() => aiEstimate(fm, body()), 250); };
+    fm.querySelectorAll("select, input").forEach(x => x.addEventListener("change", () => { show(); go(); }));
+    show(); go();
+  },
+  run: async (id, fm, st) => {
+    const prompt = field(fm, "prompt").value.trim();
+    if (!prompt) { field(fm, "prompt").focus(); throw new Error("Say what should happen in the clip."); }
+    const r = field(fm, "res").value, from = field(fm, "from").value, place = field(fm, "place")?.value || "";
+    const body = { file_id: id, prompt, duration: +field(fm, "dur").value || 5, audio: field(fm, "audio").checked,
+      ...(r === "draft" ? { draft: true } : { resolution: r }) };
+    if (from === "frame") body.image = { frame: +field(fm, "at_frame").value || 0 };
+    if (from === "pic") body.image = (await readSlot(fm, "pic", "the first-frame picture"))[0];
+    if (place === "at") body.at = +field(fm, "at").value || 0;
+    if (place === "after") { const a = field(fm, "after").value.trim(); body.after_scene = /^\d+$/.test(a) ? +a : a; }
+    const job = await api("/api/ai/clip", { method: "POST", body: JSON.stringify(body) });
+    loadAccount().catch(() => {});
+    const res = await pollJob(job, j => j.stage === "putting it on the timeline" ? "Putting it on the timeline…" : "Generating the clip — usually 1–3 minutes…", st);
+    await loadAccount();
+    if (res.timeline_error) toast(res.timeline_error);
+    const to = res.timeline?.file_id || res.file_id;
+    return { file_id: to, view: res.timeline ? "edit" : "preview",
+      msg: `${res.draft ? "Draft" : "Clip"} ready — ${res.credits_charged} credits${res.draft ? ". Like it? Make it final from the clip's AI panel." : ""}` };
+  } };
+const AI_FINAL = { label: "Make final (1080p)", ai: true, doing: "Making the final 1080p clip…", hint: "The same shot as the draft, at 1080p",
+  show: () => aiOn() && /\(draft\)/.test(cur?.label || cur?.name || ""),
+  run: async (id, fm, st) => {
+    const meta = await api(`/api/ai/draft-of?file_id=${encodeURIComponent(id)}`);
+    const job = await api("/api/ai/clip", { method: "POST", body: JSON.stringify({ finalize: meta.task_id }) });
+    const res = await pollJob(job, () => "Making the final 1080p clip…", st);
+    await loadAccount();
+    return { file_id: res.file_id, view: "preview", msg: `Final clip ready — ${res.credits_charged} credits` };
+  } };
 const QUICK = [
   { title: "PDF tools", exts: EXT.pdf, uses: ["deck", "scan"], covers: ["pdf"], items: [
     { label: "Merge with…", doing: "Merging…", form: () => fileSlot("more", { exts: ["pdf"], multiple: true, label: "PDFs to add after this one, in order" }),
@@ -1356,9 +1407,9 @@ const QUICK = [
     { label: "Render MP4", doing: "Rendering the video — about a minute for a minute of video…", hint: "Full quality, with sound",
       run: id => videoRender(id, false) },
     { label: "Quick draft", doing: "Rendering a quick draft…", hint: "Half size — to check the timing fast", run: id => videoRender(id, true) },
-    AI_ENHANCE,
+    AI_CLIP, AI_ENHANCE,
   ] },
-  { title: "Video", exts: EXT.video, uses: [], covers: [], center: false, when: () => Promise.resolve(aiOn()), items: [AI_ENHANCE] },
+  { title: "Video", exts: EXT.video, uses: [], covers: [], center: false, when: () => Promise.resolve(aiOn()), items: [AI_FINAL, AI_CLIP, AI_ENHANCE] },
   // Pakli / Word: a képek cseréje a KÉPVÁLASZTÓVAL (a jobb oldali fiókban). A sáv csak akkor látszik, ha van kép a fájlban;
   // a „Kérj változtatást” után magától nyílik az új/kicserélt képre. center:false — ettől még nem a szerkesztő a nyitónézet.
   { title: "Pictures", exts: ["pptx", "docx"], uses: [], covers: [], center: false,

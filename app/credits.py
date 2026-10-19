@@ -125,7 +125,7 @@ async def balance(uid: str) -> Optional[int]:
 
 async def history(uid: str, limit: int = 50, before: Optional[int] = None) -> list[dict[str, Any]]:
     return await db._rows(
-        """SELECT id, created_at, kind, delta, balance_after, reason, ref, operation, provider, provider_task_id, meta
+        """SELECT id, created_at, kind, delta, balance_after, reason, ref, operation, provider, provider_task_id, provider_cost, meta
            FROM credit_ledger WHERE user_id = %s AND (%s::bigint IS NULL OR id < %s::bigint)
            ORDER BY id DESC LIMIT %s""", (uid, before, before, max(1, min(200, limit))))
 

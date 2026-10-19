@@ -111,36 +111,71 @@ async def get(op: str) -> dict[str, Any]:
 
 # ---------- indítás ----------
 
-async def submit(operation: str, model: str, inputs: list[dict[str, Any]], *, hold: int, meta: dict[str, Any],
-                 provider: str = "kie") -> str:
-    """Hold a becsült maximumra (fedezet nélkül InsufficientCredits — semmi nem indul), a sorok, majd a szolgáltatói
-    feladat(ok). Vissza: az op azonosítója."""
+async def reserve(operation: str, model: str, *, hold: int, meta: dict[str, Any], provider: str = "kie") -> str:
+    """1. lépés, a kérésen belül: hold a becsült maximumra (fedezet nélkül InsufficientCredits — semmi nem indul) és az op
+    sora („created”). Az előkészítés (feltöltés, darabolás) utána jön a jobban; ha az elakad, a hold visszajár."""
     uid = tenancy.current_user_id()
-    prov = _provider(provider)
+    _provider(provider)
     op = uuid.uuid4().hex[:20]
     held = (await credits.hold(uid, hold, op, operation=operation, provider=provider,
                                meta={"model": model, **{k: meta[k] for k in ("units", "tier") if k in meta}}))["held"]
     from psycopg.types.json import Jsonb
+    await db._rows("""INSERT INTO provider_tasks (id, user_id, provider, model, operation, hold, meta)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                   (op, uid, provider, model, operation, held, Jsonb({**meta, "op": op, "i": 0, "n": 1})))
+    _watching.add(op)
+    return op
+
+
+async def launch(op: str, inputs: list[dict[str, Any]]) -> None:
+    """2. lépés: a szolgáltatói feladat(ok) — egy op több része (hosszú videó darabjai) külön sor, közös hold."""
+    from psycopg.types.json import Jsonb
+    head = (await _rows_of(op))[0]
+    prov = _provider(head["provider"])
+    await _update(op, input=inputs[0], meta_merge={"n": len(inputs)})
     ids = [op] + [f"{op}-{i}" for i in range(1, len(inputs))]
-    for i, (rid, inp) in enumerate(zip(ids, inputs)):
+    for i, (rid, inp) in enumerate(zip(ids[1:], inputs[1:]), 1):
         await db._rows("""INSERT INTO provider_tasks (id, user_id, provider, model, operation, input, hold, meta)
-                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                       (rid, uid, provider, model, operation, Jsonb(inp), held if i == 0 else 0,
-                        Jsonb({**meta, "op": op, "i": i, "n": len(inputs)})))
+                          VALUES (%s, %s, %s, %s, %s, %s, 0, %s) RETURNING id""",
+                       (rid, head["user_id"], head["provider"], head["model"], head["operation"], Jsonb(inp),
+                        Jsonb({**head["meta"], "i": i, "n": len(inputs)})))
     cb = callback_url()
     for rid, inp in zip(ids, inputs):
         try:
-            tid = await prov.create(model, inp, callback_url=cb)
+            tid = await prov.create(head["model"], inp, callback_url=cb)
         except Exception as e:
-            log.warning("AI-feladat nem indult (%s %s): %s", operation, model, e)
+            log.warning("AI-feladat nem indult (%s %s): %s", head["operation"], head["model"], e)
             await _abort(op, _friendly(e))
             if isinstance(e, ProviderError) and e.code == 402:
-                await credits.notice(f"{provider}_out_of_credits", f"{provider} refused a job: no credits left on the "
-                                                                    "provider account. Top it up.")
+                await credits.notice(f"{head['provider']}_out_of_credits", f"{head['provider']} refused a job: no credits "
+                                                                            "left on the provider account. Top it up.")
             raise AIVideoError(_friendly(e)) from None
         await _update(rid, provider_task_id=tid, status="running")
-    log.info("AI-feladat indult: %s %s ×%d (hold %d)", operation, model, len(inputs), held)
+    log.info("AI-feladat indult: %s %s ×%d (hold %d)", head["operation"], head["model"], len(inputs), head["hold"])
+
+
+async def submit(operation: str, model: str, inputs: list[dict[str, Any]], *, hold: int, meta: dict[str, Any],
+                 provider: str = "kie") -> str:
+    """reserve + launch egyben (ha a bemenet már kész). Vissza: az op azonosítója."""
+    op = await reserve(operation, model, hold=hold, meta=meta, provider=provider)
+    try:
+        await launch(op, inputs)
+    finally:
+        _watching.discard(op)
     return op
+
+
+async def run_reserved(op: str, prepare: Callable[[], Awaitable[list[dict[str, Any]]]],
+                       progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """A jobban: előkészítés → launch → várakozás; ha az előkészítés elhasal, a hold visszajár."""
+    try:
+        inputs = await prepare()
+    except Exception as e:
+        await _abort(op, f"the input couldn't be prepared: {str(e)[:200]}")
+        _watching.discard(op)
+        raise
+    await launch(op, inputs)
+    return await wait(op, progress)
 
 
 def _friendly(e: Exception) -> str:
@@ -328,7 +363,7 @@ async def on_webhook(provider_task_id: str) -> str:
 
 async def resume_loop() -> None:
     """Újraindítás után (és ha senki nem vár rá): a nyitott feladatok lekérdezése; a „created” (feladat nélkül
-    maradt) sor 10 perc után visszaadja a holdot."""
+    maradt) sor 30 perc után visszaadja a holdot."""
     await asyncio.sleep(20)
     while True:
         try:
@@ -340,7 +375,7 @@ async def resume_loop() -> None:
                 if op in _watching:
                     continue
                 age = time.time() - _ts(rs[0]["created_at"])
-                if any(r["status"] == "created" for r in rs) and age > 600:
+                if any(r["status"] == "created" for r in rs) and age > 1800:
                     await _abort(op, "the job never reached the AI service")
                 elif age > TASK_TIMEOUT_S:
                     await _abort(op, "the AI service took too long")
@@ -428,7 +463,7 @@ async def estimate_clip(o: dict[str, Any]) -> dict[str, Any]:
     """Az AI-klip ára (Studio-kredit) a becsült maximumra — ezt foglaljuk le; a levonás a tényleges költség."""
     if o.get("finalize"):
         src = await _rows_of(str(o["finalize"]))
-        dur = int(((src[0]["input"] if src else {}) or {}).get("duration") or 5)
+        dur = int(((src[0]["input"] if src else {}) or {}).get("duration") or (src[0]["meta"].get("duration") if src else 0) or 5)
         est = await credits.estimate("ai_clip", FINAL_MODEL, "1080p", dur)
         return {**est, "what": f"final 1080p of the draft ({dur} s)"}
     c = clip_options(o)
@@ -460,20 +495,12 @@ def _factor(v: Any) -> int:
     return f
 
 
-# ---------- közös: előzetes fedezet-ellenőrzés, job ----------
+# ---------- közös: job ----------
 
-async def _precheck(est: dict[str, Any]) -> None:
-    """A becsült maximum fedezete a job ELŐTT (fedezet nélkül semmi nem indul, a feltöltés sem); a tényleges foglalás a
-    submit-ben (versenyhelyzetben is biztos)."""
-    bal = await credits.balance(tenancy.current_user_id())
-    if bal is not None and bal < est["credits"]:
-        raise credits.InsufficientCredits(needed=est["credits"], available=bal)
-
-
-def _start_job(kind: str, est: dict[str, Any], work: Callable[..., Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+def _start_job(kind: str, est: dict[str, Any], work: Callable[..., Awaitable[dict[str, Any]]], op: str) -> dict[str, Any]:
     from app import jobs
     j = jobs.start(kind, work)
-    return {**j, "job_id": j["id"], "estimate": {k: est[k] for k in ("credits", "what") if k in est},
+    return {**j, "job_id": j["id"], "task_id": op, "estimate": {k: est[k] for k in ("credits", "what") if k in est},
             "how": 'Call video(action="status", job_id=…) until status is "done" (result) or "failed"; the estimated '
                    "credits are reserved now and only what the AI service actually charged is taken."}
 
@@ -545,29 +572,27 @@ async def start_enhance(file_id: str, factor: Any) -> dict[str, Any]:
     f = _factor(factor)
     src = await _source_video(file_id)
     est = await estimate_enhance(src, f)
-    await _precheck(est)
+    op = await reserve("enhance", UPSCALE_MODEL, hold=est["credits"],
+                       meta={"units": est["units"], "tier": f"{f}x", "source": src, "factor": f})
 
-    async def work(progress):
+    async def prepare() -> list[dict[str, Any]]:
+        import shutil
         from app.storage import temp_path
         from app.tools import crafts
-        import shutil
-        progress(0, 1, "preparing the video")
         path = crafts.existing(src)
-        info = await _probe(path)
         tmp = temp_path(f"enh_{uuid.uuid4().hex[:10]}")
         tmp.mkdir(parents=True)
         try:
-            parts = await _topaz_inputs(path, info, tmp)
-            progress(0, len(parts), "uploading")
+            parts = await _topaz_inputs(path, await _probe(path), tmp)
             prov = _provider()
-            urls = [await prov.upload(p) for p in parts]
+            return [{"video": await prov.upload(p), "factor": f} for p in parts]
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-        op = await submit("enhance", UPSCALE_MODEL, [{"video": u, "factor": f} for u in urls], hold=est["credits"],
-                          meta={"units": est["units"], "tier": f"{f}x", "source": src, "factor": f})
-        res = await wait(op, progress)
-        return _job_result(res)
-    return _start_job("ai_video", est, work)
+
+    async def work(progress):
+        progress(0, 1, "preparing the video")
+        return _job_result(await run_reserved(op, prepare, progress))
+    return _start_job("ai_video", est, work, op)
 
 
 def _job_result(res: dict[str, Any]) -> dict[str, Any]:
@@ -691,3 +716,209 @@ def _clip_args(ai: dict[str, Any], text: Optional[str], duration: Any, draft: bo
     if draft and "draft" not in out:
         out["draft"] = True
     return out
+
+
+# ---------- AI-klip (Seedance 2.5, OMLETT 2.4) ----------
+
+IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff"}
+DRAFT_VALID_S = 7 * 86400                         # a kie a draft azonosítóját 7 napig fogadja el
+
+
+def _frame_ref(v: Any) -> Optional[dict[str, Any]]:
+    """{"frame": s} | {"at": s} | {"scene": "s3"} → a timeline egy kockája; különben None."""
+    if isinstance(v, dict) and any(k in v for k in ("frame", "at", "scene")) and not v.get("file_id"):
+        return v
+    return None
+
+
+async def _image_input(spec: Any, project: Optional[str], work) -> Any:
+    """Egy kép-bemenet (első/utolsó kocka, referenciakép) → helyi JPEG a kie követelményei szerint (300–6000 px, 0,4–2,5
+    arány), vagy egy nyilvános URL ahogy van. A timeline kockája: a projekt (vagy videó) legutóbbi renderjéből."""
+    from app.tools import crafts, video
+    fr = _frame_ref(spec)
+    dst = work / f"img_{uuid.uuid4().hex[:8]}.jpg"
+    if fr is not None:
+        if not project:
+            raise AIVideoError('A frame of the timeline needs file_id = the video or video project (ai={"image": {"frame": 3.5}}).')
+        try:
+            vid, t, _ = video.frame_time(project, fr.get("scene"), float(fr.get("frame", fr.get("at"))) if
+                                         fr.get("frame", fr.get("at")) is not None else None)
+        except ValueError as e:
+            raise AIVideoError(str(e)) from None
+        src, pre = crafts.existing(vid), ["-ss", f"{t:.3f}"]
+    elif isinstance(spec, str) and spec.startswith(("http://", "https://")):
+        return spec
+    else:
+        fid = str(spec.get("file_id") if isinstance(spec, dict) else spec)
+        ext = fid.rsplit(".", 1)[-1].lower() if "." in fid else ""
+        if ext not in IMAGE_EXTS:
+            raise AIVideoError(f"{fid} isn't a picture — give an image file_id, or {{\"frame\": seconds}} of the video.")
+        try:
+            src = crafts.existing(fid)
+        except FileNotFoundError:
+            raise AIVideoError(f"No such picture in this workspace: {fid}") from None
+        pre = []
+    # 300–6000 px, az arány 0,4–2,5 között (kívül: a középre vágva), JPEG
+    vf = ("scale='if(lt(min(iw,ih),300),iw*300/min(iw,ih),if(gt(max(iw,ih),4096),iw*4096/max(iw,ih),iw))':-2,"
+          "crop='min(iw,ih*2.5)':'min(ih,iw*2.5)'")
+    await _ffmpeg(*pre, "-i", str(src), "-frames:v", "1", "-vf", vf, "-q:v", "2", str(dst))
+    return dst
+
+
+async def _video_ref(fid: str, work) -> Any:
+    """Referencia-videó a kie követelményei szerint: 480p/720p (409 600–927 408 pixel), 24–60 fps, ≤ 200 MB."""
+    from app.tools import crafts
+    src = crafts.existing(fid)
+    fps = min(60.0, max(24.0, float((await _probe(src))["fps"] or 30)))
+    dst = work / f"ref_{uuid.uuid4().hex[:8]}.mp4"
+    await _ffmpeg("-i", str(src), "-t", "30", "-vf", "scale='trunc(sqrt(800000*iw/ih)/2)*2':-2", "-r", f"{fps:g}",
+                  "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", str(dst))
+    return dst
+
+
+async def _audio_ref(fid: str, work) -> Any:
+    from app.tools import crafts
+    dst = work / f"aud_{uuid.uuid4().hex[:8]}.mp3"
+    await _ffmpeg("-i", str(crafts.existing(fid)), "-t", "30", "-vn", "-c:a", "libmp3lame", "-b:a", "160k", str(dst))
+    return dst
+
+
+async def _inputs_for(c: dict[str, Any], project: Optional[str]) -> dict[str, Any]:
+    """A klip bemenete a kie-nek: a képek / referenciák feltöltve (a kie feltöltő hostja, 24 óráig él)."""
+    import shutil
+    from app.storage import temp_path
+    prov = _provider()
+    work = temp_path(f"clip_{uuid.uuid4().hex[:10]}")
+    work.mkdir(parents=True)
+
+    async def up(p: Any) -> str:
+        return p if isinstance(p, str) else await prov.upload(p)
+    try:
+        inp: dict[str, Any] = {"prompt": c["prompt"], "resolution": c["resolution"], "duration": c["duration"],
+                               "audio": c["audio"], "aspect": c["aspect"], "format": "mp4"}
+        if c["draft"]:
+            inp["draft"] = True
+        if c["first_frame"]:
+            inp["first_frame"] = await up(await _image_input(c["first_frame"], project, work))
+        if c["last_frame"]:
+            inp["last_frame"] = await up(await _image_input(c["last_frame"], project, work))
+        if c["reference_images"]:
+            inp["reference_images"] = [await up(await _image_input(x, project, work)) for x in c["reference_images"]]
+        if c["reference_videos"]:
+            inp["reference_videos"] = [await up(await _video_ref(x, work)) for x in c["reference_videos"]]
+        if c["reference_audios"]:
+            inp["reference_audios"] = [await up(await _audio_ref(x, work)) for x in c["reference_audios"]]
+        return inp
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+async def _draft_row(op: str) -> dict[str, Any]:
+    rows = await _rows_of(op)
+    if not rows or rows[0]["user_id"] != tenancy.current_user_id():
+        raise AIVideoError(f"No such AI clip: {op}")
+    r = rows[0]
+    if r["model"] != CLIP_MODEL or not (r["input"] or {}).get("draft"):
+        raise AIVideoError("Only a draft clip (draft=true) can be finalised.")
+    if not r["meta"].get("output"):
+        raise AIVideoError("That draft isn't finished (or failed) — make a new draft first.")
+    if time.time() - _ts(r["created_at"]) > DRAFT_VALID_S:
+        raise AIVideoError("That draft is older than 7 days — the AI service no longer keeps it; make a new draft.")
+    return r
+
+
+def timeline_changes(clip_fid: str, dur: float, *, at: Any = None, after_scene: Any = None, audio: bool = False) -> dict[str, Any]:
+    """Az elkészült klip helye a videóprojektben (a meglévő szerkesztő-úton, app/tools/video.py edit): at → teljes képes
+    bevágás (fullscreen réteg) azon az időponton; after_scene → egy saját jelenet a klippel (graphic + image elem)."""
+    if at is not None:
+        return {"add_layers": [{"type": "fullscreen", "at": at, "dur": round(float(dur), 2), "image": clip_fid,
+                                "sound": "mix" if audio else "off"}]}
+    return {"add": [{"after": after_scene, "headline": "", "caption": "", "duration": round(float(dur), 2),
+                     "chart": {"type": "graphic", "backdrop": 0, "elements": [
+                         {"shape": "image", "image": clip_fid, "x": 0.5, "y": 0.5, "w": 1, "h": 1, "fit": "cover"}]}}]}
+
+
+async def start_clip(opts: dict[str, Any], project: Optional[str] = None) -> dict[str, Any]:
+    """Seedance 2.5 klip → job. opts: prompt, resolution, duration, audio, aspect, draft, first_frame/image, last_frame,
+    reference_*; finalize = egy draft task_id-je (1080p). project + at / after_scene → a klip a timeline-ra kerül."""
+    require_enabled()
+    at, after = opts.get("at"), opts.get("after_scene", opts.get("scene"))
+    if (at is not None or after is not None) and not project:
+        raise AIVideoError("To put the clip on a timeline, give file_id = the video project (or its video).")
+    if project and (at is not None or after is not None):
+        from app.tools import video
+        try:
+            video.project_of(project)
+        except ValueError as e:
+            raise AIVideoError(str(e)) from None
+    fin = await _draft_row(str(opts["finalize"])) if opts.get("finalize") else None
+    c = None if fin else clip_options(opts)
+    est = await estimate_clip(opts)
+    if fin:
+        dur = int(fin["input"].get("duration") or 5)
+        op = await reserve("ai_clip", FINAL_MODEL, hold=est["credits"],
+                           meta={"units": dur, "tier": "1080p", "prompt": fin["meta"].get("prompt"), "duration": dur,
+                                 "audio": bool(fin["input"].get("audio")), "draft_of": fin["id"]})
+    else:
+        op = await reserve("ai_clip", CLIP_MODEL, hold=est["credits"],
+                           meta={"units": est["units"], "tier": est["tier"], "prompt": c["prompt"][:300],
+                                 "duration": c["duration"], "audio": c["audio"], "draft": c["draft"], "mode": c["mode"]})
+
+    async def prepare() -> list[dict[str, Any]]:
+        if fin:
+            return [{"draft_task_id": fin["provider_task_id"], "resolution": "1080p"}]
+        return [await _inputs_for(c, project)]
+
+    async def work(progress):
+        progress(0, 1, "preparing")
+        res = _job_result(await run_reserved(op, prepare, progress))
+        if c and c["draft"]:
+            res["draft"] = True
+            res["next"] = (f'A cheap 480p preview. Happy with it? video(action="ai_clip", ai={{"finalize": "{res["task_id"]}"}}) '
+                           "makes it final at 1080p (the same shot). Not happy? Change the prompt and make a new draft.")
+        if project and (at is not None or after is not None):
+            progress(1, 1, "putting it on the timeline")
+            from app.tools import video
+            try:
+                ed = await video.edit(project, timeline_changes(res["file_id"], res["duration"], at=at, after_scene=after,
+                                                                audio=bool(res.get("audio"))), progress=progress)
+                res["timeline"] = ed
+            except Exception as e:
+                log.warning("AI-klip a timeline-ra nem került (%s): %s", project, e)
+                res["timeline_error"] = (f"The clip is ready, but it couldn't be put on the timeline ({str(e)[:200]}). "
+                                         "Put it in yourself: video(action=\"edit\", file_id=…, changes="
+                                         + json.dumps(timeline_changes(res["file_id"], res["duration"], at=at,
+                                                                       after_scene=after)) + ")")
+        return res
+    return _start_job("ai_video", est, work, op)
+
+
+async def _post_clip(rows: list[dict[str, Any]], files: list[list[str]]) -> dict[str, Any]:
+    from app.storage import output_path, public_url, write_meta
+    head = rows[0]
+    fid = files[0][0]
+    info = await _probe(output_path(fid))
+    words = " ".join(str(head["meta"].get("prompt") or "AI clip").split()[:6])
+    final = head["model"] == FINAL_MODEL
+    label = f"AI clip — {words}{' (draft)' if head['meta'].get('draft') else ' (1080p)' if final else ''}.mp4"
+    src = None
+    if final:
+        prev = await _rows_of(head["meta"].get("draft_of") or "")
+        src = ((prev[0]["meta"].get("output") or {}) if prev else {}).get("file_id")
+    write_meta(fid, label=label, operation="ai_clip", source_file_id=src,
+               extra={"ai": {"provider": head["provider"], "model": head["model"], "prompt": head["meta"].get("prompt"),
+                             "mode": head["meta"].get("mode"), "draft": bool(head["meta"].get("draft"))}})
+    return {"file_id": fid, "url": public_url(fid), "label": label, "width": info["width"], "height": info["height"],
+            "duration": info["duration"], "audio": info["audio_stream"] is not None}
+
+
+POST["ai_clip"] = _post_clip
+
+
+async def task_of_file(file_id: str) -> dict[str, Any]:
+    """Melyik AI-feladat készítette ezt a fájlt (pl. a draft véglegesítéséhez a felületről)."""
+    rows = await db._rows("""SELECT id FROM provider_tasks WHERE user_id = %s AND meta->'output'->>'file_id' = %s
+                             ORDER BY created_at DESC LIMIT 1""", (tenancy.current_user_id(), file_id))
+    if not rows:
+        raise AIVideoError("This file wasn't made by an AI clip job.")
+    return await get(rows[0]["id"])
