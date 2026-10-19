@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
+import functools
 import json
 import logging
 import math
@@ -840,6 +841,45 @@ def _fit_size(st: str, size: float, box_w: float, box_h: float, name: str = "") 
     return out
 
 
+# a renderer betűje (Inter) méréshez: a rendszer fonts-inter csomagja — a motorba csomagolt Interrel mérve (10-19) a
+# sorszélesség ±2%-on belül egyezik, az ő/ű is (a 0,56 em-es becslés a nagybetűs címet ~15%-kal alábecsülte)
+_INTER = {"bold": "Inter-Bold", "semibold": "Inter-SemiBold", "regular": "Inter-Regular"}
+_FONT_DIRS = ("/usr/share/fonts/opentype/inter", "/usr/share/fonts/truetype/inter", "/usr/local/share/fonts")
+
+
+@functools.lru_cache(maxsize=64)
+def _inter_font(weight: str, size: int) -> Any:
+    from PIL import ImageFont
+    for d in _FONT_DIRS:
+        for ext in (".otf", ".ttf"):
+            p = Path(d) / (_INTER.get(weight, "Inter-SemiBold") + ext)
+            if p.exists():
+                return ImageFont.truetype(str(p), size)
+    return None
+
+
+def _text_px(st: str, size: float, weight: str = "semibold") -> float:
+    """A szöveg legszélesebb (\\n-nel tagolt) sora EGY sorban, px — a renderer betűjével; betű nélkül becslés."""
+    lines = str(st or "").split("\n")
+    f = _inter_font(weight if weight in _INTER else "semibold", max(1, int(round(size))))
+    if f is None:
+        return max(sum(0.68 if c.isupper() else 0.55 for c in x) * size for x in lines)
+    return max(f.getlength(x) for x in lines) * size / max(1, int(round(size)))
+
+
+def _auto_text_w(st: str, size: float, weight: str, x: float, align: str, W: float) -> float:
+    """A saját grafika szövegdoboza, ha nincs w: 0,6 W (mint eddig) — ha a szöveg egy sorban ennél szélesebb, annyi,
+    amennyi kell, legfeljebb a képkocka 0,92-e, és a képkockán belül (balra / jobbra igazítva a 0,6-os doboz széle a
+    horgony). Ami így sem fér el, az tördel — a check megmondja (10-19: a rejtett 0,6 két sorba törte a címet)."""
+    base = 0.6 * W
+    need = _text_px(st, size, weight) * 1.03 + 0.01 * W
+    if need <= base:
+        return base
+    lo, hi = 0.04 * W, 0.96 * W
+    room = {"left": hi - (x - 0.3 * W), "right": (x + 0.3 * W) - lo}.get(align, 2 * min(x - lo, hi - x))
+    return max(base, min(need, 0.92 * W, room))
+
+
 def _with_ids(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Stabil jelenetazonosítók (s1, s2…): beszúrás/törlés után is ugyanarra a jelenetre mutatnak."""
     used = {str(sc.get("id")) for sc in scenes if sc.get("id")}
@@ -1187,6 +1227,8 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
                 el["stroke"], el["stroke_w"] = _gfx_color(e["stroke"], acc), round(e.get("width", 4) * k, 1)
             if sh == "rect" and anim["anim"] == "grow":       # oszlop a talpáról felfelé, sáv balról — nem középről
                 el["grow"] = "up" if size[1] >= size[0] else "right"
+            if sh == "rect":
+                el["gfx"] = i                                 # a szövegek kilógását ehhez méri a check (_text_report)
             out.append(el)
             if sh == "pin" and e.get("text"):
                 ts = round(e.get("size", 34) * k)
@@ -1221,14 +1263,18 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
             out.append(el)
         elif sh == "text":
             ts = round(e.get("size", 44) * k)
-            bw = e.get("w", 0.6) * W
             st = e.get("text") or ""
+            font = {"bold": "bold", "regular": "regular"}.get(e.get("weight") or "", "semibold")
+            align = e.get("align") if e.get("align") in ("left", "center", "right") else "center"
+            x = e.get("x", 0.5) * W
+            auto = e.get("w") is None               # w nélkül: egy sor, amíg a képkocka 0,92-ébe elfér (_auto_text_w)
+            bw = _auto_text_w(st, ts, font, x, align, W) if auto else e["w"] * W
+            if auto and align != "center":          # balra / jobbra igazítva a régi 0,6-os doboz széle marad a helyén
+                x += (bw / 2 - 0.3 * W) * (1 if align == "left" else -1)
             fs = _fit_size(st, ts, bw, ts * 3.6, name)
             out.append({"k": "text", "name": name, "str": st, "size": fs, "box": [round(bw, 1), round(fs * 3.6, 1)],
-                        "pos": [round(e.get("x", 0.5) * W, 1), round(e.get("y", 0.5) * H + fs * 1.15, 1)],
-                        "align": e.get("align") if e.get("align") in ("left", "center", "right") else "center",
-                        "font": {"bold": "bold", "regular": "regular"}.get(e.get("weight") or "", "semibold"),
-                        "color": _gfx_color(e.get("color"), acc, "white"), **anim})
+                        "pos": [round(x, 1), round(e.get("y", 0.5) * H + fs * 1.15, 1)], "align": align, "font": font,
+                        "color": _gfx_color(e.get("color"), acc, "white"), "gfx": i, **({"auto_w": True} if auto else {}), **anim})
         elif sh == "map":                # valódi térkép: rétegcsoportok (utak, folyók, országok), a forrás feltüntetve
             if not e.get("_groups"):
                 continue
@@ -1725,6 +1771,8 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
                      "elements": chart_elements(chart, W, H, lang, _rgb(accent), dur=d),
                      **({"backdrop": chart["backdrop"]} if chart.get("backdrop") is not None else {}),
                      **({"code": chart["code"], "id": s.get("id") or f"s{i + 1}"} if chart["type"] == "script" else {})}
+            if s["chart"]["type"] == "graphic":      # a saját grafika szövegeit a renderer megméri (_text_report)
+                _probe_texts(chart["elements"], f"scene:{s.get('id') or f's{i + 1}'}")
         slot = _slots(images[i + 1] if i + 1 < len(images) else None)
         mv = MOTIONS.get(s.get("motion") or "auto") or motions[i]
         # képsor: a megadott mozgás mindegyikre; különben váltakozva (közelít, úszik, távolodik…), hogy legyen ritmusa
@@ -2414,6 +2462,8 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             item["split"] = b["split"]
         if (ly.get("chart") or {}).get("type") == "script":
             item["code"] = ly["chart"]["code"]
+        if (ly.get("chart") or {}).get("type") == "graphic":
+            _probe_texts(item["elements"], ly["id"])
         out.append(item)
         rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": ly["type"], "layer": True})
         placed.append((ly, at, at + dur, b))
@@ -2815,6 +2865,95 @@ def _script_report(out: str, source: str, layer_ids: Optional[set[str]] = None) 
     return found
 
 
+def _probe_texts(els: list[dict[str, Any]], holder: str) -> None:
+    """A saját grafika szövegei mérésre jelölve: a builder TEXT_BOX sort ír róluk (a kirajzolt tinta doboza)."""
+    for e in els:
+        if e.get("k") == "text" and e.get("gfx") is not None:
+            e["probe"] = f"{holder}#{e['gfx']}"
+
+
+def _text_report(out: str, D: dict[str, Any]) -> list[str]:
+    """A renderer MÉRT szövegdobozaiból (TEXT_BOX: a kirajzolt tinta a szövegréteg horgonyához képest) a saját grafikák
+    szöveghibái: két szöveg egymáson (egy rétegben, vagy két egyszerre látszó rétegben), kilóg a befoglaló téglalapjából
+    (rect) vagy a képkockából, w nélkül váratlanul több sorra tört. A finding megnevezi a réteget (jelenetet) és az elemet,
+    és javasol w / size (/ y) értéket. (10-19: a cím két sorba tört és az alcímre csúszott — a check mégis „ok” volt.)"""
+    boxes: dict[str, tuple[float, float, float, float]] = {}
+    for ln in out.splitlines():
+        if ln.startswith("TEXT_BOX "):
+            try:
+                key, l_, t_, w_, h_ = json.loads(ln[9:])
+                boxes[str(key)] = (float(l_), float(t_), float(w_), float(h_))
+            except (ValueError, TypeError):
+                continue
+    if not boxes:
+        return []
+    holders = [(f"Layer {ly['id']}", (ly["pos"][0] - ly["w"] / 2, ly["pos"][1] - ly["h"] / 2),
+                (float(ly["at"]), float(ly["at"]) + float(ly["dur"])), ly["w"], ly["h"], ly.get("elements") or [])
+               for ly in D.get("layers") or []]
+    holders += [("", (0.0, 0.0), (-9.0 - k, -9.0 - k), D["W"], D["H"], (sc.get("chart") or {}).get("elements") or [])
+                for k, sc in enumerate(D.get("scenes") or [])]           # jelenet: csak a saját szövegei egymással
+    texts, rects = [], {}
+    for hi, (name, (ox, oy), span, Wh, Hh, els) in enumerate(holders):
+        for e in els:
+            if e.get("k") == "rect" and e.get("gfx") is not None:
+                cx, cy, sw, sh = ox + e["pos"][0], oy + e["pos"][1], e["size"][0] / 2, e["size"][1] / 2
+                rects.setdefault(hi, []).append((e["gfx"] + 1, (cx - sw, cy - sh, cx + sw, cy + sh), e["size"][1] / Hh))
+            elif e.get("k") == "text" and e.get("probe") in boxes:
+                l_, t_, w_, h_ = boxes[e["probe"]]
+                x0, y0, fs = ox + e["pos"][0] + l_, oy + e["pos"][1] + t_, float(e["size"])
+                lead = float(e.get("leading") or fs * 1.2)
+                texts.append({"h": hi, "who": name or "Scene " + e["probe"].split(":", 1)[-1].rsplit("#", 1)[0], "n": e["gfx"] + 1,
+                              "e": e, "ink": (x0, y0, x0 + w_, y0 + h_), "fs": fs, "k": min(Wh, Hh) / 1080, "W": Wh, "H": Hh,
+                              "lines": 1 + max(0, round((h_ - 0.95 * fs) / lead)), "span": span, "o": (ox, oy)})
+    q = lambda s: "“" + re.sub(r"\s+", " ", s)[:40] + ("…" if len(s) > 40 else "") + "”"       # noqa: E731
+    over = lambda a, b: (min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1]))  # noqa: E731
+    found = []
+    for i, t in enumerate(texts):
+        e, fs, (x0, y0, x1, y1) = t["e"], t["fs"], t["ink"]
+        st = str(e.get("str") or "")
+        wrapped = t["lines"] > st.count("\n") + 1
+        tol = max(2.0, 0.06 * fs)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        box = min((r for r in rects.get(t["h"], []) if r[1][0] <= cx <= r[1][2] and r[1][1] <= cy <= r[1][3]),
+                  key=lambda r: (r[1][2] - r[1][0]) * (r[1][3] - r[1][1]), default=None)
+        issues, move = [], None
+        if box and (x0 < box[1][0] - tol or x1 > box[1][2] + tol or y0 < box[1][1] - tol or y1 > box[1][3] + tol):
+            issues.append(f"runs out of element {box[0]} (a rect {box[2]:.2g} of the frame high)")
+        elif not box and (x0 < -tol or y0 < -tol or x1 > D["W"] + tol or y1 > D["H"] + tol):
+            issues.append("runs off the frame")
+        for j, u in enumerate(texts):
+            if j == i or (u["h"] != t["h"] and min(t["span"][1], u["span"][1]) - max(t["span"][0], u["span"][0]) < 0.3):
+                continue
+            iw, ih = over(t["ink"], u["ink"])
+            u_wrapped = u["lines"] > str(u["e"].get("str") or "").count("\n") + 1
+            if iw > 2 and ih > max(2.0, 0.1 * min(fs, u["fs"])) and ((wrapped and not u_wrapped) or (wrapped == u_wrapped and i < j)):
+                where = "" if u["h"] == t["h"] else f" of {u['who']}"
+                issues.append(f"runs into element {u['n']}{where} (text {q(str(u['e'].get('str') or ''))})")
+                if not wrapped and u["ink"][1] >= y0 and u["h"] == t["h"]:          # két egysoros egymáson: az alsót lejjebb
+                    dy = y1 + 0.25 * u["fs"] - u["ink"][1]
+                    move = (u["n"], (u["e"]["pos"][1] - u["fs"] * 1.15 + dy) / u["H"])
+        if not issues and not (wrapped and e.get("auto_w")):
+            continue
+        # javaslat a réteg / jelenet saját egységeiben: w = a szélesség 0–1-e, size = px a rövidebb oldal 1080-ára vetítve
+        one = _text_px(st, fs, e.get("font") or "semibold") * 1.04
+        avail = (box[1][2] - box[1][0]) - 0.4 * fs if box else 0.92 * t["W"]
+        size_u = fs / t["k"]
+        if wrapped and one + 0.01 * t["W"] <= avail:
+            fix = f"give it \"w\": {math.ceil((one + 0.01 * t['W']) / t['W'] * 100) / 100:.2f} (one line) or a smaller \"size\": " \
+                  f"{max(8, math.floor(size_u * e['box'][0] / one))}"
+        elif wrapped or one > avail:
+            fix = f"give it a smaller \"size\": {max(8, math.floor(size_u * avail / one))} (one line)"
+        elif box and y1 - y0 > (box[1][3] - box[1][1]) * 0.9:
+            fix = f"give it a smaller \"size\": {max(8, math.floor(size_u * (box[1][3] - box[1][1]) * 0.8 / (y1 - y0)))} or a taller rect"
+        elif move:
+            fix = f"move element {move[0]} lower (\"y\": {math.ceil(move[1] * 1000) / 1000:.3f}) or give a smaller \"size\""
+        else:
+            fix = "move it (x, y) or give a smaller \"size\""
+        what = ([f"broke into {t['lines']} lines"] if wrapped else []) + issues
+        found.append(f"{t['who']}, element {t['n']} (text {q(st)}): {' and '.join(what)} — {fix}.")
+    return found
+
+
 def _without_runtime(story: dict[str, Any]) -> dict[str, Any]:
     """A forgatókönyv mentéshez: a futásidejű kulcsok (_groups, _skip, _credit…) nélkül."""
     def clean(x: Any) -> Any:
@@ -3158,6 +3297,14 @@ def _kept_layer_notes(spec: dict[str, Any], layers: list[dict[str, Any]]) -> lis
     return [n for n in spec.get("layer_notes") or [] if (m_ := re.match(r"Layer (\S+?):", n)) and m_.group(1) in same]
 
 
+def _unrendered_check(findings: list[str]) -> dict[str, Any]:
+    """render=false: a projekt elmentve, render nélkül — a szerkezeti / elrendezési check (szövegek mérete, ütközés,
+    kimaradt elem) így is jön; a kép maga nincs ellenőrizve."""
+    return {"status": "needs_check" if findings else "ok", "findings": list(dict.fromkeys(findings)),
+            "verified": ["Saved the project without rendering (render=false): the layout was checked (text boxes measured by "
+                         "the video engine, overlaps, left-out elements) — render it with video(action=\"render\", file_id=…)."]}
+
+
 def _split_notes(notes: list[str]) -> tuple[list[str], list[str]]:
     """⚠ = figyelmeztetés (findings), a többi az igazolt (verified)."""
     return [n for n in notes if not n.startswith("⚠ ")], [n[2:] for n in notes if n.startswith("⚠ ")]
@@ -3392,6 +3539,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             pre_findings += [n[2:] for n in three_notes if n.startswith("⚠ ")]
         step(3, 5, "building the timeline")
         out = await _build(D, work, lotties)
+        layer_problems = layer_problems + _text_report(out, D)   # a saját grafikák mért szövegei (jelenetek és rétegek)
         scripted = any(((x.get("chart") or {}).get("type") == "script") for x in (story.get("scenes") or []) + (story.get("layers") or []))
         script_findings = _script_report(out, source_text or "", {ly["id"] for ly in story.get("layers") or []}) if scripted else []
         log.info("videó felépítve: %s", out.strip().splitlines()[-2:] if out.strip() else "")
@@ -3485,6 +3633,9 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                         result["check"]["status"] = "needs_check"
         else:
             result["files"] = [result["project"]]
+            result["check"] = _unrendered_check(list(pre_findings or []) + script_findings + gfx_findings
+                                                + _split_notes(layer_notes or [])[1] + layer_problems
+                                                + [n[2:] for n in chart_notes if n.startswith("⚠ ")])
         step(5, 5, "done")
         return result
     finally:
@@ -3875,6 +4026,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             problems = problems + [n[2:] for n in three_notes if n.startswith("⚠ ")]
         step(2, 4, "building the timeline")
         out = await _build(D, work, lotties)
+        problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
         script_findings = _script_report(out, source or "", {ly["id"] for ly in layers}) if scripted else []
         log.info("overlay felépítve: %s", out.strip().splitlines()[-1:] if out.strip() else "")
@@ -3915,6 +4067,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             result["subtitles"] = {"count": len(subs), "srt": srt_entry}
         if not render:
             result["files"] = [result["project"]]
+            result["check"] = _unrendered_check(_split_notes(layer_notes)[1] + problems + gfx_findings + script_findings)
             return result
         step(3, 4, "rendering the video")
         vid = await _render_staged(pid, work / "project.ecproj", label_stem, group=group, want_s=total, mode="footage")

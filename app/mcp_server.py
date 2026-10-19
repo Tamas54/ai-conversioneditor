@@ -1935,7 +1935,9 @@ async def video(
       graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
       {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
       {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie | map, x, y (centre, 0–1 of
-      the frame), w, h (0–1), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
+      the frame), w, h (0–1; a text without w stays on ONE line up to 0.92 of the frame width, then wraps — the
+      check measures every text and names overlaps, a text running out of its rect, and unexpected line breaks with a
+      fitting w / size), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
       (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
       color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity (0–1),
       anim: appear | pop | grow (a rect grows from its base: upward when taller than wide — a bar —, else from the left)

@@ -346,6 +346,12 @@ function mediaLayer(comp, el) {   // kép vagy Lottie egy dobozba illesztve
   animate(L, el);
   return L;
 }
+function probeText(t, el) {     // a szöveg KIRAJZOLT doboza (tinta, a réteg horgonyához képest) a Pythonnak: ütközés,
+  try {                          // kilógás a dobozából, váratlan tördelés — a check ebből szól (_text_report)
+    var r = t.sourceRectAtTime(0, false), q = function (v) { return Math.round(v * 10) / 10; };
+    writeLn("TEXT_BOX " + JSON.stringify([el.probe, q(r.left), q(r.top), q(r.width), q(r.height)]));
+  } catch (e) {}
+}
 function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria: minden oszlop / pont / felirat külön réteg
   var F = { bold: D.font.bold, semibold: D.font.semibold, regular: D.font.regular };
   for (var k = 0; k < ch.elements.length; k++) {
@@ -363,6 +369,7 @@ function chartLayers(c, ch) {   // a Python (chart_elements) számolta geometria
     } else {
       var tl = textLayer(c, el.box, el.str, { size: el.size, align: el.align, pos: el.pos, name: el.name,
         font: F[el.font] || D.font.semibold, color: el.color, leading: el.leading, tracking: el.tracking, shadow: el.shadow });
+      if (el.probe) probeText(tl, el);
       if (el.keys) keyed(tl, el);
       else if (el.t1 !== undefined || el.cut) {   // felpörgő szám: rövid ideig látható, egymást váltó rétegek (áttűnés nélkül)
         tl.inPoint = el.t0 || 0;
