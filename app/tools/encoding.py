@@ -7,7 +7,7 @@ végső render nem hozza vissza. Most:
   közbenső (eszközök: resize, merge, trim, crop, rotate, vízjel…)  x264 CRF 17   (VIDEO_CRF_INTERMEDIATE)
   végső (a videó-renderelő MP4-e)                                  x264 CRF 19   (VIDEO_CRF_FINAL)
   preset                                                           medium        (VIDEO_X264_PRESET)
-  hang                                                             AAC 192k      (VIDEO_AUDIO_BITRATE)
+  hang                                                             AAC 256k      (VIDEO_AUDIO_BITRATE)
   MP4/MOV                                                          +faststart
 A végső kódolás: a renderelő (EffectCraft) közel veszteségmentes köztes fájlt ír (ProRes 422 LT, ~100 Mbps a
 munkamappában, a végén törölve), abból x264 CRF 19 — a renderelő saját H.264-kódolója csak rögzített bitrátát tud
@@ -43,8 +43,8 @@ def preset() -> str:
 
 
 def audio_bitrate() -> str:
-    b = os.getenv("VIDEO_AUDIO_BITRATE", "192k").strip()
-    return b if re.fullmatch(r"\d{2,3}k", b) else "192k"
+    b = os.getenv("VIDEO_AUDIO_BITRATE", "256k").strip()       # 256k: a saját zene se romoljon (a „minőség” elv, 10-19)
+    return b if re.fullmatch(r"\d{2,3}k", b) else "256k"
 
 
 def final_encoder() -> str:
