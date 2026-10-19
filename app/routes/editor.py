@@ -222,5 +222,10 @@ async def editor_save(
     label = f"{stem} (edited {stamp} UTC).{ext}"
     write_meta(fid, label=label, source_file_id=source, operation="manual edit", original_filename=fname)
     result = {"file_id": fid, "url": public_url(fid), "size_kb": len(data) // 1024, "label": label}
+    from app import share_versions, sharing
+    if source and sharing.enabled():     # megosztott projekt: közben más mentett újabbat → „<Név> változata” + választás
+        conflict = await share_versions.check_fork(fid)
+        if conflict:
+            result.update(conflict=conflict, label=conflict["fork"]["label"])
     events.emit("tool_done", tool="editor_save", params={"source": source, "name": fname}, result=result)
     return result

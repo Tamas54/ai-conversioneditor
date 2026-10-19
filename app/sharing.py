@@ -10,7 +10,7 @@ pont az auth-middleware (enter_request) — web, szerkesztő, render és MCP min
 idejére a munkaterület a tulajdonosé (tenancy.workspace_id, user_root), a művelet gazdája viszont a belépett
 felhasználó marad (tenancy.current_user_id): ő fizet (kredit, keret), az ő nevén fut a job, ő kerül a naplóba.
 
-Tárolás Postgresben (db.py: shares, share_links, share_audit). Feature flag: SHARING_ENABLED=1
+Tárolás Postgresben (db.py: shares, share_links, share_audit, edit_locks). Feature flag: SHARING_ENABLED=1
 (alapból ki — kikapcsolva minden úgy működik, mint eddig: a munkaterületek fizikailag elszigeteltek).
 E-mailt NEM küld (az appnak nincs levelező útja): a regisztrálatlan címre szóló meghívó függő marad, és a
 regisztrációkor / belépéskor oldódik fel (claim_invites).
@@ -689,7 +689,7 @@ async def shared_with_me(actor: str) -> list[dict[str, Any]]:
 # ---------- napló: új változat a megosztott családban ----------
 
 async def on_new_version(fid: str, owner: Optional[str], meta: dict[str, Any]) -> None:
-    """db.record_version hívja minden ÚJ fájlra: megosztott családban napló (ki, mit, mikor)."""
+    """db.record_version hívja minden ÚJ fájlra: megosztott családban napló (ki, mit, mikor) + ütközésvizsgálat."""
     if not enabled() or not owner:
         return
     try:
@@ -701,6 +701,8 @@ async def on_new_version(fid: str, owner: Optional[str], meta: dict[str, Any]) -
         sh = tenancy.shared()
         actor = sh.actor if sh is not None else tenancy.current_user_id()
         await audit(owner, actor, fid, "version", {k: meta.get(k) for k in ("operation", "source_file_id", "label")})
+        from app import share_versions
+        await share_versions.check_fork(fid, owner=owner, actor=actor)
     except Exception as e:                      # a napló soha ne állítsa meg a szerkesztést
         log.warning("megosztás-napló kimaradt (%s): %s", fid, e)
 
@@ -744,6 +746,9 @@ async def mcp_action(action: str, file_id: Optional[str], *, email: Optional[str
         raise ValueError(f"{action} needs file_id")
     if action == "share_link":
         return await create_link(actor, file_id, role or "viewer")
+    if action == "choose":
+        from app import share_versions
+        return await share_versions.choose(actor, file_id)
     if email:
         return await share(actor, file_id, email=email, role=role or "editor")
     return await people(actor, file_id)
@@ -756,4 +761,7 @@ SHARE_SCHEMA_REF = """Sharing (files tool; when the server has sharing on):
     email: who has access + recent activity (who changed what).
   files(action="share_link", file_id, role="viewer"|"editor") — a link that works only for signed-in people.
   files(action="list") — your files, plus shared_with_me [{file_id, name, shared_by, role}].
-  Editing a shared file works like your own: every edit is a new version in the owner's workspace, paid by you."""
+  Editing a shared file works like your own: every edit is a new version in the owner's workspace, paid by you.
+  Optimistic locking: pass if_version=<the version you started from> to any edit; if someone saved a newer version
+    meanwhile, yours is kept as "<Name>'s version" and the result carries conflict {fork, other} —
+    files(action="choose", file_id) makes the chosen one current (nothing is lost)."""

@@ -1,4 +1,4 @@
-"""Megosztás a webes felületnek (app/sharing.py): meghívás, szerepek, link, „megosztva velem”.
+"""Megosztás a webes felületnek (app/sharing.py): meghívás, szerepek, link, „megosztva velem”, ütközés-választás, zár.
 
     GET    /api/share?file_id=…          ki fér hozzá, linkek, napló (ki mit mikor)
     POST   /api/share                    {file_id, email | user_id, role, keep_location?} — meghívás / szerepváltás /
@@ -8,6 +8,9 @@
     DELETE /api/share/link/{link_id}
     GET    /share/{token}                a link: belépés után megosztás a belépett felhasználónak → a fájlhoz
     GET    /api/shared                   megosztva velem
+    GET    /api/share/conflict?file_id=  nyitott ütközés (a te változatod és a másiké)
+    POST   /api/share/choose             {file_id} — ez legyen az aktuális változat
+    POST   /api/share/lock               {file_id} — szerkesztés jelzése (szívverés); DELETE /api/share/lock?file_id=
 
 A fájl-azonosítós kéréseket az auth-middleware már a tulajdonos munkaterületén futtatja (jogellenőrzés ott).
 """
@@ -18,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
-from app import sharing, tenancy
+from app import share_versions, sharing, tenancy
 
 router = APIRouter()
 
@@ -96,3 +99,30 @@ async def share_join(token: str):
 async def shared_list() -> dict[str, Any]:
     _on()
     return {"shared": await sharing.shared_with_me(tenancy.current_user_id())}
+
+
+@router.get("/api/share/conflict")
+async def share_conflict(file_id: str = Query(...)) -> dict[str, Any]:
+    _on()
+    return {"conflict": await share_versions.conflict_for(tenancy.current_user_id(), _fid(file_id))}
+
+
+@router.post("/api/share/choose")
+async def share_choose(body: dict[str, Any]) -> dict[str, Any]:
+    _on()
+    try:
+        return await share_versions.choose(tenancy.current_user_id(), _fid(body.get("file_id")))
+    except FileNotFoundError:
+        raise HTTPException(404, "File not found.") from None
+
+
+@router.post("/api/share/lock")
+async def share_lock(body: dict[str, Any]) -> dict[str, Any]:
+    _on()
+    return await share_versions.lock(tenancy.current_user_id(), _fid(body.get("file_id")))
+
+
+@router.delete("/api/share/lock")
+async def share_unlock(file_id: str = Query(...)) -> dict[str, Any]:
+    _on()
+    return await share_versions.unlock(tenancy.current_user_id(), _fid(file_id))

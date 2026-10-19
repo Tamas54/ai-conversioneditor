@@ -258,6 +258,11 @@ async def _finalize(tool: str, args: dict, res):
         _sizes(res)
     except Exception as e:
         log.info("méret kimaradt (%s): %s", tool, e)
+    try:                                 # megosztott projekt: ütközés (más közben új változatot mentett) → conflict
+        from app import share_versions
+        await share_versions.annotate(res)
+    except Exception as e:
+        log.info("megosztás-jelzés kimaradt (%s): %s", tool, e)
     from app.tools import checks
     check, page = await checks.run(tool, args, res)
     pages = {}
@@ -483,7 +488,7 @@ async def files(
       changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
     action="share": file_id + email + role (viewer|editor|owner|none) — share a file or video project (none = remove);
       without email: who has access and who changed what. action="share_link" (role) — a link for signed-in people.
-      list also returns shared_with_me.
+      action="choose": after a version conflict, make file_id the current version. list also returns shared_with_me.
     """
     if action in ("list", "find", "search"):
         import datetime
@@ -518,7 +523,7 @@ async def files(
             "made_from": f.get("source_label"),
             **({"older_versions": f["older_versions"]} if f.get("older_versions") and not versions else {})} for f in page],
             **({"shared_with_me": mine} if mine else {})}
-    if action in ("share", "share_link", "shared"):
+    if action in ("share", "share_link", "choose", "shared"):
         from app import sharing
         return await sharing.mcp_action(action, file_id, email=email, role=role)
     if action == "preview":
@@ -532,7 +537,7 @@ async def files(
             raise ValueError("Give other_file_id — this file wasn't made from another one.")
         return await cmp.compare(other, file_id) if not other_file_id else await cmp.compare(file_id, other_file_id)
     if action != "new":
-        raise ValueError('action: "list", "new", "preview", "compare", "share" or "share_link"')
+        raise ValueError('action: "list", "new", "preview", "compare", "share", "share_link" or "choose"')
     k = (kind or "").lower()
     if k in ("document", "doc", "word"):
         from app.routes.make import make_document

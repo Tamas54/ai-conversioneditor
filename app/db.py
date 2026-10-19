@@ -271,6 +271,14 @@ CREATE TABLE IF NOT EXISTS share_audit (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS share_audit_owner_idx ON share_audit (owner_id, created_at DESC);
+-- szerkesztési zár (tanácsadó): a változatlánc gyökerén, szívveréssel; lejárt szívverés = szabad
+CREATE TABLE IF NOT EXISTS edit_locks (
+    owner_id        text NOT NULL,
+    file_id         text NOT NULL,
+    holder_id       text NOT NULL,
+    heartbeat_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (owner_id, file_id)
+);
 """
 
 _pool = None

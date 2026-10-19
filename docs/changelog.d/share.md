@@ -15,3 +15,9 @@
   `edited_by`; the audit log (`share_audit`) records who shared / changed what and when.
 - **Retention**: shared projects and their whole family (assets included) are exempt from the 30-day cleanup while
   the share (or a pending invite) is active.
+- **Versions with optimistic locking**: every edit stays a new version; if someone else saved a newer version of the
+  same base meanwhile (or of the `if_version` the client started from — any MCP tool and the editor save accept it),
+  the new one becomes a fork labelled "<Name>'s version", the result carries `conflict {fork, other, message}`, and
+  the user picks the current one (`POST /api/share/choose`, MCP `files(action="choose")`); nothing is lost. Same
+  person branching an older version is not a conflict. Advisory edit lock with a 30 s heartbeat (stale after 90 s,
+  `edit_locks` table) only tells who is editing; it never blocks.
