@@ -33,7 +33,7 @@ router = APIRouter()
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/apple-touch-icon", "/icon-192.png",
-                    "/icon-512.png", "/static/", "/api/stripe/webhook",
+                    "/icon-512.png", "/static/", "/api/stripe/webhook", "/webhooks/",
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
                     "/.well-known/", "/oauth/",
                     "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",

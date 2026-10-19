@@ -30,3 +30,23 @@
 - Code truth vs. the spec: MCP already charged credits for Studio AI steps over the monthly allowance and for paid
   work routed through the web handlers (digitize, restore, fact checks); what was missing was a per-call price hook,
   admin logging and the balance in the result.
+
+## 2.1 kie.ai adapter (swappable provider layer)
+- `app/providers/base.py` (interface: `create(model, input) → task`, `status(task)`, `fetch_result(task) → stored
+  file_ids`, `cancel(task)`, `balance()`, `upload(path)`), `app/providers/kie.py` (kie.ai), `app/providers/__init__.py`
+  (registry + flag). Provider data (task ids, result URLs, field names) stays in the provider layer and
+  `provider_tasks`; the video layer only sees files already in our own storage.
+- Per-model field-name mapping table (`MODELS`): unknown fields are refused instead of sent; Seedance first/last-frame
+  and reference modes can't be mixed; Topaz `upscale_factor` is a string.
+- 429 → exponential backoff 1-2-4-8-16 s plus a client-side bucket (18 new tasks / 10 s, under kie's 20/10 s).
+  kie returns errors as HTTP 200 with `code` in the body — always checked.
+- Results are downloaded immediately (kie keeps generated files 14 days; uploads 24 h) through the shared SSRF-safe
+  `net.download`.
+- `POST /webhooks/kie?token=KIE_WEBHOOK_SECRET` (+ optional kie HMAC `KIE_WEBHOOK_HMAC_KEY`): the callback is only a
+  signal — the result is re-read from `recordInfo` and matched to our `provider_tasks` row; idempotent (row lock +
+  `settled` + ledger keys). No secret → no callback URL is sent, polling only (backoff 3 s → 30 s), and a resume loop
+  finishes open tasks after a restart (a task stuck without a provider id for 10 min, or running > 6 h, is released).
+- Feature flag: nothing runs without `KIE_API_KEY` AND `AI_VIDEO` = `admin` (admin only) | `1` (everyone).
+- Live (2026-10-19): a request kie rejects at create time costs nothing; an accepted task that fails reports
+  `creditsConsumed: 0` and the balance didn't move (4 failed Topaz tasks, 0 credits) → failed tasks are not billed.
+  kie has no cancel endpoint: cancel is local (hold released; a late provider charge shows up in reconciliation).

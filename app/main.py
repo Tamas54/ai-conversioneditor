@@ -134,6 +134,8 @@ app.include_router(jobs.router)
 app.include_router(billing.router)
 from app.routes import credits as credits_routes  # noqa: E402  (kreditkönyv, árazás, admin-egyeztetés)
 app.include_router(credits_routes.router)
+from app.routes import ai_video as ai_video_routes  # noqa: E402  (kie.ai: webhook, AI-klip, minőségjavítás)
+app.include_router(ai_video_routes.router)
 app.include_router(product.router)
 from app import seo  # noqa: E402
 app.include_router(seo.router)
