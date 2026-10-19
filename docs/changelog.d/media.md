@@ -71,3 +71,12 @@
 - Reference text for the video tool's `action="schema"`: `app.tools.video_fx.REFERENCE`.
 - Measured on synthetic clips: shaky testsrc2 (±22 px jitter) frame-to-frame difference 43.5 → 14.9 with vidstab;
   a dim, flat clip gets levels 0.07–0.82 → 0–1 and gamma 1.2 from Auto.
+
+## Phase 5 (media items)
+- `video info` on a raw video (not a project): duration, display width/height (after rotation), rotation, fps,
+  video/audio codec, audio, HDR (hlg | pq), bit depth, bitrate, and the stored size when it is rotated. Info results
+  (raw video and project) are read-only, so the automatic check no longer adds "It opens: 3 pages" — that line came
+  from the generic check counting a video's 3 preview frames as pages; a video/audio result now says
+  "It plays: 12.3 s, 1080×1920 at 30 fps, with sound." instead.
+- `read-metadata` takes up to 100 files in one call: one JSON with `{count, items: [{file_id, label, …}]}`; one file
+  answers as before. Media files also get a `video` summary (display size, rotation, HDR…) from mediaprobe.

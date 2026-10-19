@@ -438,3 +438,39 @@ async def test_video_edit_changes_adjust_corrects_the_footage(tmp_path, put_file
     spec = read_meta(ed["project"]["file_id"])["spec"]
     assert spec["base"]["adjust"] == {"lut": "black_white"} and [ly["id"] for ly in spec["story"]["layers"]] == ["L1"]
     assert any("Your footage" in v for v in ed["check"]["verified"])
+
+
+# ---------------------------------------------------------------- 5: video info nyers videón, read-metadata több fájllal
+
+@pytest.mark.asyncio
+async def test_video_info_on_raw_footage_and_no_pages_for_video(tmp_path, put_file):
+    from app.tools import checks, video
+    fid = put_file(_clip(tmp_path / "allo.mp4", 320, 180, seconds=2, rotate=90))
+    i = video.info(fid)
+    # (az ffmpeg 4.4 átcsomagoláskor a rotate=90 kérést 270-ként írja — álló mindkettő)
+    assert (i["width"], i["height"]) == (180, 320) and i["rotation"] in (90, 270) and 1.8 <= i["duration"] <= 2.3
+    assert i["fps"] == 10 and i["video_codec"] == "h264" and i["audio_codec"] == "aac" and i["audio"] is True
+    assert i["hdr"] is None and "320×180" in i["stored_as"] and i["read_only"] is True
+    chk, _ = await checks.run("video", {"action": "info", "file_id": fid}, i)
+    assert chk is None                                                   # olvasás: nincs „It opens: 3 pages”
+    if _zscale():
+        _, hlg = _hlg_clip(tmp_path / "hdr.mp4")
+        assert video.info(put_file(hlg))["hdr"] == "hlg"
+    from app.tools import crafts
+    g = await checks.generic(crafts.existing(fid))
+    text = " ".join(g["verified"] + g["findings"])
+    assert "page" not in text and "It plays: 2.0 s, 180×320 at 10 fps, with sound." in text
+
+
+@pytest.mark.asyncio
+async def test_read_metadata_takes_several_files(tmp_path, put_file, samples):
+    one = put_file(_clip(tmp_path / "a.mp4", 320, 180, rotate=90))
+    two = put_file(samples.png(size=(200, 100)))
+    r = await _run("read-metadata", [one])
+    assert "items" not in r["data"] and r["data"]["video"]["display_width"] == 180      # egy fájl: mint eddig (+ video)
+    r = await _run("read-metadata", [one, two])
+    d = r["data"]
+    assert d["count"] == 2 and [x["file_id"] for x in d["items"]] == [one, two]
+    assert d["items"][0]["video"]["rotation"] in (90, 270) and d["items"][1]["file"]["format"] == "png"
+    assert len(r["files"]) == 1 and r["file_id"].endswith(".json")
+    assert json.loads(_out(r["file_id"]).read_text("utf-8"))["count"] == 2

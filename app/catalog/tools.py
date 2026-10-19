@@ -125,7 +125,7 @@ TOOLS_LIST: list[Tool] = [
     _t("create-archive", "files", "*", f"{_H}.files:create_archive", ("archive_format", "password", "level"), max_files=500, output="zip", engines=("python",), related=("extract-archive", "merge-files")),
     _t("extract-archive", "files", "@archive", f"{_H}.files:extract_archive", ("password",), output="zip", engines=("python",), related=("create-archive",)),
     # ---------- metaadat ----------
-    _t("read-metadata", "metadata", "*", f"{_H}.metadata:read", (), output="json", engines=("exiftool",), related=("edit-metadata", "remove-metadata")),
+    _t("read-metadata", "metadata", "*", f"{_H}.metadata:read", (), max_files=100, output="json", engines=("exiftool",), related=("edit-metadata", "remove-metadata")),
     _t("edit-metadata", "metadata", "@image @video @audio pdf docx xlsx pptx", f"{_H}.metadata:edit", ("fields",), engines=("exiftool",), tier=2, related=("read-metadata", "remove-metadata")),
     _t("remove-metadata", "metadata", "@image @video @audio pdf docx xlsx pptx", f"{_H}.metadata:remove", (), max_files=100, engines=("exiftool",), related=("read-metadata", "redact-pdf")),
     # ---------- haladó ----------

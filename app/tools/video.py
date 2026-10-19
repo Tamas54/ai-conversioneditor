@@ -4124,7 +4124,22 @@ def info(file_id: str) -> dict[str, Any]:
     if ext != "ecproj":
         src = meta.get("source_file_id")
         out = {"file_id": file_id, "kind": "movie" if ext in MOVIE_EXTS else ext, "size_kb": p.stat().st_size // 1024,
-               "made_from": src}
+               "made_from": src, "read_only": True}
+        if ext in MOVIE_EXTS or ext in AUDIO_EXTS:           # nyers felvétel: hossz, megjelenítési méret, elforgatás, kodekek, HDR
+            from app.tools import mediaprobe
+            try:
+                m = mediaprobe.info_sync(p)
+            except Exception as e:
+                log.info("video info: ffprobe %s: %s", file_id, e)
+                m = None
+            if m:
+                out.update({"duration": m["duration"], "width": m["display_width"] or None,
+                            "height": m["display_height"] or None, "rotation": m["rotation"], "fps": m["fps"],
+                            "video_codec": m["vcodec"], "audio_codec": m["acodec"], "audio": m["has_audio"],
+                            "hdr": m["hdr"], "bit_depth": m["bit_depth"],
+                            "bitrate_kbps": round(m["bitrate"] / 1000) if m["bitrate"] else None})
+                if m["rotation"]:
+                    out["stored_as"] = f"{m['width']}×{m['height']}, turned {m['rotation']}° when played"
         if src and str(src).lower().endswith(".ecproj"):
             out["project"] = src
             out["note"] = ("To change this video, use video(action=\"edit\") with this file or its project; info on the project "
@@ -4152,7 +4167,7 @@ def info(file_id: str) -> dict[str, Any]:
     layers = [{**x, **({"on_timeline": f"{_tc(rows[x['id']]['start'])}–{_tc(rows[x['id']]['end'])}"} if x["id"] in rows
                        else {"on_timeline": "left out (it starts after the video ends)"})}
               for x in layer_listing((spec.get("story") or {}).get("layers") or [])]
-    return {"file_id": file_id, "comps": _comps(data), "footage": footage, "missing": [f for f in footage if f not in assets],
+    return {"file_id": file_id, "read_only": True, "comps": _comps(data), "footage": footage, "missing": [f for f in footage if f not in assets],
             "video": meta.get("video"), "last_render": _file_entry(rid) if rid and output_path(rid).exists() else None,
             "credits": meta.get("credit"), "editable_by_description": bool(spec),
             **({"title": spec["story"].get("title"), "scenes": scenes, "layers": layers, "options": spec.get("opts")} if spec else {}),

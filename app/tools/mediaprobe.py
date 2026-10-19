@@ -110,6 +110,14 @@ async def info(path: Path) -> dict[str, Any]:
     return summarize(await probe(path))
 
 
+def info_sync(path: Path) -> dict[str, Any]:
+    """Ugyanaz szinkron hívóknak (pl. video info) — az ffprobe gyors, a fejlécet olvassa."""
+    import subprocess
+    out = subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+                         capture_output=True, timeout=60).stdout
+    return summarize(json.loads((out or b"{}").decode("utf-8", "replace") or "{}"))
+
+
 def public(m: dict[str, Any]) -> dict[str, Any]:
     """A felhasználónak (video info, read-metadata): a lényeg, belső mezők nélkül."""
     keep = ("duration", "display_width", "display_height", "width", "height", "rotation", "orientation", "fps", "vcodec",
