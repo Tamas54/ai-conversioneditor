@@ -521,11 +521,14 @@ async def ocr_cache_get(sha256: str, prompt_ver: str, model: str) -> Optional[st
     return rows[0]["text"] if rows else None
 
 
-async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str) -> None:
+async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str, replace: bool = False) -> None:
+    """replace: a meglévő bejegyzés felülírása (pl. az átirat force-szal újrahallgatva)."""
     if not enabled():
         return
     await _rows("INSERT INTO ocr_cache (sha256, prompt_ver, model, text) VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (sha256, prompt_ver, model) DO NOTHING", (sha256, prompt_ver, model, text))
+                "ON CONFLICT (sha256, prompt_ver, model) DO "
+                + ("UPDATE SET text = EXCLUDED.text, created_at = now()" if replace else "NOTHING"),
+                (sha256, prompt_ver, model, text))
 
 
 # ---------- tartalmi ellenőrzés (gyorsítótár) és élő adatok ----------

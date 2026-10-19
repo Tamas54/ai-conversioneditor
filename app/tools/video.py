@@ -4167,9 +4167,11 @@ async def thumb(src: Path, raw: Path) -> None:
 
 # ---------- utólagos szerkesztés (az ügynök és az „Ask for a change”) ----------
 
-async def transcribe_file(file_id: str, language: Optional[str] = None, step: Callable[..., None] = lambda *a, **k: None) -> dict[str, Any]:
+async def transcribe_file(file_id: str, language: Optional[str] = None, step: Callable[..., None] = lambda *a, **k: None,
+                          **opts: Any) -> dict[str, Any]:
     """Egy felvétel (videó vagy hang; overlay-projektnél az alapsáv) időbélyeges átirata + SRT-feliratfájl. Ebből köthető
-    réteg egy mondathoz (at: {"say": …}), és ebből javasolhat az ügynök grafikát (melyik mondatnál mi segítene)."""
+    réteg egy mondathoz (at: {"say": …}), és ebből javasolhat az ügynök grafikát (melyik mondatnál mi segítene).
+    opts: prompt, vocabulary, model, force, correct (app/tools/transcript.py: transcribe)."""
     from app.storage.naming import result_stem
     from app.tools import transcript
     p = crafts.existing(file_id)
@@ -4184,7 +4186,7 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
     elif ext not in MOVIE_EXTS | AUDIO_EXTS:
         raise ValueError(f"A transcript needs a video or a sound file, not .{ext}.")
     step(0, 2, "listening (transcript)")
-    tr = await transcript.transcribe(p, transcript_lang(language))
+    tr = await transcript.transcribe(p, transcript_lang(language), **opts)
     step(1, 2, "writing the subtitles")
     subs = transcript.cues(tr)               # feliratméretű sorok a szóidőkből (a mondat a rétegkötéshez marad)
     sid = new_file_id("srt")
@@ -4195,7 +4197,17 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
     check = ({"status": "ok", "findings": [], "verified": [f"{n} sentence(s) heard ({tr['language']}), {len(tr['words'])} words with "
                                                            f"their times, from {_tc(tr['duration'])} of sound (model {tr['model']})."]}
              if n else {"status": "needs_check", "findings": ["No speech was heard in this file."], "verified": []})
-    return {"file_id": sid, "name": label, "url": public_url(sid), "language": tr["language"], "duration": tr["duration"],
+    fixes = tr.get("corrections")
+    if fixes:
+        by = {k: sum(c["by"] == k for c in fixes) for k in ("vocabulary", "ai")}
+        check["verified"].append(f"{len(fixes)} misheard word(s) corrected — {by['vocabulary']} from your vocabulary, "
+                                 f"{by['ai']} by the Studio AI; each is in corrections (heard → fixed, at).")
+    for note in tr.get("correction_notes") or []:
+        check["findings"].append(note)
+        check["status"] = "needs_check"
+    extra = {k: tr[k] for k in ("corrections", "studio_ai") if k in tr}
+    return {**extra, "file_id": sid, "name": label, "url": public_url(sid), "language": tr["language"], "duration": tr["duration"],
+            "model": tr.get("model"),
             "sentences": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}
                           for x in tr["sentences"]],
             "subtitles": [{"at": _tc(x["start"]), "until": _tc(x["end"]), "start": x["start"], "end": x["end"], "text": x["text"]}

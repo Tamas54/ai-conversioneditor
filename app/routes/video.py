@@ -159,7 +159,8 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/api/video/transcript")
 async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
-    """{file_id: <videó | hang | overlay-projekt>, language?} → job (időbélyeges mondatok + .srt)."""
+    """{file_id: <videó | hang | overlay-projekt>, language?, prompt?, vocabulary?, model?, force?, correct?} → job
+    (időbélyeges mondatok + .srt + a javítások) — a paraméterek: app/tools/transcript.py."""
     from app import jobs
     from app.tools import transcript, video
     if tenancy.is_guest():
@@ -172,10 +173,17 @@ async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
         crafts.existing(fid)
     except (FileNotFoundError, ValueError):
         raise HTTPException(400, "That file isn't in the workspace — upload it first (upload_file), then pass its file_id.")
+    try:
+        flag = lambda v: None if v is None or v == "" else str(v).strip().lower() not in ("0", "false", "no", "off")  # noqa: E731
+        opts = {"prompt": body.get("prompt"), "vocabulary": transcript.vocab_list(body.get("vocabulary")),
+                "model": transcript.model_name(body.get("model")), "force": bool(flag(body.get("force"))),
+                "correct": flag(body.get("correct"))}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     async def work(progress):
         try:
-            return await video.transcribe_file(fid, body.get("language"), progress)
+            return await video.transcribe_file(fid, body.get("language"), progress, **opts)
         except Exception as e:
             raise _fail(e)
     return jobs.start("video", work)
