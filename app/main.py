@@ -46,6 +46,8 @@ async def lifespan(app: FastAPI):
     log_auth_state()
     from app import db
     await db.start()
+    from app import credits
+    await credits.start()                 # induló árak, napi egyeztetés (kie ↔ könyv), félbemaradt AI-feladatok
     pool = WorkerPool(
         libreoffice_warm=settings.LO_WARM,
         chromium_warm=settings.CHROMIUM_WARM,
@@ -72,6 +74,7 @@ async def lifespan(app: FastAPI):
             log.info("Shutting down…")
             cleanup_task.cancel()
             warmup_task.cancel()
+            await credits.stop()
             await pool.stop()
             await db.stop()
 
@@ -139,6 +142,10 @@ app.include_router(video_routes.router)
 app.include_router(checks_routes.router)
 app.include_router(jobs.router)
 app.include_router(billing.router)
+from app.routes import credits as credits_routes  # noqa: E402  (kreditkönyv, árazás, admin-egyeztetés)
+app.include_router(credits_routes.router)
+from app.routes import ai_video as ai_video_routes  # noqa: E402  (kie.ai: webhook, AI-klip, minőségjavítás)
+app.include_router(ai_video_routes.router)
 app.include_router(product.router)
 from app import seo  # noqa: E402
 app.include_router(seo.router)

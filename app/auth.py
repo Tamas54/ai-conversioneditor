@@ -33,7 +33,7 @@ router = APIRouter()
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/apple-touch-icon", "/icon-192.png",
-                    "/icon-512.png", "/static/", "/api/stripe/webhook",
+                    "/icon-512.png", "/static/", "/api/stripe/webhook", "/webhooks/",
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
                     "/.well-known/", "/oauth/",
                     "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
@@ -346,8 +346,6 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     except ValueError as e:
         return _signup_form(nxt, str(e), name, email, 400)
     _signups[ip].append(time.time())
-    if settings.SIGNUP_CREDITS:
-        await db.credits_add(user["id"], 0, "signup")  # napló-sor a kezdő egyenlegről
     await _adopt_guest(request, user["id"])
     await _claim_invites(user["id"], user.get("email"))
     resp = RedirectResponse(nxt, status_code=303)
@@ -421,6 +419,7 @@ async def api_account(request: Request) -> dict:
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
+        "ai_video": _ai_video_on(uid),
         "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
         "keys": await db.api_key_list(uid) if db.enabled() and not guest else [],
         "sharing": _sharing_on() and not guest,
@@ -431,6 +430,12 @@ async def api_account(request: Request) -> dict:
 def _sharing_on() -> bool:
     from app import sharing
     return sharing.enabled()
+
+
+def _ai_video_on(uid: str) -> bool:
+    """kie.ai AI-videó (klip, minőségjavítás): KIE_API_KEY + AI_VIDEO kapcsoló (app/providers)."""
+    from app import providers
+    return not tenancy.is_guest(uid) and providers.enabled_for(uid)
 
 
 @router.post("/api/account/keys")
@@ -463,5 +468,8 @@ async def api_admin_credits(body: dict) -> dict:
     rows = await db._rows("SELECT id FROM users WHERE email = lower(%s) OR id = %s", (body.get("email") or "", body.get("user_id") or ""))
     if not rows:
         raise HTTPException(404, "no such user")
-    bal = await db.credits_add(rows[0]["id"], int(body.get("delta", 0)), body.get("reason") or "admin grant")
+    try:
+        bal = await db.credits_add(rows[0]["id"], int(body.get("delta", 0)), body.get("reason") or "admin grant", kind="adjust")
+    except db.InsufficientCredits as e:
+        raise HTTPException(400, f"The balance is only {e.available} credits.")
     return {"user_id": rows[0]["id"], "credits": bal}

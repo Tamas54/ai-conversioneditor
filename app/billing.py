@@ -329,7 +329,8 @@ async def _apply(event: dict[str, Any]) -> str:
             return "no uid"
         await db.user_set_billing(uid, customer=obj.get("customer"))
         if item in PACKS and obj.get("payment_status") == "paid":
-            await db.credits_add(uid, PACKS[item]["credits"], f"bought {item}", ref=obj.get("id"))
+            await db.credits_add(uid, PACKS[item]["credits"], f"bought {item}", ref=obj.get("id"), kind="purchase",
+                                 idempotency_key=f"stripe:{obj.get('id')}")
             return f"pack {item}"
         if item in ("plus", "pro"):
             await db.user_set_billing(uid, plan=item, subscription=obj.get("subscription"))
@@ -343,7 +344,8 @@ async def _apply(event: dict[str, Any]) -> str:
         plan = u.get("plan") if u.get("plan") in ("plus", "pro") else \
             ((obj.get("subscription_details") or {}).get("metadata") or {}).get("item") or "plus"
         await db.user_set_billing(u["id"], plan=plan, subscription=sub)
-        await db.credits_add(u["id"], PLANS[plan]["monthly_credits"], f"{plan} monthly credits", ref=obj.get("id"))
+        await db.credits_add(u["id"], PLANS[plan]["monthly_credits"], f"{plan} monthly credits", ref=obj.get("id"), kind="grant",
+                             idempotency_key=f"stripe:{obj.get('id')}")
         return f"credits {plan}"
     if kind in ("customer.subscription.deleted",) or (kind == "customer.subscription.updated" and obj.get("status") in ("canceled", "unpaid")):
         u = await db.user_by_subscription(obj.get("id"), obj.get("customer"))

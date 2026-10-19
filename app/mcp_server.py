@@ -102,7 +102,8 @@ mcp = FastMCP(
         "but a step where this server runs its OWN AI model (choosing stock photos with a vision model, finding image search "
         "words, writing a video script from an article, describe_image / ocr_image / extract_table_from_image, "
         "edit_with_instruction, facts checks) is a Studio AI step: a monthly allowance, then credits (result field "
-        "`studio_ai`). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
+        "`studio_ai`: steps, credits_used, balance; without enough credits a paid call fails with insufficient_credits "
+        "before anything starts). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
         "finished scenes=[…] plan, look at pictures with files(action=\"preview\"), and use the editing commands directly."
     ),
     streamable_http_path="/",
@@ -167,25 +168,39 @@ def linked(fn):
     async def w(*a, **k):
         import time
         from app import tenancy
-        from app import billing
+        from app import billing, credits
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
         t0 = time.monotonic()
         try:
-            with billing.count_steps() as used:        # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
-                res = await _finalize(fn.__name__, k, await fn(*a, **k))
-            if used[0] and isinstance(res, dict):
-                res["studio_ai"] = {"steps": used[0], "credits": used[1],
-                                    "note": "Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
-                                            f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions."}
+            # a kreditút (OMLETT 1.5): a token felhasználója fizet, mint a webes felületen; fedezet nélkül el sem indul
+            async with credits.mcp_call(fn.__name__, k) as acct:
+                with billing.count_steps() as used:    # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
+                    res = await _finalize(fn.__name__, k, await fn(*a, **k))
+                acct["steps"] = used[0]
+            if isinstance(res, dict) and (used[0] or acct["used"] or acct["held"] or acct["would"]):
+                res["studio_ai"] = {"steps": used[0], "credits": used[1], **_credit_report(acct)}
+                if used[0]:
+                    res["studio_ai"]["note"] = ("Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
+                                                f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions.")
             st = (res.get("check") or {}).get("status") if isinstance(res, dict) else None
             log.info("mcp %s(%s) ok %.1fs%s", fn.__name__, _arg_brief(k), time.monotonic() - t0, f" check={st}" if st else "")
             return res
         except Exception as e:
             log.warning("mcp %s(%s) FAILED %.1fs: %s", fn.__name__, _arg_brief(k), time.monotonic() - t0, str(e)[:300])
+            if isinstance(e, credits.InsufficientCredits):
+                raise ValueError(credits.insufficient_message(e)) from None
             raise
         finally:
             tenancy.client_makes_images.reset(tok)
     return w
+
+
+def _credit_report(acct: dict) -> dict:
+    """studio_ai bővítése: a hívásban felhasznált (és lefoglalt) kredit, az egyenleg utána; admin: nem fizet."""
+    from app import tenancy
+    if acct.get("uid") == tenancy.ADMIN_ID:
+        return {"credits_used": 0, "balance": None, "admin": True, **({"would_charge": acct["would"]} if acct["would"] else {})}
+    return {"credits_used": acct["used"], **({"credits_held": acct["held"]} if acct["held"] else {}), "balance": acct["balance"]}
 
 
 # a közvetlen szerkesztők (edits.py) eredménye eddig címke nélkül maradt („3fa8c1e2.docx") — itt kap nevet
@@ -1888,24 +1903,26 @@ async def video(
     wait: Optional[float] = None,
     prompt: Optional[str] = None, vocabulary: Union[list[str], str, None] = None, model: Optional[str] = None,
     force: bool = False, correct: Optional[bool] = None,
+    factor: Optional[float] = None,
+    ai: Optional[dict] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (edit_url opens an After Effects-like editor): made from a text, or
     graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
     FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit |
-    transcript | adjust.
-    Read topic "layers" before your first overlay and "graphic" before drawing your own.
+    transcript | adjust | ai_clip | enhance. Read "layers" before your first overlay, "graphic" before your own.
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
       scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
       MP4. format vertical|landscape|square; duration (s) + duration_mode fixed|narration.
       AI NARRATION IS ON BY DEFAULT (narration="none" turns it off); music = a mood.
     action="overlay": file_id = their mp4|mov|webm|m4v (kept as is) + layers=[{"at", "dur"|"until", "type", …}]
       and/or subtitles=[{start, end, text}] | "auto". Types: lower_third · title · chapter · source · stat · quote ·
-      chart (a layer with a "chart" object; or type = a chart type such as "column" or "graphic") · fullscreen ·
-      split. text = the source: numbers and quotes are checked against it (else "not checked against a source").
+      chart (a layer with a "chart" object) · graphic · fullscreen · split. text = the source: numbers and quotes
+      are checked against it.
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again (draft=true: half size); scene="s3" / scene="L2": just that scene / layer.
-    action="transcript": what is said, with times (+ .srt; vocabulary=[names] hears them right). action="lottie": text="words" → free animations.
+    action="transcript": what is said, with times (+ .srt; vocabulary=[names]). action="lottie": text → animations.
     action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
+    AI video (credits): action="ai_clip" (ai={…}) · "enhance" (factor 1|2|4) · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only video (ProRes 4444 .mov / WebM VP9).
     render=false (make / overlay / edit): save the project only (the layout check still comes back); draft=true: fast.
     Every result has a check (status, findings, verified); files(action="preview", file_id, scene=…) shows it.
@@ -1962,6 +1979,9 @@ async def video(
                 "how": 'Put one in a graphic: {"shape": "lottie", "lottie": {"url": json_url, "credit": …}} — or let the '
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
+    if act in ("ai_clip", "enhance", "estimate"):    # kie.ai — a logika és a referencia: app/tools/ai_video.py
+        from app.tools import ai_video
+        return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
         raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | '
                          '"lottie" | "schema" (the full reference: video(action="schema", topic="layers"))')

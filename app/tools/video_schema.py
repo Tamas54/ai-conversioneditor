@@ -242,7 +242,8 @@ def _autoload() -> None:
     import importlib
     for mod, attr, name in (("app.tools.transcript", "SCHEMA_REF", None),
                             ("app.tools.video_fx", "REFERENCE", "adjust"),
-                            ("app.sharing", "SHARE_SCHEMA_REF", "share")):
+                            ("app.sharing", "SHARE_SCHEMA_REF", "share"),
+                            ("app.tools.ai_video", "AI_VIDEO_REFERENCE", None)):
         try:
             ref = getattr(importlib.import_module(mod), attr, None)
         except Exception:

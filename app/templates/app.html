@@ -209,6 +209,8 @@
       <div id="usage-box" hidden><h3 class="plans-h">This month</h3><div id="usage"></div></div>
     </div>
     <p class="muted small" id="manage"></p>
+    <div id="ledger-box" hidden><h3 class="plans-h">Credit history <span class="muted small">— every change to your balance</span></h3>
+      <table class="costs ledger" id="ledger"></table><p><button class="btn ghost" id="ledger-more" hidden>Older</button></p></div>
   </section>
 </template>
 
@@ -284,7 +286,8 @@ async function api(path, opts = {}) {
   const data = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
   if (r.status === 401 && data?.account_required) throw Object.assign(new Error(data.detail || AI_NOTE), { cta: true });   // vendég AI-n: fiók-ajánlat
   if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(here()); throw new Error("signed out"); }
-  if (!r.ok) throw new Error((data && data.detail) || data.error || `Request failed (${r.status})`);
+  const det = data && data.detail;                                // 402 insufficient_credits: {message, needed, available}
+  if (!r.ok) throw new Error((det && typeof det === "object" ? det.message || det.error : det) || data.error || `Request failed (${r.status})`);
   return data;
 }
 
@@ -507,11 +510,35 @@ const views = {
     $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
       [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`],
       [`Studio AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps`, `1 per ${c.ai_steps_per_credit} steps`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+    if (account.ai_video) {                                         // AI-videó (kie.ai): az árszabályokból, 10 mp-re
+      const per10 = (op, model, tier) => api(`/api/estimate?operation=${op}&model=${encodeURIComponent(model)}&tier=${encodeURIComponent(tier)}&units=10`).then(e => e.credits).catch(() => null);
+      const rows = [["AI video clip, 480p (also drafts)", "ai_clip", "bytedance/seedance-2-5", "480p"], ["AI video clip, 720p", "ai_clip", "bytedance/seedance-2-5", "720p"],
+        ["AI video clip, 1080p", "ai_clip", "bytedance/seedance-2-5", "1080p"], ["Enhance a video 1×–2× (Topaz)", "enhance", "topaz/video-upscale", "2x"],
+        ["Enhance a video 4× (Topaz)", "enhance", "topaz/video-upscale", "4x"]];
+      const got = await Promise.all(rows.map(([, ...a]) => per10(...a)));
+      $("#costs").insertAdjacentHTML("beforeend", rows.map(([l], i) => got[i] === null ? "" : `<tr><td>${l}</td><td>${got[i]} per 10 s</td></tr>`).join(""));
+    }
     if (account.usage && Object.keys(account.usage).length) {
       $("#usage-box").hidden = false;
       const names = { deck: "Presentations", revise: "Changes", document: "AI documents", photo_edit: "Photo edits", scan_pages: "Scanned pages", form_pages: "Form pages", ai_steps: "Studio AI steps (connected AI)" };
       $("#usage").innerHTML = Object.entries(account.usage).map(([k, u]) => `<div class="use"><span>${names[k] || k}</span><span class="mono small">${u.used} / ${u.limit.toLocaleString("en")}</span>
         <i style="--w:${Math.min(100, 100 * u.used / Math.max(1, u.limit))}%"></i></div>`).join("");
+    }
+    if (!account.guest && account.credits !== null) {           // tranzakciótörténet (a kreditkönyv sorai)
+      $("#ledger-box").hidden = false;
+      const KIND = { grant: "Added", purchase: "Bought", hold: "Reserved", capture: "Used", release: "Reservation returned",
+        refund: "Refund", adjust: "Adjustment", admin_usage: "Admin use" };
+      let before = null;
+      const more = async () => {
+        const r = await api(`/api/account/ledger?limit=30${before ? `&before=${before}` : ""}`);
+        $("#ledger").insertAdjacentHTML("beforeend", r.entries.map(e => `<tr class="k-${esc(e.kind)}"><td class="mono small">${esc(new Date(e.created_at).toLocaleString())}</td>
+          <td>${esc(KIND[e.kind] || e.kind)} · ${esc(e.reason || e.operation || "")}</td><td class="mono">${e.delta > 0 ? "+" : ""}${e.delta}</td>
+          <td class="mono muted">${e.balance_after ?? ""}</td></tr>`).join("") || (before ? "" : `<tr><td class="muted">Nothing yet.</td></tr>`));
+        before = r.entries.length ? r.entries[r.entries.length - 1].id : before;
+        $("#ledger-more").hidden = r.entries.length < 30;
+      };
+      $("#ledger-more").addEventListener("click", () => more().catch(e => toast(e.message)));
+      more().catch(() => {});
     }
     if (account.has_subscription && P.enabled) {
       $("#manage").innerHTML = `<button class="btn ghost" id="portal">Manage subscription, invoices and card</button>`;
@@ -1268,6 +1295,81 @@ async function videoRender(file_id, draft, st = $("#quick-status")) {
   const r = await pollJob(job, () => draft ? "Rendering a quick draft…" : "Rendering the video — about a minute for a minute of video…", st);
   return { ...r, view: "preview", msg: `${draft ? "Draft" : "Video"} ready (${r.seconds}s to render) — it's in your workspace` };
 }
+// AI-videó (kie.ai — csak ha be van kapcsolva: account.ai_video): a becslés a gombon, a foglalt kredit a fejlécben
+async function aiEstimate(panel, body) {
+  const b = panel.querySelector(".qp-actions .btn.primary"); if (!b) return;
+  b.dataset.base ??= b.innerHTML;                                // a címke + az AI-jelvény marad, mögé az ár
+  try {
+    const e = await api("/api/ai/estimate", { method: "POST", body: JSON.stringify(body) });
+    b.innerHTML = `${b.dataset.base} <span class="est">— ${e.credits} credit${e.credits === 1 ? "" : "s"}</span>`;
+    b.title = e.what + (e.balance !== null && e.balance !== undefined ? ` · you have ${e.balance}` : "");
+  } catch (e) { b.innerHTML = b.dataset.base; b.title = e.message; }
+}
+const aiOn = () => !!account?.ai_video;
+const AI_ENHANCE = { label: "Enhance…", ai: true, show: aiOn, doing: "Enhancing with AI — usually a minute or two…",
+  hint: "Topaz AI: sharper and cleaner, the result is a new version",
+  form: () => `<p class="muted small" style="margin:0 0 10px">Topaz AI makes the video sharper and cleaner. The result is a new version — the original stays. Only what the AI service really charges is taken; a failed job costs nothing.</p>
+    <label>Size<select name="factor"><option value="1">Same size, cleaner</option><option value="2" selected>2× bigger</option><option value="4">4× bigger</option></select></label>`,
+  wire: fm => { const go = () => aiEstimate(fm, { action: "enhance", file_id: cur.file_id, factor: +field(fm, "factor").value });
+    field(fm, "factor").addEventListener("change", go); go(); },
+  run: async (id, fm, st) => {
+    const job = await api("/api/ai/enhance", { method: "POST", body: JSON.stringify({ file_id: id, factor: +field(fm, "factor").value }) });
+    loadAccount().catch(() => {});
+    const r = await pollJob(job, j => j.stage === "generating" ? "The AI is working on it — a minute or two…" : "Enhancing…", st);
+    await loadAccount();
+    return { file_id: r.file_id, view: "preview", msg: `Enhanced — ${r.width}×${r.height}, ${r.credits_charged} credits` };
+  } };
+const AI_CLIP = { label: "AI clip…", ai: true, show: aiOn, doing: "Generating the clip — usually 1–3 minutes…",
+  hint: "A generated clip (Seedance 2.5): from words, from this frame or a picture",
+  form: () => `<p class="muted small" style="margin:0 0 10px">A new clip made by AI (Seedance 2.5). Start with a cheap 480p draft, then make the one you like final. Only what the AI service really charges is taken; a failed job costs nothing.</p>
+    <label>What happens in the clip<textarea name="prompt" rows="3" placeholder="The camera slowly pushes in on the pan as the omelette is flipped, warm kitchen light"></textarea></label>
+    <label>Start from<select name="from"><option value="text">Only the words</option><option value="frame">This video's frame at…</option><option value="pic">A picture</option></select></label>
+    <label data-show="frame" hidden>Frame at (seconds)<input type="number" name="at_frame" min="0" step="0.1" value="0"></label>
+    <div data-show="pic" hidden>${fileSlot("pic", { exts: EXT.image, label: "First frame" })}</div>
+    <div class="row2"><label>Quality<select name="res"><option value="draft">Draft (480p, cheap)</option><option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option></select></label>
+    <label>Seconds<input type="number" name="dur" min="4" max="30" value="5"></label></div>
+    <div class="checks"><label><input type="checkbox" name="audio"> With sound</label></div>
+    ${cur?.ext === "ecproj" ? `<label>Put it<select name="place"><option value="">Only make the clip</option><option value="at">As a cut-in at…</option><option value="after">As a new scene after…</option></select></label>
+    <label data-show="at" hidden>At (seconds)<input type="number" name="at" min="0" step="0.1" value="0"></label>
+    <label data-show="after" hidden>After scene (e.g. s2; 0 = first)<input type="text" name="after" value="0"></label>` : ""}`,
+  wire: fm => {
+    const body = () => { const r = field(fm, "res").value;
+      return { action: "ai_clip", prompt: field(fm, "prompt").value.trim() || "preview", duration: +field(fm, "dur").value || 5,
+        ...(r === "draft" ? { draft: true } : { resolution: r }) }; };
+    const show = () => { const on = new Set([field(fm, "from").value, field(fm, "place")?.value || ""]);
+      fm.querySelectorAll("[data-show]").forEach(x => x.hidden = !on.has(x.dataset.show)); };
+    let t = null; const go = () => { clearTimeout(t); t = setTimeout(() => aiEstimate(fm, body()), 250); };
+    fm.querySelectorAll("select, input").forEach(x => x.addEventListener("change", () => { show(); go(); }));
+    show(); go();
+  },
+  run: async (id, fm, st) => {
+    const prompt = field(fm, "prompt").value.trim();
+    if (!prompt) { field(fm, "prompt").focus(); throw new Error("Say what should happen in the clip."); }
+    const r = field(fm, "res").value, from = field(fm, "from").value, place = field(fm, "place")?.value || "";
+    const body = { file_id: id, prompt, duration: +field(fm, "dur").value || 5, audio: field(fm, "audio").checked,
+      ...(r === "draft" ? { draft: true } : { resolution: r }) };
+    if (from === "frame") body.image = { frame: +field(fm, "at_frame").value || 0 };
+    if (from === "pic") body.image = (await readSlot(fm, "pic", "the first-frame picture"))[0];
+    if (place === "at") body.at = +field(fm, "at").value || 0;
+    if (place === "after") { const a = field(fm, "after").value.trim(); body.after_scene = /^\d+$/.test(a) ? +a : a; }
+    const job = await api("/api/ai/clip", { method: "POST", body: JSON.stringify(body) });
+    loadAccount().catch(() => {});
+    const res = await pollJob(job, j => j.stage === "putting it on the timeline" ? "Putting it on the timeline…" : "Generating the clip — usually 1–3 minutes…", st);
+    await loadAccount();
+    if (res.timeline_error) toast(res.timeline_error);
+    const to = res.timeline?.file_id || res.file_id;
+    return { file_id: to, view: res.timeline ? "edit" : "preview",
+      msg: `${res.draft ? "Draft" : "Clip"} ready — ${res.credits_charged} credits${res.draft ? ". Like it? Make it final from the clip's AI panel." : ""}` };
+  } };
+const AI_FINAL = { label: "Make final (1080p)", ai: true, doing: "Making the final 1080p clip…", hint: "The same shot as the draft, at 1080p",
+  show: () => aiOn() && /\(draft\)/.test(cur?.label || cur?.name || ""),
+  run: async (id, fm, st) => {
+    const meta = await api(`/api/ai/draft-of?file_id=${encodeURIComponent(id)}`);
+    const job = await api("/api/ai/clip", { method: "POST", body: JSON.stringify({ finalize: meta.task_id }) });
+    const res = await pollJob(job, () => "Making the final 1080p clip…", st);
+    await loadAccount();
+    return { file_id: res.file_id, view: "preview", msg: `Final clip ready — ${res.credits_charged} credits` };
+  } };
 const QUICK = [
   { title: "PDF tools", exts: EXT.pdf, uses: ["deck", "scan"], covers: ["pdf"], items: [
     { label: "Merge with…", doing: "Merging…", form: () => fileSlot("more", { exts: ["pdf"], multiple: true, label: "PDFs to add after this one, in order" }),
@@ -1325,7 +1427,9 @@ const QUICK = [
     { label: "Render MP4", doing: "Rendering the video — about a minute for a minute of video…", hint: "Full quality, with sound",
       run: id => videoRender(id, false) },
     { label: "Quick draft", doing: "Rendering a quick draft…", hint: "Half size — to check the timing fast", run: id => videoRender(id, true) },
+    AI_CLIP, AI_ENHANCE,
   ] },
+  { title: "Video", exts: EXT.video, uses: [], covers: [], center: false, when: () => Promise.resolve(aiOn()), items: [AI_FINAL, AI_CLIP, AI_ENHANCE] },
   // Pakli / Word: a képek cseréje a KÉPVÁLASZTÓVAL (a jobb oldali fiókban). A sáv csak akkor látszik, ha van kép a fájlban;
   // a „Kérj változtatást” után magától nyílik az új/kicserélt képre. center:false — ettől még nem a szerkesztő a nyitónézet.
   { title: "Pictures", exts: ["pptx", "docx"], uses: [], covers: [], center: false,
@@ -1338,7 +1442,8 @@ const QUICK = [
 ];
 const FIT_PREVIEW = [...IMG, "psd", "psb", "tif", "tiff", "vectorcraft", "ai", "eps"];
 function wireQuick(f) {
-  const g = QUICK.find(q => q.exts.includes(f.ext)); if (!g) return null;
+  const g0 = QUICK.find(q => q.exts.includes(f.ext)); if (!g0) return null;
+  const g = { ...g0, items: g0.items.filter(it => !it.show || it.show()) };   // pl. az AI-videó csak bekapcsolva
   const wrap = $("#quick"), row = $("#quick-row"), panel = $("#quick-panel"), st = $("#quick-status");
   const uses = USES.filter(([kind, , , exts]) => g.uses.includes(kind) && exts.includes(f.ext));
   const ai = '<em class="ai-badge">AI</em>';

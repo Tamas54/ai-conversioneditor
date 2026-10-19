@@ -279,6 +279,83 @@ CREATE TABLE IF NOT EXISTS edit_locks (
     heartbeat_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (owner_id, file_id)
 );
+-- ---- kreditkönyv (10-19, OMLETT 2.3): a meglévő credit_ledger bővül (fajta, művelet, szolgáltató, idempotencia-kulcs);
+-- az egyenleg továbbra is users.credits (gyorsítótár), ugyanabban a tranzakcióban írva — app/credits.py ----
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'credit_ledger' AND column_name = 'kind') THEN
+    ALTER TABLE credit_ledger ADD COLUMN kind text, ADD COLUMN workspace_id text, ADD COLUMN operation text,
+                              ADD COLUMN provider text, ADD COLUMN provider_task_id text, ADD COLUMN provider_cost numeric,
+                              ADD COLUMN idempotency_key text, ADD COLUMN meta jsonb;
+    UPDATE credit_ledger SET kind = CASE WHEN reason LIKE 'bought %' THEN 'purchase' WHEN reason LIKE 'refund%' THEN 'refund'
+                                         WHEN reason = 'admin grant' THEN 'adjust' WHEN delta < 0 THEN 'capture' ELSE 'grant' END;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS credit_ledger_idem_idx ON credit_ledger (idempotency_key);
+-- nyitó egyenleg: ahol a users.credits nem egyezik a napló összegével (kézi jóváírás SQL-ből, a régi 0-s „signup” sor),
+-- egy „adjust” sor a különbséggel — felhasználónként egyszer (idempotency_key), az egyenleg maga nem változik
+INSERT INTO credit_ledger (user_id, delta, balance_after, reason, kind, idempotency_key)
+SELECT u.id, u.credits - COALESCE(s.total, 0), u.credits, 'opening balance', 'adjust', 'opening:' || u.id
+FROM users u LEFT JOIN (SELECT user_id, sum(delta) AS total FROM credit_ledger GROUP BY user_id) s ON s.user_id = u.id
+WHERE u.id <> 'admin' AND u.credits <> COALESCE(s.total, 0)
+ON CONFLICT (idempotency_key) DO NOTHING;
+-- árazás: ár = ceil(provider_cost × egység × multiplier), legalább min_charge (provider_cost a szolgáltató saját egységében,
+-- pl. kie-kredit/mp; a multiplier ebből Studio-kreditet csinál, haszonnal). Adminból szerkeszthető; a helyi CPU-művelet 0.
+CREATE TABLE IF NOT EXISTS pricing_rules (
+    id              bigserial PRIMARY KEY,
+    operation       text NOT NULL,
+    model           text NOT NULL DEFAULT '',
+    tier            text NOT NULL DEFAULT '',
+    unit            text NOT NULL DEFAULT 'job',
+    provider        text,
+    provider_cost   numeric NOT NULL DEFAULT 0,
+    multiplier      numeric NOT NULL DEFAULT 1,
+    min_charge      integer NOT NULL DEFAULT 0,
+    note            text,
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (operation, model, tier)
+);
+-- külső AI-feladatok (kie.ai…): a mi azonosítónk (a hold kulcsa is), a szolgáltatóé, állapot, a tárolt eredményfájlok —
+-- újraindítás után is innen folytatódik (lekérdezés), a webhook a provider_task_id-vel talál ide
+CREATE TABLE IF NOT EXISTS provider_tasks (
+    id                text PRIMARY KEY,
+    user_id           text NOT NULL,
+    provider          text NOT NULL,
+    model             text NOT NULL,
+    operation         text NOT NULL,
+    provider_task_id  text UNIQUE,
+    status            text NOT NULL DEFAULT 'created',
+    settled           boolean NOT NULL DEFAULT false,
+    input             jsonb NOT NULL DEFAULT '{}',
+    hold              integer NOT NULL DEFAULT 0,
+    charged           integer,
+    provider_cost     numeric,
+    result            jsonb,
+    error             text,
+    meta              jsonb NOT NULL DEFAULT '{}',
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    finished_at       timestamptz
+);
+CREATE INDEX IF NOT EXISTS provider_tasks_open_idx ON provider_tasks (created_at) WHERE NOT settled;
+CREATE INDEX IF NOT EXISTS provider_tasks_user_idx ON provider_tasks (user_id, created_at DESC);
+-- napi egyeztetés (szolgáltatói egyenleg ↔ a könyv provider-költségei) és az admin-felület figyelmeztetései
+CREATE TABLE IF NOT EXISTS provider_balance (
+    id              bigserial PRIMARY KEY,
+    provider        text NOT NULL,
+    balance         numeric NOT NULL,
+    ledger_cost     numeric,
+    expected        numeric,
+    drift           numeric,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS admin_notices (
+    id              bigserial PRIMARY KEY,
+    kind            text NOT NULL,
+    message         text NOT NULL,
+    meta            jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    resolved_at     timestamptz
+);
 """
 
 _pool = None
@@ -454,7 +531,11 @@ async def _owns(file_id: str) -> bool:
 # ---------- fiókok, MCP-kulcsok, kreditek ----------
 
 class InsufficientCredits(Exception):
-    pass
+    """Nincs fedezet. needed / available: mennyi kellene és mennyi van (MCP: insufficient_credits)."""
+
+    def __init__(self, msg: str = "", *, needed: Optional[int] = None, available: Optional[int] = None):
+        self.needed, self.available = needed, available
+        super().__init__(msg or f"insufficient_credits: this needs {needed} credits, you have {available}")
 
 
 def _hash_password(pw: str) -> str:
@@ -486,6 +567,10 @@ async def user_create(email: str, password: str, name: Optional[str], credits: i
                        (uid, email.strip(), name, _hash_password(password), credits))
     if not rows:
         raise ValueError("this email is already registered")
+    if credits:                     # a kezdő kredit is a könyvben (különben a nyitó egyenleg-egyeztetés pótolná)
+        await _rows("INSERT INTO credit_ledger (user_id, delta, balance_after, reason, kind, idempotency_key) "
+                    "VALUES (%s, %s, %s, 'signup', 'grant', %s) ON CONFLICT (idempotency_key) DO NOTHING",
+                    (uid, credits, credits, f"signup:{uid}"))
     return rows[0]
 
 
@@ -540,26 +625,21 @@ async def api_key_user(key: str) -> Optional[str]:
     return rows[0]["user_id"] if rows else None
 
 
-async def credits_spend(uid: str, amount: int, reason: str, ref: Optional[str] = None) -> Optional[int]:
-    """Atomi levonás; admin korlátlan (None). Nincs fedezet → InsufficientCredits."""
+async def credits_spend(uid: str, amount: int, reason: str, ref: Optional[str] = None, **kw: Any) -> Optional[int]:
+    """Atomi levonás (a könyvben „capture”: azonnal lefoglalt és elszámolt); admin korlátlan (None). Nincs fedezet →
+    InsufficientCredits. kw: operation, idempotency_key, meta… (app/credits.py apply)."""
     if uid == "admin" or amount <= 0:
         return None
-    rows = await _rows("""UPDATE users SET credits = credits - %s WHERE id = %s AND credits >= %s RETURNING credits""",
-                       (amount, uid, amount))
-    if not rows:
-        raise InsufficientCredits(f"not enough credits ({amount} needed for {reason})")
-    await _rows("INSERT INTO credit_ledger (user_id, delta, balance_after, reason, ref) VALUES (%s, %s, %s, %s, %s)",
-                (uid, -amount, rows[0]["credits"], reason, ref))
-    return rows[0]["credits"]
+    from app import credits
+    return (await credits.apply(uid, -amount, kw.pop("kind", "capture"), reason, ref=ref, **kw))["balance"]
 
 
-async def credits_add(uid: str, amount: int, reason: str, ref: Optional[str] = None) -> int:
-    rows = await _rows("UPDATE users SET credits = credits + %s WHERE id = %s RETURNING credits", (amount, uid))
-    if not rows:
-        raise ValueError(f"no such user: {uid}")
-    await _rows("INSERT INTO credit_ledger (user_id, delta, balance_after, reason, ref) VALUES (%s, %s, %s, %s, %s)",
-                (uid, amount, rows[0]["credits"], reason, ref))
-    return rows[0]["credits"]
+async def credits_add(uid: str, amount: int, reason: str, ref: Optional[str] = None, **kw: Any) -> int:
+    """Jóváírás a könyvben (kind: grant | purchase | refund | adjust — a reason-ből, ha nincs megadva)."""
+    from app import credits
+    kind = kw.pop("kind", None) or ("refund" if reason.startswith("refund") else "purchase" if reason.startswith("bought")
+                                    else "adjust" if reason.startswith("admin") else "grant")
+    return (await credits.apply(uid, amount, kind, reason, ref=ref, **kw))["balance"]
 
 
 # ---------- OCR-gyorsítótár ----------
@@ -713,17 +793,14 @@ async def usage_add(uid: str, month: str, kind: str, n: int, limit: Optional[int
 
 async def free_topup(uid: str, month: str, amount: int) -> int:
     """Ingyenes csomag: hónaponként egyszer feltöltés legalább `amount` kreditre (nem halmozódik). Vissza: jóváírt."""
-    rows = await _rows("""WITH old AS (SELECT credits FROM users WHERE id = %s AND plan = 'free'
-                                         AND topup_month IS DISTINCT FROM %s FOR UPDATE)
-                          UPDATE users u SET credits = GREATEST(u.credits, %s), topup_month = %s FROM old
-                          WHERE u.id = %s RETURNING u.credits AS now, old.credits AS before""", (uid, month, amount, month, uid))
+    rows = await _rows("""UPDATE users SET topup_month = %s WHERE id = %s AND plan = 'free' AND topup_month IS DISTINCT FROM %s
+                          RETURNING id""", (month, uid, month))
     if not rows:
         return 0
-    delta = rows[0]["now"] - rows[0]["before"]
-    if delta > 0:
-        await _rows("INSERT INTO credit_ledger (user_id, delta, balance_after, reason, ref) VALUES (%s, %s, %s, %s, %s)",
-                    (uid, delta, rows[0]["now"], "free monthly credits", month))
-    return delta
+    from app import credits                      # a hiány a sorzár alatt számolva (közben levonás is jöhet)
+    res = await credits.apply(uid, 0, "grant", "free monthly credits", ref=month, idempotency_key=f"topup:{uid}:{month}",
+                              top_up_to=amount)
+    return res["delta"]
 
 
 async def user_set_billing(uid: str, *, plan: Optional[str] = None, customer: Optional[str] = None,
