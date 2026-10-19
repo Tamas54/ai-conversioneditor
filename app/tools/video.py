@@ -1845,6 +1845,8 @@ _CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "ma
                "y_title", "forecast_from", "total_label", "flows", "nodes", "edges", "root", "branches", "steps", "lanes",
                "actors", "reveal", "pace", "direction", "center", "focus", "columns", "rows")
 _PANEL = [0.035, 0.04, 0.055]
+# a hibaüzenetek minimális példája (10-19: a csonkolt leírás után a „type None” hiba nem mondta meg, mi a jó alak)
+_LAYER_EXAMPLE = '{"at": "00:02", "dur": 5, "type": "lower_third", "name": "Anna Kovács", "role": "Mayor"}'
 
 
 def _own_text(x: Any) -> str:
@@ -1868,6 +1870,10 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         elif isinstance(raw.get("image_query"), str) and raw["image_query"].strip():
             raw = {**raw, "image": {"stock": raw["image_query"]}}
     r = {**(base or {}), **raw}
+    if r.get("type") in (None, "") and isinstance(r.get("chart"), dict):
+        r["type"] = "chart"                     # ábra-objektum típus nélkül: ábra-réteg (10-19: „type None” hiba lett)
+    elif r.get("type") in (None, "") and isinstance(r.get("elements"), list):
+        r["type"] = "graphic"                   # elemek típus nélkül: saját grafika
     lid = re.sub(r"[^\w-]", "", str(r.get("id") or ""))[:20] or "L?"
     what = f"Layer {lid}"
     typ = _LAYER_ALIAS.get(str(r.get("type") or "").strip().lower().replace(" ", "_"),
@@ -1878,9 +1884,10 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         raw = {**raw, "chart": r["chart"]}
         typ = "chart"
     if typ not in LAYER_TYPES:
-        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} (or a chart type such as \"column\").")
+        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} (or a chart type such as \"column\"), "
+                         f"e.g. {_LAYER_EXAMPLE} — the full list: video(action=\"schema\", topic=\"layers\").")
     if r.get("at") is None:
-        raise ValueError(f"{what}: give at — when it starts (seconds, or a timecode such as \"01:24\").")
+        raise ValueError(f"{what}: give at — when it starts (seconds, or a timecode such as \"01:24\"), e.g. {_LAYER_EXAMPLE}.")
     at = timecode(r["at"], f"{what} at")
     if raw.get("until") is not None:
         dur = timecode(raw["until"], f"{what} until") - at
@@ -1917,7 +1924,10 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
             cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a cím)
         if not isinstance(cc, dict):
-            raise ValueError(f"{what}: chart = {{type, title, unit, items}} — any scene chart type (graphic, map, lottie and script too).")
+            raise ValueError(f"{what}: chart = {{type, title, unit, items}} — any scene chart type (graphic, map, lottie and script "
+                             "too), e.g. {\"at\": 9, \"chart\": {\"type\": \"column\", \"title\": \"Budget\", \"unit\": \"bn Ft\", "
+                             "\"items\": [{\"label\": \"2024\", \"value\": 44.8}, {\"label\": \"2025\", \"value\": 47.5}]}} — "
+                             "video(action=\"schema\", topic=\"chart\").")
         chart, note = _chart_from_plan(cc, src)
         for n_ in (note if isinstance(note, list) else [note] if note else []):
             if n_.startswith("⚠ ") or not chart:
@@ -4581,17 +4591,17 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
 
 
 async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
-               progress: Optional[Callable[..., None]] = None, alpha: Any = None) -> dict[str, Any]:
+               progress: Optional[Callable[..., None]] = None, alpha: Any = None, render: bool = True) -> dict[str, Any]:
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
-        return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha)
+        return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha, render=render)
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
 
 
 async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
-                progress: Optional[Callable[..., None]] = None, alpha: Any = None) -> dict[str, Any]:
+                progress: Optional[Callable[..., None]] = None, alpha: Any = None, render: bool = True) -> dict[str, Any]:
     """Egy elkészült videó módosítása a forgatókönyvéből → ÚJ változat (projekt + MP4). changes:
     {"scenes": [{"scene": n (1-től), "headline"?, "caption"?, "image"?, "stat"?, "chart"?, "remove"?}],
      "add": [{"after": n (0 = az első elé), "headline", "caption"?, "image"? | "image_query"?, "stat"?, "chart"?}],
@@ -4610,7 +4620,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     if not isinstance(changes, dict) or (not changes and alpha in (None, False)):
         raise ValueError("Say what should change (changes).")
     if spec.get("kind") == "overlay":
-        res = await _edit_overlay(pid, spec, changes, extra_source=extra_source, step=step, alpha=alpha)
+        res = await _edit_overlay(pid, spec, changes, extra_source=extra_source, step=step, alpha=alpha, render=render)
         res["notes"] = ["Rebuilt from the layer list: changes made by hand in the video editor are not in this version "
                         "(they stay in the previous one)."] if meta.get("hand_edited") else []
         return res
@@ -4722,7 +4732,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     from app.storage.naming import result_stem
     opts["layer_source"] = layer_src
     res = await _assemble(story, specs, opts, chart_notes=_kept_chart_notes(spec, story) + notes, source_text=source,
-                          source_file_id=pid, step=step, parent=pid, label_stem=result_stem(pid, "edited"),
+                          source_file_id=pid, step=step, parent=pid, label_stem=result_stem(pid, "edited"), render=render,
                           operation="video edit", layer_notes=_kept_layer_notes(spec, story["layers"]) + lnotes)
     res["notes"] = notes + (["Rebuilt from the video's script: changes made by hand in the video editor are not in this "
                              "version (they stay in the previous one)."] if meta.get("hand_edited") else [])
@@ -4730,7 +4740,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
 
 
 async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any], *, extra_source: str,
-                        step: Callable[..., None], alpha: Any = None) -> dict[str, Any]:
+                        step: Callable[..., None], alpha: Any = None, render: bool = True) -> dict[str, Any]:
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
@@ -4762,7 +4772,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
         raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
     return await _assemble_overlay(dict(spec["base"]), layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
-                                   label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid)
+                                   label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid, render=render)
 
 
 _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json object of changes — only what the request asks:

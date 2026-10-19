@@ -12,3 +12,15 @@
 - Measured on the reconstructed 10-19 layers (`rendkivuli`, `tudta`, `hir3`, main's 0.6 box): main 0 findings / `ok`,
   now 3 named findings / `needs_check`. Without `w` the new default keeps "RENDKÍVÜLI KIADÁS" (66 px, ~663 px wide) and
   the Tudta line on one line; only the over-long ticker text is still reported (with a size that fits).
+
+## 1.4 — short `video` tool description + `action="schema"`
+- The `video` MCP description went from 21 902 to 1 945 characters (cap 2 000, tested; sent without indentation). It
+  lists the main actions and points to `video(action="schema", topic=…)`.
+- New `action="schema"`: topics make | overlay | layers | graphic | chart | subtitles | edit (no topic = the list). The
+  registry is a plain dict, `app.tools.video_schema.TOPICS` — another lane adds a topic with
+  `TOPICS["adjust"] = video_fx.SCHEMA` (no other wiring needed).
+- A layer with a `chart` object and no `type` is a chart layer (a list of `elements` without `type` is a graphic); the
+  type / `at` / chart errors carry a minimal example and point to the schema.
+- New MCP params: `topic`, `render` (`render=false` for make / overlay / edit: save the project only).
+- Other tool descriptions over 2 000 characters (not changed here): wordcraft 4 829, design 4 785, pptx_build 4 246,
+  forms 3 698, file_tools 3 046, office 2 901, validate_document 2 531, files 2 297, convert 2 255, facts 2 080.

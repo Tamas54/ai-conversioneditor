@@ -221,11 +221,13 @@ def test_preview_and_clip_find_a_layer_by_id(tmp_path):
 
 def test_video_tool_describes_overlay_layers_alpha_and_duration():
     from app import mcp_server
+    from app.tools import video_schema
     fn = inspect.unwrap(mcp_server.video)
     params = inspect.signature(fn).parameters
     for p in ("layers", "alpha", "duration_mode"):
         assert p in params
-    doc = fn.__doc__
+    # a rövid leírás + a részletes referencia (video action="schema") együtt mondja el (OMLETT 1.4)
+    doc = fn.__doc__ + "\n".join(video_schema.TOPICS.values())
     for s in ('action="overlay"', "lower_third", "split", "fullscreen", "duration_mode", "ProRes 4444", '"webm"',
               "AI NARRATION IS ON BY DEFAULT", 'narration="none"', 'scene="L2"', "add_layers", "not checked against a source"):
         assert s in doc, s

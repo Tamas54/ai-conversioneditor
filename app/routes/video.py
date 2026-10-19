@@ -149,7 +149,7 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
     async def work(progress):
         try:
             res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress,
-                                   alpha=body.get("alpha"))
+                                   alpha=body.get("alpha"), render=body.get("render", True) is not False)
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})
