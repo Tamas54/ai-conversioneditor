@@ -192,7 +192,9 @@ result; changes.subtitles in an edit replaces them. Layers are optional when the
 caption bar. Long lines are split at sentence / clause boundaries into two-line parts.
 action="transcript": what is said in a video or sound file (or an overlay project's footage), with times → sentences
 [{at, until, text}] + an .srt (file_id), as a job. Offline speech recognition (Whisper large-v3-turbo; `language`
-helps, else detected). Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …}."""
+helps, else detected). Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …}.
+Overlay transcript={"prompt"?, "vocabulary"?, "model"?} passes hints to the speech recognition used by
+subtitles="auto" and {"say": …} (topic "transcript", when present, lists them)."""
 
 TOPICS["edit"] = """\
 action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
@@ -222,8 +224,24 @@ _ABOUT = {"make": "a video from a text / your scene plan: formats, duration, pic
           "edit": "changing a finished video, faster re-renders, to_pptx"}
 
 
+def register(refs: dict[str, str]) -> None:
+    """Egy másik modul referenciája a témák közé: register(transcript.SCHEMA_REF) — {téma: szöveg}."""
+    TOPICS.update({str(k).strip().lower(): str(v) for k, v in (refs or {}).items() if v})
+
+
+def _autoload() -> None:
+    """A más sávok ismert referencia-állandói (ha már megvannak): app.tools.transcript.SCHEMA_REF."""
+    import importlib
+    for mod, attr in (("app.tools.transcript", "SCHEMA_REF"),):
+        try:
+            register(getattr(importlib.import_module(mod), attr, None) or {})
+        except Exception:
+            pass
+
+
 def reference(topic: Optional[str] = None) -> dict[str, Any]:
     """video(action="schema"): téma nélkül a témák listája, témával a részletes referencia (a TOPICS bővíthető)."""
+    _autoload()
     t = str(topic or "").strip().lower()
     if not t:
         return {"topics": {k: _ABOUT.get(k, TOPICS[k].split("\n", 1)[0][:120]) for k in TOPICS},

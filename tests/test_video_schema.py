@@ -61,3 +61,36 @@ def test_a_layer_with_a_chart_object_is_a_chart_and_errors_carry_an_example():
     assert '"type": "lower_third"' in str(e.value) and 'action=\\"schema\\"' not in str(e.value) and "schema" in str(e.value)
     with pytest.raises(ValueError, match='"at": "00:02"'):
         video.layers_from([{"type": "title", "text": "x"}], "", [])
+
+
+def test_other_lanes_register_their_reference(monkeypatch):
+    """A transcript sáv állandója (transcript.SCHEMA_REF) — ha megvan — magától téma lesz; bármi más register()-rel."""
+    import types
+    from app.tools import transcript, video_schema
+    monkeypatch.setattr(transcript, "SCHEMA_REF", {"transcript": 'video(action="transcript", …, vocabulary?) — test'}, raising=False)
+    try:
+        assert video_schema.reference("transcript")["reference"].startswith('video(action="transcript"')
+        video_schema.register({"Enhance": "enhance — test"})
+        assert "enhance" in video_schema.reference()["topics"]
+    finally:
+        for k in ("transcript", "enhance"):
+            video_schema.TOPICS.pop(k, None)
+
+
+def test_overlay_transcript_hints_reach_the_recogniser_when_it_knows_them(monkeypatch, tmp_path):
+    from app.tools import transcript, video
+    assert video.transcript_opts({"vocabulary": "sonkával"}) in ({}, {"vocabulary": "sonkával"})   # régi / új aláírás
+    seen = {}
+
+    async def fake(src, language=None, *, prompt=None, vocabulary=None, model=None, force=False, correct=None):
+        seen.update(prompt=prompt, vocabulary=vocabulary, model=model)
+        return {"language": "hu", "model": "m", "duration": 2.0, "words": [],
+                "sentences": [{"start": 0.2, "end": 1.5, "text": "Jöhet a tálalás."}]}
+    monkeypatch.setattr(transcript, "transcribe", fake)
+    monkeypatch.setattr(transcript, "cues", lambda tr: [{"start": 0.2, "end": 1.5, "text": "Jöhet a tálalás."}], raising=False)
+    opts = video.transcript_opts({"prompt": "Főzőműsor", "vocabulary": ["tálalás"], "model": "large-v3", "bogus": 1})
+    assert opts == {"prompt": "Főzőműsor", "vocabulary": ["tálalás"], "model": "large-v3"}
+    import asyncio
+    monkeypatch.setattr(video.crafts, "existing", lambda fid: tmp_path / "x.mp4")
+    subs = asyncio.run(video._auto_subtitles("x.mp4", "hu", lambda *a, **k: None, opts))
+    assert subs and seen == {"prompt": "Főzőműsor", "vocabulary": ["tálalás"], "model": "large-v3"}

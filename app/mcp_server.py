@@ -1867,6 +1867,7 @@ async def video(
     topic: Optional[str] = None,
     render: bool = True,
     end_card: Optional[Any] = None,
+    transcript: Optional[dict] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (edit_url opens an After Effects-like editor): made from a text, or
     graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id=…) until "done".
@@ -1925,7 +1926,8 @@ async def video(
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
                                     "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera,
                                     "subtitles": subtitles, "language": language, "render": render,
-                                    "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle})
+                                    "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
+                                    "transcript": transcript})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,

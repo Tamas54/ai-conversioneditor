@@ -52,3 +52,11 @@
   length reuses the extension); `"none"` removes it and the video is back to the footage's length.
 - Measured: 3.0 s clip + `dur: 2` → 5.0 s video, audio 5.0 s; frames at 3.6 s and 4.6 s are identical under the card.
 - The general extend-video / image-to-video operations belong to lane "media".
+
+## Cross-lane hooks (schema registry, transcript hints)
+- `video_schema.register({topic: text})` adds any lane's reference; `app.tools.transcript.SCHEMA_REF` (lane
+  transcript) is picked up automatically when present, so `video(action="schema", topic="transcript")` works after the
+  merge without wiring.
+- Overlay `transcript={"prompt", "vocabulary", "model"}` (MCP param `transcript`) is passed to the speech recognition
+  behind `subtitles="auto"` and `at: {"say": …}` (also kept for edits) — only the keys `transcript.transcribe` accepts,
+  so it is a no-op until lane transcript's new parameters are merged.
