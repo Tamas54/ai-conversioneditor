@@ -21,3 +21,8 @@
   the user picks the current one (`POST /api/share/choose`, MCP `files(action="choose")`); nothing is lost. Same
   person branching an older version is not a conflict. Advisory edit lock with a 30 s heartbeat (stale after 90 s,
   `edit_locks` table) only tells who is editing; it never blocks.
+- **Web UI** (only when sharing is on): file view "More → Share…" dialog (invite by e-mail with Can edit / Can view,
+  change role, remove, pending invites, link for signed-in people, "keep location" opt-out, recent activity);
+  Files → "Shared with me" (owner's name on each card, "By <name>" on versions others made in your workspace); the file
+  header tag "<Owner>'s · you can edit"; a "Two versions" bar that lets the user choose the current version after a
+  parallel save; a "<Name> is editing this right now" bar from the edit-lock heartbeat.

@@ -54,6 +54,7 @@
   <h2 id="leave-title">Save your edits first?</h2><p class="muted" id="leave-text">You changed something in the editor since the last save.</p>
   <div class="actions"><button class="btn ghost" value="stay">Stay</button><button class="btn" value="leave">Don't save</button><button class="btn primary" value="save" autofocus>Save and continue</button></div>
 </form></dialog>
+<dialog class="merge-dlg share-dlg" id="share-dlg" aria-labelledby="share-title"><button type="button" class="x-close drawer-x" id="share-x" aria-label="Close" title="Close (Esc)">✕</button><div id="share-body"></div></dialog>
 <dialog class="drawer" id="drawer" aria-labelledby="drawer-title"><button type="button" class="x-close drawer-x" id="drawer-x" aria-label="Close" title="Close (Esc)">✕</button><form id="make-form" method="dialog"></form></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -141,6 +142,7 @@
       <div class="seg-mini ws-kinds" id="ws-kinds" aria-label="Show"></div>
     </div>
     <div class="files" id="all-files"></div>
+    <div id="shared-box" hidden><div class="row-head shared-head"><h2>Shared with me</h2></div><div class="files" id="shared-files"></div></div>
   </section>
 </template>
 
@@ -229,6 +231,7 @@
       <form class="quick-panel" id="quick-panel" hidden novalidate></form>
       <p class="quick-status" id="quick-status" role="status" aria-live="polite" hidden></p>
     </div>
+    <div class="share-bar" id="share-bar" role="status" aria-live="polite" hidden></div>
     <div class="work-main">
       <iframe id="file-frame" title="File preview" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
       <aside class="ck-panel" id="checks" aria-label="Checks" hidden></aside>
@@ -267,7 +270,7 @@ const EDITORS = [
 const editorsFor = ext => EDITORS.filter(([, , exts]) => exts.includes((ext || "").toLowerCase()));
 const EDITOR_NAMES = { wordcraft: "Word editor", deckcraft: "slide editor", pdfcraft: "PDF editor", gridcraft: "spreadsheet editor",
   photocraft: "photo editor", designcraft: "layout editor", vectorcraft: "design editor", effectcraft: "video editor", filmcraft: "video cutter" };
-let account = null, files = [];
+let account = null, files = [], sharedFiles = [];   // sharedFiles: más munkaterületéből, velem megosztva
 
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("act"); t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3800); }
 function toastAction(msg, label, fn, ms = 8000) {      // üzenet + egy gomb (pl. „Undo”), amíg látszik
@@ -332,6 +335,7 @@ async function pollJob(job, label, st = $("#make-status")) {
 async function loadFiles() {
   const d = await api("/api/files");
   files = [...(d.inputs || []), ...(d.outputs || [])].filter(f => !pendingDel.has(f.file_id)).sort((a, b) => b.mtime - a.mtime);   // a visszavonható törlés alatt állók nem látszanak
+  sharedFiles = d.shared || [];
 }
 const IMG = ["png","jpg","jpeg","webp","gif","bmp"];
 const REL = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" });
@@ -348,7 +352,7 @@ const ICON_PRINT = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" 
 function fileCard(f) {
   const older = f.older_versions && !f._older ? `<button type="button" class="older-toggle" data-chain="${esc(f.chain)}" aria-expanded="${openChains.has(f.chain)}">${openChains.has(f.chain) ? "Hide older versions" : `+${f.older_versions} older version${f.older_versions > 1 ? "s" : ""}`}</button>` : "";
   return `<div class="file-card${f._older ? " is-older" : ""}"><button class="file" data-id="${esc(f.file_id)}"><span class="thumb" data-ext="${esc(f.ext)}"><img src="/api/thumb/${encodeURIComponent(f.file_id)}" alt="" loading="lazy"${IMG.includes(f.ext) ? "" : ' class="page"'}></span>
-    <span class="name" title="${esc(f.label)}">${esc(cardName(f))}</span><span class="meta">${f._older ? "Older version · " : ""}${f._n > 1 ? `${f._n} files · ` : `${size(f.size_kb)} · `}${ago(f.mtime)}</span></button>${older}
+    <span class="name" title="${esc(f.label)}">${esc(cardName(f))}</span><span class="meta">${f._older ? "Older version · " : ""}${f.shared ? `Shared by ${esc(f.shared.owner_name)} · ` : f.edited_by_name ? `By ${esc(f.edited_by_name)} · ` : ""}${f._n > 1 ? `${f._n} files · ` : `${size(f.size_kb)} · `}${ago(f.mtime)}</span></button>${older}
     <span class="file-acts"><a class="fa" href="${esc(f.url)}" download title="Download" aria-label="Download ${esc(f.label)}">${ICON_DL}</a><button class="fa" data-print="${esc(f.file_id)}" title="Print" aria-label="Print ${esc(f.label)}">${ICON_PRINT}</button></span></div>`;
 }
 // nyomtatás: a szerver PDF-et ad (Word, pptx, táblázat, kép, PSD… → PDF), a böngésző azt nyomtatja
@@ -607,6 +611,7 @@ const views = {
     q.addEventListener("input", () => { st.q = q.value; draw(); });
     q.addEventListener("keydown", e => { if (e.key === "Escape" && q.value) { q.value = ""; st.q = ""; draw(); } });
     draw();
+    if (sharedFiles.length) { $("#shared-box").hidden = false; renderFiles($("#shared-files"), sharedFiles); }
     if (account?.guest) $("#all-files").insertAdjacentHTML("beforebegin", `<p class="muted small" style="margin:-6px 0 14px">You're working as a guest: files are kept for 24 hours and uploads up to ${account.guest_max_upload_mb} MB. <a href="/signup?next=/app">Create a free account</a> to keep them.</p>`);
   },
   async connect() {
@@ -653,14 +658,17 @@ const views = {
   async file(arg) {
     const [id, sub, wantApp] = arg.split("?")[0].split("/");
     mount("t-file");
-    editorDirty = false;
+    editorDirty = false; stopLock();
+    if (!account) await loadAccount().catch(() => {});
     await loadFiles();
-    const f = files.find(x => x.file_id === id);
+    const f = files.find(x => x.file_id === id) || sharedFiles.find(x => x.file_id === id);
     if (!f) { $("#file-name").textContent = "This file is gone"; $("#btn-more").hidden = true; $("#btn-download").hidden = true; return; }
     cur = f;
     const sibs = f.group ? files.filter(x => x.group === f.group) : [];     // egy készítés testvérei (méretek × formátumok)
     const fmts = drawSibs(f, sibs, () => openApp);
     setFileName(f, !fmts);
+    if (f.shared) $("#file-name").insertAdjacentHTML("beforeend", ` <span class="ext-tag share-tag" title="Shared with you by ${esc(f.shared.owner_name)}">${esc(f.shared.owner_name)}'s · ${f.shared.role === "viewer" ? "view only" : "you can edit"}</span>`);
+    checkConflict(f.file_id);
     // EGY vissza-gomb: ha egy készítő-ablakból jött, oda visz kitöltve („← Back to Presentation”), különben egy lépés vissza
     const back = $("#btn-back"), close = $("#btn-close");
     back.href = close.href = lastPlace; close.title = "Close this file";
@@ -703,12 +711,13 @@ const views = {
       const flags = app === "effectcraft" ? "&empty&nosw" : "";
       $("#file-frame").src = `/editor/${app}/?src=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}&save=${encodeURIComponent(save)}${flags}`;
       openApp = app; drawSeg();
+      if (cur.shared?.role !== "viewer") startLock(cur.file_id);   // megosztott fájl: jelezzük, hogy szerkesztjük (szívverés)
     };
     const showPreview = async () => {
       if (!await canLeaveEditor()) return;
       editorDirty = false;
       history.replaceState(null, "", `/app/file/${encodeURIComponent(cur.file_id)}/preview`);   // saját link: újratöltéskor is előnézet
-      $("#file-frame").src = previewSrc(cur); openApp = null; drawSeg();
+      $("#file-frame").src = previewSrc(cur); openApp = null; drawSeg(); stopLock();
     };
     seg.addEventListener("click", e => {
       const b = e.target.closest("[data-view]"); if (!b || b.getAttribute("aria-pressed") === "true") return;
@@ -727,7 +736,7 @@ const views = {
   },
 };
 let mounted = "";
-function mount(id) { ckAbort?.abort(); ckAbort = null; mounted = id; $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
+function mount(id) { ckAbort?.abort(); ckAbort = null; if (id !== "t-file") stopLock(); mounted = id; $("#view").replaceChildren($("#" + id).content.cloneNode(true)); }
 let lastPlace = "/app";        // ahová a fájlnézet „bezárás” gombja visz
 let appSteps = 0;              // hány nézetet járt be az appon belül (a „← Back” csak ekkor lép a böngésző-előzményben)
 let underMaker = "/app";       // a készítő-fiók alatti nézet linkje — bezáráskor ide áll vissza a cím
@@ -846,6 +855,7 @@ window.addEventListener("message", e => {
       const app = (($("#file-frame").getAttribute("src") || "").match(/\/editor\/(\w+)\//) || [])[1];
       history.replaceState(history.state, "", `/app/file/${encodeURIComponent(cur.file_id)}` + (app ? `/edit/${app}` : ""));
     }
+    if (e.data.conflict) showConflict(e.data.conflict);       // megosztott projekt: közben más is mentett → választás
   }
   if (e.data.type === "save_failed") toast("Couldn't save to your workspace — it was downloaded instead");
 });
@@ -2273,7 +2283,8 @@ function wireMore(f, altEds, openEditor) {
     menu.innerHTML = sec("Edit", altEds.map(([app, label]) => `<button type="button" role="menuitem" data-act="edit" data-app="${app}">${esc(ALT_EDIT[app] || label)}</button>`).join(""))
       + sec("Use in", uses.map((u, i) => `<button type="button" role="menuitem" data-act="use" data-i="${i}">${esc(u[4])}</button>`).join(""))
       + sec("Convert to", targets.length ? `<div class="menu-chips">${targets.map(x => `<button type="button" role="menuitem" data-act="convert" data-fmt="${x.fmt}">${esc(x.label)}</button>`).join("")}</div>` : "")
-      + `<div class="menu-sec"><button type="button" role="menuitem" data-act="print">Print</button><button type="button" role="menuitem" data-act="delete" class="danger">Delete</button></div>`;
+      + (account?.sharing ? `<div class="menu-sec"><button type="button" role="menuitem" data-act="share">Share…<small>${f.shared ? `${esc(f.shared.owner_name)}'s file — see who has access` : "Let someone view it or keep editing it from their account"}</small></button></div>` : "")
+      + `<div class="menu-sec"><button type="button" role="menuitem" data-act="print">Print</button>${f.shared && f.shared.role !== "owner" ? "" : `<button type="button" role="menuitem" data-act="delete" class="danger">Delete</button>`}</div>`;
   };
   draw();
   api(`/api/convert/targets?ext=${encodeURIComponent(f.ext)}`).then(({ targets }) => draw(targets)).catch(() => {});
@@ -2284,6 +2295,7 @@ function wireMore(f, altEds, openEditor) {
     if (act === "edit") return openEditor(b.dataset.app);
     if (act === "print") return printFile(cur.file_id);
     if (act === "delete") return deleteWithUndo(cur);
+    if (act === "share") return openShare(cur);
     if (act === "use") return useIn(uses[+b.dataset.i]);
     if (act === "convert") {
       toast("Converting…");
@@ -2293,6 +2305,105 @@ function wireMore(f, altEds, openEditor) {
     }
   });
 }
+// ---------- megosztás: ki fér hozzá (néz / szerkeszt), link belépett felhasználóknak, napló ----------
+const ROLE_NAMES = { viewer: "Can view", editor: "Can edit", owner: "Owner" };
+const SHARE_ACTS = { version: "made a new version", share: "shared it", role: "changed someone's access", unshare: "removed someone's access",
+  link: "made a link", "link revoked": "turned a link off", "joined by link": "joined with the link", "invite accepted": "accepted the invitation",
+  conflict: "saved a parallel version", choose: "chose the current version" };
+async function openShare(f) {
+  const dlg = $("#share-dlg"), body = $("#share-body"), title = `Share “${esc(fileTitle(f))}”`;
+  body.innerHTML = `<h2 id="share-title">${title}</h2><p class="muted">Loading…</p>`;
+  if (!dlg.open) dlg.showModal();
+  const say = (t, html = false) => { const st = $("#share-status"); if (st) st[html ? "innerHTML" : "textContent"] = t; };
+  const post = (url, data, method = "POST") => api(url, { method, body: data ? JSON.stringify(data) : undefined });
+  const draw = async () => {
+    let s;
+    try { s = await api(`/api/share?file_id=${encodeURIComponent(f.file_id)}`); } catch (e) { body.querySelector(".muted").textContent = e.message; return; }
+    const people = s.people.map(p => `<li><span><strong>${esc(p.name || p.email || "")}</strong>${p.name && p.email ? ` <span class="muted small">${esc(p.email)}</span>` : ""}${p.pending ? ` <span class="muted small">· invited — waits until they sign up with this address</span>` : ""}</span>`
+      + (s.can_manage ? `<select data-share="${p.share_id}" aria-label="Access for ${esc(p.name || p.email || "")}">${["viewer", "editor", "owner"].map(r => `<option value="${r}"${r === p.role ? " selected" : ""}>${ROLE_NAMES[r]}</option>`).join("")}</select><button type="button" class="btn ghost" data-remove="${p.share_id}">Remove</button>` : `<span class="muted small">${ROLE_NAMES[p.role]}</span>`) + `</li>`).join("");
+    const acts = (s.activity || []).slice(0, 8).map(a => `<li><span>${esc(a.who)} ${esc(SHARE_ACTS[a.action] || a.action)}</span><span class="muted small">${ago(Date.parse(a.created_at) / 1000)}</span></li>`).join("");
+    body.innerHTML = `<h2 id="share-title">${title}</h2>
+      <p class="muted small">Owner: ${esc(s.owner.name)}${s.your_role === "owner" ? "" : ` · you ${s.your_role === "editor" ? "can edit" : "can view"}`}. People you add open it from their own account. Every change they make is a new version here — nothing is overwritten — and each person pays for their own AI work. Location (GPS) is removed from shared videos and photos.</p>
+      ${s.can_manage ? `<form class="share-add" id="share-add"><input type="email" name="email" placeholder="Email address" required autocomplete="off" aria-label="Email address">
+        <select name="role" aria-label="Access"><option value="editor">Can edit</option><option value="viewer">Can view</option></select><button class="btn primary">Invite</button>
+        <label class="checks small"><span><input type="checkbox" name="keep"> Keep location data (GPS) in the shared files</span></label></form>` : `<p class="muted small">Only the owner can change who has access.</p>`}
+      <p class="status small" id="share-status" role="status"></p>
+      <ul class="share-people">${people || `<li class="muted small">Not shared with anyone yet.</li>`}</ul>
+      ${s.can_manage ? `<div class="share-link"><span class="menu-h">Link for signed-in people</span>
+        <div class="rev-row"><select id="link-role" aria-label="What the link allows"><option value="viewer">Can view</option><option value="editor">Can edit</option></select><button type="button" class="btn" id="link-make">Create link</button></div>
+        <ul class="share-people">${(s.links || []).map(l => `<li><span>${ROLE_NAMES[l.role]} link · ${ago(Date.parse(l.created_at) / 1000)}</span><button type="button" class="btn ghost" data-unlink="${l.id}">Turn off</button></li>`).join("")}</ul></div>` : ""}
+      ${acts ? `<span class="menu-h">Activity</span><ul class="share-people share-activity">${acts}</ul>` : ""}`;
+    body.querySelector("#share-add")?.addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.currentTarget), email = fd.get("email");
+      try {
+        const r = await post("/api/share", { file_id: f.file_id, email, role: fd.get("role"), keep_location: !!fd.get("keep") });
+        await draw();
+        say((r.pending ? r.note : `Shared with ${email}.`) + (r.location_removed ? ` Location removed from ${r.location_removed} file${r.location_removed > 1 ? "s" : ""}.` : ""));
+      } catch (err) { say(err.message); }
+    });
+    body.querySelectorAll("[data-share]").forEach(sel => sel.addEventListener("change", async () => {
+      const p = s.people.find(x => String(x.share_id) === sel.dataset.share);
+      try { await post("/api/share", { file_id: p.shared_file_id, user_id: p.user_id || undefined, email: p.user_id ? undefined : p.email, role: sel.value }); await draw(); say("Access changed."); }
+      catch (err) { say(err.message); }
+    }));
+    body.querySelectorAll("[data-remove]").forEach(b => b.addEventListener("click", async () => {
+      try { await post(`/api/share/${b.dataset.remove}`, null, "DELETE"); await draw(); say("Removed — they can't open it any more."); } catch (err) { say(err.message); }
+    }));
+    body.querySelectorAll("[data-unlink]").forEach(b => b.addEventListener("click", async () => {
+      try { await post(`/api/share/link/${b.dataset.unlink}`, null, "DELETE"); await draw(); say("Link turned off."); } catch (err) { say(err.message); }
+    }));
+    $("#link-make")?.addEventListener("click", async () => {
+      try {
+        const r = await post("/api/share/link", { file_id: f.file_id, role: $("#link-role").value });
+        await draw();
+        say(`<input class="share-url" readonly value="${esc(r.url)}" aria-label="Link"> <button type="button" class="btn" id="link-copy">Copy</button><br>${esc(r.note)}`, true);
+        $("#link-copy").addEventListener("click", async ev => { try { await navigator.clipboard.writeText(r.url); ev.target.textContent = "Copied ✓"; } catch { $(".share-url").select(); } });
+      } catch (err) { say(err.message); }
+    });
+  };
+  await draw();
+}
+$("#share-x").addEventListener("click", () => $("#share-dlg").close());
+// Ütközés: közben más is mentett ugyanabból a változatból — mindkettő megvan, a felhasználó választ, melyik az aktuális
+async function checkConflict(id) {
+  if (!account?.sharing) return;
+  try { showConflict((await api(`/api/share/conflict?file_id=${encodeURIComponent(id)}`)).conflict); } catch {}
+}
+function showConflict(c) {
+  const bar = $("#share-bar"); if (!bar) return;
+  if (!c) { if (bar.classList.contains("warn")) { bar.hidden = true; bar.className = "share-bar"; bar.innerHTML = ""; } return; }
+  bar.className = "share-bar warn"; bar.hidden = false;
+  bar.innerHTML = `<span><strong>Two versions.</strong> ${esc(c.other.by)} saved a newer version while ${esc(c.fork.by)} was working on it. Both are kept — which one should be the current version?</span>
+    <button type="button" class="btn" data-pick="${esc(c.other.file_id)}">Use ${esc(c.other.by)}'s</button><button type="button" class="btn primary" data-pick="${esc(c.fork.file_id)}">Use ${esc(c.fork.by)}'s</button>`;
+  bar.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click", async () => {
+    if (!await canLeaveEditor()) return;
+    try {
+      await api("/api/share/choose", { method: "POST", body: JSON.stringify({ file_id: b.dataset.pick }) });
+      bar.hidden = true; bar.className = "share-bar"; toast("That's the current version now — the other one is kept as an older version");
+      if (b.dataset.pick !== cur?.file_id) nav("/app/file/" + encodeURIComponent(b.dataset.pick)); else route();
+    } catch (err) { toast(err.message); }
+  }));
+}
+// Szerkesztési zár (csak jelzés): amíg a szerkesztő nyitva van, 30 mp-enként szívverés; ha más szerkeszti, a sáv mondja
+let lockTimer = null, lockId = null;
+async function heartbeat() {
+  if (!lockId) return;
+  try {
+    const r = await api("/api/share/lock", { method: "POST", body: JSON.stringify({ file_id: lockId }) });
+    if (r.shared === false) return stopLock(true);              // nincs megosztva: nincs mit jelezni
+    const bar = $("#share-bar");
+    if (bar && !bar.classList.contains("warn")) { bar.hidden = r.yours !== false; bar.textContent = r.yours === false ? r.note : ""; }
+  } catch {}
+}
+function startLock(id) { stopLock(); if (!account?.sharing || account.guest) return; lockId = id; heartbeat(); lockTimer = setInterval(heartbeat, 30000); }
+function stopLock(quiet = false) {
+  clearInterval(lockTimer); lockTimer = null;
+  if (lockId && !quiet) fetch(`/api/share/lock?file_id=${encodeURIComponent(lockId)}`, { method: "DELETE", keepalive: true }).catch(() => {});
+  lockId = null;
+}
+addEventListener("pagehide", () => stopLock());
+
 // Törlés: azonnal eltűnik, de 8 másodpercig visszavonható („Undo”); a tényleges törlés utána (vagy az oldal elhagyásakor)
 const pendingDel = new Map();   // file_id → időzítő
 function commitDelete(id) {
