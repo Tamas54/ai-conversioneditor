@@ -117,7 +117,7 @@ TOOLS_LIST: list[Tool] = [
     _t("website-to-pdf", "web", "url", f"{_H}.web:to_pdf", ("url", "page_size", "full_page", "wait_ms"), min_files=0, max_files=0, output="pdf", engines=("chromium",), related=("website-to-image", "html-to-pdf")),
     _t("website-to-image", "web", "url", f"{_H}.web:to_image", ("url", "width", "full_page", "image_format", "wait_ms"), min_files=0, max_files=0, output="png", engines=("chromium",), related=("website-to-pdf", "thumbnail")),
     # ---------- fájlok ----------
-    _t("merge-files", "files", "@document @image @video @audio pdf", f"{_H}.files:merge", ("output_format",), min_files=2, max_files=100, engines=("pymupdf", "ffmpeg"), related=("merge-pdf", "collage-maker", "create-archive")),
+    _t("merge-files", "files", "@document @image @video @audio pdf", f"{_H}.files:merge", ("output_format", "canvas", "fit"), min_files=2, max_files=100, engines=("pymupdf", "ffmpeg"), related=("merge-pdf", "collage-maker", "create-archive")),
     _t("thumbnail", "files", "@document @image @video @presentation @ebook @vector @cad pdf", f"{_H}.files:thumbnail", ("width", "height", "image_format", "page", "at"), max_files=100, output="png", related=("website-to-image", "resize-image")),
     _t("create-archive", "files", "*", f"{_H}.files:create_archive", ("archive_format", "password", "level"), max_files=500, output="zip", engines=("python",), related=("extract-archive", "merge-files")),
     _t("extract-archive", "files", "@archive", f"{_H}.files:extract_archive", ("password",), output="zip", engines=("python",), related=("create-archive",)),

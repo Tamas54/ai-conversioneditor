@@ -196,11 +196,15 @@ async def crop_video(inputs: list[Path], o: dict[str, Any], out: Path) -> list[P
 async def resize_video(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
     if not o.get("resolution"):
         raise OptionError("resolution is required, e.g. 1280x720 or 720p")
-    wh = _RES.get(o["resolution"], o["resolution"].replace("x", ":"))
+    from app.tools import mediaprobe, videonorm
+    W, H = (int(x) for x in _RES.get(o["resolution"], o["resolution"].replace("x", ":")).split(":"))
     mode = o.get("aspect_mode", "pad")
-    vf = [f"scale={wh}:force_original_aspect_ratio=decrease,pad={wh}:(ow-iw)/2:(oh-ih)/2" if mode == "pad" else
-          f"scale={wh}:force_original_aspect_ratio=increase,crop={wh}" if mode == "crop" else f"scale={wh}", "setsar=1"]
-    return [await _video(src, out_name(out, src, "-resized"), vf=vf) for src in inputs]
+    fit = {"pad": "contain", "crop": "cover"}.get(mode, mode)          # pad | crop | stretch | blur
+    res = []
+    for src in inputs:
+        m = mediaprobe.summarize(await probe(src))
+        res.append(await _video(src, out_name(out, src, "-resized"), vf=[videonorm.input_chain(m, W, H, fit)]))
+    return res
 
 
 async def rotate_video(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:

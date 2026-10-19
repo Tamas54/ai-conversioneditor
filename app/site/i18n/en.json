@@ -697,7 +697,7 @@
   },
   "fit": {
    "label": "Fit",
-   "help": "inside: within the box · cover: fill and crop · contain: pad · fill: stretch."
+   "help": "inside: within the box · cover: fill and crop · contain: pad · fill: stretch · blur (videos): the clip's blurred copy fills the rest."
   },
   "quality": {
    "label": "Quality",
@@ -741,7 +741,7 @@
   },
   "aspect_mode": {
    "label": "Aspect mode",
-   "help": "pad with black bars, crop, or stretch."
+   "help": "pad with black bars, crop, stretch, or blur (a blurred copy of the video fills the bars)."
   },
   "fps": {
    "label": "Frame rate",
@@ -1130,6 +1130,10 @@
   "deep": {
    "label": "AI recognition for complex forms",
    "help": "auto: only when the free recognition looks incomplete or the form is complex (Plus and Pro plans, 1 credit per page) · on: always · off: never."
+  },
+  "canvas": {
+   "label": "Canvas",
+   "help": "auto: the first clip's size as shown (a portrait phone clip stays portrait) · vertical 1080×1920 · landscape 1920×1080 · square · or WxH."
   }
  },
  "thub": {

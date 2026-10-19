@@ -710,7 +710,7 @@
   },
   "fit": {
    "label": "Illesztés",
-   "help": "inside: dobozba · cover: kitölt és vág · contain: kitöltő sávval · fill: nyújt."
+   "help": "inside: dobozba · cover: kitölt és vág · contain: kitöltő sávval · fill: nyújt · blur (videó): a klip elmosott másolata tölti ki a maradékot."
   },
   "quality": {
    "label": "Minőség",
@@ -754,7 +754,7 @@
   },
   "aspect_mode": {
    "label": "Képarány-mód",
-   "help": "fekete sávokkal (pad), vágással (crop) vagy nyújtással (stretch)."
+   "help": "fekete sávokkal (pad), vágással (crop), nyújtással (stretch) vagy elmosott kitöltéssel (blur: a videó elmosott másolata tölti ki a sávot)."
   },
   "fps": {
    "label": "Képkocka/s",
@@ -1135,6 +1135,10 @@
   "deep": {
    "label": "AI-felismerés összetett űrlapokhoz",
    "help": "auto: csak ha az ingyenes felismerés hiányosnak tűnik vagy az űrlap összetett (Plus és Pro csomag, oldalanként 1 kredit) · on: mindig · off: soha."
+  },
+  "canvas": {
+   "label": "Vászon",
+   "help": "auto: az első klip megjelenített mérete (az álló telefonos klip álló marad) · vertical 1080×1920 · landscape 1920×1080 · square · vagy SzxM."
   }
  },
  "thub": {
