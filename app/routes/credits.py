@@ -41,7 +41,7 @@ async def account_ledger(limit: int = 50, before: Optional[int] = None) -> dict[
 
 @router.get("/api/estimate")
 async def estimate(operation: str, model: str = "", tier: str = "", units: float = 1) -> dict[str, Any]:
-    est = await credits.estimate(operation, model, tier, units)
+    est = credits.public_estimate(await credits.estimate(operation, model, tier, units))
     return {**est, "balance": await credits.balance(tenancy.current_user_id())}
 
 
