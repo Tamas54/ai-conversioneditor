@@ -146,6 +146,10 @@ async def jobs(action: str = "create", tasks: Optional[dict] = None, job_id: Opt
         return _job_out(job.public())
     j = J.get(job_id or "", uid)
     if not j:
+        from app import jobs as studio_jobs          # a videó / Studio jobja (video, render, transcript…): ugyanitt látszik
+        if studio_jobs.mine(job_id or ""):
+            st = await (studio_jobs.job_cancel(job_id) if action == "cancel" else studio_jobs.wait_status(job_id, wait))
+            return {**st, "note": 'A Studio job (video, render, transcript…) — video(action="status", job_id=…) shows the same.'}
         raise ValueError("No such job.")
     if action == "cancel":
         await J.cancel(j)

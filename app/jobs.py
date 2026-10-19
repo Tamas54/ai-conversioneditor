@@ -73,6 +73,26 @@ async def job_status(job_id: str) -> dict[str, Any]:
     return _public(job)
 
 
+def mine(job_id: str) -> bool:
+    """Ennek a felhasználónak a jobja-e (a REST /v1/jobs mellett: az MCP jobs eszköze ezt is látja)."""
+    job = _JOBS.get(job_id or "")
+    return bool(job) and job["owner"] == tenancy.current_user_id()
+
+
+async def wait_status(job_id: str, wait: Any = None) -> dict[str, Any]:
+    """A job állapota; wait: legfeljebb ennyi másodpercig (≤ 55) vár, amíg fut — a kliens így nem pörgeti a status-t."""
+    job = _JOBS.get(job_id)
+    secs = max(0.0, min(float(wait or 0), 55.0))
+    if secs and job and job["owner"] == tenancy.current_user_id() and job["status"] == "running" and job.get("_task"):
+        try:
+            await asyncio.wait_for(asyncio.shield(job["_task"]), secs)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:                       # a hiba a job állapotában van (failed)
+            pass
+    return await job_status(job_id)
+
+
 @router.delete("/api/jobs/{job_id}")
 async def job_cancel(job_id: str) -> dict[str, Any]:
     """Futó munka leállítása (a már kiolvasott oldalak a gyorsítótárban maradnak)."""
