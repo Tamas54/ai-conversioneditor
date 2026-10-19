@@ -697,7 +697,7 @@
   },
   "fit": {
    "label": "Fit",
-   "help": "inside: within the box · cover: fill and crop · contain: pad · fill: stretch."
+   "help": "inside: within the box · cover: fill and crop · contain: pad · fill: stretch · blur (videos): the clip's blurred copy fills the rest."
   },
   "quality": {
    "label": "Quality",
@@ -741,7 +741,7 @@
   },
   "aspect_mode": {
    "label": "Aspect mode",
-   "help": "pad with black bars, crop, or stretch."
+   "help": "pad with black bars, crop, stretch, or blur (a blurred copy of the video fills the bars)."
   },
   "fps": {
    "label": "Frame rate",
@@ -1130,6 +1130,82 @@
   "deep": {
    "label": "AI recognition for complex forms",
    "help": "auto: only when the free recognition looks incomplete or the form is complex (Plus and Pro plans, 1 credit per page) · on: always · off: never."
+  },
+  "canvas": {
+   "label": "Canvas",
+   "help": "auto: the first clip's size as shown (a portrait phone clip stays portrait) · vertical 1080×1920 · landscape 1920×1080 · square · or WxH."
+  },
+  "duration": {
+   "label": "Duration (s)",
+   "help": "extend-video: how long the frame is held · image-to-video: the clip's length (default 5 s)."
+  },
+  "motion": {
+   "label": "Motion",
+   "help": "still · zoom_in / zoom_out (towards / away from the centre) · pan_left / pan_right / pan_up / pan_down (the picture glides that way)."
+  },
+  "auto": {
+   "label": "Auto",
+   "help": "Measures the clip (average, darkest and brightest tones, saturation) and corrects levels, mid-tones, saturation and hot highlights. Your own values win."
+  },
+  "brightness": {
+   "label": "Brightness",
+   "help": "-1…1, 0 = unchanged."
+  },
+  "contrast": {
+   "label": "Contrast",
+   "help": "0…3, 1 = unchanged."
+  },
+  "gamma": {
+   "label": "Gamma",
+   "help": "0.1…3, 1 = unchanged; above 1 brightens the mid-tones."
+  },
+  "saturation": {
+   "label": "Saturation",
+   "help": "0…3, 1 = unchanged, 0 = grey."
+  },
+  "shadows": {
+   "label": "Shadows",
+   "help": "-1…1: + lifts the dark parts, − deepens them."
+  },
+  "highlights": {
+   "label": "Highlights",
+   "help": "-1…1: − tones the bright parts down, + brightens them."
+  },
+  "highlight_rolloff": {
+   "label": "Highlight roll-off",
+   "help": "0…1: bends the brightest tones down softly. Clipped (burnt-out) highlights can't be recovered, only toned down."
+  },
+  "temperature": {
+   "label": "Colour temperature (K)",
+   "help": "1000–40000, 6500 = as shot; lower is warmer (orange), higher cooler (blue)."
+  },
+  "vibrance": {
+   "label": "Vibrance",
+   "help": "-2…2: lifts the dull colours more than the strong ones; skin stays natural."
+  },
+  "lut": {
+   "label": "Look (LUT)",
+   "help": "warm_kitchen (Warm kitchen) · news_studio (News studio) · cinema (Cinema) · black_white (Black & white)."
+  },
+  "denoise": {
+   "label": "Denoise",
+   "help": "off · fast (hqdn3d) · quality (nlmeans, slower)."
+  },
+  "sharpen": {
+   "label": "Sharpen",
+   "help": "0…1, 0 = off."
+  },
+  "sharpen_method": {
+   "label": "Sharpening",
+   "help": "cas (contrast-adaptive, default) · unsharp."
+  },
+  "stabilize": {
+   "label": "Stabilise",
+   "help": "Two-pass stabilisation (vidstab) for shaky hand-held footage; the frame zooms in slightly to hide the moving edges."
+  },
+  "preview": {
+   "label": "Preview only",
+   "help": "Four frames, left half before, right half after — a picture instead of the whole video."
   }
  },
  "thub": {
@@ -2035,6 +2111,39 @@
    "desc": "Convert a time between time zones, daylight saving included.",
    "h1": "Time zone converter",
    "intro": "Convert a date and time between any of the IANA time zones, with daylight saving time.",
+   "points": [],
+   "faq": []
+  },
+  "extend-video": {
+   "slug": "extend-video",
+   "name": "Extend video",
+   "tag": "extended",
+   "title": "Extend a video — hold the last frame or freeze a moment",
+   "desc": "Make a video longer by holding its last frame for a few seconds, or freeze it at any moment.",
+   "h1": "Extend video",
+   "intro": "Extend video holds the last frame for the seconds you choose — room for an end card or closing titles — or freezes the picture at a given moment and then plays on. The sound pauses during the freeze.",
+   "points": [],
+   "faq": []
+  },
+  "image-to-video": {
+   "slug": "image-to-video",
+   "name": "Image to video",
+   "tag": "video",
+   "title": "Image to video — a still as a clip, with Ken Burns motion",
+   "desc": "Turn a photo or a PNG into a video clip of any length, still or with a slow zoom or pan.",
+   "h1": "Image to video",
+   "intro": "Image to video makes an MP4 clip from a photo, a PNG or a graphic: choose the length, a slow zoom or pan (Ken Burns) and the frame — portrait, landscape or square, with the picture's blurred copy filling the rest. The clip has a silent sound track, so it merges with other clips.",
+   "points": [],
+   "faq": []
+  },
+  "adjust-video": {
+   "slug": "adjust-video",
+   "name": "Adjust video",
+   "tag": "adjusted",
+   "title": "Adjust video — colour, light, LUT looks, denoise, sharpen, stabilise",
+   "desc": "Correct a video's colours and light (or let Auto do it), add a LUT look, remove noise, sharpen and stabilise shaky footage.",
+   "h1": "Adjust video",
+   "intro": "Adjust video corrects brightness, contrast, gamma, saturation, shadows and highlights, colour temperature and vibrance — or Auto measures the clip and sets them — adds a look (Warm kitchen, News studio, Cinema, Black & white), removes noise, sharpens and stabilises shaky footage. Preview shows four frames half before, half after, before the whole video is made. Burnt-out highlights can't be recovered, only toned down.",
    "points": [],
    "faq": []
   }

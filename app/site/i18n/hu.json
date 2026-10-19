@@ -710,7 +710,7 @@
   },
   "fit": {
    "label": "Illesztés",
-   "help": "inside: dobozba · cover: kitölt és vág · contain: kitöltő sávval · fill: nyújt."
+   "help": "inside: dobozba · cover: kitölt és vág · contain: kitöltő sávval · fill: nyújt · blur (videó): a klip elmosott másolata tölti ki a maradékot."
   },
   "quality": {
    "label": "Minőség",
@@ -754,7 +754,7 @@
   },
   "aspect_mode": {
    "label": "Képarány-mód",
-   "help": "fekete sávokkal (pad), vágással (crop) vagy nyújtással (stretch)."
+   "help": "fekete sávokkal (pad), vágással (crop), nyújtással (stretch) vagy elmosott kitöltéssel (blur: a videó elmosott másolata tölti ki a sávot)."
   },
   "fps": {
    "label": "Képkocka/s",
@@ -1135,6 +1135,82 @@
   "deep": {
    "label": "AI-felismerés összetett űrlapokhoz",
    "help": "auto: csak ha az ingyenes felismerés hiányosnak tűnik vagy az űrlap összetett (Plus és Pro csomag, oldalanként 1 kredit) · on: mindig · off: soha."
+  },
+  "canvas": {
+   "label": "Vászon",
+   "help": "auto: az első klip megjelenített mérete (az álló telefonos klip álló marad) · vertical 1080×1920 · landscape 1920×1080 · square · vagy SzxM."
+  },
+  "duration": {
+   "label": "Hossz (mp)",
+   "help": "extend-video: meddig áll a kocka · image-to-video: a klip hossza (alap 5 mp)."
+  },
+  "motion": {
+   "label": "Mozgás",
+   "help": "still (áll) · zoom_in / zoom_out (a közép felé / felől) · pan_left / pan_right / pan_up / pan_down (a kép arra úszik)."
+  },
+  "auto": {
+   "label": "Auto",
+   "help": "Megméri a klipet (átlagos, legsötétebb és legvilágosabb tónus, telítettség), és javítja a szinteket, a középtónusokat, a telítettséget és a forró csúcsfényeket. A saját értékeid erősebbek."
+  },
+  "brightness": {
+   "label": "Fényerő",
+   "help": "-1…1, 0 = változatlan."
+  },
+  "contrast": {
+   "label": "Kontraszt",
+   "help": "0…3, 1 = változatlan."
+  },
+  "gamma": {
+   "label": "Gamma",
+   "help": "0,1…3, 1 = változatlan; 1 fölött világosabb középtónusok."
+  },
+  "saturation": {
+   "label": "Telítettség",
+   "help": "0…3, 1 = változatlan, 0 = szürke."
+  },
+  "shadows": {
+   "label": "Árnyékok",
+   "help": "-1…1: + világosítja a sötét részeket, − mélyíti."
+  },
+  "highlights": {
+   "label": "Csúcsfények",
+   "help": "-1…1: − tompítja a világos részeket, + világosítja."
+  },
+  "highlight_rolloff": {
+   "label": "Csúcsfény-lekerekítés",
+   "help": "0…1: a legvilágosabb tónusokat lágyan lehajlítja. A kiégett (clipped) csúcsfény nem állítható vissza, csak tompítható."
+  },
+  "temperature": {
+   "label": "Színhőmérséklet (K)",
+   "help": "1000–40000, 6500 = ahogy felvették; alacsonyabb = melegebb (narancs), magasabb = hűvösebb (kék)."
+  },
+  "vibrance": {
+   "label": "Vibrance",
+   "help": "-2…2: a fakó színeket jobban emeli, mint az erőseket; a bőrtónus természetes marad."
+  },
+  "lut": {
+   "label": "Hangulat (LUT)",
+   "help": "warm_kitchen (Meleg konyha) · news_studio (Hírstúdió) · cinema (Mozi) · black_white (Fekete-fehér)."
+  },
+  "denoise": {
+   "label": "Zajszűrés",
+   "help": "off · fast (hqdn3d, gyors) · quality (nlmeans, minőségi, lassabb)."
+  },
+  "sharpen": {
+   "label": "Élesítés",
+   "help": "0…1, 0 = ki."
+  },
+  "sharpen_method": {
+   "label": "Élesítés módja",
+   "help": "cas (kontrasztfüggő, alap) · unsharp."
+  },
+  "stabilize": {
+   "label": "Stabilizálás",
+   "help": "Kétmenetes stabilizálás (vidstab) a kézből remegő felvételhez; a kép kissé nagyítva, hogy a mozgó szél ne látsszon."
+  },
+  "preview": {
+   "label": "Csak előnézet",
+   "help": "Négy kocka, bal fele előtte, jobb fele utána — kép az egész videó helyett."
   }
  },
  "thub": {
@@ -1971,6 +2047,36 @@
    "desc": "Időpont átváltása időzónák között, a nyári időszámítással együtt.",
    "h1": "Időzóna-váltó",
    "intro": "Dátum és időpont átváltása bármely IANA-időzóna között, a nyári időszámítással együtt.",
+   "points": [],
+   "faq": []
+  },
+  "extend-video": {
+   "slug": "video-meghosszabbitasa",
+   "name": "Videó meghosszabbítása",
+   "title": "Videó meghosszabbítása — az utolsó kocka kimerevítése",
+   "desc": "Hosszabb videó az utolsó kocka néhány másodperces kimerevítésével, vagy egy pillanat kimerevítésével bárhol.",
+   "h1": "Videó meghosszabbítása",
+   "intro": "A meghosszabbítás az utolsó kockát a megadott ideig kimerevíti — hely a zárókártyának, a végefőcímnek —, vagy egy adott pillanatnál merevíti ki a képet, aztán a videó folytatódik. A kimerevítés alatt a hang szünetel.",
+   "points": [],
+   "faq": []
+  },
+  "image-to-video": {
+   "slug": "kepbol-video",
+   "name": "Képből videó",
+   "title": "Képből videó — állókép klipként, Ken Burns-mozgással",
+   "desc": "Fotóból vagy PNG-ből tetszőleges hosszú videóklip, állva vagy lassú nagyítással, úsztatással.",
+   "h1": "Képből videó",
+   "intro": "A képből videó egy fotóból, PNG-ből vagy grafikából MP4-klipet készít: megadhatod a hosszát, a lassú nagyítást vagy úsztatást (Ken Burns) és a képkeretet — álló, fekvő vagy négyzetes, a maradékot a kép elmosott másolata tölti ki. A klipnek néma hangsávja van, így más klipekkel összefűzhető.",
+   "points": [],
+   "faq": []
+  },
+  "adjust-video": {
+   "slug": "video-korrekcio",
+   "name": "Videó korrekciója",
+   "title": "Videó korrekciója — színek, fények, LUT, zajszűrés, élesítés, stabilizálás",
+   "desc": "A videó színeinek és fényeinek javítása (vagy az Auto), LUT-hangulat, zajszűrés, élesítés és a remegő felvétel stabilizálása.",
+   "h1": "Videó korrekciója",
+   "intro": "A korrekció a fényerőt, a kontrasztot, a gammát, a telítettséget, az árnyékokat és a csúcsfényeket, a színhőmérsékletet és a vibrance-t állítja — vagy az Auto megméri a klipet és beállítja —, hangulatot ad (Meleg konyha, Hírstúdió, Mozi, Fekete-fehér), zajt szűr, élesít és stabilizálja a remegő felvételt. Az előnézet négy kockán mutatja félig előtte, félig utána, mielőtt az egész videó elkészül. A kiégett csúcsfény nem állítható vissza, csak tompítható.",
    "points": [],
    "faq": []
   }

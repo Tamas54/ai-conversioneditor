@@ -148,7 +148,26 @@ def _ooxml_read(p: Path) -> dict[str, Any]:
 
 
 async def read(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[str, Any]:
-    src = inputs[0]
+    """Egy fájl: {"files": [<név>-metadata.json], "data": {...}} (mint eddig). Több fájl egy hívásban: egy közös JSON,
+    data = {"count": n, "items": [{file_id, label, file, metadata, media?, video?} …]} a bemenetek sorrendjében."""
+    if len(inputs) == 1:
+        return await _read_one(inputs[0], out)
+    from app.storage import display_label
+    items = []
+    for src in inputs:
+        d = (await _read_one(src, out, write=False))["data"]
+        try:
+            label = display_label(src.name)
+        except Exception:
+            label = None
+        items.append({"file_id": src.name, "label": label, **d})
+    data = {"count": len(items), "items": items}
+    dst = out / "metadata.json"
+    dst.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), "utf-8")
+    return {"files": [dst], "data": data}
+
+
+async def _read_one(src: Path, out: Path, write: bool = True) -> dict[str, Any]:
     kind = _kind(src)
     data: dict[str, Any] = {"file": {"name": src.name.split("__", 1)[-1], "format": from_filename(src.name),
                                      "size_bytes": src.stat().st_size}}
@@ -167,8 +186,14 @@ async def read(inputs: list[Path], o: dict[str, Any], out: Path) -> dict[str, An
     if kind == "media" and available("ffmpeg"):
         try:
             data["media"] = await _ffprobe(src)
+            from app.tools import mediaprobe          # a lényeg egy helyen: megjelenítési méret, elforgatás, HDR
+            m = await mediaprobe.info(src)
+            if m["has_video"]:
+                data["video"] = mediaprobe.public(m)
         except Exception:
             pass
+    if not write:
+        return {"files": [], "data": data}
     dst = out_name(out, src, "-metadata", "json")
     dst.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), "utf-8")
     return {"files": [dst], "data": data}

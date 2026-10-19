@@ -240,8 +240,9 @@ def _main_comp(project_path: Path) -> str:
 
 
 async def probe_movie(path: Path) -> dict[str, Any]:
-    """Egy felvétel adatai (ffprobe): méret (az elforgatás szerint), képkocka/s, hossz, van-e hang, pixelformátum."""
+    """Egy felvétel adatai (ffprobe): méret (az elforgatás szerint), képkocka/s, hossz, van-e hang, pixelformátum, HDR."""
     from app.convert.engines import run
+    from app.tools.mediaprobe import hdr_kind
     out, _ = await run("ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path), timeout=60)
     d = json.loads(out.decode("utf-8", "replace") or "{}")
     vs = [s for s in d.get("streams") or [] if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")]
@@ -268,7 +269,7 @@ async def probe_movie(path: Path) -> dict[str, Any]:
     return {"audio_stream": known[0] if known else None,
             "width": w, "height": h, "fps": round(fps, 3), "duration": round(dur, 3), "rotation": rot,
             "audio": any(s.get("codec_type") == "audio" for s in d.get("streams") or []),
-            "codec": v.get("codec_name"), "pix_fmt": v.get("pix_fmt"), "alpha_mode": alpha_tag}
+            "codec": v.get("codec_name"), "pix_fmt": v.get("pix_fmt"), "alpha_mode": alpha_tag, "hdr": hdr_kind(v)}
 
 
 def _tc(t: float) -> str:
@@ -3319,10 +3320,12 @@ async def _cut_clip(src: Path, span: tuple[float, float], dst: Path) -> Path:
     """Egy másik felvétel része a grafikába (bevágás): span = (kezdet, hossz) mp; a kép NÉMÁN (a hangja külön sáv:
     _cut_sound), az elforgatás szerint egyenesen, a hosszabb oldal legfeljebb 1920 px."""
     from app.convert.engines import run
+    from app.tools import encoding, mediaprobe, videonorm
     a, n = span
+    hdr = videonorm.tonemap_filters(await mediaprobe.info(src))          # HLG/PQ → SDR BT.709 (OMLETT 3.3)
     await run("ffmpeg", "-v", "error", "-y", "-ss", f"{a:.3f}", "-i", str(src), "-t", f"{n:.3f}", "-map", "0:v:0", "-an",
-              "-vf", "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'", "-c:v", "libx264",
-              "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst),
+              "-vf", ",".join(hdr + ["scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'"]), "-c:v", "libx264",
+              "-preset", "veryfast", "-crf", str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst),
               timeout=settings.VIDEO_TIMEOUT_S)
     return dst
 
@@ -3847,12 +3850,15 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
                              + (" — every layer given was left out: " + "; ".join(n[2:] for n in notes if n.startswith("⚠ ")) if notes else "") + ".")
         from app.storage.naming import result_stem, root_name
         base = {"asset": f"footage.{ext}", "file_id": fid, **{k: info[k] for k in ("width", "height", "fps", "duration", "audio")}}
-        if info.get("rotation") and int(info["rotation"]) % 360:
+        if (info.get("rotation") and int(info["rotation"]) % 360) or info.get("hdr"):
             # telefonos felvétel elforgatás-jelöléssel: a motor a tárolt (oldalra fektetett) képet olvasná — egyszer
-            # felállítjuk (ffmpeg autorotate), és ez lesz az alapsáv
-            step(0, 4, "turning the footage upright")
+            # felállítjuk (ffmpeg autorotate), és ez lesz az alapsáv; a HDR (HLG/PQ) ugyanitt SDR-re képezve (OMLETT 3.3)
+            step(0, 4, "turning the footage upright" if info.get("rotation") else "mapping the HDR footage to SDR")
             base["media_id"], base["asset"] = await _upright(crafts.existing(fid)), "footage.mp4"
-            base["rotated"] = int(info["rotation"])
+            if info.get("rotation") and int(info["rotation"]) % 360:
+                base["rotated"] = int(info["rotation"])
+            if info.get("hdr"):
+                base["hdr"] = info["hdr"]
         if card:                                              # zárókártya: a felvétel vége kimerevítve, a hang csenddel
             step(0, 4, "holding the last frame for the end card")
         base = await _with_end_card(base, card)
@@ -4089,11 +4095,14 @@ def _credit_line(credit_list: list[str], story: dict[str, Any]) -> tuple[str, st
 async def _upright(src: Path) -> str:
     """Az elforgatás-jelöléssel tárolt felvétel álló/fekvő helyzetbe újrakódolva (rejtett munkafájl) → file_id."""
     from app.convert.engines import run
+    from app.tools import encoding, mediaprobe, videonorm
     fid = new_file_id("mp4")
-    k = (await probe_movie(src)).get("audio_stream")
+    info = await probe_movie(src)
+    k = info.get("audio_stream")
     aud = ["-map", f"0:a:{k}"] if k is not None else []      # csak az első dekódolható hangsáv (térhang nélkül)
-    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud, "-c:v", "libx264", "-preset", "veryfast",
-              "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path(fid)),
+    vf = ["-vf", ",".join(videonorm.head_filters(await mediaprobe.info(src)))] if info.get("hdr") else []   # HLG/PQ → SDR
+    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud, *vf, "-c:v", "libx264", "-preset", "veryfast",
+              "-crf", str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p", *encoding.aac(), "-movflags", "+faststart", str(output_path(fid)),
               timeout=settings.VIDEO_TIMEOUT_S)
     write_meta(fid, operation="footage set upright", source_file_id=None, extra={"ephemeral": True})
     return fid
@@ -4289,8 +4298,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         group = _new_group()
         credits = _credit_line(credit_list, story)[0]
         spec = {"kind": "overlay", "story": _without_runtime(story),
-                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "width", "height", "fps", "duration", "audio",
-                                                  "end_card", "plain")
+                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "hdr", "adjust", "clean_media_id", "width",
+                                                  "height", "fps", "duration", "audio", "end_card", "plain")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
                          "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera"),
@@ -4335,7 +4344,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         fitted, trunc = _FIT.get() or [], _TRUNC.get() or []
         chk["verified"] = m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}"
                            + (", with its own sound." if base.get("audio") else " (it has no sound track).")
-                           + (f" It was stored turned by {base['rotated']}°, so it was set upright first." if base.get("rotated") else "")] \
+                           + (f" It was stored turned by {base['rotated']}°, so it was set upright first." if base.get("rotated") else "")
+                           + (f" It is HDR ({base['hdr'].upper()}): mapped to SDR (BT.709) first, so the colours aren't washed out."
+                              if base.get("hdr") else "")] \
             + ([f"End card “{card['title']}”: the footage's last frame is held for {card['dur']:g} s under it"
                  + (", the sound padded with silence" if base.get("audio") else "")
                  + f" — {_tc(base['plain']['duration'])} → {_tc(total)}."] if card else []) \
@@ -4439,17 +4450,27 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
                          mode: Optional[str] = None, why: Optional[str] = None) -> dict[str, Any]:
     """A projekt fő kompozíciója → MP4 (WebM / GIF) + check. A kért hossz (requested) és a mód a projekt metájából is
     jön (újrarenderelésnél): az eredmény duration = {requested, actual (a fájl mért hossza), mode}."""
+    from app.tools import encoding
     ext = "webm" if fmt == "webm" else "gif" if fmt == "gif" else "mp4"
     out = project_path.parent / f"render.{ext}"
-    args = ["render", "--project", project_path.name, "--comp", _main_comp(project_path), "--out", out.name,
-            "--format", {"mp4": "h264", "webm": "webm", "gif": "gif"}[ext], "--json"]
-    if ext == "mp4":
+    # OMLETT 1.2: a végső MP4 = a renderelő ProRes LT köztes fájlja → x264 CRF (app/tools/encoding.py)
+    master = project_path.parent / "render-master.mov" if ext == "mp4" and not draft and encoding.final_encoder() == "x264" else None
+    args = ["render", "--project", project_path.name, "--comp", _main_comp(project_path), "--out", (master or out).name,
+            "--format", "prores" if master else {"mp4": "h264", "webm": "webm", "gif": "gif"}[ext], "--json"]
+    if master:
+        args += ["--prores", "lt", "--audio", "auto"]
+    elif ext == "mp4":
         args += ["--bitrate", "2500" if draft else "8000", "--audio", "auto"]
     if draft:
         args += ["--resolution", "half", "--quality", "draft"]
     t0 = time.time()
     async with _render_gate():
         await _run(*args, cwd=project_path.parent)
+    if master is not None and master.exists():
+        try:
+            await encoding.final_from_master(master, out, timeout=settings.VIDEO_TIMEOUT_S)
+        finally:
+            master.unlink(missing_ok=True)
     if not out.exists():
         raise RuntimeError("The render produced no file")
     from app.tools import ios_safe
@@ -4520,7 +4541,22 @@ def info(file_id: str) -> dict[str, Any]:
     if ext != "ecproj":
         src = meta.get("source_file_id")
         out = {"file_id": file_id, "kind": "movie" if ext in MOVIE_EXTS else ext, "size_kb": p.stat().st_size // 1024,
-               "made_from": src}
+               "made_from": src, "read_only": True}
+        if ext in MOVIE_EXTS or ext in AUDIO_EXTS:           # nyers felvétel: hossz, megjelenítési méret, elforgatás, kodekek, HDR
+            from app.tools import mediaprobe
+            try:
+                m = mediaprobe.info_sync(p)
+            except Exception as e:
+                log.info("video info: ffprobe %s: %s", file_id, e)
+                m = None
+            if m:
+                out.update({"duration": m["duration"], "width": m["display_width"] or None,
+                            "height": m["display_height"] or None, "rotation": m["rotation"], "fps": m["fps"],
+                            "video_codec": m["vcodec"], "audio_codec": m["acodec"], "audio": m["has_audio"],
+                            "hdr": m["hdr"], "bit_depth": m["bit_depth"],
+                            "bitrate_kbps": round(m["bitrate"] / 1000) if m["bitrate"] else None})
+                if m["rotation"]:
+                    out["stored_as"] = f"{m['width']}×{m['height']}, turned {m['rotation']}° when played"
         if src and str(src).lower().endswith(".ecproj"):
             out["project"] = src
             out["note"] = ("To change this video, use video(action=\"edit\") with this file or its project; info on the project "
@@ -4548,7 +4584,7 @@ def info(file_id: str) -> dict[str, Any]:
     layers = [{**x, **({"on_timeline": f"{_tc(rows[x['id']]['start'])}–{_tc(rows[x['id']]['end'])}"} if x["id"] in rows
                        else {"on_timeline": "left out (it starts after the video ends)"})}
               for x in layer_listing((spec.get("story") or {}).get("layers") or [])]
-    return {"file_id": file_id, "comps": _comps(data), "footage": footage, "missing": [f for f in footage if f not in assets],
+    return {"file_id": file_id, "read_only": True, "comps": _comps(data), "footage": footage, "missing": [f for f in footage if f not in assets],
             "video": meta.get("video"), "last_render": ({**_file_entry(rid), **({"draft": True} if meta.get("render_draft") else {})}
                                                         if rid and output_path(rid).exists() else None),
             "credits": meta.get("credit"), "editable_by_description": bool(spec),
@@ -4895,6 +4931,9 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
         res["notes"] = ["Rebuilt from the layer list: changes made by hand in the video editor are not in this version "
                         "(they stay in the previous one)."] if meta.get("hand_edited") else []
         return res
+    if changes.get("adjust"):
+        raise ValueError("adjust corrects your own footage: it works on an overlay video (action=\"overlay\"). For a "
+                         "clip before it goes in, use file_tools(tool=\"adjust-video\").")
     alpha_kinds(alpha)
     duration_mode(changes.get("duration_mode"), changes.get("duration"))
     story = copy.deepcopy(spec["story"])
@@ -5018,11 +5057,12 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
     allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "camera", "subtitles", "end_card", "end_title",
-               "end_subtitle", "transcript"}
+               "end_subtitle", "transcript", "adjust"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
-                         f"changes.add_layers), accent or title — not {', '.join(other)}. To recut the footage itself, use "
+                         f"changes.add_layers), accent, title, an end card (changes.end_card) or the footage's colour and light "
+                         f"(changes.adjust, e.g. {{\"auto\": true}}) — not {', '.join(other)}. To recut the footage itself, use "
                          "file_tools (trim-video…) and run overlay again.")
     opts = dict(spec.get("opts") or {})
     if "camera" in changes:
@@ -5055,6 +5095,21 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
         card = end_card_of({"end_card": merged})
     if not layers and not opts["subtitles"] and not card:
         raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
+    if "adjust" in changes:                     # OMLETT 3.2: a felvétel korrekciója (app/tools/video_fx.py), mindig az eredetiből
+        from app.tools import video_fx
+        base = await _with_end_card(base, None)    # a korrekció a kimerevített vég nélküli felvételre; a kártya utána újra rá
+        adj = video_fx.normalize(changes["adjust"])
+        clean = base.get("clean_media_id") if base.get("adjust") else base.get("media_id")
+        for k in ("adjust", "clean_media_id", "media_id"):
+            base.pop(k, None)
+        base["asset"] = "footage.mp4" if clean else f"footage.{str(base['file_id']).rsplit('.', 1)[-1].lower()}"
+        if clean:
+            base["media_id"] = clean
+        if adj:
+            step(0, 4, "adjusting the footage")
+            fx, info = await video_fx.render_file(crafts.existing(clean or base["file_id"]), adj)
+            base.update(media_id=fx, asset=f"footage-fx-{fx[:8]}.mp4", adjust=adj, clean_media_id=clean)
+            notes.append("Your footage — " + " ".join(info["applied"]))
     base = await _with_end_card(base, card)                    # új / más hosszú kártya: a felvétel újra meghosszabbítva
     return await _assemble_overlay(base, layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,

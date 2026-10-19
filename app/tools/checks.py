@@ -581,7 +581,29 @@ async def check_pages_math(out: Path, expected: int, what: str) -> dict[str, Any
     return make("ok", [], [f"{what}: {_plural(n, 'page')}, as expected."])
 
 
+_AV_EXTS = {"mp4", "mov", "m4v", "webm", "mkv", "avi", "mpg", "mpeg", "3gp", "mts", "m2ts", "ts", "wmv", "flv", "ogv",
+            "mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "aiff", "aif", "wma"}
+
+
+async def _plays(out: Path) -> list[str]:
+    """Videó / hang: mit mutat a lejátszó (hossz, megjelenítési méret, fps, hang) — nem „oldalak”."""
+    from app.tools import mediaprobe
+    try:
+        m = await mediaprobe.info(out)
+    except Exception:
+        return []
+    if not m["duration"] and not m["has_video"]:
+        return []
+    bits = [f"{m['duration']:.1f} s"]
+    if m["has_video"]:
+        bits.append(f"{m['display_width']}×{m['display_height']}" + (f" at {m['fps']:g} fps" if m["fps"] else ""))
+        bits.append("with sound" if m["has_audio"] else "no sound")
+    return [f"It plays: {', '.join(bits)}."]
+
+
 async def generic(out: Path) -> dict[str, Any]:
+    if _ext(out) in _AV_EXTS:
+        return make("needs_check", ["No automatic check for this kind of change. " + LOOK], await _plays(out))
     n = await _pages(out)
     v = [f"It opens: {_plural(n, 'page')}."] if n else []
     return make("needs_check", ["No automatic check for this kind of change. " + LOOK], v)
