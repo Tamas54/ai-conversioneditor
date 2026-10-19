@@ -131,7 +131,7 @@ def _sniff_delimiter(p: Path) -> str:
 
 
 async def wordcraft(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
-    """WordCraft (Rust Word-motor, a meglévő CLI): docx/odt/rtf/html/md/tex/txt → pdf/odt/rtf/html/md/tex/txt."""
+    """WordCraft (Rust Word-motor, a meglévő CLI): docx/odt/rtf/html/md/tex/txt → pdf/odt/rtf/html/md/tex/txt, md → docx."""
     from app.tools import wordcraft as wc
     dst = ctx.out(src, fmt)
     try:
@@ -256,6 +256,9 @@ async def pandoc(src: Path, fmt: str, ctx: Ctx) -> list[Path]:
         args += ["--extract-media", str(media)]
     args.append(str(src))
     await run(*args, timeout=300, cwd=src.parent)
+    if fmt == "docx":                           # a pandoc üres táblarácsot ír: Wordben csak az első oszlop látszana
+        from app.tools import ooxml_safe
+        await asyncio.to_thread(ooxml_safe.fix, dst)
     return _ok([dst])
 
 

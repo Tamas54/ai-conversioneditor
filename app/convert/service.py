@@ -109,7 +109,12 @@ async def convert_path(src: Path, target: str, options: Optional[dict[str, Any]]
     sfmt = normalize(source_format) if source_format else from_filename(src.name)
     tfmt = normalize(target)
     prefer = opts.get("engine") if opts.get("engine") not in (None, "auto") else None
-    path = plan_or_raise(sfmt, tfmt, prefer, craft_avoid(opts, tfmt) - ({prefer} if prefer else set()))
+    avoid = craft_avoid(opts, tfmt)
+    if sfmt == "md":
+        from app.tools import wordcraft
+        if not wordcraft.md_ok(src):
+            avoid.add("wordcraft")           # lábjegyzet, kép, képlet…: a WordCraft betűre hagyná vagy elejtené
+    path = plan_or_raise(sfmt, tfmt, prefer, avoid - ({prefer} if prefer else set()))
     work.mkdir(parents=True, exist_ok=True)
     current = [src]
     used: list[str] = []

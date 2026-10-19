@@ -6,6 +6,7 @@ hogy kulccsal jöjjön a kérés, és kulcsonként korlátozzuk a kérésszámot
 """
 from __future__ import annotations
 
+import base64
 import asyncio
 import hashlib
 import json
@@ -519,6 +520,89 @@ async def presets_delete(request: Request, preset_id: int) -> dict[str, Any]:
     if not db.enabled() or not await db.preset_delete(c.uid, preset_id):
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such preset."})
     return {"deleted": preset_id}
+
+
+# ---------- ismétlődő táblázat-sablonok (havi jelenléti ív…) — egy havi cron is hívhatja ----------
+
+def _rest_file(body: dict[str, Any], key: str) -> Path:
+    """Egy fájl a kérésből: <key>_id (a munkaterület file_id-je) vagy <key> (base64) + <key>_name (fájlnév)."""
+    from app.tools.crafts import existing
+    if body.get(f"{key}_id"):
+        try:
+            return existing(body[f"{key}_id"])
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(404, {"code": "FILE_NOT_FOUND", "message": f"no such file: {body[f'{key}_id']}"})
+    if body.get(key):
+        from app.api_v1 import operations as O
+        name = body.get(f"{key}_name") or "template.xlsx"
+        tmp = O._tmpdir() / name
+        try:
+            tmp.write_bytes(base64.b64decode(body[key]))
+        except ValueError:
+            raise HTTPException(422, {"code": "INVALID_REQUEST", "message": f"{key}: base64 file content"})
+        return existing(O._save_named(tmp, name))
+    raise HTTPException(422, {"code": "INVALID_REQUEST", "message": f"give {key}_id, or {key} (base64) + {key}_name"})
+
+
+def _template_call(fn):
+    import functools
+
+    @functools.wraps(fn)
+    async def w(*a, **k):
+        from app.formkit.sheet_template import TemplateError
+        try:
+            return await fn(*a, **k)
+        except TemplateError as e:
+            raise HTTPException(422, {"code": "INVALID_TEMPLATE", "message": str(e)})
+    return w
+
+
+@v1.post("/forms/templates/learn", tags=["forms"])
+@_template_call
+async def sheet_template_learn(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    """Üres sablon (file / file_id) + egy kitöltött hónap (sample / sample_id) [+ period] → javasolt profil."""
+    from app.formkit import sheet_template as ST
+    ctx(request)
+    empty, sample = await ST._to_xlsx(_rest_file(body, "file")), await ST._to_xlsx(_rest_file(body, "sample"))
+    return ST.learn(empty, sample, body.get("period"))
+
+
+@v1.post("/forms/templates", tags=["forms"])
+@_template_call
+async def sheet_template_register(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    from app.formkit import sheet_template as ST
+    c = ctx(request)
+    if not isinstance(body.get("profile"), dict):
+        raise HTTPException(422, {"code": "INVALID_REQUEST", "message": "profile is required (POST /v1/forms/templates/learn suggests one)"})
+    return await ST.register(c.uid, _rest_file(body, "file"), body["profile"], body.get("name"))
+
+
+@v1.get("/forms/templates", tags=["forms"])
+async def sheet_template_list(request: Request) -> dict[str, Any]:
+    from app.formkit import sheet_template as ST
+    c = ctx(request)
+    return {"data": await ST.list_(c.uid)}
+
+
+@v1.delete("/forms/templates/{tid}", tags=["forms"])
+async def sheet_template_delete(request: Request, tid: str) -> dict[str, Any]:
+    from app.formkit import sheet_template as ST
+    c = ctx(request)
+    if not await ST.delete(c.uid, tid):
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "No such template."})
+    return {"deleted": tid}
+
+
+@v1.post("/forms/templates/{tid}/fill", tags=["forms"])
+@_template_call
+async def sheet_template_fill(request: Request, tid: str, body: dict[str, Any]) -> dict[str, Any]:
+    """{period: "YYYY-MM", defaults?: {start, end, …}, exceptions?: [{date | from/to, kind}], formats?: [xlsx, pdf, xls]}"""
+    from app.formkit import sheet_template as ST
+    c = ctx(request)
+    res = await ST.fill(c.uid, tid, body.get("period") or "", body.get("defaults"), body.get("exceptions"), body.get("formats"))
+    from app.api_v1.operations import _file_entry
+    res["files"] = [{**_file_entry(f["file_id"]), "url": f["url"]} for f in res["files"]]
+    return res
 
 
 # ---------- aláírások, adatprofil (titkosítva tárolva) ----------

@@ -32,7 +32,6 @@ log = logging.getLogger("aice.images")
 
 ImageSpec = Union[str, dict[str, Any]]
 # A Wikimedia kapcsolatot kér a User-Agentben (különben 429-cel fojt): https://meta.wikimedia.org/wiki/User-Agent_policy
-_UA = "ai-conversioneditor/1.0 (+https://github.com/Tamas54/ai-conversioneditor; document builder)"
 _MAX_DOWNLOAD = 30 * 1024 * 1024
 
 
@@ -51,33 +50,31 @@ def _size_for(aspect: Optional[float]) -> str:
     return "1024x1792" if aspect <= 0.62 else "1152x1536"
 
 
-async def _get(url: str, **kw) -> httpx.Response:
-    """GET újrapróbálással: átmeneti DNS-/kapcsolati hiba ne döntse el a teljes paklit; a „túl sok kérés” (429/503 —
-    10-17: a Wikimedia a párhuzamos letöltésekre 429-et adott, és a videó két képe csendben kimaradt) után vár (a
-    Retry-After szerint, legfeljebb 8 s) és újra kéri."""
-    for attempt in (1, 2, 3):
-        try:
-            async with httpx.AsyncClient(timeout=60, follow_redirects=True, headers={"User-Agent": _UA}) as c:
-                r = await c.get(url, **kw)
-                r.raise_for_status()
-                return r
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
-            if attempt == 3:
-                raise
-            await asyncio.sleep(1.5)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code not in (429, 503) or attempt == 3:
-                raise
-            ra = e.response.headers.get("Retry-After", "")
-            await asyncio.sleep(min(8.0, float(ra)) if ra.replace(".", "", 1).isdigit() else 2.0 * attempt + 1)
-    raise RuntimeError("unreachable")
+class _Resp:
+    """A közös kliens válasza a régi hívóknak (.content, .json(), .headers)."""
+    def __init__(self, f):
+        self.content, self.headers, self.url, self.status_code = f.content, {"content-type": f.content_type}, f.url, f.status
+
+    def json(self):
+        import json
+        return json.loads(self.content)
+
+
+async def _get(url: str, params: Optional[dict] = None, **kw) -> _Resp:
+    """GET a közös kimenő klienssel (app.net): SSRF-védelem, leíró User-Agent (a Wikimedia enélkül 403), átmeneti
+    DNS-/kapcsolati hibánál és „túl sok kérés”-nél (429/503 — 10-17: a Wikimedia a párhuzamos letöltésekre 429-et
+    adott, és a videó két képe csendben kimaradt) a Retry-After szerint vár és újra kéri."""
+    from app import net
+    return _Resp(await net.fetch(url, max_bytes=_MAX_DOWNLOAD, params=params, timeout=60))
 
 
 async def _download(url: str) -> bytes:
-    r = await _get(url)
-    if len(r.content) > _MAX_DOWNLOAD:
-        raise ValueError(f"Image too large: {url}")
-    return r.content
+    try:
+        return (await _get(url)).content
+    except ValueError as e:
+        if "larger than" in str(e):
+            raise ValueError(f"Image too large: {url}") from None
+        raise
 
 
 def _wikimedia_thumb(url: str, width: int) -> str:

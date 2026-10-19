@@ -219,14 +219,45 @@ def _name_unlabeled(tool: str, args: dict, res) -> None:
         write_meta(fid, label=label, source_file_id=src if isinstance(src, str) else None, operation=tool)
 
 
+def _sizes(x, depth: int = 0) -> None:
+    """Minden fájl-elem mérete bájtban is (size_bytes), és 10 kB alatt tizedes kB — az 1 kB alatti fájl ne „0” legyen."""
+    if depth > 4:
+        return
+    if isinstance(x, list):
+        for y in x:
+            _sizes(y, depth + 1)
+        return
+    if not isinstance(x, dict):
+        return
+    fid = x.get("file_id")
+    if isinstance(fid, str) and ("size_kb" in x or "label" in x or "url" in x):
+        from app.storage import input_path, output_path
+        try:
+            p = output_path(fid) if output_path(fid).exists() else input_path(fid)
+            n = p.stat().st_size if p.exists() else None
+        except (OSError, ValueError):
+            n = None
+        if n is not None:
+            x["size_bytes"] = n
+            if "size_kb" in x:
+                x["size_kb"] = round(n / 1024, 1) if n < 10240 else n // 1024
+    for k, v in x.items():
+        if isinstance(v, (dict, list)) and k not in ("check", "steps", "tasks"):
+            _sizes(v, depth + 1)
+
+
 async def _finalize(tool: str, args: dict, res):
-    """Minden MCP-eredmény közös utófeldolgozása: név, ellenőrzés (check), linkek (szerkesztő, előnézet)."""
+    """Minden MCP-eredmény közös utófeldolgozása: név, méret, ellenőrzés (check), linkek (szerkesztő, előnézet)."""
     if not isinstance(res, dict):
         return res                       # pl. CallToolResult (files preview képpel) — érintetlenül
     try:
         _name_unlabeled(tool, args, res)
     except Exception as e:
         log.info("elnevezés kimaradt (%s): %s", tool, e)
+    try:
+        _sizes(res)
+    except Exception as e:
+        log.info("méret kimaradt (%s): %s", tool, e)
     from app.tools import checks
     check, page = await checks.run(tool, args, res)
     pages = {}
@@ -255,6 +286,21 @@ def _arg_brief(k: dict) -> str:
 
 
 _CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
+
+
+def _no_ai_pictures(*specs: Any) -> None:
+    """MCP-n a szerver nem készít AI-képet: ha egy spec mégis kér ({"generate": …}, images/pictures="ai", ai_prompt),
+    MUNKA ELŐTT ugyanaz az egyértelmű hiba jön, nem félúton egy képnél."""
+    from app import tenancy
+
+    def asks(x: Any) -> bool:
+        if isinstance(x, dict):
+            return isinstance(x.get("generate"), str) or any(asks(v) for v in x.values())
+        if isinstance(x, (list, tuple)):
+            return any(asks(v) for v in x)
+        return False
+    if any(asks(s_) for s_ in specs):
+        raise ValueError(tenancy.CLIENT_IMAGE_MSG)
 
 
 def _sniff_ext(data: bytes) -> str:
@@ -306,21 +352,21 @@ async def upload_from_url(url: Optional[str] = None, filename: Optional[str] = N
     Returns: same shape as upload_file: {file_id, url, size_kb, original_name, edit_url}.
     """
     import httpx
+    from app import net
+    from app.api_v1 import operations as O
     if file is not None:
         url = file.download_url
         filename = filename or file.name
     if not url:
         raise ValueError("Give url, or attach the file in the chat (file).")
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.content
+    try:                                  # a közös kimenő kliens: SSRF-védelem, leíró User-Agent, méretkorlát
+        got = await net.fetch(url, max_bytes=O.max_bytes(False), timeout=120)
+    except httpx.HTTPStatusError as e:
+        raise ValueError(f"The server of that URL answered HTTP {e.response.status_code} — check the link "
+                         "(or download it and upload_file it).") from None
+    data = got.content
     if not filename:
-        import re as _re
-        cd = r.headers.get("content-disposition", "")
-        m = _re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", cd, _re.I)
-        from urllib.parse import unquote
-        filename = unquote(m.group(1)) if m else (url.rstrip("/").split("/")[-1].split("?")[0] or "downloaded.bin")
+        filename = got.name if got.name != "download" else "downloaded.bin"
     ext = Path(filename).suffix.lstrip(".").lower()
     if not ext or ext == "bin":            # név kiterjesztés nélkül (csetfájl-link): a tartalomból
         ext = _sniff_ext(data)
@@ -700,7 +746,9 @@ async def convert(
 
     Set `engine="wordcraft"` for the Rust Word engine: no LibreOffice, a few
     ms per call. Sources docx/doc/odt/rtf/html/md/tex/txt; targets
-    docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page).
+    docx/pdf/odt/rtf/html/md/tex/txt/png (png = first page). md → docx/odt uses
+    it by default (tables keep every column); Markdown with footnotes, pictures,
+    math or task lists goes through pandoc instead.
     engine="photocraft": images (psd/png/jpg/webp/tif/exr…, PSD layers kept
     when saving psd). engine="vectorcraft": svg/pdf/ai/eps → pdf/svg/png/eps.
     pptx → docx makes a Word HANDOUT: each slide's picture, title, text,
@@ -874,7 +922,7 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
     the file_id of a docx/odt/rtf/md/txt/html/pdf: the server turns that
     document into slides — its headings become slides, its facts and its
     own pictures are kept (`instructions` e.g. "10-minute talk for the
-    board", `slides` 4–15 or omit for auto, `images` stock|ai|doc|none,
+    board", `slides` 4–15 or omit for auto, `images` stock|doc|none,
     `template_file_id` a .pptx/.potx to build on). Typical chain: write and
     revise a document, then from_document, then pptx revisions.
     spec = {"title", "footer"?, "brand"? | "theme"? {primary, accent, bg,
@@ -912,13 +960,14 @@ async def pptx_build(spec: Optional[dict] = None, from_document: Optional[str] =
               a video chart (see video): native, editable shapes (boxes with their text, arrows bound to the
               boxes, the legend); the same actor keeps its colour on every slide
       closing {title?, subtitle?}
-    image = "<file_id>" | {"file_id"} | {"url"} | {"generate": "<FLUX prompt>"}
+    image = "<file_id>" | {"file_id"} | {"url"} (e.g. a picture you made with your own image tool)
             | {"stock": "<search words>"} (free CC photos, credit goes to notes).
-    Images are cropped to their frame; FLUX images generate in parallel.
+    Images are cropped to their frame. This server doesn't make AI pictures for connected AIs.
     The result's `check` is the rendered check validate_document runs (both layouts): each problem names the
     slide and shape id with a ready office(app="deck") fix for just that shape — no rebuild. See the slides as
     pictures with validate_document.
     """
+    _no_ai_pictures(spec, {"generate": "ai"} if (images or "").lower() == "ai" else None)
     if from_document:
         from app.routes.make import make_deck
         return await make_deck({"mode": "document", "source_file_id": from_document, "brief": instructions or "",
@@ -1090,6 +1139,7 @@ async def design(
                                 title=data.get("title"), subtitle=data.get("subtitle"), author=data.get("author"), size=size,
                                 captions=data.get("captions"), auto_captions=bool(data.get("auto_captions")),
                                 cover=data.get("cover"), theme=theme, brand=await user_brands.resolve(brand))
+    _no_ai_pictures(data)
     if from_design:
         from app.routes.studio import package
         return await package({"from_file_id": from_design, "sizes": sizes, "content": data})
@@ -1337,7 +1387,9 @@ async def pdf_form(
 ) -> dict:
     """
     Fillable PDF forms. With only file_id: lists the fields (name, type,
-    value, options, page). With values {field: value}: fills them (check
+    value, options, page, semantic_type — date, number, phone, email,
+    postcode… from the field's native format or its label: give values in
+    that kind). With values {field: value}: fills them (check
     boxes take true/false; keys may be field names or close spellings) and
     returns a NEW file_id. With data_file_id (CSV/XLSX, first row = field
     names): one filled copy per row, combined into one PDF. flatten=true
@@ -1368,21 +1420,25 @@ async def photo_edit(
     layers, the logo as an embedded layer), plus a JPG. All file_ids get the
     SAME edit (batch). instruction e.g. "Instagram 4:5, warmer, darker sky,
     headline 'Summer sale' at the top, logo bottom right".
-    Or pass your own plan (skip our planner): steps from
-      crop {aspect 1:1|4:5|16:9|9:16|3:2|4:3, focus center|top|bottom|left|right},
+    Or pass your own plan (skip our planner): a list of steps, each {"op": "<name>", …its fields}, e.g.
+      [{"op": "crop", "aspect": "4:5"}, {"op": "color", "warmth": 20}, {"op": "text", "text": "Nyári akció"}].
+      An unknown op or key is an error that lists the allowed values. ops:
+      crop {aspect 1:1|4:5|5:4|16:9|9:16|3:2|2:3|4:3|3:4, focus center|top|bottom|left|right},
       resize {long_edge}, auto, sharpen {amount}, light {exposure, contrast,
       brightness}, color {vibrance, saturation, warmth}, look {name warm|cool|
       tealOrange|bleachBypass|fadedFilm|monoContrast|crossProcess, strength},
       black_white, sky {exposure, saturation, contrast}, vignette {amount},
-      background {remove | stock | ai | color, blur}, logo {position,
+      background {remove | stock | color, blur}, logo {position,
       width_pct, margin_pct}, text {text, position, size small|medium|large|
-      huge, color, weight, shadow}.
+      huge, color, weight, shadow}, ai_edit {instruction}.
     Returns a job: call again with job_id until status "done"; result.plan
     is the plan used — tweak it and send it back as plan to adjust.
     """
     from app import jobs
     if job_id:
         return await jobs.job_status(job_id)
+    if plan and any(isinstance(st, dict) and st.get("op") == "background" and st.get("ai") for st in plan):
+        _no_ai_pictures({"generate": "background"})       # MCP-n generált hátteret nem készítünk
     from app.routes.make import make_photo_edit
     return await make_photo_edit({"file_ids": file_ids or [], "instruction": instruction, "plan": plan,
                                   "logo_file_id": logo_file_id, "formats": formats})
@@ -1468,7 +1524,8 @@ async def merge(file_ids: list[str], target_format: str = "pdf") -> dict:
 @linked
 async def extract(file_id: str, mode: str = "text") -> dict:
     """Extract text (PDF, DOCX, PPTX, MD, TXT, HTML) or tables (PDF, DOCX) — reads only, no new file.
-    mode: 'text' | 'tables'."""
+    mode: 'text' (DOCX: in document order, each table row on its own line, cells tab-separated) | 'tables'
+    ([{page, rows}] for PDF and DOCX; a merged cell's continuation is null)."""
     return await t_extract(file_id, mode)
 
 
@@ -1523,7 +1580,10 @@ async def facts(
             office and period), the right value and — when it is wrong — a corrected `replacement` for the `quote`.
             Statistics are checked against StatData (Eurostat, KSH, ECB, FRED…), forint rates against the MNB, other
             facts against a web search: short search queries built from the claims leave the server. "unverified" means
-            no source settled it — never say it is false. Costs 1 credit per 10 newly checked facts (repeats are free).
+            no source settled it — never say it is false. A statistic about a past period ("in 2024", "at the end of
+            2025") is checked against THAT period's figure only; when the source has none, it is "unverified" with
+            no_data_for_period (never compared with the latest figure). Costs 1 credit per 10 newly checked facts
+            (repeats are free).
       action="bind" + file_id, quote (exact text with the number), source → links that number to its source;
             source = {"kind": "indicator", "country": "HU", "indicator": "cpi"} (cpi, core_cpi, policy_rate,
             unemployment, gdp_growth, gov_debt, bond_yield_10y, …) or {"kind": "fx", "currency": "EUR"} (MNB rate).
@@ -1544,7 +1604,8 @@ async def facts(
     if action == "check":
         r = await cc.facts(existing(file_id), charge=_charge_claims)
         return {"claims": [{k: c.get(k) for k in ("id", "verdict", "claim", "quote", "paragraph", "explanation", "correct",
-                                                   "replacement", "source", "stat", "fx")} for c in r["claims"]],
+                                                   "replacement", "source", "stat", "fx", "no_data_for_period")
+                            if k != "no_data_for_period" or c.get(k)} for c in r["claims"]],
                 "counts": r["counts"], "checked": r["checked"], "new_checks": r["new_checks"]}
     if action == "bind":
         if not quote or not isinstance(source, dict):
@@ -1632,16 +1693,19 @@ async def insert_image(
 
     Pictures (decks and Word documents): file_id alone → the file's pictures [{slot, where, query?}].
     file_id + slot + ONE of image_file_id | image_url (+credit, e.g. a candidate from
-    generate_image(stock_search=…)) | ai_prompt (generated, costs a credit) → a NEW version with that
-    picture replaced (same frame, nothing else changes). Let the person choose: show them the candidates."""
+    generate_image(stock_search=…), or a picture you made with your own image tool) → a NEW version with that
+    picture replaced (same frame, nothing else changes). Let the person choose: show them the candidates.
+    ai_prompt: not available here — this server doesn't make AI pictures for connected AIs (it returns an error)."""
     from app.tools import pictures
+    if ai_prompt:
+        _no_ai_pictures({"generate": ai_prompt})
     if slot or not anchor:
         if not slot:
             return {"pictures": await pictures.list_pictures(file_id)}
-        pick = ({"ai": ai_prompt} if ai_prompt else {"url": image_url, "credit": credit} if image_url
+        pick = ({"url": image_url, "credit": credit} if image_url
                 else {"file_id": image_file_id} if image_file_id else None)
         if not pick:
-            raise ValueError("Give image_file_id, image_url or ai_prompt for the new picture.")
+            raise ValueError("Give image_file_id or image_url for the new picture.")
         return await pictures.replace(file_id, slot, pick)
     if not image_file_id:
         raise ValueError("image_file_id is needed to insert a picture after the anchor.")
@@ -1698,9 +1762,26 @@ async def extract_table_from_image(image_file_id: str) -> dict:
 
 @mcp.tool()
 @linked
-async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
-    """OCR a photographed table and save as a real XLSX (one shot).
-    Returns the new XLSX file_id."""
+async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1", mode: str = "data") -> dict:
+    """A photographed table → a real XLSX.
+    mode="data" (default): the table's data only (header + rows), one shot.
+    mode="layout": a FAITHFUL, fillable copy of a paper form (e.g. a photographed attendance sheet): perspective and
+      skew corrected, the grid measured from the drawn lines — rows, columns, merged cells, proportional column widths
+      and row heights, borders; text with bold and alignment; numbers, dates and times typed; empty cells of a
+      form-like table marked as fillable fields (unlocked; listed in `fields`); a visible totals row rebuilt as
+      formulas (SUM / COUNT / COUNTA, and the daily leave − arrival time) marked inferred and checked against the
+      photo's numbers (`formulas`); uncertain readings commented (`uncertain`). Also `comparison_url` (the photo and
+      the rendered sheet side by side) and, for an attendance sheet, `template_profile` — ready for
+      forms(action="template_register") so the sheet can be filled every month.
+    Runs the Studio's own vision model (Studio AI steps)."""
+    if mode == "layout":
+        from app.storage import display_label
+        from app.tools import table_layout
+        from app.tools.vision_ops import _resolve_image
+        src = _resolve_image(image_file_id)
+        return await table_layout.image_to_layout_xlsx(src, Path(display_label(image_file_id)).stem, sheet_name)
+    if mode != "data":
+        raise ValueError('mode: "data" (the table\'s data) or "layout" (a faithful, fillable copy of the form)')
     return await vision_ops.image_to_xlsx(image_file_id, sheet_name=sheet_name)
 
 
@@ -1708,21 +1789,17 @@ async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict:
 @linked
 async def generate_image(
     prompt: Optional[str] = None,
-    size: str = "1024x1024",
-    model: str = "black-forest-labs/FLUX.2-pro",
     stock_search: Optional[str] = None,
     n: int = 12,
 ) -> dict:
-    """Generate an image from text via SiliconFlow image-gen (FLUX.2-pro
-    by default; costs a credit). Useful for: missing figures, conceptual illustrations,
-    decorative covers. size "WIDTHxHEIGHT", 256–2048 px a side, e.g.
-    1792x1024 (wide), 1024x1792 (tall), 1024x1024, 1600x900 (16:9 slide).
-    Returns image_file_id usable in insert_image.
+    """Pictures for a document, deck or video: stock_search="words" → free stock photo CANDIDATES (Wikimedia Commons +
+    Openverse, unfiltered) — [{thumb_url, url, credit, title, width, height, source}] AND a numbered picture of them in
+    the result, so you see them yourself. Show them to the person and let them pick; then
+    insert_image(file_id, slot, image_url=…, credit=…), or {"url": …, "credit": …} in a pptx_build / design / video spec.
 
-    stock_search="words" instead: free stock photo CANDIDATES (Wikimedia Commons + Openverse, unfiltered) —
-    [{thumb_url, url, credit, title, width, height, source}] AND a numbered picture of them in the result, so you
-    see them yourself; nothing is generated. Show them to the person and let them pick; then
-    insert_image(file_id, slot, image_url=…, credit=…)."""
+    This server doesn't generate AI pictures for connected AIs: `prompt` only returns an error saying so. Make the
+    picture with your own image tool and pass its public URL (image_url / {"url": …}) or upload it (upload_from_url /
+    upload_file → file_id)."""
     if stock_search:
         import json
         from mcp.types import CallToolResult, ImageContent, TextContent
@@ -1737,9 +1814,9 @@ async def generate_image(
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(info, ensure_ascii=False)),
                                        ImageContent(type="image", data=base64.b64encode(sheet).decode(), mimeType="image/jpeg")],
                               structuredContent=info)
-    if not prompt:
-        raise ValueError("Give a prompt (or stock_search words for free stock candidates).")
-    return await vision_ops.generate_image(prompt, model=model, size=size)
+    if prompt:
+        _no_ai_pictures({"generate": prompt})
+    raise ValueError("Give stock_search words for free stock photo candidates.")
 
 
 # ============================================================
@@ -1815,10 +1892,11 @@ async def video(
       in gentle motion, headlines, timed captions, end card with picture credits → a video project (.ecproj) + the
       MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
       (result.project / result.video, each with edit_url) or "failed".
-      format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds
-      (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
-      when you give duration — the video is that long: scenes hold longer, the narration is read up to 1.2× faster;
-      what still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
+      format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds,
+      4–180 (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
+      when you give duration — the video is that long INCLUDING the title card and the end card, which get shorter on a
+      short video: scenes hold longer or get shorter (down to 1.2 s), the narration is read up to 1.2× faster; what
+      still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
       length). Every result has duration = {requested, actual, mode}; a gap beyond a second or so is a check finding
       ("Asked for 24 s, it is 17 s (…)"), never "ok". images: pictures in order —
       file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where

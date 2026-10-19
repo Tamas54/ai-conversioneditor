@@ -49,6 +49,10 @@ def quality(sch: dict[str, Any]) -> dict[str, Any]:
     unnamed = sum(1 for x in f if re.fullmatch(r"Field \d+", x.get("label") or ""))
     if f and unnamed / len(f) > 0.3:
         reasons.append(f"{unnamed} of {len(f)} fields have no label")
+    nums = (sch.get("numeric_labels") or 0) + sum(1 for x in f if S.numeric_label(x.get("label") or ""))
+    if nums:
+        reasons.append(f"{nums} field{'s' if nums > 1 else ''} had only a number next to {'them' if nums > 1 else 'it'} "
+                       "(table data, not a label)")
     labels = sch.get("label_hints") or 0
     if labels >= 3 and len([x for x in f if x["type"] != "checkbox"]) < 0.6 * labels:
         reasons.append(f"{labels} printed labels but only {len(f)} fields")

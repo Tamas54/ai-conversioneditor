@@ -134,7 +134,12 @@ def _fill_acroform(src: Path, dst: Path, sch: dict[str, Any], vals: dict[str, An
         af = pdf.Root.get("/AcroForm")
         fonts = af.get("/DR", {}).get("/Font", {}) if af is not None else {}
         if af is not None and "/UniF" in fonts:
-            font = pymupdf.Font(fontfile=FONT)
+            # a glifazonosítók a TÉNYLEGESEN beágyazott mezőbetűből (a gépelési részhalmaz más sorrendű, mint a teljes
+            # DejaVu — azzal mérve a megjelenés eltolt betűket mutatna); ha nem olvasható, a teljes betű
+            try:
+                font = pymupdf.Font(fontbuffer=bytes(fonts.UniF.DescendantFonts[0].FontDescriptor.FontFile2.read_bytes()))
+            except Exception:
+                font = pymupdf.Font(fontfile=FONT)
 
             def fix(fld, name=None):
                 name = str(fld.get("/T", name or ""))
@@ -205,7 +210,9 @@ def _fit_size(font, text: str, w: float, h: float, max_size: float) -> float:
 
 def _overlay_pdf(src: Path, dst: Path, sch: dict[str, Any], vals: dict[str, Any], scale: float = 1.0) -> list[str]:
     import pymupdf
-    font = pymupdf.Font(fontfile=FONT)
+    from app.tools import pdffonts
+    buf = pdffonts.subset_for("".join(str(v) for v in vals.values() if not isinstance(v, dict)), FONT)   # csak a beírt jelek
+    font = pymupdf.Font(fontbuffer=buf)
     filled = []
     with pymupdf.open(str(src)) as d:
         for f in sch["fields"]:
@@ -221,7 +228,7 @@ def _overlay_pdf(src: Path, dst: Path, sch: dict[str, Any], vals: dict[str, Any]
                     stamp_pdf_page(page, list(r), Path(v["image"]))
                     filled.append(f["name"])
                 continue
-            page.insert_font(fontname="UniX", fontfile=FONT)
+            page.insert_font(fontname="UniX", fontbuffer=buf)
             if f["type"] == "checkbox":
                 if truthy(v):
                     s = min(r.width, r.height)

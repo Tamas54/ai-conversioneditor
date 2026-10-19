@@ -32,6 +32,9 @@ def _tools_doc() -> str:
         "Run a file tool. tool = one of the keys below; file_ids = the input files (upload first with upload_file / "
         "upload_from_url / transfer); options = the tool's options. Returns new file(s) — the originals stay. Long tasks "
         "(video, OCR) return a job: call again with job_id until status is \"done\".\n" + "\n".join(groups) +
+        "\nposition (page-numbers, watermarks): center | top-left | top | top-right | left | right | bottom-left | bottom | "
+        "bottom-right | tile (watermarks); also bottom-center → bottom, top-center → top, middle → center; page numbers go "
+        "top-left | top | top-right | bottom-left | bottom | bottom-right (center = bottom)."
         "\nAdvanced: ffmpeg-advanced / imagemagick-advanced take allow-listed flags in options.args (e.g. [\"-crf\", \"20\"])."
     )
 
@@ -157,11 +160,18 @@ async def jobs(action: str = "create", tasks: Optional[dict] = None, job_id: Opt
 
 def _job_out(job: dict) -> dict:
     """MCP-barát alak: a fájlok kiemelve (file_id → szerkesztő/előnézet link a linked burkolóban)."""
-    files = []
+    files, seen = [], {}
     for t in job["tasks"]:
         for f in (t.get("result") or {}).get("files") or []:
             if f.get("file_id") and not t["operation"].startswith("import/"):
-                files.append({"file_id": f["file_id"], "label": f.get("filename"), **({"url": f["url"]} if f.get("url") else {})})
+                if f["file_id"] in seen:              # a convert és az export/url ugyanazt a fájlt adja: egyszer
+                    if f.get("url") and "url" not in seen[f["file_id"]]:
+                        seen[f["file_id"]]["url"] = f["url"]
+                    continue
+                item = {"file_id": f["file_id"], "label": f.get("filename"), **({"url": f["url"]} if f.get("url") else {}),
+                        **({"size_bytes": f["size"]} if isinstance(f.get("size"), int) else {})}
+                seen[f["file_id"]] = item
+                files.append(item)
     return {"job_id": job["id"], "status": job["status"], "files": files,
             "tasks": [{k: t.get(k) for k in ("name", "operation", "status", "code", "message")} for t in job["tasks"]]}
 
@@ -259,7 +269,10 @@ async def _tool(key: str, file_ids: list[str], options: dict) -> dict:
 @linked
 async def forms(action: str = "recognize", file_id: Optional[str] = None, values: Optional[dict] = None,
                 schema: Optional[dict] = None, data_file_id: Optional[str] = None, flatten: bool = False,
-                keep_look: bool = True, language: Optional[str] = None) -> dict:
+                keep_look: bool = True, language: Optional[str] = None, template_id: Optional[str] = None,
+                period: Optional[str] = None, defaults: Optional[dict] = None, exceptions: Optional[list[dict]] = None,
+                profile: Optional[dict] = None, sample_file_id: Optional[str] = None, formats: Optional[list[str]] = None,
+                name: Optional[str] = None) -> dict:
     """
     Forms from ANY file: fillable or flat PDF, DOCX, XLSX, photo or scan (also DOC/ODT/XLS/ODS).
     action="recognize": returns one field schema {kind, fields:[{name, label, type, page, box, options, required}]}
@@ -276,7 +289,30 @@ async def forms(action: str = "recognize", file_id: Optional[str] = None, values
     action="bulk_fill": data_file_id (CSV/XLSX, first row = field names) → one copy per row (PDF: combined; else ZIP).
     action="make_fillable": a flat PDF, DOCX or photo → a PDF with real form fields on its blanks.
     For filling from the user's saved profile and documents (asks for what's missing), use fill_assistant.
+
+    RECURRING SPREADSHEET TEMPLATES (a monthly attendance sheet / timesheet), filled in ONE call, deterministically:
+    action="template_learn": file_id (the empty template .xlsx/.xls) + sample_file_id (a filled earlier month)
+      (+ period "YYYY-MM" of the sample if the sheet has no day-number column) → a suggested profile from the
+      difference + the evidence. Show it to the person; once they approve (or correct) it, register it.
+    action="template_register": file_id + profile (+ name) → template_id, kept in the person's account (encrypted).
+      profile = {"sheet"?, "header": {"name": "B3", "job_title": "B4", "code": "E4", "month": "E3"},
+      "month_format"?: "date" | "{year}. {month}", "days": {"first_row": 8, "step"?: 1} (day d at row first_row + d − 1),
+      "columns": {"arrive": "B", "leave": "C", "absence": "D"}, "rules": {"workday": {"arrive": "{start}", "leave":
+      "{end}"}, "kinds": {"szabadság": {"leave": "SZABADSÁG", "absence": "+"}}}, "totals"?: {"hours": "E39",
+      "absence_days": "D39"}, "header_values"?: {"name": …}, "defaults"?: {"start": "8:00", "end": "16:00"}}.
+    action="template_fill": template_id + period "YYYY-MM" (+ defaults {"start", "end", header values} + exceptions
+      [{"date": "YYYY-MM-DD" | "from"/"to", "kind": "szabadság"}] + formats ["xlsx", "pdf", "xls"]) → the filled sheet.
+      Workdays come from the Hungarian work calendar (Mt. 102. § (1) holidays incl. Easter-based ones, and that year's
+      decree of transferred working and rest days; a year without a published decree is an error, never a guess).
+      Only given or derived data goes on the sheet: a workday gets the defaults, an exception day its rule, every other
+      day stays empty. Times go in as times, dates as dates, numbers as numbers; LibreOffice recalculates every formula
+      before the PDF. `check`: workdays and exception days counted, the sheet's own total hours = the expected value,
+      no #VALUE!/#REF!, every workday has its entry.
+    action="templates": the person's templates; action="template_delete": template_id.
     """
+    if action.startswith("template"):
+        return await _sheet_template(action, file_id, template_id, period, defaults, exceptions, profile,
+                                     sample_file_id, formats, name)
     if not file_id:
         raise ValueError("file_id is required (upload the form first)")
     opts: dict[str, Any] = {}
@@ -295,7 +331,36 @@ async def forms(action: str = "recognize", file_id: Optional[str] = None, values
                                                          "data_file": data_file_id, "flatten": flatten})
     if action == "make_fillable":
         return await _tool("make-fillable", [file_id], {k: v for k, v in opts.items() if k == "language"})
-    raise ValueError("action: recognize, fill, bulk_fill or make_fillable")
+    raise ValueError("action: recognize, fill, bulk_fill, make_fillable, template_learn, template_register, "
+                     "template_fill, templates or template_delete")
+
+
+async def _sheet_template(action, file_id, template_id, period, defaults, exceptions, profile, sample_file_id,
+                          formats, name) -> dict:
+    from app import tenancy
+    from app.formkit import sheet_template as ST
+    from app.tools.crafts import existing
+    uid = tenancy.current_user_id()
+    if action == "templates":
+        return {"templates": await ST.list_(uid)}
+    if action == "template_learn":
+        if not file_id or not sample_file_id:
+            raise ValueError("template_learn needs file_id (the empty template) and sample_file_id (a filled month)")
+        empty, sample = await ST._to_xlsx(existing(file_id)), await ST._to_xlsx(existing(sample_file_id))
+        return ST.learn(empty, sample, period)
+    if action == "template_register":
+        if not file_id or not profile:
+            raise ValueError("template_register needs file_id (the template .xlsx/.xls) and profile (template_learn suggests one)")
+        return await ST.register(uid, existing(file_id), profile, name)
+    if action == "template_fill":
+        if not template_id or not period:
+            raise ValueError("template_fill needs template_id and period (YYYY-MM)")
+        return await ST.fill(uid, template_id, period, defaults, exceptions, formats)
+    if action == "template_delete":
+        if not template_id:
+            raise ValueError("template_delete needs template_id")
+        return {"deleted": await ST.delete(uid, template_id)}
+    raise ValueError("template actions: template_learn, template_register, template_fill, templates, template_delete")
 
 
 @mcp.tool(meta=_ui_meta(UI_PAD, UI_PAD_SKY, "Opening the signature pad…"), structured_output=True)

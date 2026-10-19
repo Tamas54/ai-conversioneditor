@@ -87,6 +87,36 @@ async def plan(image: Path, request: str, has_logo: bool) -> dict[str, Any]:
     raise RuntimeError(f"Could not plan the edit: {last}")
 
 
+_ALIASES = ("type", "step", "action", "operation", "name", "kind")
+
+
+def validate_plan(steps: Any, has_logo: bool) -> None:
+    """A hívó saját terve (plan): minden lépés {"op": <név>, …}. Ismeretlen kulcs vagy op → érthető hiba az
+    engedélyezett értékekkel (nem a csendes „Nothing to do”)."""
+    if not isinstance(steps, list) or not steps:
+        raise ValueError('plan: a list of steps, each {"op": "<name>", …} — ops: ' + ", ".join(_ORDER))
+    for i, s in enumerate(steps, 1):
+        if not isinstance(s, dict):
+            raise ValueError(f'plan step {i}: an object {{"op": "<name>", …}}, not {s!r}')
+        if "op" not in s:
+            alt = next((k for k in _ALIASES if k in s), None)
+            raise ValueError(f'plan step {i}: the step key is "op"' + (f' (not "{alt}")' if alt else "")
+                             + f" — ops: {', '.join(_ORDER)}")
+        op = s["op"]
+        if op not in _ORDER:
+            raise ValueError(f"plan step {i}: unknown op {op!r} — ops: {', '.join(_ORDER)}")
+        if op == "crop" and s.get("aspect") not in ASPECTS:
+            raise ValueError(f"plan step {i} (crop): aspect is one of {', '.join(ASPECTS)}")
+        if op == "look" and s.get("name") not in LOOKS:
+            raise ValueError(f"plan step {i} (look): name is one of {', '.join(sorted(LOOKS))}")
+        if op == "logo" and not has_logo:
+            raise ValueError(f"plan step {i} (logo): give logo_file_id too")
+        if op == "text" and not str(s.get("text") or "").strip():
+            raise ValueError(f'plan step {i} (text): give "text"')
+        if op == "ai_edit" and not str(s.get("instruction") or "").strip():
+            raise ValueError(f'plan step {i} (ai_edit): give "instruction"')
+
+
 def clean_steps(steps: list[Any], has_logo: bool) -> list[dict[str, Any]]:
     """Ismeretlen lépés/érték ki, határok közé szorítva — a végrehajtó csak ezt kapja."""
     clamp = lambda v, lo, hi, d=0: max(lo, min(hi, float(v))) if isinstance(v, (int, float)) else d

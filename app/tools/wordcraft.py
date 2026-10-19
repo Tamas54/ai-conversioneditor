@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -42,6 +43,25 @@ def cli_path() -> Optional[str]:
 
 def available() -> bool:
     return cli_path() is not None
+
+
+# Markdown-elemek, amiket a WordCraft betűre hagy („[^1]”, „$E=mc^2$”, „[ ] feladat”) vagy elejt (kép) — ilyenkor
+# a pandoc fut (a táblarácsát az ooxml_safe pótolja); minden mást a WordCraft visz, a táblák oszlopaival együtt
+_MD_PANDOC_ONLY = re.compile(
+    r"\[\^[^\]\s]+\]"                       # lábjegyzet
+    r"|!\[[^\]]*\]\([^)]+\)"                # kép
+    r"|(?<![\\$\w])\$(?=\S)[^$\n]+(?<=\S)\$(?![\w$])|^\s*\$\$"     # képlet ($…$, $$…$$) — „5 $” ár nem az
+    r"|^\s*[-*+]\s+\[[ xX]\]\s"             # feladatlista
+    r"|^[^\n]+\n:\s",                       # definíciós lista
+    re.M)
+
+
+def md_ok(src: Path) -> bool:
+    """A Markdown minden eleme átmegy-e a WordCraft-on (lábjegyzet, kép, képlet, feladat- és definíciós lista nem)."""
+    try:
+        return not _MD_PANDOC_ONLY.search(Path(src).read_text("utf-8", "replace"))
+    except OSError:
+        return False
 
 
 async def _cli(*args: str) -> str:

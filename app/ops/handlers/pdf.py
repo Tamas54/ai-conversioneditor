@@ -422,7 +422,9 @@ async def edit(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
     images = {e.get("file_id"): o["_resolve"](e["file_id"]) for e in items if e.get("type") == "image" and e.get("file_id")}
 
     def go():
+        from app.tools import pdffonts
         d = _open(src)
+        ebuf = pdffonts.subset_for("".join(str(e.get("text", "")) for e in items if e.get("type") == "text"), fp) if fp else None
         for e in items:
             pi = int(e.get("page", 1)) - 1
             if not 0 <= pi < d.page_count:
@@ -431,7 +433,7 @@ async def edit(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
             kind = e.get("type")
             if kind == "text":
                 if fp:
-                    pg.insert_font(fontname="UniE", fontfile=fp)
+                    pg.insert_font(fontname="UniE", fontbuffer=ebuf)
                 pg.insert_text(pymupdf.Point(float(e.get("x", 72)), float(e.get("y", 72))), str(e.get("text", "")),
                                fontsize=float(e.get("size", 12)), fontname="UniE" if fp else "helv", color=rgb(e.get("color")))
             elif kind == "whiteout":
@@ -517,11 +519,14 @@ async def page_numbers(inputs: list[Path], o: dict[str, Any], out: Path) -> list
     first = int(o.get("start_number", 1))
 
     def go():
+        from app.tools import pdffonts
         d = _open(src)
         total = d.page_count
-        font = pymupdf.Font(fontfile=fp) if fp else pymupdf.Font("helv")
+        texts = [fmt.replace("{n}", str(first + i)).replace("{total}", str(total + first - 1)) for i in range(total)]
+        buf = pdffonts.subset_for("".join(texts), fp) if fp else None      # csak a beírt jelek (nem a teljes DejaVu)
+        font = pymupdf.Font(fontbuffer=buf) if buf else pymupdf.Font("helv")
         for i, pg in enumerate(d):
-            text = fmt.replace("{n}", str(first + i)).replace("{total}", str(total + first - 1))
+            text = texts[i]
             size = 10
             w = font.text_length(text, fontsize=size)
             r = pg.rect
@@ -529,9 +534,9 @@ async def page_numbers(inputs: list[Path], o: dict[str, Any], out: Path) -> list
             x = {"left": m, "top-left": m, "bottom-left": m, "right": r.width - m - w, "top-right": r.width - m - w,
                  "bottom-right": r.width - m - w}.get(pos, (r.width - w) / 2)
             y = m + size if pos.startswith("top") else r.height - m
-            if fp:
-                pg.insert_font(fontname="UniN", fontfile=fp)
-            pg.insert_text(pymupdf.Point(x, y), text, fontsize=size, fontname="UniN" if fp else "helv", color=(0.25, 0.25, 0.25))
+            if buf:
+                pg.insert_font(fontname="UniN", fontbuffer=buf)
+            pg.insert_text(pymupdf.Point(x, y), text, fontsize=size, fontname="UniN" if buf else "helv", color=(0.25, 0.25, 0.25))
         return _save(d, out_name(out, src, "-numbered"))
     return [await asyncio.to_thread(go)]
 
@@ -567,11 +572,12 @@ async def compare(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path
                 pb.add_text_annot(pymupdf.Point(20, 20), "Removed: " + " ".join(removed)[:2000]).update()
             summary.append((i + 1, ins, dele))
         rep = b.new_page(0, width=595, height=842)
-        if fp:
-            rep.insert_font(fontname="UniC", fontfile=fp)
-        fn = "UniC" if fp else "helv"
         lines = [f"Comparison: {old.name} → {new.name}", ""]
         lines += [f"Page {p}: {ins} words added, {dl} removed" for p, ins, dl in summary if ins or dl] or ["No text differences."]
+        if fp:
+            from app.tools import pdffonts
+            rep.insert_font(fontname="UniC", fontbuffer=pdffonts.subset_for("".join(lines[:60]), fp))
+        fn = "UniC" if fp else "helv"
         y = 72
         for ln in lines[:60]:
             rep.insert_text(pymupdf.Point(56, y), ln, fontsize=11, fontname=fn)

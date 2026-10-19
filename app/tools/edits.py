@@ -16,6 +16,7 @@ The convert tool handles the round-trip; edits operate on DOCX/HTML/MD only.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import shutil
@@ -1370,10 +1371,7 @@ async def extract(file_id: str, mode: str = "text") -> dict:
                 text = "\n\n".join((p.extract_text() or "") for p in pdf.pages)
             return {"text": text, "ms_elapsed": int((time.time() - t0) * 1000)}
         if fmt == "docx":
-            from docx import Document
-
-            doc = Document(str(src))
-            text = "\n".join(p.text for p in doc.paragraphs)
+            text = await asyncio.to_thread(_docx_text, src)
             return {"text": text, "ms_elapsed": int((time.time() - t0) * 1000)}
         if fmt == "pptx":
             return {
@@ -1396,4 +1394,69 @@ async def extract(file_id: str, mode: str = "text") -> dict:
                     tables.append({"page": i, "rows": t})
         return {"tables": tables, "ms_elapsed": int((time.time() - t0) * 1000)}
 
+    if mode == "tables" and fmt == "docx":
+        tables = await _docx_tables(src)
+        return {"tables": tables, "ms_elapsed": int((time.time() - t0) * 1000)}
+
     raise ValueError(f"extract: unsupported mode={mode} for fmt={fmt}")
+
+
+def _docx_rows(tbl) -> list[list[Optional[str]]]:
+    """Egy w:tbl sorai: cellánként a szöveg (a beágyazott táblával együtt); az egyesített cella folytatása None —
+    ugyanaz az alak, mint a pdfplumber-é a PDF-táblán."""
+    from app.tools.validate import _W, _text
+    rows, above = [], {}
+    for tr in tbl.findall(_W + "tr"):
+        row, col = [], 0
+        for tc in tr.findall(_W + "tc"):
+            pr = tc.find(_W + "tcPr")
+            span = int((pr.find(_W + "gridSpan").get(_W + "val") if pr is not None and pr.find(_W + "gridSpan") is not None else 1) or 1)
+            vm = pr.find(_W + "vMerge") if pr is not None else None
+            cont = vm is not None and vm.get(_W + "val") in (None, "continue")
+            text = " ".join(t for t in (_text(p).strip() for p in tc.iter(_W + "p")) if t)
+            row.append(None if cont and col in above else text)
+            row += [None] * (span - 1)
+            if not cont:
+                above[col] = True
+            col += span
+        rows.append(row)
+    return rows
+
+
+def _docx_text(src: Path) -> str:
+    """A törzs dokumentumsorrendben: bekezdések, a táblák soronként, a cellák tabbal elválasztva."""
+    from docx import Document
+    from app.tools.validate import _W, _body, _text
+    out: list[str] = []
+    for el in _body(Document(str(src)).element.body):
+        if el.tag == _W + "tbl":
+            out += ["\t".join(c for c in row if c is not None) for row in _docx_rows(el)]
+        else:
+            out.append(_text(el))
+    return "\n".join(out)
+
+
+async def _docx_tables(src: Path) -> list[dict]:
+    """[{page, rows}] mint a PDF-nél; az oldalszám a beépített szerkesztő tördeléséből (ha nem tördelhető: None)."""
+    from docx import Document
+    from app.tools.validate import _W, _body
+    tbls = [el for el in _body(Document(str(src)).element.body) if el.tag == _W + "tbl"]
+    pages: list[Optional[int]] = [None] * len(tbls)
+    try:
+        pages = await _docx_table_pages(src, len(tbls))
+    except Exception as e:                          # az oldalszám kényelmi adat — a táblák enélkül is jönnek
+        log.info("extract: table pages unavailable for %s: %s", src.name, e)
+    return [{"page": pg, "rows": _docx_rows(t)} for t, pg in zip(tbls, pages)]
+
+
+async def _docx_table_pages(src: Path, n: int) -> list[Optional[int]]:
+    from app.tools import previews, validate as v
+    pdf = await previews.as_pdf(src)
+    blocks, sections = await asyncio.to_thread(v.read_docx, src)
+    L = await asyncio.to_thread(v.read_pdf, pdf, "editor")
+    try:
+        dc = v.DocCheck(blocks, sections, [L])
+        got = [dc.first_page(L, b) for b in blocks if b.kind == "table"]
+    finally:
+        L.close()
+    return got if len(got) == n else [None] * n

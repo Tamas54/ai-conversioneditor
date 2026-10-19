@@ -84,7 +84,7 @@ class WorkerPool:
         self.chromium_warm = chromium_warm
 
         self._lo_workers: list[LOWorker] = []
-        self._lo_sem = asyncio.Semaphore(libreoffice_warm)
+        self._lo_sem = asyncio.Semaphore(max(1, libreoffice_warm))     # LO_WARM=0: lusta indítás, nem holtpont
         self._lo_lock = asyncio.Lock()
 
         # Playwright lazily imported in start() so module loads fast in tests

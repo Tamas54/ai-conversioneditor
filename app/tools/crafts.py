@@ -303,7 +303,7 @@ def vector_cli() -> Optional[str]:
 
 async def vector_run(
     *, file_id: Optional[str] = None, commands: Optional[list[Command]] = None,
-    export: Optional[list[str]] = None, scale: Optional[float] = None,
+    export: Optional[list[str]] = None, scale: Optional[float] = None, name: Optional[str] = None,
 ) -> dict[str, Any]:
     t0 = time.time()
     formats = [f.lower().lstrip(".") for f in (export or ["pdf"])]
@@ -339,7 +339,11 @@ async def vector_run(
         log_lines = await run_cli(vector_cli(), "vectorcraft-cli", *args)
     except CliError as e:
         raise ValueError(await _explain(e, "vector", parsed)) from None
-    stem = _stem(file_id, "edited" if file_id else "", "design")
+    if name and not file_id:                   # új dizájn: a sablon és a tartalom adja a nevét („Oklevél – Kovács Anna”)
+        from app.storage.naming import unique_stem
+        stem = unique_stem(name)
+    else:
+        stem = _stem(file_id, "edited" if file_id else "", "design")
     files = [_finish(fid, file_id, "vectorcraft", stem) for fid in outs]
     res = {"files": files, "file_id": files[0]["file_id"], "commands_run": len(commands or []),
            "ms_elapsed": int((time.time() - t0) * 1000),

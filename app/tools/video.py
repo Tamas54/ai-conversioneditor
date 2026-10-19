@@ -54,6 +54,9 @@ _ALIASES = {"9:16": "vertical", "story": "vertical", "stories": "vertical", "ree
             "wide": "landscape", "horizontal": "landscape", "1:1": "square", "post": "square", "instagram": "square"}
 FPS = 30
 XFADE = 0.5                            # jelenetek közti áttűnés (s)
+MIN_TOTAL = 4.0                        # a legrövidebb kérhető videó (cím + egy jelenet + zárókép) — korábban 10 s volt a
+                                       # padló, és a 8 s-os kérésből 10–13 s lett
+MIN_SCENE = 1.2                        # szoros fix hossznál ennél rövidebb jelenet nem olvasható
 TICKS_PER_S = 254_016_000_000          # az .ecproj időegysége (mint a Premiere „tick”-je)
 MOVIE_EXTS = {"mp4", "mov", "webm", "m4v", "mkv"}
 AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "ogg", "oga", "flac", "aiff", "aif", "opus"}
@@ -303,22 +306,28 @@ async def fetch_article(url: str) -> dict[str, Any]:
     """Egy weboldal cikk-szövege (címsorok + bekezdések), címe, fő képe (og:image) és a webhely neve."""
     import httpx
     from bs4 import BeautifulSoup
-    from app.tools.images import _UA as polite_ua
+    from app import net
     browser = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
     host = (httpx.URL(url).host or "").lower()
     # 10-12 élesben: a Wikipedia 403-mal tiltja az adatközpontból jövő, böngészőnek álcázott kérést — a Wikimedia
-    # a kapcsolatot megadó, őszinte User-Agentet kéri; máshol a böngésző-UA az első, 403/429 után az őszinte
-    uas = [polite_ua, browser] if host.endswith(("wikipedia.org", "wikimedia.org", "wikinews.org", "wikivoyage.org")) else [browser, polite_ua]
-    r = None
-    async with httpx.AsyncClient(timeout=25, follow_redirects=True) as c:
-        for ua in uas:
-            r = await c.get(url, headers={"User-Agent": ua, "Accept-Language": "en,hu;q=0.8,*;q=0.5"})
-            if r.status_code not in (401, 403, 429):
+    # a kapcsolatot megadó, őszinte User-Agentet kéri; máshol a böngésző-UA az első, 403/429 után az őszinte.
+    # A letöltés a közös kimenő klienssel megy (SSRF-védelem: belső címre nem kér).
+    uas = ([net.user_agent(), browser] if host.endswith(("wikipedia.org", "wikimedia.org", "wikinews.org", "wikivoyage.org"))
+           else [browser, net.user_agent()])
+    got, code = None, "no answer"
+    for ua in uas:
+        try:
+            got = await net.fetch(url, max_bytes=max(MAX_FETCH, 5 * 1024 * 1024), timeout=25, retries=1,
+                                  headers={"User-Agent": ua, "Accept-Language": "en,hu;q=0.8,*;q=0.5"})
+            break
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code not in (401, 403, 429):
                 break
-    if r is None or r.status_code >= 400:
-        code = r.status_code if r is not None else "no answer"
+    if got is None:
         raise ValueError(f"That page wouldn't let us read it ({code}) — paste the article's text instead.")
-    html = r.content[:MAX_FETCH].decode(r.encoding or "utf-8", "replace")
+    m = re.search(r"charset=([\w-]+)", got.content_type or "")
+    html = got.content[:MAX_FETCH].decode(m.group(1) if m else "utf-8", "replace")
     soup = BeautifulSoup(html, "lxml")
     meta = lambda *keys: next((m.get("content") for k in keys for m in soup.find_all("meta", attrs={"property": k}) + soup.find_all("meta", attrs={"name": k}) if m.get("content")), None)
     title = meta("og:title", "twitter:title") or (soup.title.string.strip() if soup.title and soup.title.string else "")
@@ -1641,8 +1650,17 @@ def _motions(n: int, ken_burns: str) -> list[str]:
 
 
 def _cards(total: Optional[float]) -> tuple[float, float]:
-    """A címkártya és a zárókép hossza (rövid videón rövidebbek)."""
-    return (2.6, 3.0) if (total or 60) < 22 else (3.6, 4.2)
+    """A címkártya és a zárókép hossza — ezek is a kért hosszba számítanak, ezért rövid videón arányosan rövidebbek
+    (8 s-nál 1,3 + 1,4 s)."""
+    t = total or 60
+    if t >= 22:
+        return 3.6, 4.2
+    return round(min(2.6, max(1.0, 0.16 * t)), 2), round(min(3.0, max(1.2, 0.18 * t)), 2)
+
+
+def _scene_floor(total: float, n: int, Tt: float, Te: float) -> float:
+    """A jelenet legrövidebb hossza: rendesen 3 s; ha a kért hossz ennél szorosabb, ami jut (legalább MIN_SCENE)."""
+    return max(MIN_SCENE, min(3.0, (total - Tt - Te + XFADE * (n + 1)) / max(n, 1)))
 
 
 def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: list[Optional[str]],
@@ -1666,15 +1684,16 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
         durs = [f or max(3.5, w / 14 + 1.0) for f, w in zip(fixed, weights)]
         total = Tt + sum(durs) + Te - X * (n + 1)
     else:
-        room = max(total - Tt - Te + X * (n + 1), 3.0 * n)
+        lo = _scene_floor(total, n, Tt, Te)
+        room = max(total - Tt - Te + X * (n + 1), lo * n)
         free = room - sum(f for f in fixed if f)
         fw = sum(w for f, w in zip(fixed, weights) if not f) or 1
-        durs = [f or max(3.0, free * w / fw) for f, w in zip(fixed, weights)]
+        durs = [f or max(lo, free * w / fw) for f, w in zip(fixed, weights)]
         loose = [i for i, f in enumerate(fixed) if not f]
         if loose:                            # a szabad jelenetek igazodnak, hogy a teljes hossz kijöjjön
             k = max(0.2, (room - sum(f for f in fixed if f)) / max(sum(durs[i] for i in loose), 1e-6))
             for i in loose:
-                durs[i] = max(3.0, durs[i] * k)
+                durs[i] = max(lo, durs[i] * k)
         total = Tt + sum(durs) + Te - X * (n + 1)
     total = round(total, 2)
     cpl = L["capW"] / (0.53 * L["capSize"])
@@ -2621,7 +2640,7 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
         raise ValueError("Give the video something to say — an article link, a document, or a few sentences of your own.")
     keep = mode == "text"
     dur = body.get("duration")
-    total = None if (keep and not dur) else float(min(max(float(dur or 60), 10), 180))
+    total = None if (keep and not dur) else float(min(max(float(dur or 60), MIN_TOTAL), 180))
     # saját szövegnél is a hossz szerint bontunk (10-12: egy bekezdésként jött 60 s → 1 jelenet, a szöveg nagy része
     # kimaradt); a bekezdések száma csak alsó határ — a modell a mondatokat gondolatonként csoportosítja
     by_len = max(2, min(12, round(((total or 60) - 7) / 6.5)))
@@ -2760,7 +2779,7 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
                  + "; " + ", ".join(f"{sc['id']} ← {kind_of(k)}" for k, sc in enumerate(scenes)))
     await _pick_stock(specs, lambda i: story["title"] if i == 0 else scenes[i - 1]["headline"])
     dur = body.get("duration")
-    total = float(min(max(float(dur), 10), 180)) if dur else None
+    total = float(min(max(float(dur), MIN_TOTAL), 180)) if dur else None
     opts = {"fmt": fmt, "total": total, "accent": body.get("accent"), "ken_burns": body.get("ken_burns"),
             "voice_file_id": body.get("voice_file_id"), "music_file_id": body.get("music_file_id"), "music": body.get("music"),
             "keep_wording": False,
@@ -3049,12 +3068,19 @@ def fit_to_length(story: dict[str, Any], clips: list, total: float) -> tuple[dic
         return out, 0.0
     Tt, Te = _cards(total)
     room = total - Tt - Te + XFADE * (n + 1)
-    need, flex = [], []
-    for i, sc in enumerate(scenes):
-        secs = clips[i + 1][1] if i + 1 < len(clips) else 0.0
-        given = float(sc["duration"]) if isinstance(sc.get("duration"), (int, float)) and sc["duration"] > 0 else None
-        need.append(max(given or 0.0, secs + 1.4 if secs else (given or 3.0)))
-        flex.append(given is None)
+    lo = _scene_floor(total, n, Tt, Te)
+
+    def needs(pad: float) -> tuple[list[float], list[bool]]:
+        need, flex = [], []
+        for i, sc in enumerate(scenes):
+            secs = clips[i + 1][1] if i + 1 < len(clips) else 0.0
+            given = float(sc["duration"]) if isinstance(sc.get("duration"), (int, float)) and sc["duration"] > 0 else None
+            need.append(max(given or 0.0, secs + pad if secs else (given or lo)))
+            flex.append(given is None)
+        return need, flex
+    need, flex = needs(1.4)
+    if sum(need) > room:                    # szoros fix hossz: a narráció után rövidebb szünet (a hang a jelenet 0,45 s-ánál indul)
+        need, flex = needs(0.6)
     spare = room - sum(need)
     if spare > 0:
         grow = [i for i in range(n) if flex[i]] or list(range(n))
@@ -4506,7 +4532,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
         opts["fmt"] = fmt_name(changes["format"])
     if "duration" in changes:
         d = changes["duration"]
-        opts["total"] = None if d in (None, "", "auto") else float(min(max(float(d), 10), 180))
+        opts["total"] = None if d in (None, "", "auto") else float(min(max(float(d), MIN_TOTAL), 180))
         opts["requested"] = None if d in (None, "", "auto") else float(d)
         opts["duration_mode"] = None                     # új hossz: alapból fix (hacsak a duration_mode mást nem mond)
     if changes.get("duration_mode"):

@@ -794,12 +794,19 @@ class DocCheck:
                                                   else "check its indents and long unbroken text") if b else None),
                     regions=[(t.page, (0, max(0, box[1] - 60), w, min(h, box[3] + 60)))], marks=[(t.page, box)]))
             else:
-                self.issues.append(_issue(
-                    "into_margin", WARNING, f"{what.capitalize()} reaches into the {'right' if t.box[2] > a[2] + tol else 'left'} "
-                                            f"margin on page {t.page}.",
+                right = t.box[2] > a[2] + tol
+                tb = self.boxes(L, b).get(t.page) if what == "table" else None       # a tábla doboza ezen az oldalon
+                it = _issue(
+                    "into_margin", ERROR if (right and L.view == "word") else WARNING,
+                    f"{what.capitalize()} reaches into the {'right' if right else 'left'} margin on page {t.page}"
+                    + (f" (“{_short(t.t, 20)}” ends {t.box[2] - a[2]:.0f} pt past it)." if right else "."),
                     L.view, t.page, b, fix=(_goto(b, 'table.properties {"widthPct": 100}' if what == "table"
                                                   else "check the paragraph's indents") if b else None),
-                    regions=[(t.page, (0, max(0, box[1] - 50), w, min(h, box[3] + 50)))], marks=[(t.page, box)]))
+                    regions=[(t.page, (0, max(0, (tb or box)[1] - 50), w, min(h, (tb or box)[3] + 50)))],
+                    marks=[(t.page, tb or box)])
+                if tb:
+                    it["box"] = {"page": t.page, "pt": [round(v, 1) for v in tb]}
+                self.issues.append(it)
         mapped = {(pg, tuple(box)): b for b in self.blocks for pg, box in L.pics.get(b.pos, [])}
         for pg, ims in enumerate(L.images, 1):
             w, h = L.sizes[pg - 1]
@@ -937,7 +944,45 @@ class DocCheck:
             self.layout(L)
         if len(self.layouts) == 2:
             self._compare(*self.layouts)
+            self._completeness(*self.layouts)
         return merge(self.issues, [L.view for L in self.layouts])
+
+    # --- teljesség: ami az egyik tördelésben megvan, a másikból hiányzik ---
+    def units(self, b: Block) -> list[tuple]:
+        if b.kind == "table":
+            return [(("c", b.pos, r, c), cell) for r, row in enumerate(b.rows) for c, cell in enumerate(row) if _toks(cell)]
+        return [(("p", b.pos), b.text)] if _toks(b.text) else []
+
+    def _completeness(self, E: Layout, W: Layout) -> None:
+        """A lap szélén túl levágott oszlopot a LibreOffice ki sem írja: a szavai nincsenek a PDF-ben, így a margó-mérés
+        nem látja. Itt egységenként (bekezdés, cella) nézzük, megvan-e mindkét tördelés szövegrétegében."""
+        for have, lack in ((E, W), (W, E)):
+            for b in self.blocks:
+                units = self.units(b)
+                gone = [(k, txt) for k, txt in units if k in have.spans and k not in lack.spans]
+                if not gone:
+                    continue
+                bx = self.boxes(lack, b)
+                p = min(bx) if bx else None
+                if b.kind == "table":
+                    cells = [{"row": k[2] + 1, "column": k[3] + 1, "text": txt} for k, txt in gone]
+                    msg = (f"Table “{_short(' | '.join(b.rows[0]), 50)}”: {len(gone)} of its {len(units)} cells are missing "
+                           f"from {view_name(lack)} — {', '.join('“' + _short(c['text'], 24) + '”' for c in cells[:12])}"
+                           f"{'…' if len(cells) > 12 else ''}. They are in {view_name(have)}; the columns run past the "
+                           "page edge and are cut off.")
+                    fix = _goto(b, 'table.properties {"widthPct": 100} (or set explicit column widths)')
+                else:
+                    cells = None
+                    msg = f"“{_short(b.text, 60)}” is missing from {view_name(lack)} (it is in {view_name(have)})."
+                    fix = _goto(b, "check that it isn't hidden, outside the page or in a frame Word can't show")
+                it = _issue("content_missing", ERROR, msg, lack.view, p, b, fix=fix,
+                            regions=[self.strip(lack, p, bx[p][1] - 40, bx[p][3] + 40)] if p else [],
+                            marks=[(p, bx[p])] if p else [])
+                if cells:
+                    it["missing_cells"] = cells
+                if p:
+                    it["box"] = {"page": p, "pt": [round(v, 1) for v in bx[p]]}
+                self.issues.append(it)
 
     def _compare(self, E: Layout, W: Layout) -> None:
         if E.pages != W.pages:
@@ -1566,6 +1611,39 @@ def _analyze_doc(docx: Path, layouts: list[Layout]) -> tuple[list[dict], DocChec
     return dc.run(), dc
 
 
+def missing_in_pdf(docx: Path, pdf: Path) -> list[dict[str, Any]]:
+    """A forrás bekezdései és táblacellái, amelyek a PDF szövegrétegéből hiányoznak (pl. a lap szélén levágott oszlop) —
+    blokkonként: {kind, text | header, missing [szöveg], total}. A convert saját ellenőrzése (docx/odt/rtf → pdf)."""
+    blocks, sections = read_docx(docx)
+    L = read_pdf(pdf, "pdf")
+    try:
+        dc = DocCheck(blocks, sections, [L])
+        out = []
+        for b in blocks:
+            units = dc.units(b)
+            gone = [txt for k, txt in units if k not in L.spans]
+            if gone:
+                out.append({"kind": b.kind, "header": " | ".join(b.rows[0]) if b.kind == "table" and b.rows else None,
+                            "text": b.text if b.kind != "table" else None, "missing": gone, "total": len(units)})
+        return out
+    finally:
+        L.close()
+
+
+def describe_missing(gone: list[dict[str, Any]], limit: int = 4) -> list[str]:
+    out = []
+    for g in gone[:limit]:
+        if g["kind"] == "table":
+            out.append(f"Table “{_short(g['header'] or '', 50)}”: {len(g['missing'])} of {g['total']} cells are missing from "
+                       f"the PDF — {', '.join('“' + _short(t, 24) + '”' for t in g['missing'][:10])}"
+                       f"{'…' if len(g['missing']) > 10 else ''} (columns cut off at the page edge).")
+        else:
+            out.append(f"“{_short(g['text'] or '', 60)}” is missing from the PDF.")
+    if len(gone) > limit:
+        out.append(f"…and {len(gone) - limit} more places.")
+    return out
+
+
 async def quick_layout(path: Path) -> Optional[dict[str, Any]]:
     """Mentés utáni gyors tördelés-ellenőrzés (csak a szerkesztő motorja, kép nélkül) — a `check` mezőhöz."""
     layouts, _ = await _layouts(path, "document", want_file=False)
@@ -1587,7 +1665,8 @@ CHECKED = {
                  "typed numbers, heading numbers)", "table rows split across pages, table headers not repeated",
                  "headings left as the last line of a page, captions apart from their picture/table",
                  "text, tables and pictures off the page or into the margins", "empty pages",
-                 "the built-in editor's layout against Word's (LibreOffice) — page count, numbering, where problems appear"],
+                 "the built-in editor's layout against Word's (LibreOffice) — page count, numbering, where problems appear",
+                 "content: every paragraph and table cell is in both layouts (a column cut off at the page edge is an error)"],
     "deck": ["text overflowing its box (in the actual rendered slide)", "text drawn over other text", "things off the slide", "empty placeholders",
              "scatter charts without axis titles",
              "empty slides", "the editor's slides against PowerPoint's (LibreOffice)"],

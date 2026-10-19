@@ -947,7 +947,9 @@ async def render(spec: dict[str, Any], content: dict[str, Any], size: str, *, ph
                 crop=(lambda aspect: crop_file(photo, aspect, tmp)) if photo else None,
                 subject=(lambda aspect: subject_pos(photo, aspect)) if photo else None)
         fmts = export or (["vectorcraft", "png"] + (["pdf"] if main == "pdf" else []))
-        res = await crafts.vector_run(commands=d.cmds, export=fmts, scale=2 if main == "pdf" else None)
+        from app.storage.naming import design_name
+        res = await crafts.vector_run(commands=d.cmds, export=fmts, scale=2 if main == "pdf" else None,
+                                      name=design_name("auto", content) + (f" ({label})" if label else ""))
     finally:
         if own_tmp:
             for p in tmp:

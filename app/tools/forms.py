@@ -132,17 +132,21 @@ def build_pdf(layouts: list[dict[str, Any]], pages: list[Path], dst: Path,
     import pymupdf as fitz
     from PIL import Image
     from app.tools.digitize import _crop_figure
+    from app.tools import pdffonts
     doc = fitz.open()
     names: list[str] = []
+    # a lapszöveg betűje: csak a lapokon álló jelek (a mezőké külön, a gépelési részhalmaz — unicode_fields)
+    chars = "".join(str(it.get("text") or "") + str(it.get("label") or "") for L in layouts for it in (L.get("items") or []))
+    reg, bold = pdffonts.subset_for(chars, _FONT), pdffonts.subset_for(chars, _FONT_BOLD)
     for n, (layout, img) in enumerate(zip(layouts, pages), 1):
         with Image.open(img) as im:
             iw, ih = im.size
         W, H = (842.0, 595.0) if iw > ih * 1.05 else (595.0, 842.0)
         page = doc.new_page(width=W, height=H)
-        page.insert_font(fontname="UniF", fontfile=_FONT)
-        page.insert_font(fontname="UniB", fontfile=_FONT_BOLD)
+        page.insert_font(fontname="UniF", fontbuffer=reg)
+        page.insert_font(fontname="UniB", fontbuffer=bold)
         R = lambda b: fitz.Rect(*(float(b[i]) * (W if i % 2 == 0 else H) / 1000 for i in range(4))).normalize()
-        font, bold_font = fitz.Font(fontfile=_FONT), fitz.Font(fontfile=_FONT_BOLD)
+        font, bold_font = fitz.Font(fontbuffer=reg), fitz.Font(fontbuffer=bold)
         pending: list = []                          # a mezők: a lap minden szövege után kerülnek fel
         blanks = []                                 # a mezők dobozai: az üres hely kezdete a nyomtatványon (a felirat ne nyúljon bele)
         for it in layout.get("items") or []:
@@ -237,6 +241,9 @@ def build_pdf(layouts: list[dict[str, Any]], pages: list[Path], dst: Path,
                 page.draw_line(fitz.Point(r.x0, r.y1), fitz.Point(r.x1, r.y1), width=0.7)
                 r = fitz.Rect(r.x0, r.y1 - 15, r.x1, r.y1 - 1)
                 w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+                from app.formkit.schema import guess_type
+                from app.ops.handlers.forms import native_field
+                native_field(w, kind if kind not in ("text", "field") else guess_type(it.get("label") or name), it.get("label") or "")
             if r.width < 4 or r.height < 4:
                 continue
             w.rect = r
@@ -259,29 +266,40 @@ def _is_uni(basefont: str) -> bool:
 
 
 def unicode_fields(path: Path) -> None:
-    """A mezők betűje egy beágyazott, teljes Unicode-betű (AcroForm /DR + /DA): a PdfCraft form_fill ezzel
-    generálja a megjelenést, így az ő/ű is látszik (Helvetica/WinAnsi-val „Brös rsula” lenne)."""
+    """A mezők betűje egy beágyazott Unicode-betű (AcroForm /DR + /DA): a PdfCraft form_fill ezzel generálja a
+    megjelenést, így az ő/ű is látszik (Helvetica/WinAnsi-val „Brös rsula” lenne). Külön betű-objektum, nem a
+    lapszövegé: a „gépelési” részhalmaz (pdffonts.typing_font — latin, görög, cirill, írásjelek), így a később
+    begépelt ékezet is megvan, a fájl mégsem hízik a teljes DejaVuval (423 kB → < 100 kB)."""
     import pikepdf
     import pymupdf as fitz
-    d = fitz.open(str(path))
-    if not any(_is_uni(f[3]) for f in d[0].get_fonts()):
-        d[0].insert_font(fontname="UniF", fontfile=_FONT)    # teljes betű (nem subset: bármit be lehessen írni)
+    from app.tools import pdffonts
+    with pikepdf.open(str(path)) as pdf:
+        af = pdf.Root.get("/AcroForm")
+        if af is None:
+            return
+        cur = (af.get("/DR") or {}).get("/Font", {}).get("/UniF")
+        try:                                  # már a részhalmaz-betű a mezőké (pl. a kitöltő újra hívja) → az marad
+            ff = cur.DescendantFonts[0].FontDescriptor.FontFile2
+            reuse = int(ff.get("/Length1", 0) or 10 ** 9) < 200_000
+        except (AttributeError, IndexError, KeyError, TypeError):
+            reuse = False
+    xref = None
+    if not reuse:
+        d = fitz.open(str(path))
+        xref = d[0].insert_font(fontname="UniT", fontbuffer=pdffonts.typing_font(_FONT))
         tmp = Path(str(path) + ".tmp")
         d.save(str(tmp))
         d.close()
         tmp.replace(path)
-    else:
-        d.close()
     pdf = pikepdf.open(str(path), allow_overwriting_input=True)
-    font = None
-    for k, v in pdf.pages[0].Resources.Font.items():
-        if _is_uni(str(v.get("/BaseFont", ""))):
-            font = v
-            break
     af = pdf.Root.get("/AcroForm")
-    if font is None or af is None:
-        pdf.close()
-        return
+    if xref is not None:
+        font = pdf.get_object((xref, 0))
+        res = pdf.pages[0].Resources.get("/Font")
+        if res is not None and "/UniT" in res:
+            del res.UniT                      # csak a mezőké: lapítás után (mezők nélkül) a fájlból is kikerül
+    else:
+        font = af.DR.Font.UniF
     # a meglévő betű-erőforrások maradnak (jelölőnégyzet: ZapfDingbats), csak hozzáadjuk a Unicode-betűt
     dr = af.get("/DR") or pikepdf.Dictionary()
     fonts = dr.get("/Font") or pikepdf.Dictionary()
@@ -311,12 +329,35 @@ def unicode_fields(path: Path) -> None:
 # ---------- mezők, kitöltés ----------
 
 async def fields(file_id: str) -> list[dict[str, Any]]:
+    """A kitölthető PDF mezői; mindegyik a szemantikus típusával is (date, number, phone, email…: a natív formátumból
+    vagy a feliratból) — a kitöltő és az ügynök ennek megfelelő értéket adjon."""
+    import pymupdf
+    from app.formkit.schema import native_type
     from app.tools import crafts
     out = await crafts.pdf_script([file_id], [{"tool": "form_fields", "args": {}}], Path("/dev/null"), save=False)
     found = _last_json(out)
     items = found.get("fields") if isinstance(found, dict) else found
-    return [{k: f.get(k) for k in ("name", "type", "value", "options", "page", "required", "read_only", "tooltip")}
-            for f in (items or []) if isinstance(f, dict) and f.get("name")]
+    meta: dict[str, tuple[str, str]] = {}
+    try:
+        with pymupdf.open(str(crafts.existing(file_id))) as d:
+            for pg in d:
+                for w in pg.widgets() or []:
+                    meta.setdefault(w.field_name, (w.script_format or "", w.field_label or ""))
+    except Exception as e:
+        log.info("form field formats unread (%s): %s", file_id, e)
+    res = []
+    for f in items or []:
+        if not isinstance(f, dict) or not f.get("name"):
+            continue
+        row = {k: f.get(k) for k in ("name", "type", "value", "options", "page", "required", "read_only", "tooltip")}
+        if f.get("type") in ("text", "Text", "tx", None):
+            fmt, lab = meta.get(f["name"], ("", ""))
+            row["semantic_type"] = native_type(fmt, lab or f.get("tooltip") or "", f["name"])
+        else:
+            row["semantic_type"] = {"checkbox": "checkbox", "radio": "choice", "combo": "choice", "list": "choice",
+                                    "signature": "signature"}.get(str(f.get("type")).lower(), str(f.get("type")))
+        res.append(row)
+    return res
 
 
 def _last_json(out: str) -> Any:
@@ -394,14 +435,16 @@ def _bake(path: Path) -> None:
     a mezők törlődnek. Sem a PdfCraft doc_flatten, sem a PyMuPDF bake / QPDF flatten nem jó: a PdfCraft
     form_fill a mező megjelenését a saját Helveticájával rajzolja (ő/ű → ?), és azok azt égetik be."""
     import pymupdf as fitz
-    font = fitz.Font(fontfile=_FONT)
+    from app.tools import pdffonts
     tmp = path.with_suffix(".baked.pdf")
     d = fitz.open(str(path))
+    buf = pdffonts.subset_for("".join(str(w.field_value or "") for pg in d for w in pg.widgets()), _FONT)  # csak a beírt jelek
+    font = fitz.Font(fontbuffer=buf)
     for page in d:
         widgets = list(page.widgets())
         if not widgets:
             continue
-        page.insert_font(fontname="UniP", fontfile=_FONT)
+        page.insert_font(fontname="UniP", fontbuffer=buf)
         for w in widgets:
             r, v = w.rect, w.field_value
             if w.field_type in (fitz.PDF_WIDGET_TYPE_CHECKBOX, fitz.PDF_WIDGET_TYPE_RADIOBUTTON):
@@ -419,6 +462,8 @@ def _bake(path: Path) -> None:
                     page.insert_text(fitz.Point(r.x0 + 2, r.y1 - max(2.0, (r.height - size) / 2) - size * 0.15), text,
                                      fontsize=size, fontname="UniP")
             page.delete_widget(w)
+    if not any(True for pg in d for _ in pg.widgets()):
+        d.xref_set_key(d.pdf_catalog(), "AcroForm", "null")    # mező nem maradt: a mezőbetű (/DR) sem kell
     d.save(str(tmp), garbage=3, deflate=True)
     d.close()
     tmp.replace(path)

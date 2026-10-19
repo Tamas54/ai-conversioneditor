@@ -49,15 +49,28 @@ async def _resolve_input(
             raise FileNotFoundError(f"file_id not found: {file_id}")
         return p
     if source_url:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.get(source_url)
-            r.raise_for_status()
-            ext = source_format or Path(source_url.split("?")[0]).suffix or "bin"
-            fid = new_file_id(ext)
-            p = input_path(fid)
-            await save_bytes(p, r.content)
-            return p
+        from app import net
+        from app.api_v1.operations import max_bytes
+        got = await net.fetch(source_url, max_bytes=max_bytes(False), timeout=120)   # SSRF-védett közös kliens
+        ext = source_format or Path(source_url.split("?")[0]).suffix or "bin"
+        fid = new_file_id(ext)
+        p = input_path(fid)
+        await save_bytes(p, got.content)
+        return p
     raise ValueError("Either file_id or source_url is required")
+
+
+# Markdown → Word-családba a WordCraft visz (a táblák oszlopaival); ha a Markdown olyat tartalmaz, amit a WordCraft
+# nem tud (lábjegyzet, kép, képlet…), vagy a WordCraft hibázik, a pandoc — a táblarácsot az ooxml_safe pótolja
+MD_WORDCRAFT = {"docx", "odt"}
+
+
+def _pandoc(src: Path, tgt_fmt: str, out: Path, options: dict) -> None:
+    import pypandoc
+    pypandoc.convert_file(str(src), tgt_fmt, outputfile=str(out), extra_args=options.get("pandoc_args", []))
+    if tgt_fmt == "docx":
+        from app.tools import ooxml_safe
+        ooxml_safe.fix(out)                     # üres w:tblGrid → oszlopszélességek, 100 % széles tábla
 
 
 async def convert(
@@ -97,6 +110,10 @@ async def convert(
         raise ValueError(f"Unknown engine: {engine} (choose wordcraft, photocraft or vectorcraft)")
     else:
         backend = route(src_fmt, tgt_fmt, use_browser=use_browser)
+        if backend == "pandoc" and src_fmt == "md" and tgt_fmt in MD_WORDCRAFT:
+            from app.tools import wordcraft
+            if wordcraft.available() and wordcraft.md_ok(src_path):
+                backend = "wordcraft"           # a pandoc-tábla Wordben/LibreOffice-ban szétesik; a WordCraft-é nem
     log.info("convert: %s → %s via %s", src_fmt, tgt_fmt, backend)
 
     out_id = new_file_id(tgt_fmt)
@@ -114,7 +131,14 @@ async def convert(
 
     elif backend == "wordcraft":
         from app.tools import wordcraft
-        await wordcraft.convert_file(src_path, out_path)
+        try:
+            await wordcraft.convert_file(src_path, out_path)
+        except Exception as e:
+            if engine == "wordcraft" or src_fmt != "md":
+                raise
+            log.warning("wordcraft md → %s failed, pandoc instead: %s", tgt_fmt, e)
+            backend = "pandoc"
+            _pandoc(src_path, tgt_fmt, out_path, options)
 
     elif backend in ("photocraft", "vectorcraft"):
         from app.tools import crafts
@@ -156,14 +180,7 @@ async def convert(
             await pool.release_chromium_page(ctx, page)
 
     elif backend == "pandoc":
-        import pypandoc
-
-        pypandoc.convert_file(
-            str(src_path),
-            tgt_fmt,
-            outputfile=str(out_path),
-            extra_args=options.get("pandoc_args", []),
-        )
+        _pandoc(src_path, tgt_fmt, out_path, options)
 
     elif backend == "md_to_pdf":
         import pypandoc
@@ -290,10 +307,12 @@ async def convert(
     elif backend == "via_md_docx":
         # MD → DOCX (pandoc) → tgt (LO)
         import pypandoc
+        from app.tools import ooxml_safe
         intermediate_dir = temp_path()
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         intermediate_docx = intermediate_dir / f"{src_path.stem}.docx"
         pypandoc.convert_file(str(src_path), "docx", outputfile=str(intermediate_docx))
+        ooxml_safe.fix(intermediate_docx)          # a pandoc-tábla rácsa, mielőtt a LibreOffice megnyitja
 
         if tgt_fmt == "docx":
             shutil.move(str(intermediate_docx), out_path)

@@ -17,6 +17,24 @@ class OptionError(ValueError):
     pass
 
 
+_SIDES = {"centre": "center", "middle": "center", "mid": "center", "upper": "top", "lower": "bottom"}
+
+
+def alias(key: str, v: Any) -> Any:
+    """A szokásos írásmódok: „bottom-center” / „bottom center” / „center_bottom” → bottom, „top-centre” → top,
+    „middle” → center, „left-top” → top-left. Csak a position kulcsnál."""
+    if key != "position" or not isinstance(v, str):
+        return v
+    parts = [_SIDES.get(p, p) for p in re.split(r"[\s_\-]+", v.strip().lower()) if p]
+    vert = next((p for p in parts if p in ("top", "bottom")), None)
+    horiz = next((p for p in parts if p in ("left", "right")), None)
+    if vert and horiz:
+        return f"{vert}-{horiz}"
+    if vert or horiz:
+        return vert or horiz
+    return "center" if parts and set(parts) <= {"center"} else v
+
+
 @dataclass(frozen=True)
 class Opt:
     key: str
@@ -213,9 +231,10 @@ def _coerce(o: Opt, v: Any) -> Any:
                 v = bool(v)
         elif t == "enum":
             if v not in o.choices:
-                alt = [c for c in o.choices if str(c) == str(v)]
+                alt = [c for c in o.choices if str(c) == str(v)] or [c for c in o.choices if c == alias(o.key, v)]
                 if not alt:
-                    raise OptionError(f"{o.key}: one of {', '.join(map(str, o.choices))}")
+                    hint = "; also bottom-center, top-center, middle…" if o.key == "position" else ""
+                    raise OptionError(f"{o.key}: one of {', '.join(map(str, o.choices))}{hint}")
                 v = alt[0]
         elif t in ("str", "time", "file"):
             v = str(v)

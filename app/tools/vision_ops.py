@@ -135,6 +135,9 @@ async def image_to_xlsx(image_file_id: str, sheet_name: str = "Sheet1") -> dict[
     out_id = new_file_id("xlsx")
     out_path = output_path(out_id)
     _write_xlsx(out_path, headers, rows, sheet_name)
+    from app.storage import display_label, write_meta
+    write_meta(out_id, label=f"{Path(display_label(image_file_id)).stem}.xlsx", source_file_id=image_file_id,
+               operation="image_to_xlsx")                  # a forrásfotó nevén (nem „5b347538.xlsx”)
     return {
         "image_file_id": image_file_id,
         "file_id": out_id,

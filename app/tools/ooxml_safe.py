@@ -10,6 +10,8 @@ w:shd típus nélkül, rövid w:nsid. Itt csak ezeket javítjuk — a tartalomho
   értékek   w:color/w:fill „#RRGGBB” → „RRGGBB”; „16.0” → „16”; w:shd val nélkül → clear; w:nsid/w:tmpl 8 jegyre;
             w:rFonts-ban CSS-betűlista („Aptos;Calibri;Segoe UI;Arial;sans-serif” — a LibreOffice HTML-importja) →
             az első család (a séma legfeljebb 31 karaktert enged)
+  táblák    rács nélküli tábla (a pandoc üres w:tblGrid-je, 0 %-os w:tblW) → 100 % széles, egyenlő oszlopok;
+            enélkül a Word/LibreOffice csak az első oszlopot mutatja, és a tábla kilóg a margóból
   xlsx      a styles.xml betűtípus-elemei az Excel sorrendjében
 
 Ha nincs mit javítani, a fájlhoz nem nyúlunk; hiba esetén a kimenet marad, ahogy volt.
@@ -128,8 +130,80 @@ def _dedupe(el) -> int:
     return n
 
 
-def _fix_word_part(root) -> int:
+def _text_width(root) -> int:
+    """A szövegtükör szélessége (twip) a rész saját sectPr-éből; ha nincs: Letter, 1" margó (a Word alapja)."""
+    wq = f"{{{W}}}"
+    sect = root.find(f"{wq}body/{wq}sectPr")
+    try:
+        sz, mar = sect.find(f"{wq}pgSz"), sect.find(f"{wq}pgMar")
+        w = int(float(sz.get(f"{wq}w"))) - int(float(mar.get(f"{wq}left", 1440))) - int(float(mar.get(f"{wq}right", 1440)))
+        return w if w > 1000 else 9360
+    except (AttributeError, TypeError, ValueError):
+        return 9360
+
+
+def _span(tc) -> int:
+    g = tc.find(f"{{{W}}}tcPr/{{{W}}}gridSpan")
+    try:
+        return max(1, int(float(g.get(f"{{{W}}}val", 1)))) if g is not None else 1
+    except ValueError:
+        return 1
+
+
+def _fix_tables(root) -> int:
+    """Rács nélküli tábla (a pandoc 2.x üres w:tblGrid-et és 0 %-os w:tblW-t ír): a Word/LibreOffice ilyenkor csak az
+    első oszlopot mutatja, a tábla kilóg a margóból. → 100 %-os szélesség, egyenlő oszlopok a szövegtükörben,
+    cellaszélesség. A rendes ráccsal bíró táblához nem nyúlunk."""
+    wq = f"{{{W}}}"
     n = 0
+    width = _text_width(root)
+    for tbl in root.iter(f"{wq}tbl"):
+        rows = tbl.findall(f"{wq}tr")
+        spans = [[_span(tc) for tc in tr.findall(f"{wq}tc")] for tr in rows]
+        ncols = max((sum(s) for s in spans), default=0)
+        grid = tbl.find(f"{wq}tblGrid")
+        cols = grid.findall(f"{wq}gridCol") if grid is not None else []
+        if not ncols or (len(cols) >= ncols and all(float(c.get(f"{wq}w", 0) or 0) > 0 for c in cols)):
+            continue
+        outer = next((a for a in tbl.iterancestors(f"{wq}tc")), None)       # beágyazott tábla: a befoglaló cella
+        avail = width
+        if outer is not None:
+            tw = outer.find(f"{wq}tcPr/{wq}tcW")
+            avail = int(float(tw.get(f"{wq}w", 0))) if tw is not None and tw.get(f"{wq}type") == "dxa" else width // 2
+        col = max(avail // ncols, 200)
+        pr = tbl.find(f"{wq}tblPr")
+        if pr is None:
+            pr = etree.SubElement(tbl, f"{wq}tblPr")
+            tbl.insert(0, pr)
+        tw = pr.find(f"{wq}tblW")
+        if tw is None or tw.get(f"{wq}type") in (None, "auto", "nil") or float(tw.get(f"{wq}w", 0) or 0) == 0:
+            if tw is None:
+                tw = etree.SubElement(pr, f"{wq}tblW")
+            tw.set(f"{wq}type", "pct"); tw.set(f"{wq}w", "5000")
+        if grid is None:
+            grid = etree.Element(f"{wq}tblGrid")
+            pr.addnext(grid)
+        for c in list(grid):
+            grid.remove(c)
+        for _ in range(ncols):
+            etree.SubElement(grid, f"{wq}gridCol").set(f"{wq}w", str(col))
+        for tr, sp in zip(rows, spans):
+            for tc, s in zip(tr.findall(f"{wq}tc"), sp):
+                tcpr = tc.find(f"{wq}tcPr")
+                if tcpr is None:
+                    tcpr = etree.Element(f"{wq}tcPr")
+                    tc.insert(0, tcpr)
+                cw = tcpr.find(f"{wq}tcW")
+                if cw is None or float(cw.get(f"{wq}w", 0) or 0) == 0:
+                    if cw is None:
+                        cw = etree.SubElement(tcpr, f"{wq}tcW")
+                    cw.set(f"{wq}w", str(col * s)); cw.set(f"{wq}type", "dxa")
+        n += 1
+    return n
+
+
+def _fix_word_part(root) -> int:
+    n = _fix_tables(root)
     wq = f"{{{W}}}"
     for el in list(root.iter(f"{wq}*")):          # előre listázva: az átrendezés ne zavarja a bejárást
         local = etree.QName(el).localname
