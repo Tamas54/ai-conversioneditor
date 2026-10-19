@@ -458,3 +458,236 @@ def _factor(v: Any) -> int:
     if f not in FACTORS:
         raise AIVideoError("factor: 1 (clean up, same size) | 2 | 4")
     return f
+
+
+# ---------- közös: előzetes fedezet-ellenőrzés, job ----------
+
+async def _precheck(est: dict[str, Any]) -> None:
+    """A becsült maximum fedezete a job ELŐTT (fedezet nélkül semmi nem indul, a feltöltés sem); a tényleges foglalás a
+    submit-ben (versenyhelyzetben is biztos)."""
+    bal = await credits.balance(tenancy.current_user_id())
+    if bal is not None and bal < est["credits"]:
+        raise credits.InsufficientCredits(needed=est["credits"], available=bal)
+
+
+def _start_job(kind: str, est: dict[str, Any], work: Callable[..., Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+    from app import jobs
+    j = jobs.start(kind, work)
+    return {**j, "job_id": j["id"], "estimate": {k: est[k] for k in ("credits", "what") if k in est},
+            "how": 'Call video(action="status", job_id=…) until status is "done" (result) or "failed"; the estimated '
+                   "credits are reserved now and only what the AI service actually charged is taken."}
+
+
+async def _source_video(file_id: str) -> str:
+    """Videó file_id; egy videóprojekt (.ecproj) → a legutóbbi renderje."""
+    from app.storage import output_path, read_meta
+    from app.tools import crafts, video
+    if file_id.lower().endswith(".ecproj"):
+        rid = (read_meta(file_id) or {}).get("render_file_id")
+        if not rid or not output_path(rid).exists():
+            raise AIVideoError("This video project has no render yet — render it first (video action=render).")
+        file_id = rid
+    ext = file_id.rsplit(".", 1)[-1].lower() if "." in file_id else ""
+    if ext not in video.MOVIE_EXTS:
+        raise AIVideoError("Enhance takes a video (mp4, mov, webm, m4v, mkv) or a video project.")
+    crafts.existing(file_id)
+    return file_id
+
+
+# ---------- „Minőségjavítás” (Topaz, OMLETT 2.5) ----------
+
+async def _ffmpeg(*args: str) -> None:
+    from app.config import settings
+    from app.convert.engines import run
+    await run("ffmpeg", "-v", "error", "-y", *args, timeout=settings.VIDEO_TIMEOUT_S)
+
+
+async def _topaz_inputs(src_path, info: dict[str, Any], work) -> list:
+    """A Topaz-bemenet(ek) ≤ 50 MB: kicsi mp4/mov/mkv → ahogy van; WebM → mp4; nagyobb → időben darabolva, kép-másolással
+    (újrakódolás nélkül, kulcskockánál vágva), a túl nagy darab célbitrátára kódolva. Vissza: a darabok útvonalai."""
+    limit = TOPAZ_MAX_MB * 1024 * 1024 * 0.9
+    size = src_path.stat().st_size
+    ext = src_path.suffix.lower().lstrip(".")
+    if size <= limit and ext in ("mp4", "mov", "mkv"):
+        return [src_path]
+    base = work / "in.mp4"
+    if ext not in ("mp4", "mov", "mkv"):          # webm / m4v → mp4 (H.264, jó minőségben; a hang külön jön vissza)
+        await _ffmpeg("-i", str(src_path), "-map", "0:v:0", "-an", "-c:v", "libx264", "-crf", "16", "-preset", "veryfast",
+                      "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(base))
+    else:
+        await _ffmpeg("-i", str(src_path), "-map", "0:v:0", "-an", "-c:v", "copy", "-movflags", "+faststart", str(base))
+    if base.stat().st_size <= limit:
+        return [base]
+    dur = max(1.0, float(info["duration"] or 1))
+    seg = max(2.0, dur * limit * 0.8 / base.stat().st_size)
+    await _ffmpeg("-i", str(base), "-map", "0:v:0", "-c", "copy", "-f", "segment", "-segment_time", f"{seg:.2f}",
+                  "-reset_timestamps", "1", "-segment_format", "mp4", str(work / "part%03d.mp4"))
+    parts = sorted(work.glob("part*.mp4"))
+    for k, p in enumerate(parts):                  # ritka kulcskocka → túl nagy darab: célbitrátára kódolva
+        if p.stat().st_size > limit:
+            pd = float((await _probe(p))["duration"] or seg)
+            kbps = int(limit * 8 / 1000 / max(1.0, pd) * 0.9)
+            q = work / f"partq{k:03d}.mp4"
+            await _ffmpeg("-i", str(p), "-c:v", "libx264", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize",
+                          f"{kbps * 2}k", "-pix_fmt", "yuv420p", "-an", str(q))
+            q.replace(p)
+    return parts
+
+
+async def _probe(path) -> dict[str, Any]:
+    from app.tools import video
+    return await video.probe_movie(path)
+
+
+async def start_enhance(file_id: str, factor: Any) -> dict[str, Any]:
+    """Topaz felskálázás (1x = tisztítás azonos méreten, 2x, 4x) → job; az eredmény a fájl ÚJ változata (verziófa)."""
+    require_enabled()
+    f = _factor(factor)
+    src = await _source_video(file_id)
+    est = await estimate_enhance(src, f)
+    await _precheck(est)
+
+    async def work(progress):
+        from app.storage import temp_path
+        from app.tools import crafts
+        import shutil
+        progress(0, 1, "preparing the video")
+        path = crafts.existing(src)
+        info = await _probe(path)
+        tmp = temp_path(f"enh_{uuid.uuid4().hex[:10]}")
+        tmp.mkdir(parents=True)
+        try:
+            parts = await _topaz_inputs(path, info, tmp)
+            progress(0, len(parts), "uploading")
+            prov = _provider()
+            urls = [await prov.upload(p) for p in parts]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        op = await submit("enhance", UPSCALE_MODEL, [{"video": u, "factor": f} for u in urls], hold=est["credits"],
+                          meta={"units": est["units"], "tier": f"{f}x", "source": src, "factor": f})
+        res = await wait(op, progress)
+        return _job_result(res)
+    return _start_job("ai_video", est, work)
+
+
+def _job_result(res: dict[str, Any]) -> dict[str, Any]:
+    if res["status"] != "done":
+        raise AIVideoError(f"The AI job {res['status']}: {res.get('error') or 'no result'} — your reserved credits came back.")
+    out = dict(res.get("result") or {})
+    return {**out, "task_id": res["task_id"], "credits_charged": res["credits_charged"]}
+
+
+async def _post_enhance(rows: list[dict[str, Any]], files: list[list[str]]) -> dict[str, Any]:
+    """A darabok összefűzése (kép-másolással), az eredeti hang visszakeverése, új változat a forrás mellé."""
+    import shutil
+    from app.storage import display_label, output_path, public_url, temp_path, write_meta
+    from app.storage.files import new_file_id
+    from app.tools import crafts
+    head = rows[0]
+    src, f = head["meta"]["source"], int(head["meta"]["factor"])
+    pieces = [output_path(x[0]) for x in files]
+    out_id = new_file_id("mp4")
+    tmp = temp_path(f"enhc_{uuid.uuid4().hex[:10]}")
+    tmp.mkdir(parents=True)
+    try:
+        video_only = pieces[0]
+        if len(pieces) > 1:
+            lst = tmp / "list.txt"
+            lst.write_text("".join(f"file '{p}'\n" for p in pieces))
+            video_only = tmp / "joined.mp4"
+            try:
+                await _ffmpeg("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(video_only))
+            except Exception:                         # eltérő paraméterű darabok: újrakódolva, jó minőségben
+                await _ffmpeg("-f", "concat", "-safe", "0", "-i", str(lst), "-c:v", "libx264", "-crf", "16",
+                              "-preset", "veryfast", "-pix_fmt", "yuv420p", str(video_only))
+        orig = crafts.existing(src)
+        k = (await _probe(orig)).get("audio_stream")          # az első dekódolható hangsáv (iPhone: a térhang nem)
+        if k is not None:
+            await _ffmpeg("-i", str(video_only), "-i", str(orig), "-map", "0:v:0", "-map", f"1:a:{k}", "-c:v", "copy",
+                          "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(output_path(out_id)))
+        else:
+            await _ffmpeg("-i", str(video_only), "-map", "0:v:0", "-c", "copy", "-movflags", "+faststart",
+                          str(output_path(out_id)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        for p in pieces:                             # a nyers szolgáltatói darabok nem maradnak a munkaterületen
+            p.unlink(missing_ok=True)
+    stem = display_label(src).rsplit(".", 1)[0]
+    label = f"{stem} (enhanced {f}x).mp4"
+    write_meta(out_id, label=label, source_file_id=src, operation="enhance",
+               extra={"ai": {"provider": head["provider"], "model": head["model"], "factor": f}})
+    info = await _probe(output_path(out_id))
+    return {"file_id": out_id, "url": public_url(out_id), "label": label, "width": info["width"], "height": info["height"],
+            "duration": info["duration"], "made_from": src,
+            "next": "A new version — use its file_id like any video: overlay, merge-files, edit."}
+
+
+POST["enhance"] = _post_enhance
+
+
+# ---------- MCP: video(action="enhance" | "ai_clip" | "estimate") ----------
+
+# a video eszköz action="schema" referenciája (a "video" sáv köti be: topic "enhance" / "ai_clip")
+AI_VIDEO_REFERENCE: dict[str, str] = {
+    "enhance": (
+        'video(action="enhance", file_id=<video or project>, factor=1|2|4) — Topaz AI upscale via kie.ai: 1 = clean up at '
+        "the same size, 2 / 4 = sharper and bigger. Costs credits by length (1x/2x: 8, 4x: 14 kie credits a second × the "
+        "Studio multiplier); the estimate is reserved first, only the real cost is taken, a failed job costs nothing. Long or "
+        "big videos (> 50 MB) are cut into parts and joined back; the original sound is kept. The result is a NEW version of "
+        "the file (made_from = the source) — use its file_id like any video: overlay, merge-files, edit. "
+        'action="estimate" with the same arguments → {credits, what, balance} without starting anything. Returns a job: '
+        'video(action="status", job_id=…).'),
+    "ai_clip": (
+        'video(action="ai_clip", ai={…}, file_id?=<project to put the clip in>) — a generated clip (Seedance 2.5 via '
+        "kie.ai). ai: prompt (what happens, camera, style), resolution 480p|720p|1080p (default 720p), duration 4–30 s "
+        "(default 5), audio true|false (default false), aspect 16:9|9:16|1:1|4:3|3:4|21:9|adaptive. Picture to start "
+        "from (pick ONE mode): image / first_frame = file_id of a picture, or {\"frame\": seconds} = that moment of the "
+        "file_id video/project (its last render) — the clip continues the shot; + last_frame = where it should end; OR "
+        "reference_images [≤30 file_ids] / reference_videos [≤10, ≤30 s in total] / reference_audios — the look, the "
+        "person, the sound to follow (not mixable with first/last frame). draft=true → a cheap 480p preview, then "
+        'ai={"finalize": task_id} makes the same clip final at 1080p. Where it goes (with file_id = a video project): '
+        "at=seconds → a full-screen cut-in over the timeline at that time (its sound mixed if audio) | after_scene=\"s3\" "
+        "(or 0 = first) → a new scene of its own; without them the clip just comes back as a file. Costs credits by "
+        "length × resolution (480p/720p/1080p: 28/63/158 kie credits a second × the Studio multiplier); the estimate is "
+        'reserved, only the real cost is taken, a failed job costs nothing. action="estimate" → the price only.'),
+}
+
+
+async def mcp(act: str, *, file_id: Optional[str] = None, factor: Any = None, ai: Optional[dict] = None,
+              text: Optional[str] = None, duration: Any = None, draft: bool = False) -> dict[str, Any]:
+    """A video eszköz AI-akciói (a horog a video eszközben egy sor: app/mcp_server.py)."""
+    try:
+        return await _mcp(act, file_id=file_id, factor=factor, ai=dict(ai or {}), text=text, duration=duration, draft=draft)
+    except (AIVideoError, PermissionError) as e:
+        raise ValueError(str(e)) from None
+
+
+async def _mcp(act: str, *, file_id, factor, ai: dict[str, Any], text, duration, draft) -> dict[str, Any]:
+    if act == "estimate":
+        if factor is not None or ai.get("factor") is not None or (ai.get("for") or ai.get("action")) == "enhance":
+            require_enabled()
+            est = await estimate_enhance(await _source_video(file_id or ""), factor if factor is not None else ai.get("factor"))
+        else:
+            require_enabled()
+            est = await estimate_clip(_clip_args(ai, text, duration, draft))
+        return {**est, "balance": await credits.balance(tenancy.current_user_id())}
+    if act == "enhance":
+        if not file_id:
+            raise AIVideoError('enhance needs file_id (a video or a video project) and factor 1|2|4.')
+        return await start_enhance(file_id, factor if factor is not None else ai.get("factor") or 2)
+    if act == "ai_clip":
+        if ai.get("task_id") and not ai.get("finalize"):
+            return await get(str(ai["task_id"]))
+        return await start_clip(_clip_args(ai, text, duration, draft), project=file_id)
+    raise AIVideoError(f"unknown AI action {act}")
+
+
+def _clip_args(ai: dict[str, Any], text: Optional[str], duration: Any, draft: bool) -> dict[str, Any]:
+    out = dict(ai)
+    if text and not out.get("prompt"):
+        out["prompt"] = text
+    if duration is not None and out.get("duration") is None:
+        out["duration"] = duration
+    if draft and "draft" not in out:
+        out["draft"] = True
+    return out

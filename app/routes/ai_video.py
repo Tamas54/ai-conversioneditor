@@ -83,5 +83,36 @@ async def task_cancel(op: str) -> dict[str, Any]:
         raise _fail(e)
 
 
-def _uid() -> str:
-    return tenancy.current_user_id()
+@router.get("/api/ai/config")
+async def ai_config() -> dict[str, Any]:
+    """Be van-e kapcsolva (a felület ennek alapján mutatja az AI-videó gombokat), és a választható értékek."""
+    from app import providers
+    from app.tools import ai_video
+    return {"enabled": providers.enabled_for() and not tenancy.is_guest(), "resolutions": list(ai_video.RESOLUTIONS),
+            "aspects": list(ai_video.ASPECTS), "duration": [ai_video.CLIP_MIN_S, ai_video.CLIP_MAX_S],
+            "factors": list(ai_video.FACTORS)}
+
+
+@router.post("/api/ai/estimate")
+async def ai_estimate(body: dict[str, Any]) -> dict[str, Any]:
+    """{action: enhance, file_id, factor} | {action: ai_clip, prompt, resolution, duration, …} → {credits, what, balance}."""
+    from app import credits
+    from app.tools import ai_video
+    try:
+        if (body.get("action") or "") == "enhance":
+            est = await ai_video.estimate_enhance(await ai_video._source_video(body.get("file_id") or ""), body.get("factor"))
+        else:
+            est = await ai_video.estimate_clip(body)
+    except Exception as e:
+        raise _fail(e)
+    return {**est, "balance": await credits.balance(tenancy.current_user_id())}
+
+
+@router.post("/api/ai/enhance")
+async def ai_enhance(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: videó vagy videóprojekt, factor: 1 | 2 | 4} → job (az eredmény a fájl új változata)."""
+    from app.tools import ai_video
+    try:
+        return await ai_video.start_enhance(body.get("file_id") or "", body.get("factor") or 2)
+    except Exception as e:
+        raise _fail(e)

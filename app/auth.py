@@ -394,10 +394,17 @@ async def api_account(request: Request) -> dict:
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
+        "ai_video": _ai_video_on(uid),
         "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
         "keys": await db.api_key_list(uid) if db.enabled() and not guest else [],
         "mcp_url": f"{base}/mcp", "product": settings.PRODUCT_NAME,
     }
+
+
+def _ai_video_on(uid: str) -> bool:
+    """kie.ai AI-videó (klip, minőségjavítás): KIE_API_KEY + AI_VIDEO kapcsoló (app/providers)."""
+    from app import providers
+    return not tenancy.is_guest(uid) and providers.enabled_for(uid)
 
 
 @router.post("/api/account/keys")

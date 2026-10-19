@@ -64,3 +64,18 @@
   credits per kie credit (`KIE_CREDIT_MULTIPLIER`), `min_charge` 1 — owner decision, see the lane report.
 - Estimates: `ai_video.estimate_clip` (resolution, 4–30 s, reference video seconds) and `estimate_enhance` (probed
   length rounded up × factor tier). Seedance modes (text | first frame | first+last | reference) can't be mixed.
+
+## 2.5 "Enhance" (Topaz video upscale)
+- `video(action="enhance", file_id, factor=1|2|4)` over MCP, `POST /api/ai/enhance` + an "Enhance… AI" quick tool
+  for videos and video projects in the app (only when AI video is on), with the estimate on the button
+  ("Enhance — 4 credits"); `video(action="estimate", …)` / `POST /api/ai/estimate` give the price only.
+- The result is a NEW version of the file (`source_file_id` = the source, label "… (enhanced 2x).mp4"), usable as the
+  base of overlay / merge-files / edit; a project is enhanced from its last render.
+- kie's API input limit is 50 MB (mp4/mov/mkv, same as the web form): bigger inputs are cut in time with stream copy
+  (keyframe cuts, no re-encode; an oversized part is re-encoded to a target bitrate), upscaled part by part (one user
+  operation, one hold, one capture) and joined back with stream copy; the original sound (first decodable track) is
+  muxed back in.
+- Credit pre-check before anything is uploaded: not enough → `insufficient_credits`, nothing starts.
+- Live: kie's Topaz video upscale answered "internal error" (failCode 500) for every input on 2026-10-19 — also for
+  kie's own documentation example — and billed 0; the flow is covered by tests with a fake provider that really
+  upscales with ffmpeg.

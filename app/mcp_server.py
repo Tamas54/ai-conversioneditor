@@ -1879,6 +1879,8 @@ async def video(
     duration_mode: Optional[str] = None,
     camera: Optional[Any] = None,
     subtitles: Optional[Any] = None,
+    factor: Optional[float] = None,
+    ai: Optional[dict] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
     text, or graphics on the person's OWN footage (action="overlay").
@@ -2075,6 +2077,10 @@ async def video(
       draft=true renders half size, fast.
     action="info": a project's compositions, length, scenes, layers, media files and last render (file_id).
     action="status": a make / overlay / edit / render job (job_id).
+    AI VIDEO (kie.ai, costs credits — the estimate is reserved, only the real cost is taken): action="enhance" + file_id
+      (video or project) + factor 1|2|4 → a sharper new version; action="ai_clip" + ai={prompt, image? | first_frame? +
+      last_frame?, resolution?, duration? 4–30, audio?, draft?, at? | after_scene?} (+ file_id = the project to put it
+      in); ai={"finalize": task_id} makes a draft final (1080p); action="estimate" (same arguments) → credits only.
     """
     from app import jobs
     from app.tools import video as vid
@@ -2121,6 +2127,9 @@ async def video(
                 "how": 'Put one in a graphic: {"shape": "lottie", "lottie": {"url": json_url, "credit": …}} — or let the '
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
+    if act in ("ai_clip", "enhance", "estimate"):    # kie.ai — a logika és a referencia: app/tools/ai_video.py
+        from app.tools import ai_video
+        return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
         raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
     from app.routes.video import make_video

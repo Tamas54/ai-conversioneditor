@@ -282,7 +282,8 @@ async function api(path, opts = {}) {
   const data = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
   if (r.status === 401 && data?.account_required) throw Object.assign(new Error(data.detail || AI_NOTE), { cta: true });   // vendég AI-n: fiók-ajánlat
   if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(here()); throw new Error("signed out"); }
-  if (!r.ok) throw new Error((data && data.detail) || data.error || `Request failed (${r.status})`);
+  const det = data && data.detail;                                // 402 insufficient_credits: {message, needed, available}
+  if (!r.ok) throw new Error((det && typeof det === "object" ? det.message || det.error : det) || data.error || `Request failed (${r.status})`);
   return data;
 }
 
@@ -1274,6 +1275,30 @@ async function videoRender(file_id, draft, st = $("#quick-status")) {
   const r = await pollJob(job, () => draft ? "Rendering a quick draft…" : "Rendering the video — about a minute for a minute of video…", st);
   return { ...r, view: "preview", msg: `${draft ? "Draft" : "Video"} ready (${r.seconds}s to render) — it's in your workspace` };
 }
+// AI-videó (kie.ai — csak ha be van kapcsolva: account.ai_video): a becslés a gombon, a foglalt kredit a fejlécben
+async function aiEstimate(panel, body) {
+  const b = panel.querySelector(".qp-actions .btn.primary"); if (!b) return;
+  b.dataset.base ??= b.textContent;
+  try {
+    const e = await api("/api/ai/estimate", { method: "POST", body: JSON.stringify(body) });
+    b.textContent = `${b.dataset.base} — ${e.credits} credit${e.credits === 1 ? "" : "s"}`;
+    b.title = e.what + (e.balance !== null && e.balance !== undefined ? ` · you have ${e.balance}` : "");
+  } catch (e) { b.textContent = b.dataset.base; b.title = e.message; }
+}
+const aiOn = () => !!account?.ai_video;
+const AI_ENHANCE = { label: "Enhance…", ai: true, show: aiOn, doing: "Enhancing with AI — usually a minute or two…",
+  hint: "Topaz AI: sharper and cleaner, the result is a new version",
+  form: () => `<p class="muted small" style="margin:0 0 10px">Topaz AI makes the video sharper and cleaner. The result is a new version — the original stays. Only what the AI service really charges is taken; a failed job costs nothing.</p>
+    <label>Size<select name="factor"><option value="1">Same size, cleaner</option><option value="2" selected>2× bigger</option><option value="4">4× bigger</option></select></label>`,
+  wire: fm => { const go = () => aiEstimate(fm, { action: "enhance", file_id: cur.file_id, factor: +field(fm, "factor").value });
+    field(fm, "factor").addEventListener("change", go); go(); },
+  run: async (id, fm, st) => {
+    const job = await api("/api/ai/enhance", { method: "POST", body: JSON.stringify({ file_id: id, factor: +field(fm, "factor").value }) });
+    loadAccount().catch(() => {});
+    const r = await pollJob(job, j => j.stage === "generating" ? "The AI is working on it — a minute or two…" : "Enhancing…", st);
+    await loadAccount();
+    return { file_id: r.file_id, view: "preview", msg: `Enhanced — ${r.width}×${r.height}, ${r.credits_charged} credits` };
+  } };
 const QUICK = [
   { title: "PDF tools", exts: EXT.pdf, uses: ["deck", "scan"], covers: ["pdf"], items: [
     { label: "Merge with…", doing: "Merging…", form: () => fileSlot("more", { exts: ["pdf"], multiple: true, label: "PDFs to add after this one, in order" }),
@@ -1331,7 +1356,9 @@ const QUICK = [
     { label: "Render MP4", doing: "Rendering the video — about a minute for a minute of video…", hint: "Full quality, with sound",
       run: id => videoRender(id, false) },
     { label: "Quick draft", doing: "Rendering a quick draft…", hint: "Half size — to check the timing fast", run: id => videoRender(id, true) },
+    AI_ENHANCE,
   ] },
+  { title: "Video", exts: EXT.video, uses: [], covers: [], center: false, when: () => Promise.resolve(aiOn()), items: [AI_ENHANCE] },
   // Pakli / Word: a képek cseréje a KÉPVÁLASZTÓVAL (a jobb oldali fiókban). A sáv csak akkor látszik, ha van kép a fájlban;
   // a „Kérj változtatást” után magától nyílik az új/kicserélt képre. center:false — ettől még nem a szerkesztő a nyitónézet.
   { title: "Pictures", exts: ["pptx", "docx"], uses: [], covers: [], center: false,
@@ -1344,7 +1371,8 @@ const QUICK = [
 ];
 const FIT_PREVIEW = [...IMG, "psd", "psb", "tif", "tiff", "vectorcraft", "ai", "eps"];
 function wireQuick(f) {
-  const g = QUICK.find(q => q.exts.includes(f.ext)); if (!g) return null;
+  const g0 = QUICK.find(q => q.exts.includes(f.ext)); if (!g0) return null;
+  const g = { ...g0, items: g0.items.filter(it => !it.show || it.show()) };   // pl. az AI-videó csak bekapcsolva
   const wrap = $("#quick"), row = $("#quick-row"), panel = $("#quick-panel"), st = $("#quick-status");
   const uses = USES.filter(([kind, , , exts]) => g.uses.includes(kind) && exts.includes(f.ext));
   const ai = '<em class="ai-badge">AI</em>';
