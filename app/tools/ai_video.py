@@ -832,7 +832,8 @@ AI_VIDEO_REFERENCE: dict[str, str] = {
         "big videos (> 50 MB) are cut into parts and joined back; the original sound is kept. The result is a NEW version of "
         "the file (made_from = the source) — use its file_id like any video: overlay, merge-files, edit. "
         'action="estimate" with the same arguments → {credits, what, balance} without starting anything. Returns a job: '
-        'video(action="status", job_id=…).'),
+        'video(action="status", job_id=…). Cancelling (jobs cancel) before the upload reaches the AI service costs nothing; '
+        "after that the service can't be stopped: you pay what it really charged and the result is kept in your files."),
     "ai_clip": (
         'video(action="ai_clip", ai={…}, file_id?=<project to put the clip in>) — a generated clip (Seedance 2.5 via '
         "kie.ai). ai: prompt (what happens, camera, style), resolution 480p|720p|1080p (default 720p), duration 4–30 s "
@@ -845,7 +846,8 @@ AI_VIDEO_REFERENCE: dict[str, str] = {
         "at=seconds → a full-screen cut-in over the timeline at that time (its sound mixed if audio) | after_scene=\"s3\" "
         "(or 0 = first) → a new scene of its own; without them the clip just comes back as a file. Costs credits by "
         "length × resolution (480p/720p/1080p: 28/63/158 kie credits a second × the Studio multiplier); the estimate is "
-        'reserved, only the real cost is taken, a failed job costs nothing. action="estimate" → the price only.'),
+        'reserved, only the real cost is taken, a failed job costs nothing. action="estimate" → the price only. Cancelling '
+        "after the AI service has the job: you pay what it charged, the clip is kept in your files (not on the timeline)."),
 }
 
 
