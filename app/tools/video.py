@@ -3704,10 +3704,10 @@ async def _upright(src: Path) -> str:
     from app.convert.engines import run
     from app.tools import encoding, mediaprobe, videonorm
     fid = new_file_id("mp4")
-    m = await mediaprobe.info(src)
-    k = m.get("audio_stream")
+    info = await probe_movie(src)
+    k = info.get("audio_stream")
     aud = ["-map", f"0:a:{k}"] if k is not None else []      # csak az első dekódolható hangsáv (térhang nélkül)
-    vf = ["-vf", ",".join(videonorm.head_filters(m))] if m.get("hdr") else []      # HLG/PQ → SDR BT.709
+    vf = ["-vf", ",".join(videonorm.head_filters(await mediaprobe.info(src)))] if info.get("hdr") else []   # HLG/PQ → SDR
     await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud, *vf, "-c:v", "libx264", "-preset", "veryfast",
               "-crf", str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p", *encoding.aac(), "-movflags", "+faststart", str(output_path(fid)),
               timeout=settings.VIDEO_TIMEOUT_S)

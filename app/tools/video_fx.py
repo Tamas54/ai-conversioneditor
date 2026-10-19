@@ -295,7 +295,7 @@ def chain(adj: dict[str, Any], work: Path, auto: Optional[dict[str, Any]] = None
 def describe(adj: dict[str, Any], auto: Optional[dict[str, Any]] = None) -> list[str]:
     """Mit állított be (a felhasználónak, a check verified-listájába)."""
     out = []
-    if auto:
+    if auto is not None:
         bits = []
         if auto.get("levels"):
             bits.append(f"levels {auto['levels'][0]:.2f}–{auto['levels'][1]:.2f} → 0–1")
