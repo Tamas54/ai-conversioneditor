@@ -24,3 +24,10 @@
 - New MCP params: `topic`, `render` (`render=false` for make / overlay / edit: save the project only).
 - Other tool descriptions over 2 000 characters (not changed here): wordcraft 4 829, design 4 785, pptx_build 4 246,
   forms 3 698, file_tools 3 046, office 2 901, validate_document 2 531, files 2 297, convert 2 255, facts 2 080.
+
+## 3.6 — `move_to` timing
+- The glide starts once the element has appeared (after the ≤ 0.5 s fade-in for `appear`, after `dur` for pop / grow /
+  slide, 0.3 s for pulse) and lasts `move_dur` (new; default `dur`), eased. It starts from the element's own place
+  (a slide-in no longer makes it start from the slide offset).
+- Regression (rendered frames, marker at x 0.2, `at` 1.5, `dur` 2.2, `move_to` [0.88, y]): at 4.3 s main had it at
+  x ≈ 0.2 (the move started at 3.9 s and lasted 4.4 s); now x = 0.88 (arrives at 4.2 s).

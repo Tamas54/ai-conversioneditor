@@ -272,7 +272,7 @@ function dims(layer, el) {       // irányított figyelem: a megadott szakaszokb
 }
 function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | grow | slide-* | pulse | none (+ move_to)
   var T = tp(layer), a = el.anim || "appear", t0 = el.t0 || 0, d = el.dur || 0.6, full = el.opacity || 100;
-  var O = T.property("ADBE Opacity"), S = T.property("ADBE Scale"), P = T.property("ADBE Position");
+  var O = T.property("ADBE Opacity"), S = T.property("ADBE Scale"), P = T.property("ADBE Position"), home = P.value;
   if (a === "appear" || a === "grow" || a.indexOf("slide-") === 0) { O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + Math.min(d, 0.5), full); }
   if (a === "pop" || a === "grow") { S.setValueAtTime(t0, [0, 0]); S.setValueAtTime(t0 + d, [100, 100]); ease(S); }
   if (a.indexOf("slide-") === 0) {
@@ -285,9 +285,10 @@ function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | g
     for (var q = 0; q < 3; q++) { var b = t0 + 0.3 + q * 0.8; S.setValueAtTime(b, [100, 100]); S.setValueAtTime(b + 0.4, [112, 112]); S.setValueAtTime(b + 0.8, [100, 100]); }
     ease(S);
   }
-  if (el.move_to) {                // odasiklik: a megjelenés után a jelenet végéig
-    var p0 = P.value, tm = t0 + d + 0.2;
-    P.setValueAtTime(tm, p0); P.setValueAtTime(tm + Math.max(0.8, d * 2), el.move_to); ease(P);
+  if (el.move_to) {                // odasiklik: amint megjelent, move_dur alatt (alap: dur), lágyan indul és érkezik
+    // (10-19: dur 2.2 mellett 2,4 s várakozás + 4,4 s út — a jelölő 4,3 s-nál még az út elején járt)
+    var shown = a === "appear" ? Math.min(d, 0.5) : a === "pulse" ? 0.3 : a === "none" ? 0 : d, tm = t0 + shown;
+    P.setValueAtTime(tm, home); P.setValueAtTime(tm + (el.move_dur || d), el.move_to); ease(P);
   }
   dims(layer, el);
 }

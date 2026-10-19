@@ -493,7 +493,7 @@ def _graphic_from_plan(c: dict[str, Any], source: str) -> tuple[Optional[dict[st
         for k in ("x", "y", "w", "h", "r"):
             if num(e.get(k)) is not None:
                 el[k] = max(-0.2, min(1.2, float(e[k])))
-        for k in ("size", "width", "radius", "at", "dur", "opacity"):
+        for k in ("size", "width", "radius", "at", "dur", "opacity", "move_dur"):
             if num(e.get(k)) is not None:
                 el[k] = float(e[k])
         if 0 < el.get("opacity", 100) <= 1:      # 0–1 arány (mint minden más itt) → százalék; 10-18: 0.55 → 5 % = láthatatlan
@@ -1194,8 +1194,10 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
         sh, name = e["shape"], f"{e['shape'].capitalize()} {i + 1}"
         t0, dur = _el_t0(e, i), max(0.1, e.get("dur", 0.6))
         anim = {"anim": e.get("anim", "appear"), "t0": round(t0, 3), "dur": round(dur, 3)}
-        if e.get("move_to"):
+        if e.get("move_to"):              # odasiklik: a megjelenés után, move_dur alatt (alap: dur) — a builder animate()
             anim["move_to"] = px(e["move_to"])
+            if e.get("move_dur"):
+                anim["move_dur"] = round(max(0.1, e["move_dur"]), 3)
         if e.get("dim"):                  # irányított figyelem: a rétegre (és a nyílhegyére) is
             anim["dim"] = [[round(a, 3), round(b, 3)] for a, b in e["dim"]]
         op = int(max(5, min(100, e.get("opacity", 100))))

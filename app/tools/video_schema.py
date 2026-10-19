@@ -120,7 +120,9 @@ Element: {"shape": rect | circle | line | arrow | path | polygon | text | pin | 
     draw (lines, and rect / circle outlines without fill, draw themselves) | slide-left | slide-right | slide-up |
     slide-down | pulse | none,
   at (seconds into the scene / layer when it appears; default one after another), dur (seconds the appearing takes),
-  move_to [x, y] (then glides there),
+  move_to [x, y] (then glides there: it starts once the element has appeared — after the fade-in (≤ 0.5 s) for
+    appear, after dur for pop / grow / slide — and takes move_dur seconds (default: dur), eased in and out; e.g.
+    "at": 1.5, "dur": 2.2 → it is at move_to by 4.2 s),
   dash (line, arrow, path: "dashed" | "dotted" | [dash, gap] px), dim [[from, to] seconds] (faded while something else
   is shown)}.
 TEXT BOX: a text without w stays on ONE line as long as it fits in 0.92 of the frame width (a short one keeps a 0.6
