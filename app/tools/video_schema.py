@@ -132,9 +132,13 @@ TEXT BOX: a text without w stays on ONE line as long as it fits in 0.92 of the f
 image: file_id | URL | {"stock": "words"} — or the person's VIDEO file_id: its picture plays there from when the element
   appears; "clip": [from, to] seconds of it; on an overlay "sound": "replace" | "mix" plays its sound (muted by
   default) + fit cover|contain.
-lottie: file_id | URL of a Lottie JSON | {"search": "confetti"} — the server picks a free LottieFiles animation and
-  credits it; it loops unless loop=false. video(action="lottie", text="confetti") lists candidates with previews to
-  choose one yourself.
+lottie: file_id | URL of a Lottie JSON | {"search": "confetti", "pick"?: n} — the server orders free LottieFiles
+  animations: transparent ones first, then those whose shape fits the element's box (w × h), then by a look at their
+  previews; pick = the n-th of that order (default 1). The result's lottie_picks names the one taken (name, author,
+  thumb_url preview, its pick and the alternatives with their previews); it is credited, and loops unless loop=false.
+  video(action="lottie", text="confetti") lists candidates with previews to choose one yourself (then {"url": json_url,
+  "credit": …}). The check samples every Lottie element at 3 moments: an opaque background or a Lottie sitting on a text
+  is a finding.
 map — a REAL map under the other elements: {"shape": "map", "place": "Szeged" (or "bbox": [south, west, north, east]),
   "detail": auto | streets | outline, x/y/w/h = its box (default the whole frame)}. Streets, rivers and parks from
   OpenStreetMap, country borders from Natural Earth; both credited on screen. Place anything ON it by name or
@@ -208,7 +212,7 @@ to an existing deck; the MP4 is embedded (first frame as its poster)."""
 _ABOUT = {"make": "a video from a text / your scene plan: formats, duration, pictures, narration, music",
           "overlay": "graphics and subtitles on the person's own footage",
           "layers": "time-coded layers: types, timing, position, alpha — read before your first overlay",
-          "graphic": "draw your own: shapes, the text box rule, images, Lottie, real maps",
+          "graphic": "draw your own: shapes, the text box rule, move_to, images, Lottie (search + pick), real maps",
           "chart": "every chart type, explainer diagrams, three.js, script",
           "subtitles": "subtitles on footage and the transcript",
           "edit": "changing a finished video, faster re-renders, to_pptx"}

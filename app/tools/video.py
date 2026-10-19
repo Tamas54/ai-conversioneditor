@@ -1307,7 +1307,9 @@ def _graphic_elements(ch: dict[str, Any], W: int, H: int, acc: list[float]) -> l
             if not e.get("file"):
                 continue
             out.append({"k": sh, "name": name, "file": e["file"], "comp": e.get("comp"), "fit": e.get("fit", "contain"),
-                        "loop": e.get("loop", True), "pos": px([e.get("x", 0.5), e.get("y", 0.5)]),
+                        "loop": e.get("loop", True), "pos": px([e.get("x", 0.5), e.get("y", 0.5)]), "gfx": i,
+                        **({"credit": e["credit"]} if sh == "lottie" and e.get("credit") else {}),
+                        **({"pick": e["_pick"]["pick"]} if sh == "lottie" and e.get("_pick") else {}),
                         **({"movie": True} if Path(e["file"]).suffix.lower().lstrip(".") in MOVIE_EXTS else {}),
                         "size": [round(e.get("w", 0.3) * W, 1), round(e.get("h", 0.3) * H, 1)], "opacity": op, **anim})
     return out
@@ -2884,11 +2886,18 @@ def _probe_texts(els: list[dict[str, Any]], holder: str) -> None:
             e["probe"] = f"{holder}#{e['gfx']}"
 
 
-def _text_report(out: str, D: dict[str, Any]) -> list[str]:
-    """A renderer MÉRT szövegdobozaiból (TEXT_BOX: a kirajzolt tinta a szövegréteg horgonyához képest) a saját grafikák
-    szöveghibái: két szöveg egymáson (egy rétegben, vagy két egyszerre látszó rétegben), kilóg a befoglaló téglalapjából
-    (rect) vagy a képkockából, w nélkül váratlanul több sorra tört. A finding megnevezi a réteget (jelenetet) és az elemet,
-    és javasol w / size (/ y) értéket. (10-19: a cím két sorba tört és az alcímre csúszott — a check mégis „ok” volt.)"""
+def _holders(D: dict[str, Any]) -> list[tuple[str, tuple[float, float], tuple[float, float], float, float, list[dict[str, Any]]]]:
+    """A builder-csomag (D) grafikái: [(név, eltolás a képkockán, időszak, szélesség, magasság, elemek)] — a rétegek a
+    saját kompozíciójukkal, a jelenetek a teljes képkockán (a jelenetek egymással nem „egyszerre látszók”)."""
+    out = [(f"Layer {ly['id']}", (ly["pos"][0] - ly["w"] / 2, ly["pos"][1] - ly["h"] / 2),
+            (float(ly["at"]), float(ly["at"]) + float(ly["dur"])), ly["w"], ly["h"], ly.get("elements") or [])
+           for ly in D.get("layers") or []]
+    return out + [("", (0.0, 0.0), (-9.0 - k, -9.0 - k), D["W"], D["H"], (sc.get("chart") or {}).get("elements") or [])
+                  for k, sc in enumerate(D.get("scenes") or [])]
+
+
+def _measured_texts(out: str, D: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[int, list]]:
+    """A build kimenetének TEXT_BOX sorai → a mért szövegek (tinta a képkockán) és a saját téglalapok rétegenként."""
     boxes: dict[str, tuple[float, float, float, float]] = {}
     for ln in out.splitlines():
         if ln.startswith("TEXT_BOX "):
@@ -2897,15 +2906,11 @@ def _text_report(out: str, D: dict[str, Any]) -> list[str]:
                 boxes[str(key)] = (float(l_), float(t_), float(w_), float(h_))
             except (ValueError, TypeError):
                 continue
+    texts: list[dict[str, Any]] = []
+    rects: dict[int, list] = {}
     if not boxes:
-        return []
-    holders = [(f"Layer {ly['id']}", (ly["pos"][0] - ly["w"] / 2, ly["pos"][1] - ly["h"] / 2),
-                (float(ly["at"]), float(ly["at"]) + float(ly["dur"])), ly["w"], ly["h"], ly.get("elements") or [])
-               for ly in D.get("layers") or []]
-    holders += [("", (0.0, 0.0), (-9.0 - k, -9.0 - k), D["W"], D["H"], (sc.get("chart") or {}).get("elements") or [])
-                for k, sc in enumerate(D.get("scenes") or [])]           # jelenet: csak a saját szövegei egymással
-    texts, rects = [], {}
-    for hi, (name, (ox, oy), span, Wh, Hh, els) in enumerate(holders):
+        return texts, rects
+    for hi, (name, (ox, oy), span, Wh, Hh, els) in enumerate(_holders(D)):
         for e in els:
             if e.get("k") == "rect" and e.get("gfx") is not None:
                 cx, cy, sw, sh = ox + e["pos"][0], oy + e["pos"][1], e["size"][0] / 2, e["size"][1] / 2
@@ -2917,6 +2922,15 @@ def _text_report(out: str, D: dict[str, Any]) -> list[str]:
                 texts.append({"h": hi, "who": name or "Scene " + e["probe"].split(":", 1)[-1].rsplit("#", 1)[0], "n": e["gfx"] + 1,
                               "e": e, "ink": (x0, y0, x0 + w_, y0 + h_), "fs": fs, "k": min(Wh, Hh) / 1080, "W": Wh, "H": Hh,
                               "lines": 1 + max(0, round((h_ - 0.95 * fs) / lead)), "span": span, "o": (ox, oy)})
+    return texts, rects
+
+
+def _text_report(out: str, D: dict[str, Any]) -> list[str]:
+    """A renderer MÉRT szövegdobozaiból (TEXT_BOX: a kirajzolt tinta a szövegréteg horgonyához képest) a saját grafikák
+    szöveghibái: két szöveg egymáson (egy rétegben, vagy két egyszerre látszó rétegben), kilóg a befoglaló téglalapjából
+    (rect) vagy a képkockából, w nélkül váratlanul több sorra tört. A finding megnevezi a réteget (jelenetet) és az elemet,
+    és javasol w / size (/ y) értéket. (10-19: a cím két sorba tört és az alcímre csúszott — a check mégis „ok” volt.)"""
+    texts, rects = _measured_texts(out, D)
     q = lambda s: "“" + re.sub(r"\s+", " ", s)[:40] + ("…" if len(s) > 40 else "") + "”"       # noqa: E731
     over = lambda a, b: (min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1]))  # noqa: E731
     found = []
@@ -2964,6 +2978,73 @@ def _text_report(out: str, D: dict[str, Any]) -> list[str]:
         what = ([f"broke into {t['lines']} lines"] if wrapped else []) + issues
         found.append(f"{t['who']}, element {t['n']} (text {q(st)}): {' and '.join(what)} — {fix}.")
     return found
+
+
+async def _lottie_report(D: dict[str, Any], work: Path, out: str, project: str = "project.ecproj") -> tuple[list[str], list[str]]:
+    """A check MINTÁT vesz a Lottie-elemekből: a kész projektben a Lottie saját kompozíciója három pillanatban, átlátszó
+    háttérrel → mennyit fed a dobozából, és rákerül-e egy (mért) szövegre. (10-19: a „confetti” lila háromszögfoltként
+    ült a szövegen, a check nem látta.) → (verified, findings)"""
+    import numpy as np
+    from PIL import Image
+    texts, _ = _measured_texts(out, D)
+    verified, findings = [], []
+    for hi, (name, (ox, oy), span, Wh, Hh, els) in enumerate(_holders(D)):
+        for e in els:
+            if e.get("k") != "lottie" or not e.get("comp") or not e.get("file"):
+                continue
+            try:
+                lj = json.loads((work / e["file"]).read_text("utf-8"))
+                lw, lh, fr = float(lj.get("w") or 1), float(lj.get("h") or 1), float(lj.get("fr") or 30)
+                ip, op = float(lj.get("ip") or 0), float(lj.get("op") or fr)
+                s_ = (max if e.get("fit") == "cover" else min)(e["size"][0] / lw, e["size"][1] / lh)
+                rx0, ry0 = ox + e["pos"][0] - lw * s_ / 2, oy + e["pos"][1] - lh * s_ / 2
+                covs, union = [], None
+                for f in (0.25, 0.5, 0.75):
+                    t = (ip + (op - ip) * f) / fr
+                    png = work / f"lottie-sample-{hi}-{e.get('gfx', 0)}-{int(f * 100)}.png"
+                    await _run("render-frame", "--project", project, "--comp", e["comp"], "--time", f"{t:.3f}", "--max-side", "240",
+                               "--transparent", "--out", png.name, cwd=work, timeout=120)
+                    a_ = np.asarray(Image.open(png).convert("RGBA"))[:, :, 3] > 16
+                    png.unlink(missing_ok=True)
+                    covs.append(float(a_.mean()))
+                    if a_.any():
+                        ys, xs = np.nonzero(a_)
+                        kx, ky = lw * s_ / a_.shape[1], lh * s_ / a_.shape[0]
+                        bb = (rx0 + xs.min() * kx, ry0 + ys.min() * ky, rx0 + (xs.max() + 1) * kx, ry0 + (ys.max() + 1) * ky)
+                        union = bb if union is None else (min(union[0], bb[0]), min(union[1], bb[1]), max(union[2], bb[2]), max(union[3], bb[3]))
+            except Exception as ex:
+                log.info("lottie-minta kimaradt (%s): %s", e.get("comp"), ex)
+                continue
+            who = (name or "Scene") + f", element {int(e.get('gfx', 0)) + 1}"
+            title = re.sub(r"\s*\(LottieFiles\)$", "", str(e.get("credit") or e["comp"]))
+            hits = [t for t in texts if union and (t["h"] == hi or min(t["span"][1], span[1]) - max(t["span"][0], span[0]) >= 0.3)
+                    and (lambda w_, h_: w_ > 0 and h_ > 0 and w_ * h_ > 0.15 * (t["ink"][2] - t["ink"][0]) * (t["ink"][3] - t["ink"][1]))(
+                        min(union[2], t["ink"][2]) - max(union[0], t["ink"][0]), min(union[3], t["ink"][3]) - max(union[1], t["ink"][1]))]
+            lo, hi_ = min(covs) * 100, max(covs) * 100
+            pct = f"{lo:.0f}%" if round(lo) == round(hi_) else f"{lo:.0f}–{hi_:.0f}%"
+            other = f'(lottie {{"search": …, "pick": {2 if e.get("pick", 1) == 1 else 1}}}, or video action="lottie" to look)'
+            if min(covs) > 0.85:
+                findings.append(f"{who} ({title}): the animation fills {pct} of its box at every sampled moment — it has an "
+                                f"opaque background and hides what is under it. Choose another one {other}, or make its box smaller.")
+            if hits:
+                findings.append(f"{who} ({title}): it sits on " + ", ".join(f"element {t['n']}" + ("" if t["h"] == hi else f" of {t['who']}")
+                                + f" (text “{str(t['e'].get('str') or '')[:30]}”)" for t in hits[:3])
+                                + f" — move it (x, y), make it smaller (w, h), or choose another one {other}.")
+            if min(covs) <= 0.85 and not hits:
+                verified.append(f"{who} ({title}): sampled at 3 moments — it draws on {pct} of its canvas"
+                                + (", clear of the texts." if texts else "."))
+    return verified, findings
+
+
+def _lottie_picks(story: dict[str, Any]) -> list[dict[str, Any]]:
+    """A kereséssel választott Lottie-k (név, előnézet, hányadik a sorrendben, a többi jelölt) a válaszba."""
+    out = []
+    for kind, holders in (("Scene", story.get("scenes") or []), ("Layer", story.get("layers") or [])):
+        for k, h in enumerate(holders):
+            for i, e in enumerate((h.get("chart") or {}).get("elements") or []):
+                if e.get("_pick"):
+                    out.append({"where": f"{kind} {h.get('id') or k + 1}, element {i + 1}", **e["_pick"]})
+    return out
 
 
 def _without_runtime(story: dict[str, Any]) -> dict[str, Any]:
@@ -3060,7 +3141,8 @@ async def _place_on_maps(story: dict[str, Any], frame: tuple[int, int, float]) -
     return credits, problems
 
 
-async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[str]) -> tuple[list[str], list[tuple[str, str]], list[str]]:
+async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[str],
+                           frame: Optional[tuple[int, int, float]] = None) -> tuple[list[str], list[tuple[str, str]], list[str]]:
     """A saját grafikák képei és Lottie-animációi → a munkamappába. → (asset-nevek, [(lottie-fájl, kompozíció-név)], kreditek).
     A szülőprojekt meglévő elemei ({"asset"}) letöltés nélkül jönnek; a Lottie JSON-t ellenőrizzük és egyedi nevet kap."""
     from app.tools import images as imgs
@@ -3068,6 +3150,7 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
     names, lotties, credits = [], [], []
     n = 0
     holders = list(story.get("scenes") or []) + [ly for ly in story.get("layers") or [] if ly.get("chart")]   # jelenetek és rétegek
+    sizes = {id(h): (w_, h_) for _, h, w_, h_ in _gfx_holders(story, frame)} if frame else {}      # a doboz aránya (Lottie)
     for si, sc in enumerate(holders):
         ch = sc.get("chart") or {}
         if ch.get("type") != "graphic":
@@ -3111,10 +3194,15 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
                     sid = src.get("file_id") if isinstance(src, dict) else src
                     if isinstance(src, dict) and src.get("url"):
                         sid = src["url"]
-                    if isinstance(src, dict) and src.get("search"):      # a LottieFiles könyvtárából, a látómodell választ
-                        data, cand = await lot.pick(str(src["search"]), sc.get("headline") or sc.get("text") or ch.get("title") or "")
-                        e["src"] = {"url": cand["json_url"]}
+                    if isinstance(src, dict) and src.get("search"):      # a LottieFiles könyvtárából: átlátszó, illő alakú előre
+                        hw, hh = sizes.get(id(sc), (16.0, 9.0))
+                        box = (e.get("w", 0.3) * hw) / max(1e-6, e.get("h", 0.3) * hh)
+                        data, cand = await lot.pick(str(src["search"]), sc.get("headline") or sc.get("text") or ch.get("title") or "",
+                                                    aspect=box, n=int(src["pick"]) if str(src.get("pick") or "").isdigit() else None)
+                        e["src"] = {"url": cand["json_url"], "name": cand["name"], "thumb": cand.get("thumb_url")}
                         e["credit"] = cand["credit"]
+                        e["_pick"] = {"search": str(src["search"]), **{k: cand.get(k) for k in (
+                            "name", "author", "thumb_url", "gif_url", "page", "pick", "of", "transparent", "aspect", "alternatives")}}
                         credits.append(cand["credit"])
                     elif isinstance(sid, str) and sid.startswith("http"):
                         data = await lot.fetch(sid)
@@ -3309,12 +3397,13 @@ def _kept_layer_notes(spec: dict[str, Any], layers: list[dict[str, Any]]) -> lis
     return [n for n in spec.get("layer_notes") or [] if (m_ := re.match(r"Layer (\S+?):", n)) and m_.group(1) in same]
 
 
-def _unrendered_check(findings: list[str]) -> dict[str, Any]:
+def _unrendered_check(findings: list[str], verified: Optional[list[str]] = None) -> dict[str, Any]:
     """render=false: a projekt elmentve, render nélkül — a szerkezeti / elrendezési check (szövegek mérete, ütközés,
     kimaradt elem) így is jön; a kép maga nincs ellenőrizve."""
     return {"status": "needs_check" if findings else "ok", "findings": list(dict.fromkeys(findings)),
             "verified": ["Saved the project without rendering (render=false): the layout was checked (text boxes measured by "
-                         "the video engine, overlaps, left-out elements) — render it with video(action=\"render\", file_id=…)."]}
+                         "the video engine, overlaps, left-out elements) — render it with video(action=\"render\", file_id=…)."]
+            + list(verified or [])}
 
 
 def _split_notes(notes: list[str]) -> tuple[list[str], list[str]]:
@@ -3442,7 +3531,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                          f"{'the title card' if i == 0 else 'scene ' + str(story['scenes'][i - 1].get('id'))} couldn't be downloaded — "
                          "the others are shown." for i, (sp, nm) in enumerate(zip(specs, names))
                          if isinstance(sp, list) and isinstance(nm, list) and len(nm) < len(sp)]
-        gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
+        gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent, (W, H, _caption_top(W, H)))
         credit_list = credit_list + [c for c in gfx_credits + map_credits if c not in credit_list]
         voice = music = None
         voice_s = None
@@ -3552,6 +3641,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         step(3, 5, "building the timeline")
         out = await _build(D, work, lotties)
         layer_problems = layer_problems + _text_report(out, D)   # a saját grafikák mért szövegei (jelenetek és rétegek)
+        lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
+        layer_problems, pre_verified = layer_problems + lot_f, list(pre_verified or []) + lot_v
         scripted = any(((x.get("chart") or {}).get("type") == "script") for x in (story.get("scenes") or []) + (story.get("layers") or []))
         script_findings = _script_report(out, source_text or "", {ly["id"] for ly in story.get("layers") or []}) if scripted else []
         log.info("videó felépítve: %s", out.strip().splitlines()[-2:] if out.strip() else "")
@@ -3590,6 +3681,8 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
                                   "duration": {"requested": requested, "actual": D["total"], "mode": mode},
                                   "scenes": len(D["scenes"]), "captions": len(D["captions"]),
                                   "credits": credits or None, "story": _without_runtime(story)}
+        if _lottie_picks(story):
+            result["lottie_picks"] = _lottie_picks(story)
         if D["layers"] or story.get("layers"):
             result["layers"] = layer_listing([ly for ly in story.get("layers") or [] if ly["id"] in {r_["id"] for r_ in layer_rows}])
         if render:
@@ -3647,7 +3740,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
             result["files"] = [result["project"]]
             result["check"] = _unrendered_check(list(pre_findings or []) + script_findings + gfx_findings
                                                 + _split_notes(layer_notes or [])[1] + layer_problems
-                                                + [n[2:] for n in chart_notes if n.startswith("⚠ ")])
+                                                + [n[2:] for n in chart_notes if n.startswith("⚠ ")], lot_v)
         step(5, 5, "done")
         return result
     finally:
@@ -4004,7 +4097,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         if subs:                                              # a rétegek a feliratsáv fölött maradnak
             safe = min(safe, _caption_top(W, H))
         map_credits, gfx_findings = await _place_on_maps(story, (W, H, safe))
-        gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent)
+        gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent, (W, H, safe))
         credit_list = list(dict.fromkeys(gfx_credits + map_credits))
         lang = _lang_of(_layer_text_all({"layers": [{k: v for k, v in ly.items() if k != "name"} for ly in layers]}) + " " + (source or ""))
         acc = _rgb(opts.get("accent"))
@@ -4039,6 +4132,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         step(2, 4, "building the timeline")
         out = await _build(D, work, lotties)
         problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
+        lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
+        problems, m_v = problems + lot_f, m_v + lot_v
         scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
         script_findings = _script_report(out, source or "", {ly["id"] for ly in layers}) if scripted else []
         log.info("overlay felépítve: %s", out.strip().splitlines()[-1:] if out.strip() else "")
@@ -4070,6 +4165,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                   "width": W, "height": H, "fps": fps,
                                   "duration": {"requested": None, "actual": total, "mode": "footage"},
                                   "layers": layer_listing([ly for ly in layers if ly["id"] in placed]), "credits": credits or None}
+        if _lottie_picks(story):
+            result["lottie_picks"] = _lottie_picks(story)
         srt_entry = None
         if subs:                                              # a javított feliratok fájlként is (lejátszók, YouTube)
             sid = new_file_id("srt")
@@ -4079,7 +4176,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             result["subtitles"] = {"count": len(subs), "srt": srt_entry}
         if not render:
             result["files"] = [result["project"]]
-            result["check"] = _unrendered_check(_split_notes(layer_notes)[1] + problems + gfx_findings + script_findings)
+            result["check"] = _unrendered_check(_split_notes(layer_notes)[1] + problems + gfx_findings + script_findings, m_v)
             return result
         step(3, 4, "rendering the video")
         vid = await _render_staged(pid, work / "project.ecproj", label_stem, group=group, want_s=total, mode="footage")

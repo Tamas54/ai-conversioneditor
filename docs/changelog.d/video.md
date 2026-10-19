@@ -31,3 +31,13 @@
   (a slide-in no longer makes it start from the slide offset).
 - Regression (rendered frames, marker at x 0.2, `at` 1.5, `dur` 2.2, `move_to` [0.88, y]): at 4.3 s main had it at
   x ≈ 0.2 (the move started at 3.9 s and lasted 4.4 s); now x = 0.88 (arrives at 4.2 s).
+
+## 3.7 — Lottie search
+- `{"search": …}` now loads up to five candidates and orders them: transparent background first (a solid layer or a
+  filled rect covering the canvas counts as opaque), then the shape that fits the element's box, then the vision
+  ranking. `"pick": n` takes the n-th of that order.
+- The result has `lottie_picks`: where it went, name, author, `thumb_url` (preview), `gif_url`, page, its pick / of,
+  transparent, size, and the alternatives with their previews. The chosen URL, name and preview are kept in the spec.
+- The check samples every Lottie element (its comp rendered transparent at 25/50/75 % of its loop): an animation that
+  fills its whole box (opaque background) or sits on a measured text is a named finding; a clean one is in `verified`.
+- Tests mock LottieFiles (no network); the sampling test renders synthetic Lottie JSONs with the engine.
