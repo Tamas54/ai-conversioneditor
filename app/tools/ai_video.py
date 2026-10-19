@@ -15,6 +15,7 @@ import logging
 import os
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Awaitable, Callable, Optional
 
 from app import credits, db, tenancy
@@ -64,6 +65,13 @@ def callback_url() -> Optional[str]:
 
 
 # ---------- nyilvántartás ----------
+#
+# A MEGSZAKÍTÁS SZABÁLYA (egy szabály minden útra — DELETE /api/ai/task, a job megszakítása, MCP jobs cancel):
+#   • amíg egyik rész sincs a szolgáltatónál: semmi nem indul el, a foglalás teljesen visszajár;
+#   • ha már ott van: a kie-feladat nem állítható le (nincs ilyen API-ja), és fizetünk érte — ezért a foglalás marad,
+#     a feladat végén a felhasználó a TÉNYLEGES költséget fizeti (hibánál 0), az eredmény a fájljai közé kerül, de a
+#     timeline-ra nem tesszük. Ugyanígy: ha egy rész nem indult el, vagy túl sokáig tart, NEM engedjük el a foglalást,
+#     amíg a már elindult részek futnak — a végén a szolgáltató költsége a könyvbe kerül (hiba: a felhasználónak 0).
 
 async def _rows_of(op: str) -> list[dict[str, Any]]:
     return await db._rows("SELECT * FROM provider_tasks WHERE id = %s OR meta->>'op' = %s ORDER BY (meta->>'i')::int NULLS FIRST",
@@ -83,23 +91,31 @@ async def _update(rid: str, **cols: Any) -> None:
     await db._rows(f"UPDATE provider_tasks SET {', '.join(sets)}, updated_at = now() WHERE id = %s RETURNING id", (*vals, rid))
 
 
+def _launched(rows: list[dict[str, Any]]) -> bool:
+    return any(r["provider_task_id"] for r in rows)
+
+
 def public(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Egy op állapota a felhasználónak (a szolgáltatói adat — URL-ek, azonosítók — nélkül)."""
+    """Egy op állapota a felhasználónak (a szolgáltatói adat — URL-ek, azonosítók, költség — nélkül)."""
     head = rows[0]
-    st = "running"
-    if head["meta"].get("output") and all(r["settled"] for r in rows):
-        st = "done"
-    elif all(r["settled"] for r in rows):
-        st = "cancelled" if any(r["status"] == "cancelled" for r in rows) else "failed"
+    settled = all(r["settled"] for r in rows)
+    cancelled = bool(head["meta"].get("cancel_requested")) or any(r["status"] == "cancelled" for r in rows)
+    if settled:
+        st = "cancelled" if cancelled else "done" if head["meta"].get("output") else "failed"
+    else:
+        st = "cancelling" if cancelled else "running"
     out = {"task_id": head["id"], "operation": head["operation"], "status": st,
            "parts": len(rows), "parts_done": sum(1 for r in rows if r["status"] in ("success", "fail", "cancelled")),
-           "credits_held": head["hold"], "credits_charged": int(head["charged"] or 0) if st == "done" else 0,
+           "credits_held": head["hold"], "credits_charged": int(head["charged"] or 0) if settled else 0,
            "created_at": head["created_at"]}
     if head["meta"].get("output"):
         out["result"] = head["meta"]["output"]
-    err = next((r["error"] for r in rows if r["error"]), None)
+    err = next((r["error"] for r in rows if r["error"]), None) or head["meta"].get("abort")
     if err:
         out["error"] = err
+    if st == "cancelling":
+        out["note"] = ("Cancelled — but the AI service already had the job and can't be stopped: when it ends you pay what "
+                       "it actually charged (nothing if it fails), and the result goes to your files.")
     return out
 
 
@@ -110,6 +126,23 @@ async def get(op: str) -> dict[str, Any]:
     return public(rows)
 
 
+@contextmanager
+def _context(row: dict[str, Any]):
+    """A művelet gazdája és — megosztott fájlnál — a tulajdonos munkaterülete (app/sharing.py): a webhook és az újraindítás
+    utáni folytatás is ott keresi a forrást és oda teszi az eredményt, ahol a kérés tette volna."""
+    tok = tenancy.set_user(row["user_id"])
+    ws = row["meta"].get("workspace")
+    try:
+        if ws and ws.get("owner") and ws["owner"] != row["user_id"]:
+            from app import sharing
+            with sharing.workspace(ws["owner"], row["user_id"], ws.get("roles") or {}):
+                yield
+        else:
+            yield
+    finally:
+        tenancy.reset(tok)
+
+
 # ---------- indítás ----------
 
 async def reserve(operation: str, model: str, *, hold: int, meta: dict[str, Any], provider: str = "kie") -> str:
@@ -117,9 +150,14 @@ async def reserve(operation: str, model: str, *, hold: int, meta: dict[str, Any]
     sora („created”). Az előkészítés (feltöltés, darabolás) utána jön a jobban; ha az elakad, a hold visszajár."""
     uid = tenancy.current_user_id()
     _provider(provider)
+    if hold <= 0 and uid != tenancy.ADMIN_ID:     # ár nélkül (törölt / 0 szabály) nem adjuk ingyen a fizetős szolgáltatást
+        raise AIVideoError("This AI feature has no price set on this server yet — ask the admin.")
     op = uuid.uuid4().hex[:20]
     held = (await credits.hold(uid, hold, op, operation=operation, provider=provider,
                                meta={"model": model, **{k: meta[k] for k in ("units", "tier") if k in meta}}))["held"]
+    ws, sh = tenancy.workspace_id(), tenancy.shared()
+    if ws != uid and sh is not None:              # megosztott fájlon: a tulajdonos munkaterülete (a befejezéshez)
+        meta = {**meta, "workspace": {"owner": ws, "roles": dict(getattr(sh, "roles", {}) or {})}}
     from psycopg.types.json import Jsonb
     await db._rows("""INSERT INTO provider_tasks (id, user_id, provider, model, operation, hold, meta)
                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
@@ -129,29 +167,35 @@ async def reserve(operation: str, model: str, *, hold: int, meta: dict[str, Any]
 
 
 async def launch(op: str, inputs: list[dict[str, Any]]) -> None:
-    """2. lépés: a szolgáltatói feladat(ok) — egy op több része (hosszú videó darabjai) külön sor, közös hold."""
+    """2. lépés: a szolgáltatói feladat(ok) — egy op több része (hosszú videó darabjai) külön sor, közös hold. Az op
+    zárja alatt: a megszakítás vagy előtte jön (semmi nem indul), vagy utána (a már elindult rész fizetős)."""
     from psycopg.types.json import Jsonb
-    head = (await _rows_of(op))[0]
-    prov = _provider(head["provider"])
-    await _update(op, input=inputs[0], meta_merge={"n": len(inputs)})
-    ids = [op] + [f"{op}-{i}" for i in range(1, len(inputs))]
-    for i, (rid, inp) in enumerate(zip(ids[1:], inputs[1:]), 1):
-        await db._rows("""INSERT INTO provider_tasks (id, user_id, provider, model, operation, input, hold, meta)
-                          VALUES (%s, %s, %s, %s, %s, %s, 0, %s) RETURNING id""",
-                       (rid, head["user_id"], head["provider"], head["model"], head["operation"], Jsonb(inp),
-                        Jsonb({**head["meta"], "i": i, "n": len(inputs)})))
-    cb = callback_url()
-    for rid, inp in zip(ids, inputs):
-        try:
-            tid = await prov.create(head["model"], inp, callback_url=cb)
-        except Exception as e:
-            log.warning("AI-feladat nem indult (%s %s): %s", head["operation"], head["model"], e)
-            await _abort(op, _friendly(e))
-            if isinstance(e, ProviderError) and e.code == 402:
-                await credits.notice(f"{head['provider']}_out_of_credits", f"{head['provider']} refused a job: no credits "
-                                                                            "left on the provider account. Top it up.")
-            raise AIVideoError(_friendly(e)) from None
-        await _update(rid, provider_task_id=tid, status="running")
+    async with _lock(op):
+        rows = await _rows_of(op)
+        head = rows[0]
+        if head["settled"]:
+            raise AIVideoError("The AI job was cancelled before it started — nothing was charged.")
+        prov = _provider(head["provider"])
+        await _update(op, input=inputs[0], meta_merge={"n": len(inputs)})
+        ids = [op] + [f"{op}-{i}" for i in range(1, len(inputs))]
+        for i, (rid, inp) in enumerate(zip(ids[1:], inputs[1:]), 1):
+            await db._rows("""INSERT INTO provider_tasks (id, user_id, provider, model, operation, input, hold, meta)
+                              VALUES (%s, %s, %s, %s, %s, %s, 0, %s) RETURNING id""",
+                           (rid, head["user_id"], head["provider"], head["model"], head["operation"], Jsonb(inp),
+                            Jsonb({**head["meta"], "i": i, "n": len(inputs)})))
+        cb = callback_url()
+        for rid, inp in zip(ids, inputs):
+            try:
+                tid = await prov.create(head["model"], inp, callback_url=cb)
+            except Exception as e:
+                log.warning("AI-feladat nem indult (%s %s): %s", head["operation"], head["model"], e)
+                # ha egy korábbi rész már fut: a foglalás marad, amíg az véget nem ér (a költsége a könyvbe kerül)
+                await _abort(op, _friendly(e), locked=True)
+                if isinstance(e, ProviderError) and e.code == 402:
+                    await credits.notice(f"{head['provider']}_out_of_credits", f"{head['provider']} refused a job: no "
+                                                                                "credits left on the provider account. Top it up.")
+                raise AIVideoError(_friendly(e)) from None
+            await _update(rid, provider_task_id=tid, status="running")
     log.info("AI-feladat indult: %s %s ×%d (hold %d)", head["operation"], head["model"], len(inputs), head["hold"])
 
 
@@ -168,15 +212,22 @@ async def submit(operation: str, model: str, inputs: list[dict[str, Any]], *, ho
 
 async def run_reserved(op: str, prepare: Callable[[], Awaitable[list[dict[str, Any]]]],
                        progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
-    """A jobban: előkészítés → launch → várakozás; ha az előkészítés elhasal, a hold visszajár."""
+    """A jobban: előkészítés → launch → várakozás. A job megszakítása (CancelledError) a megszakítás szabálya szerint;
+    az előkészítés hibája visszaadja a foglalást; a várakozás hibája után a resume_loop fejezi be."""
+    stage = "prepare"
     try:
         inputs = await prepare()
-    except Exception as e:
-        await _abort(op, f"the input couldn't be prepared: {str(e)[:200]}")
+        stage = "launch"
+        await asyncio.shield(launch(op, inputs))         # a szolgáltatónál vagy elindul, vagy nem — félúton nem szakad
+        stage = "wait"
+        return await wait(op, progress)
+    except BaseException as e:
         _watching.discard(op)
+        if isinstance(e, asyncio.CancelledError):
+            await asyncio.shield(cancel_op(op))
+        elif stage == "prepare":
+            await asyncio.shield(_abort(op, f"the input couldn't be prepared: {str(e)[:200]}"))
         raise
-    await launch(op, inputs)
-    return await wait(op, progress)
 
 
 def _friendly(e: Exception) -> str:
@@ -191,7 +242,8 @@ def _friendly(e: Exception) -> str:
 
 
 async def _abort(op: str, error: str, status: str = "fail", *, locked: bool = False) -> None:
-    """Az egész op lezárása eredmény nélkül: a hold teljesen visszajár (az op zárja alatt — a befejezéssel nem versenyez)."""
+    """Az op lezárása eredmény nélkül: a hold visszajár — DE csak ha egyik rész sem fut a szolgáltatónál. Ha fut, a még el
+    nem indult részek hibásak lesznek, és az op a futók végén zárul (_finish_op), a szolgáltatói költséggel."""
     if not locked:
         async with _lock(op):
             return await _abort(op, error, status, locked=True)
@@ -199,12 +251,19 @@ async def _abort(op: str, error: str, status: str = "fail", *, locked: bool = Fa
     if not rows or all(r["settled"] for r in rows):
         return
     head = rows[0]
+    if any(r["status"] == "running" for r in rows):
+        for r in rows:
+            if r["status"] == "created":
+                await _update(r["id"], status="fail", error=error[:500], finished_at=_now())
+        await _update(head["id"], meta_merge={"abort": error[:300]})
+        return
     await credits.release(head["user_id"], op, head["hold"], operation=head["operation"], provider=head["provider"],
                           provider_cost=sum(float(r["provider_cost"] or 0) for r in rows),
                           meta={"model": head["model"], "error": error[:200]})
     for r in rows:
         await _update(r["id"], status=r["status"] if r["status"] in ("success", "fail") and status == "fail" else status,
                       settled=True, error=r["error"] or error[:500], finished_at=_now())
+    _cleanup(head, rows, None)                    # amit nem fizetett ki, az nem marad nála (pl. félkész darabok)
     _wake(op)
 
 
@@ -227,8 +286,8 @@ def _wake(op: str) -> None:
 
 async def on_state(row: dict[str, Any], st: TaskState) -> None:
     """Egy szolgáltatói feladat végállapota (lekérdezésből vagy webhookból): siker → az eredmény AZONNAL a saját
-    tárhelyre; ha az op minden része kész → utófeldolgozás és elszámolás. Idempotens (a zár + a settled jelző + a
-    könyv kulcsai)."""
+    tárhelyre (a művelet munkaterületén); ha az op minden része kész → utófeldolgozás és elszámolás. Idempotens (a zár +
+    a settled jelző + a könyv kulcsai)."""
     op = row["meta"].get("op") or row["id"]
     async with _lock(op):
         fresh = (await db._rows("SELECT * FROM provider_tasks WHERE id = %s", (row["id"],)))[0]
@@ -238,15 +297,13 @@ async def on_state(row: dict[str, Any], st: TaskState) -> None:
             await _update(fresh["id"], status="fail", provider_cost=st.cost, error="the AI service returned no file",
                           finished_at=_now())
         elif st.state == SUCCESS:
-            tok = tenancy.set_user(fresh["user_id"])
             try:
-                files = await _provider(fresh["provider"]).fetch_result(st)
+                with _context(fresh):
+                    files = await _provider(fresh["provider"]).fetch_result(st)
             except Exception as e:
                 log.warning("AI-eredmény letöltése nem sikerült (%s): %s", fresh["id"], e)
                 files, st = [], TaskState(task_id=st.task_id, state=FAIL, cost=st.cost,
                                           error=f"the result couldn't be downloaded ({str(e)[:120]})")
-            finally:
-                tenancy.reset(tok)
             if st.state == SUCCESS:
                 await _update(fresh["id"], status="success", result=files, provider_cost=st.cost, finished_at=_now(),
                               meta_merge={k: v for k, v in st.extra.items() if v})
@@ -269,45 +326,97 @@ async def _finish_op_locked(op: str) -> None:
     if not rows or all(r["settled"] for r in rows) or any(r["status"] not in ("success", "fail") for r in rows):
         return
     head = rows[0]
-    if any(r["status"] == "fail" for r in rows):
-        await _abort(op, next(r["error"] for r in rows if r["status"] == "fail") or "failed", locked=True)
-        return
+    cancelled = bool(head["meta"].get("cancel_requested"))
+    failed = any(r["status"] == "fail" for r in rows)
     cost = sum(float(r["provider_cost"] or 0) for r in rows)
-    tok = tenancy.set_user(head["user_id"])
-    try:
-        post = POST.get(head["operation"])
-        output = await post(rows, [list(r["result"] or []) for r in rows]) if post else \
-            {"files": [f for r in rows for f in r["result"] or []]}
-    except Exception as e:
-        log.exception("AI-utófeldolgozás hiba (%s)", op)
-        await _abort(op, f"the result couldn't be finished: {str(e)[:200]}", locked=True)
+    if failed and not cancelled:              # a felhasználónak 0 — a szolgáltató költsége a feloldáson a könyvben
+        await _abort(op, next((r["error"] for r in rows if r["status"] == "fail"), None) or "failed", locked=True)
         return
-    finally:
-        tenancy.reset(tok)
+    output = head["meta"].get("output")
+    if not failed and not output:             # utófeldolgozás EGYSZER: az eredmény a meta-ban, mielőtt elszámolunk
+        try:
+            with _context(head):
+                post = POST.get(head["operation"])
+                output = await post(rows, [list(r["result"] or []) for r in rows]) if post else \
+                    {"files": [f for r in rows for f in r["result"] or []]}
+        except Exception as e:
+            log.exception("AI-utófeldolgozás hiba (%s)", op)
+            if not cancelled:
+                await _abort(op, f"the result couldn't be finished: {str(e)[:200]}", locked=True)
+                return
+            output = None
+        if output:
+            await _update(head["id"], meta_merge={"output": output})
     rule = await credits.rule_for(head["operation"], head["model"], head["meta"].get("tier") or "")
     est = credits.price(rule, float(head["meta"].get("units") or 1))
     charge = credits.price(rule, provider_units=cost) if any(r["provider_cost"] is not None for r in rows) else est
     res = await credits.settle(head["user_id"], op, head["hold"], charge, operation=head["operation"],
                                provider=head["provider"], provider_task_id=head["provider_task_id"], provider_cost=cost,
                                meta={"model": head["model"], "tier": head["meta"].get("tier"), "parts": len(rows),
-                                     "estimate": est})
-    await _update(head["id"], charged=res["charged"], meta_merge={"output": output})
+                                     "estimate": est, **({"cancelled": True} if cancelled else {})})
+    if res["charged"] or head["charged"] is None:
+        await _update(head["id"], charged=res["charged"])
     for r in rows:
         await _update(r["id"], settled=True)
-    log.info("AI-feladat kész: %s %s — %s kredit (szolgáltató: %s)", head["operation"], op, res["charged"], cost)
+    _cleanup(head, rows, output)
+    log.info("AI-feladat kész: %s %s — %s kredit (szolgáltató: %s)%s", head["operation"], op, res["charged"], cost,
+             " — megszakítva" if cancelled else "")
     _wake(op)
 
 
+def _cleanup(head: dict[str, Any], rows: list[dict[str, Any]], output: Optional[dict[str, Any]]) -> None:
+    """A nyers szolgáltatói letöltések, amik nem lettek maguk az eredmény (pl. a felskálázás darabjai)."""
+    from app.storage import output_path
+    keep = {(output or {}).get("file_id")} | set((output or {}).get("files") or [])
+    with _context(head):
+        for r in rows:
+            for fid in r["result"] or []:
+                if fid not in keep:
+                    try:
+                        output_path(fid).unlink(missing_ok=True)
+                    except (OSError, ValueError):
+                        pass
+
+
+async def cancel_op(op: str) -> dict[str, Any]:
+    """A megszakítás szabálya (fent): el nem indult op → teljes visszaadás; már a szolgáltatónál lévő → a foglalás marad,
+    a végén a tényleges költség, az eredmény a fájlok közé."""
+    finish = False
+    async with _lock(op):
+        rows = await _rows_of(op)
+        if not rows or all(r["settled"] for r in rows):
+            return public(rows) if rows else {}
+        if _launched(rows):
+            for r in rows:
+                if r["provider_task_id"] and r["status"] == "running":
+                    try:
+                        await _provider(r["provider"]).cancel(r["provider_task_id"])
+                    except Exception as e:
+                        log.info("szolgáltatói megszakítás (%s): %s", r["id"], e)
+            await _update(rows[0]["id"], meta_merge={"cancel_requested": True})
+            for r in rows:                    # a még el nem indult részek már nem indulnak
+                if r["status"] == "created":
+                    await _update(r["id"], status="fail", error="cancelled", finished_at=_now())
+            finish = True
+        else:
+            await _abort(op, "cancelled", status="cancelled", locked=True)
+    if finish:
+        await _finish_op(op)
+    _wake(op)
+    return public(await _rows_of(op))
+
+
 async def cancel(op: str) -> dict[str, Any]:
+    """DELETE /api/ai/task/{op}: a hívó saját feladata; a hozzá tartozó job is leáll (ugyanaz a szabály)."""
     rows = await _rows_of(op)
     if not rows or rows[0]["user_id"] != tenancy.current_user_id():
         raise AIVideoError(f"No such AI task: {op}")
-    if not all(r["settled"] for r in rows):
-        for r in rows:
-            if r["provider_task_id"]:
-                await _provider(r["provider"]).cancel(r["provider_task_id"])
-        await _abort(op, "cancelled", status="cancelled")
-    return public(await _rows_of(op))
+    from app import jobs
+    j = jobs._JOBS.get(str(rows[0]["meta"].get("job") or ""))
+    if j and j.get("status") == "running" and j.get("_task") and j.get("owner") == rows[0]["user_id"]:
+        j["_task"].cancel()                   # a job a saját megszakítási ágán hívja a cancel_op-ot
+        await asyncio.sleep(0)
+    return await cancel_op(op)
 
 
 # ---------- várakozás: lekérdezés visszalépéssel; a webhook felébreszti ----------
@@ -321,9 +430,9 @@ async def wait(op: str, progress: Optional[Callable[..., None]] = None, timeout:
             rows = await _rows_of(op)
             if all(r["settled"] for r in rows):
                 return public(rows)
-            if time.monotonic() - t0 > timeout:
-                await _abort(op, "the AI service took too long")
-                continue
+            if time.monotonic() - t0 > timeout:   # nem engedjük el: a resume_loop tovább figyeli, az eredmény a fájlok közé jön
+                raise AIVideoError(f"The AI service is still working on it after {timeout / 3600:g} h — the result will "
+                                   f"appear in your files when it ends (task {op}).")
             if progress:
                 done = sum(1 for r in rows if r["status"] in ("success", "fail"))
                 progress(done, len(rows), "generating" if done < len(rows) else "finishing")
@@ -345,7 +454,7 @@ async def poll(rows: list[dict[str, Any]]) -> None:
             continue
         try:
             st = await _provider(r["provider"]).status(r["provider_task_id"])
-        except ProviderError as e:
+        except Exception as e:                # a szolgáltató nem érhető el / nincs beállítva / hibás válasz: később újra
             log.info("AI-állapot nem jött (%s): %s", r["id"], e)
             continue
         if st.state in TERMINAL:
@@ -371,26 +480,53 @@ async def on_webhook(provider_task_id: str) -> str:
     return "settled"
 
 
+GIVE_UP_S = float(os.getenv("AI_TASK_GIVE_UP_D", "14")) * 86400     # a kie 2 hónapig őrzi a feladat adatait
+
+
+async def resume_once() -> None:
+    """Egy kör: a nyitott op-ok, amikre ebben a folyamatban senki nem vár."""
+    rows = await db._rows("SELECT * FROM provider_tasks WHERE NOT settled ORDER BY created_at LIMIT 200")
+    ops: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        ops.setdefault(r["meta"].get("op") or r["id"], []).append(r)
+    for op, rs in ops.items():
+        if op in _watching:
+            continue
+        age = time.time() - _ts(rs[0]["created_at"])
+        try:                                  # egy hibás op nem állítja meg a többit
+            if not _launched(rs) and age > 1800:
+                await _abort(op, "the job never reached the AI service")
+            elif _launched(rs) and age > GIVE_UP_S:
+                await _give_up(op)
+            else:
+                await poll(await _rows_of(op))
+        except Exception:
+            log.exception("AI-feladat folytatása (%s)", op)
+
+
+async def _give_up(op: str) -> None:
+    """Hetekig nincs végeredmény a szolgáltatónál: a foglalás visszajár, az admin figyelmeztetést kap (a kie naplója dönt)."""
+    async with _lock(op):
+        rows = await _rows_of(op)
+        if not rows or all(r["settled"] for r in rows):
+            return
+        for r in rows:
+            if r["status"] in ("running", "created"):
+                await _update(r["id"], status="fail", error="no answer from the AI service", finished_at=_now())
+        await _update(rows[0]["id"], meta_merge={"cancel_requested": False})
+        await _abort(op, "no answer from the AI service", locked=True)
+    await credits.notice("ai_task_given_up", f"AI task {op} got no final answer from {rows[0]['provider']} for "
+                                             f"{GIVE_UP_S / 86400:g} days; its hold was released — check the provider's log.",
+                         {"op": op, "provider_task_ids": [r["provider_task_id"] for r in rows]}, once_per_s=0)
+
+
 async def resume_loop() -> None:
-    """Újraindítás után (és ha senki nem vár rá): a nyitott feladatok lekérdezése; a „created” (feladat nélkül
-    maradt) sor 30 perc után visszaadja a holdot."""
+    """Újraindítás után (és ha senki nem vár rá) — MINDIG fut, ha van adatbázis (a kapcsoló kikapcsolása után is): a
+    nyitott feladatok lekérdezése; az el sem indult op 30 perc után visszaadja a holdot."""
     await asyncio.sleep(20)
     while True:
         try:
-            rows = await db._rows("SELECT * FROM provider_tasks WHERE NOT settled ORDER BY created_at LIMIT 200")
-            ops: dict[str, list[dict[str, Any]]] = {}
-            for r in rows:
-                ops.setdefault(r["meta"].get("op") or r["id"], []).append(r)
-            for op, rs in ops.items():
-                if op in _watching:
-                    continue
-                age = time.time() - _ts(rs[0]["created_at"])
-                if any(r["status"] == "created" for r in rs) and age > 1800:
-                    await _abort(op, "the job never reached the AI service")
-                elif age > TASK_TIMEOUT_S:
-                    await _abort(op, "the AI service took too long")
-                else:
-                    await poll(await _rows_of(op))
+            await resume_once()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -463,7 +599,7 @@ async def _ref_video_seconds(ids: list[str]) -> float:
     from app.tools import crafts, video
     total = 0.0
     for fid in ids:
-        total += float((await video.probe_movie(crafts.existing(fid)))["duration"] or 0)
+        total += await true_seconds(crafts.existing(fid))
     if total > 30:
         raise AIVideoError(f"Reference videos may be 30 seconds in total (these are {total:.1f} s).")
     return total
@@ -472,8 +608,8 @@ async def _ref_video_seconds(ids: list[str]) -> float:
 async def estimate_clip(o: dict[str, Any]) -> dict[str, Any]:
     """Az AI-klip ára (Studio-kredit) a becsült maximumra — ezt foglaljuk le; a levonás a tényleges költség."""
     if o.get("finalize"):
-        src = await _rows_of(str(o["finalize"]))
-        dur = int(((src[0]["input"] if src else {}) or {}).get("duration") or (src[0]["meta"].get("duration") if src else 0) or 5)
+        fin = await _draft_row(str(o["finalize"]))       # csak a hívó saját, kész draftja
+        dur = int((fin["input"] or {}).get("duration") or fin["meta"].get("duration") or 5)
         est = await credits.estimate("ai_clip", FINAL_MODEL, "1080p", dur)
         return {**est, "what": f"final 1080p of the draft ({dur} s)"}
     c = clip_options(o)
@@ -488,8 +624,9 @@ async def estimate_clip(o: dict[str, Any]) -> dict[str, Any]:
 async def estimate_enhance(file_id: str, factor: Any) -> dict[str, Any]:
     from app.tools import crafts, video
     f = _factor(factor)
-    info = await video.probe_movie(crafts.existing(file_id))
-    secs = max(1, math.ceil(float(info["duration"] or 0)))
+    path = crafts.existing(file_id)
+    info = await video.probe_movie(path)
+    secs = max(1, math.ceil(await true_seconds(path) - 1e-6))
     est = await credits.estimate("enhance", UPSCALE_MODEL, f"{f}x", secs)
     return {**est, "what": f"{f}x enhance of {secs} s ({info['width']}×{info['height']} → "
                            f"{info['width'] * f}×{info['height'] * f})", "seconds": secs}
@@ -507,9 +644,10 @@ def _factor(v: Any) -> int:
 
 # ---------- közös: job ----------
 
-def _start_job(kind: str, est: dict[str, Any], work: Callable[..., Awaitable[dict[str, Any]]], op: str) -> dict[str, Any]:
+async def _start_job(kind: str, est: dict[str, Any], work: Callable[..., Awaitable[dict[str, Any]]], op: str) -> dict[str, Any]:
     from app import jobs
     j = jobs.start(kind, work)
+    await _update(op, meta_merge={"job": j["id"]})
     return {**j, "job_id": j["id"], "task_id": op, "estimate": {k: est[k] for k in ("credits", "what") if k in est},
             "how": 'Call video(action="status", job_id=…) until status is "done" (result) or "failed"; the estimated '
                    "credits are reserved now and only what the AI service actually charged is taken."}
@@ -539,20 +677,19 @@ async def _ffmpeg(*args: str) -> None:
     await run("ffmpeg", "-v", "error", "-y", *args, timeout=settings.VIDEO_TIMEOUT_S)
 
 
-async def _topaz_inputs(src_path, info: dict[str, Any], work) -> list:
-    """A Topaz-bemenet(ek) ≤ 50 MB: kicsi mp4/mov/mkv → ahogy van; WebM → mp4; nagyobb → időben darabolva, kép-másolással
-    (újrakódolás nélkül, kulcskockánál vágva), a túl nagy darab célbitrátára kódolva. Vissza: a darabok útvonalai."""
+async def _topaz_inputs(src_path, info: dict[str, Any], work, paid_s: float) -> list:
+    """A Topaz-bemenet(ek) ≤ 50 MB, legfeljebb a KIFIZETETT másodpercek (-t: a fejlécben hamisított hossz mögötti képet
+    sem töltjük fel): mp4/mov/mkv → kép-másolással; WebM / m4v → mp4; nagyobb → időben darabolva, kép-másolással
+    (kulcskockánál vágva), a túl nagy darab célbitrátára kódolva. Vissza: a darabok útvonalai."""
     limit = TOPAZ_MAX_MB * 1024 * 1024 * 0.9
-    size = src_path.stat().st_size
     ext = src_path.suffix.lower().lstrip(".")
-    if size <= limit and ext in ("mp4", "mov", "mkv"):
-        return [src_path]
     base = work / "in.mp4"
     if ext not in ("mp4", "mov", "mkv"):          # webm / m4v → mp4 (H.264, jó minőségben; a hang külön jön vissza)
-        await _ffmpeg("-i", str(src_path), "-map", "0:v:0", "-an", "-c:v", "libx264", "-crf", "16", "-preset", "veryfast",
-                      "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(base))
+        await _ffmpeg("-i", str(src_path), "-t", f"{paid_s:.3f}", "-map", "0:v:0", "-an", "-c:v", "libx264", "-crf", "16",
+                      "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(base))
     else:
-        await _ffmpeg("-i", str(src_path), "-map", "0:v:0", "-an", "-c:v", "copy", "-movflags", "+faststart", str(base))
+        await _ffmpeg("-i", str(src_path), "-t", f"{paid_s:.3f}", "-map", "0:v:0", "-an", "-c:v", "copy",
+                      "-movflags", "+faststart", str(base))
     if base.stat().st_size <= limit:
         return [base]
     dur = max(1.0, float(info["duration"] or 1))
@@ -569,6 +706,29 @@ async def _topaz_inputs(src_path, info: dict[str, Any], work) -> list:
                           f"{kbps * 2}k", "-pix_fmt", "yuv420p", "-an", str(q))
             q.replace(p)
     return parts
+
+
+async def true_seconds(path) -> float:
+    """A felvétel valódi hossza: a fejléc (format / stream) ÉS a ténylegesen meglévő képkockák (csomagok ÷ fps) közül a
+    nagyobb — egy „1 s”-ra hamisított fejléc mögötti 20 s kép így 20 s-ként fizet (és a feltöltést -t úgyis levágja)."""
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-print_format", "json",
+                       "-show_entries", "stream=duration,nb_read_packets,avg_frame_rate,r_frame_rate:format=duration",
+                       str(path), timeout=300)
+    d = json.loads(out.decode("utf-8", "replace") or "{}")
+    st = (d.get("streams") or [{}])[0]
+
+    def num(v: Any) -> float:
+        try:
+            a, _, b = str(v or "0").partition("/")
+            return float(a) / float(b) if b else float(a)
+        except (ValueError, ZeroDivisionError):
+            return 0.0
+    rates = [r for r in (num(st.get("avg_frame_rate")), num(st.get("r_frame_rate"))) if 1 <= r <= 240]
+    cands = [num((d.get("format") or {}).get("duration")), num(st.get("duration"))]
+    if rates and num(st.get("nb_read_packets")):
+        cands.append(num(st.get("nb_read_packets")) / min(rates))
+    return max(cands + [0.0])
 
 
 async def _probe(path) -> dict[str, Any]:
@@ -593,7 +753,7 @@ async def start_enhance(file_id: str, factor: Any) -> dict[str, Any]:
         tmp = temp_path(f"enh_{uuid.uuid4().hex[:10]}")
         tmp.mkdir(parents=True)
         try:
-            parts = await _topaz_inputs(path, await _probe(path), tmp)
+            parts = await _topaz_inputs(path, await _probe(path), tmp, float(est["seconds"]))
             prov = _provider()
             return [{"video": await prov.upload(p), "factor": f} for p in parts]
         finally:
@@ -602,10 +762,13 @@ async def start_enhance(file_id: str, factor: Any) -> dict[str, Any]:
     async def work(progress):
         progress(0, 1, "preparing the video")
         return _job_result(await run_reserved(op, prepare, progress))
-    return _start_job("ai_video", est, work, op)
+    return await _start_job("ai_video", est, work, op)
 
 
 def _job_result(res: dict[str, Any]) -> dict[str, Any]:
+    if res["status"] == "cancelled":
+        raise AIVideoError(f"The AI job was cancelled — {res['credits_charged']} credits charged (what the AI service "
+                           "really charged before it could be stopped)" + (", the result is in your files." if res.get("result") else "."))
     if res["status"] != "done":
         raise AIVideoError(f"The AI job {res['status']}: {res.get('error') or 'no result'} — your reserved credits came back.")
     out = dict(res.get("result") or {})
@@ -644,9 +807,7 @@ async def _post_enhance(rows: list[dict[str, Any]], files: list[list[str]]) -> d
             await _ffmpeg("-i", str(video_only), "-map", "0:v:0", "-c", "copy", "-movflags", "+faststart",
                           str(output_path(out_id)))
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        for p in pieces:                             # a nyers szolgáltatói darabok nem maradnak a munkaterületen
-            p.unlink(missing_ok=True)
+        shutil.rmtree(tmp, ignore_errors=True)        # a nyers darabokat az elszámolás után a _cleanup törli
     stem = display_label(src).rsplit(".", 1)[0]
     label = f"{stem} (enhanced {f}x).mp4"
     write_meta(out_id, label=label, source_file_id=src, operation="enhance",
@@ -705,7 +866,7 @@ async def _mcp(act: str, *, file_id, factor, ai: dict[str, Any], text, duration,
         else:
             require_enabled()
             est = await estimate_clip(_clip_args(ai, text, duration, draft))
-        return {**est, "balance": await credits.balance(tenancy.current_user_id())}
+        return {**credits.public_estimate(est), "balance": await credits.balance(tenancy.current_user_id())}
     if act == "enhance":
         if not file_id:
             raise AIVideoError('enhance needs file_id (a video or a video project) and factor 1|2|4.')
@@ -780,8 +941,9 @@ async def _video_ref(fid: str, work) -> Any:
     from app.tools import crafts
     src = crafts.existing(fid)
     fps = min(60.0, max(24.0, float((await _probe(src))["fps"] or 30)))
+    secs = min(30.0, await true_seconds(src))     # a becslés ugyanebből számolt: többet nem küldünk
     dst = work / f"ref_{uuid.uuid4().hex[:8]}.mp4"
-    await _ffmpeg("-i", str(src), "-t", "30", "-vf", "scale='trunc(sqrt(800000*iw/ih)/2)*2':-2", "-r", f"{fps:g}",
+    await _ffmpeg("-i", str(src), "-t", f"{secs:.3f}", "-vf", "scale='trunc(sqrt(800000*iw/ih)/2)*2':-2", "-r", f"{fps:g}",
                   "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", str(dst))
     return dst
 
@@ -900,7 +1062,7 @@ async def start_clip(opts: dict[str, Any], project: Optional[str] = None) -> dic
                                          + json.dumps(timeline_changes(res["file_id"], res["duration"], at=at,
                                                                        after_scene=after)) + ")")
         return res
-    return _start_job("ai_video", est, work, op)
+    return await _start_job("ai_video", est, work, op)
 
 
 async def _post_clip(rows: list[dict[str, Any]], files: list[list[str]]) -> dict[str, Any]:
