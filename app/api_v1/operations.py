@@ -378,9 +378,10 @@ def _export_url(file_ids: list[str], p: dict[str, Any]) -> dict[str, Any]:
         e = _file_entry(fid)
         try:
             from app import tenancy
-            tok, exp = sign_file_id(fid, ttl, uid=tenancy.current_user_id())
+            from app.storage.files import file_workspace
+            uid = file_workspace(fid)                  # a fájl munkaterülete (megosztott fájlnál a tulajdonosé)
+            tok, exp = sign_file_id(fid, ttl, uid=uid)
             base = settings.PUBLIC_BASE_URL.rstrip("/")
-            uid = tenancy.current_user_id()
             e["url"] = f"{base}/files/{fid}?t={tok}" + ("" if uid == tenancy.ADMIN_ID else f"&u={uid}")
             e["expires_at"] = exp
         except TypeError:
