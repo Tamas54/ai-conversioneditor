@@ -42,3 +42,13 @@
   SDR original (YAVG 125 / SATAVG 112): untouched (main) 126 / 44 — saturation 39%, washed out, still tagged HLG;
   mobius 121.5 / 95.3 (97% / 85%); hable 101.3 / 77.8 (81% / 69%, darker) — hence mobius as the default.
 - zimg/zscale is in the image's ffmpeg 4.4.2 (checked); the test skips where it isn't.
+
+## 3.4 Extend a clip, image → video, allowlist (ops part)
+- ffmpeg-advanced allows `tpad`, `loop`, `apad` — bounded (≤ 3600 s padding, loop repeats × size ≤ 18 000 frames,
+  no bare `apad`), so no request can produce an endless output. A refused filter or flag now lists what is allowed.
+- New tool `extend-video` (options `duration`, `at`): holds the last frame for `duration` s (room for an end card),
+  or freezes the frame at `at` for `duration` s and plays on; silence during the hold, sound stays in sync.
+- New tool `image-to-video` (options `duration` default 5, `motion` still | zoom_in | zoom_out | pan_left | pan_right |
+  pan_up | pan_down, `canvas`, `fit`, `fps`): a still (EXIF-rotated) → MP4 clip with an optional Ken Burns move
+  (zoompan on a 2× upscale, no jitter) and a silent stereo track (so merge-files keeps the other clips' sound).
+- Both are catalog tools: web page + REST (`tool/extend-video`, `tool/image-to-video`) + MCP `file_tools` + agent.

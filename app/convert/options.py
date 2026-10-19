@@ -212,6 +212,9 @@ TOOL_OPTIONS: dict[str, Opt] = {o.key: o for o in [
     Opt("canvas", "str", "auto", pattern=r"^(auto|vertical|landscape|square|portrait|horizontal|9:16|16:9|1:1|\d{2,5}[x×]\d{2,5})$"),
     Opt("fit", "enum", None, ("inside", "cover", "contain", "fill", "blur")),
     Opt("aspect_mode", "enum", "pad", ("pad", "crop", "stretch", "blur")),
+    # meghosszabbítás, kép → videó (extend-video, image-to-video)
+    Opt("duration", "float", None, min=0.1, max=600),
+    Opt("motion", "enum", "still", ("still", "zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down")),
 ]}
 
 

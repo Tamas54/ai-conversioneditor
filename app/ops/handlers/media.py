@@ -308,3 +308,109 @@ async def volume(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]
             await run(*_FF, "-i", str(src), "-af", ",".join(af), *_acodec_for(_fmt(dst)), str(dst), timeout=VIDEO_TIMEOUT)
         res.append(dst)
     return res
+
+
+# ---------- meghosszabbítás, kép → videó (OMLETT 3.4) ----------
+
+def _seconds_opt(o: dict[str, Any], key: str = "duration", default: Optional[float] = None) -> float:
+    v = o.get(key, default)
+    if v is None or float(v) <= 0:
+        raise OptionError(f"{key}: how many seconds, e.g. 3")
+    return float(v)
+
+
+async def extend_video(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
+    """A felvétel meghosszabbítása kimerevített kockával: alapból az UTOLSÓ kocka áll `duration` mp-ig (zárókártya,
+    végefőcím alá), `at` megadásával az ott látható kocka áll `duration` mp-re, utána a felvétel folytatódik. A kimerevítés
+    alatt csend; a hang a kép után folytatódik (szinkronban marad)."""
+    from app.tools import mediaprobe, videonorm
+    hold = _seconds_opt(o)
+    res = []
+    for src in inputs:
+        m = mediaprobe.summarize(await probe(src))
+        if not m["has_video"]:
+            raise OptionError(f"{src.name} has no picture to hold")
+        fmt = _fmt(src) if _fmt(src) in ("mp4", "mov", "m4v", "mkv") else "mp4"
+        dst = out_name(out, src, "-extended", fmt)
+        hf = ",".join(videonorm.head_filters(m) + ["scale=trunc(iw/2)*2:trunc(ih/2)*2"])
+        k = m["audio_stream"] or 0
+        if o.get("at") in (None, ""):
+            fc = f"[0:v]{hf},tpad=stop_mode=clone:stop_duration={hold:g}[v]"
+            fa = f"[0:a:{k}]apad=pad_dur={hold:g}[a]"
+        else:
+            t = _secs(o["at"])
+            if not 0 < t < (m["duration"] or 0):
+                raise OptionError(f"at: a time inside the video (0–{m['duration']:.1f} s)")
+            fc = (f"[0:v]{hf},split[v1][v2];[v1]trim=end={t:g},setpts=PTS-STARTPTS,"
+                  f"tpad=stop_mode=clone:stop_duration={hold:g}[va];[v2]trim=start={t:g},setpts=PTS-STARTPTS[vb];"
+                  f"[va][vb]concat=n=2:v=1:a=0[v]")
+            fa = (f"[0:a:{k}]asplit[a1][a2];[a1]atrim=end={t:g},asetpts=PTS-STARTPTS,apad=pad_dur={hold:g}[aa];"
+                  f"[a2]atrim=start={t:g},asetpts=PTS-STARTPTS[ab];[aa][ab]concat=n=2:v=0:a=1[a]")
+        args = [*_FF, "-i", str(src), "-filter_complex", fc + (f";{fa}" if m["has_audio"] else ""), "-map", "[v]"]
+        args += (["-map", "[a]", *_acodec_for(fmt)] if m["has_audio"] else ["-an"]) + _vcodec_for(fmt) + _faststart(fmt)
+        await run(*args, str(dst), timeout=VIDEO_TIMEOUT)
+        res.append(dst)
+    return res
+
+
+MOTIONS = ("still", "zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down")
+
+
+def _ken_burns(motion: str, W: int, H: int, n: int, fps: float, zoom: float = 1.15) -> str:
+    """zoompan a vászonra illesztett képen (2× felskálázva, hogy a kerekítés ne remegjen). A mozgás neve a videó
+    eszközéé: zoom_in / zoom_out a közép felé / felől; pan_left = a kép balra úszik (a kivágás balról jobbra halad)."""
+    p = f"on/{max(1, n - 1)}"
+    z, x, y = f"{zoom}", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+    if motion == "zoom_in":
+        z = f"1+{zoom - 1:g}*{p}"
+    elif motion == "zoom_out":
+        z = f"{zoom:g}-{zoom - 1:g}*{p}"
+    elif motion in ("pan_left", "pan_right"):
+        x = f"(iw-iw/zoom)*{p}" if motion == "pan_left" else f"(iw-iw/zoom)*(1-{p})"
+    elif motion in ("pan_up", "pan_down"):
+        y = f"(ih-ih/zoom)*{p}" if motion == "pan_up" else f"(ih-ih/zoom)*(1-{p})"
+    return f"scale={W * 2}:{H * 2}:flags=lanczos,zoompan=z='{z}':x='{x}':y='{y}':d=1:s={W}x{H}:fps={fps:g}"
+
+
+async def image_to_video(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
+    """Állókép → videóklip: `duration` mp (alap 5), `motion` = still | zoom_in | zoom_out | pan_left | pan_right |
+    pan_up | pan_down (Ken Burns), `canvas` (alap: a kép mérete, a hosszabb oldal legfeljebb 1920) + `fit` (blur |
+    contain | cover). Néma sztereó hangsávval, hogy a merge-files a többi klip hangját megtartsa."""
+    import asyncio
+    from app.tools import videonorm
+    dur = _seconds_opt(o, default=5.0)
+    fps = min(60.0, float(o.get("fps") or 30))
+    motion = o.get("motion") or "still"
+    if motion not in MOTIONS:
+        raise OptionError(f"motion: {' | '.join(MOTIONS)}")
+    res = []
+    for src in inputs:
+        png = out / f"_still-{src.stem}.png"
+
+        def upright(src=src, png=png) -> tuple[int, int]:
+            from PIL import Image, ImageOps
+            from app.convert.steps import _register_plugins
+            _register_plugins()
+            with Image.open(src) as im:          # a telefonos fotó EXIF-elforgatása (az ffmpeg nem veszi figyelembe)
+                im = ImageOps.exif_transpose(im)
+                im = im.convert("RGBA").convert("RGB") if im.mode in ("P", "LA", "RGBA") else im.convert("RGB")
+                im.save(png)
+                return im.size
+        iw, ih = await asyncio.to_thread(upright)
+        m = {"display_width": iw, "display_height": ih}
+        if (o.get("canvas") or "auto") == "auto":
+            k = min(1.0, 1920 / max(iw, ih))
+            W, H = videonorm.even(iw * k), videonorm.even(ih * k)
+        else:
+            W, H = videonorm.canvas_size(o["canvas"], m)
+        fit = o.get("fit") if o.get("fit") in videonorm.FITS else "blur"
+        n = max(1, round(dur * fps))
+        vf = videonorm.input_chain(m, W, H, fit) + ("" if motion == "still" else "," + _ken_burns(motion, W, H, n, fps))
+        dst = out_name(out, src, "", "mp4")
+        await run(*_FF, "-loop", "1", "-framerate", f"{fps:g}", "-t", f"{dur:g}", "-i", str(png), "-f", "lavfi", "-t", f"{dur:g}",
+                  "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", f"[0:v]{vf},format=yuv420p[v]", "-map", "[v]",
+                  "-map", "1:a", "-frames:v", str(n), *_vcodec_for("mp4"), "-r", f"{fps:g}", *_acodec_for("mp4"), "-shortest",
+                  *_faststart("mp4"), str(dst), timeout=VIDEO_TIMEOUT)
+        png.unlink(missing_ok=True)
+        res.append(dst)
+    return res

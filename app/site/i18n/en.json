@@ -1134,6 +1134,14 @@
   "canvas": {
    "label": "Canvas",
    "help": "auto: the first clip's size as shown (a portrait phone clip stays portrait) · vertical 1080×1920 · landscape 1920×1080 · square · or WxH."
+  },
+  "duration": {
+   "label": "Duration (s)",
+   "help": "extend-video: how long the frame is held · image-to-video: the clip's length (default 5 s)."
+  },
+  "motion": {
+   "label": "Motion",
+   "help": "still · zoom_in / zoom_out (towards / away from the centre) · pan_left / pan_right / pan_up / pan_down (the picture glides that way)."
   }
  },
  "thub": {
@@ -2039,6 +2047,28 @@
    "desc": "Convert a time between time zones, daylight saving included.",
    "h1": "Time zone converter",
    "intro": "Convert a date and time between any of the IANA time zones, with daylight saving time.",
+   "points": [],
+   "faq": []
+  },
+  "extend-video": {
+   "slug": "extend-video",
+   "name": "Extend video",
+   "tag": "extended",
+   "title": "Extend a video — hold the last frame or freeze a moment",
+   "desc": "Make a video longer by holding its last frame for a few seconds, or freeze it at any moment.",
+   "h1": "Extend video",
+   "intro": "Extend video holds the last frame for the seconds you choose — room for an end card or closing titles — or freezes the picture at a given moment and then plays on. The sound pauses during the freeze.",
+   "points": [],
+   "faq": []
+  },
+  "image-to-video": {
+   "slug": "image-to-video",
+   "name": "Image to video",
+   "tag": "video",
+   "title": "Image to video — a still as a clip, with Ken Burns motion",
+   "desc": "Turn a photo or a PNG into a video clip of any length, still or with a slow zoom or pan.",
+   "h1": "Image to video",
+   "intro": "Image to video makes an MP4 clip from a photo, a PNG or a graphic: choose the length, a slow zoom or pan (Ken Burns) and the frame — portrait, landscape or square, with the picture's blurred copy filling the rest. The clip has a silent sound track, so it merges with other clips.",
    "points": [],
    "faq": []
   }

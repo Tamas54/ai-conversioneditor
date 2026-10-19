@@ -1139,6 +1139,14 @@
   "canvas": {
    "label": "Vászon",
    "help": "auto: az első klip megjelenített mérete (az álló telefonos klip álló marad) · vertical 1080×1920 · landscape 1920×1080 · square · vagy SzxM."
+  },
+  "duration": {
+   "label": "Hossz (mp)",
+   "help": "extend-video: meddig áll a kocka · image-to-video: a klip hossza (alap 5 mp)."
+  },
+  "motion": {
+   "label": "Mozgás",
+   "help": "still (áll) · zoom_in / zoom_out (a közép felé / felől) · pan_left / pan_right / pan_up / pan_down (a kép arra úszik)."
   }
  },
  "thub": {
@@ -1975,6 +1983,26 @@
    "desc": "Időpont átváltása időzónák között, a nyári időszámítással együtt.",
    "h1": "Időzóna-váltó",
    "intro": "Dátum és időpont átváltása bármely IANA-időzóna között, a nyári időszámítással együtt.",
+   "points": [],
+   "faq": []
+  },
+  "extend-video": {
+   "slug": "video-meghosszabbitasa",
+   "name": "Videó meghosszabbítása",
+   "title": "Videó meghosszabbítása — az utolsó kocka kimerevítése",
+   "desc": "Hosszabb videó az utolsó kocka néhány másodperces kimerevítésével, vagy egy pillanat kimerevítésével bárhol.",
+   "h1": "Videó meghosszabbítása",
+   "intro": "A meghosszabbítás az utolsó kockát a megadott ideig kimerevíti — hely a zárókártyának, a végefőcímnek —, vagy egy adott pillanatnál merevíti ki a képet, aztán a videó folytatódik. A kimerevítés alatt a hang szünetel.",
+   "points": [],
+   "faq": []
+  },
+  "image-to-video": {
+   "slug": "kepbol-video",
+   "name": "Képből videó",
+   "title": "Képből videó — állókép klipként, Ken Burns-mozgással",
+   "desc": "Fotóból vagy PNG-ből tetszőleges hosszú videóklip, állva vagy lassú nagyítással, úsztatással.",
+   "h1": "Képből videó",
+   "intro": "A képből videó egy fotóból, PNG-ből vagy grafikából MP4-klipet készít: megadhatod a hosszát, a lassú nagyítást vagy úsztatást (Ken Burns) és a képkeretet — álló, fekvő vagy négyzetes, a maradékot a kép elmosott másolata tölti ki. A klipnek néma hangsávja van, így más klipekkel összefűzhető.",
    "points": [],
    "faq": []
   }

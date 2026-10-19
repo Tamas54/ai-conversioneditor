@@ -252,3 +252,83 @@ async def test_hlg_footage_is_tone_mapped_to_bt709_not_washed_out(tmp_path, put_
         y, s = _stats(out)
         assert 0.8 * y0 <= y <= 1.15 * y0, f"luma {y:.0f} vs SDR {y0:.0f}"
         assert s >= 0.72 * s0, f"washed out: saturation {s:.0f} vs SDR {s0:.0f}"
+
+
+# ---------------------------------------------------------------- 3.4 meghosszabbítás, kép → videó, allowlist
+
+def test_ffmpeg_allowlist_takes_tpad_loop_apad_and_lists_what_is_allowed():
+    from app.convert import advanced
+    ok = ["-vf", "tpad=stop_mode=clone:stop_duration=3", "-af", "apad=pad_dur=3"]
+    assert advanced.check(ok) == ok
+    assert advanced.check(["-vf", "loop=loop=90:size=1:start=45"]) and advanced.check(["-vf", "loop=2:10:0"])
+    with pytest.raises(advanced.AdvancedError) as e:
+        advanced.check(["-vf", "zoompan=z=2"])
+    assert "Allowed video filters:" in str(e.value) and "tpad" in str(e.value) and "scale" in str(e.value)
+    with pytest.raises(advanced.AdvancedError) as e:
+        advanced.check(["-filter_complex", "x"])
+    assert "-crf" in str(e.value) and "apad" in str(e.value)
+    for bad in (["-af", "apad"], ["-vf", "loop=loop=-1:size=1"], ["-vf", "loop=loop=1000:size=100"],
+                ["-vf", "tpad=stop_duration=4000"], ["-vf", "movie=/etc/passwd"], ["-af", "apad=pad_dur=1;x"]):
+        with pytest.raises(advanced.AdvancedError):
+            advanced.check(bad)                            # végtelen / óriási kimenet, fájl, gráf: nem megy át
+
+
+def _same(a, b) -> bool:
+    from PIL import ImageChops, ImageStat
+    return max(ImageStat.Stat(ImageChops.difference(a, b)).mean) < 2.5
+
+
+@pytest.mark.asyncio
+async def test_extend_video_holds_the_last_frame_or_a_moment(tmp_path, put_file):
+    v = put_file(_clip(tmp_path / "klip.mp4", 320, 180, seconds=2))
+    r = await _run("extend-video", [v], duration=1.5)
+    out = _out(r["file_id"])
+    pr = _probe(out)
+    assert 3.3 <= float(pr["format"]["duration"]) <= 3.8
+    a = next(s for s in pr["streams"] if s["codec_type"] == "audio")
+    assert float(a["duration"]) >= 3.2                                   # a hang is kitart (csend)
+    assert _same(_frame(out, 2.3, tmp_path / "a.png"), _frame(out, 3.3, tmp_path / "b.png"))
+    assert not _same(_frame(out, 0.5, tmp_path / "c.png"), _frame(out, 1.5, tmp_path / "d.png"))
+    r = await _run("extend-video", [v], duration=1, at="1")
+    out = _out(r["file_id"])
+    assert 2.8 <= float(_probe(out)["format"]["duration"]) <= 3.3
+    assert _same(_frame(out, 1.1, tmp_path / "e.png"), _frame(out, 1.8, tmp_path / "f.png"))
+    assert not _same(_frame(out, 2.1, tmp_path / "g.png"), _frame(out, 2.8, tmp_path / "h.png"))   # utána megy tovább
+    from app.convert.options import OptionError
+    with pytest.raises(OptionError):
+        await _run("extend-video", [v], duration=1, at="9")
+
+
+@pytest.mark.asyncio
+async def test_image_to_video_still_and_ken_burns(tmp_path, put_file, samples):
+    png = put_file(samples.png(size=(400, 300)))
+    r = await _run("image-to-video", [png], duration=2)
+    out = _out(r["file_id"])
+    pr = _probe(out)
+    assert r["file_id"].endswith(".mp4") and _vsize(out) == (400, 300)
+    assert 1.8 <= float(pr["format"]["duration"]) <= 2.3
+    assert {s["codec_type"] for s in pr["streams"]} == {"video", "audio"}     # néma sáv: a merge megtartja a hangot
+    r = await _run("image-to-video", [png], duration=2, motion="zoom_in", canvas="360x640", fit="blur", fps=15)
+    out = _out(r["file_id"])
+    assert _vsize(out) == (360, 640)
+    assert not _same(_frame(out, 0.0, tmp_path / "a.png"), _frame(out, 1.9, tmp_path / "b.png"))
+    assert _mean(_frame(out, 1.0, tmp_path / "c.png"), (0, 0, 360, 120)) > 25          # blur-kitöltés, nem fekete
+
+
+def test_new_video_tools_are_in_the_catalog_rest_and_mcp(client, samples, put_file):
+    """Egy katalógus-bejegyzés = web, REST, MCP (file_tools leírása) és az ügynök — mint a többi videós eszköz."""
+    import time
+    from app import mcp_ext
+    from app.catalog import tools as T
+    doc = mcp_ext._tools_doc()
+    for key in ("extend-video", "image-to-video"):
+        assert T.available(key, static=True) and key in doc
+    fid = put_file(samples.png(size=(200, 100)))
+    job = client.post("/api/tools/run", json={"tool": "image-to-video", "file_ids": [fid], "options": {"duration": 1}}).json()
+    for _ in range(400):
+        if job.get("status") in ("done", "failed"):
+            break
+        time.sleep(0.05)
+        job = client.get(f"/api/jobs/{job['id']}").json()
+    assert job["status"] == "done", job
+    assert job["result"]["file_id"].endswith(".mp4")
