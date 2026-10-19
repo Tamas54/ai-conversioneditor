@@ -106,3 +106,25 @@ def test_omlett_first_render_layers_give_named_findings(tmp_path, put_file):
     # ugyanez w nélkül (az új alapdoboz): a cím egy sorban marad — rá már nincs finding
     res2 = asyncio.run(video.overlay({"file_id": put_file(clip), "layers": omlett_layers(None), "render": False}))
     assert not [f for f in res2["check"]["findings"] if f.startswith("Layer rendkivuli")], res2["check"]
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_omlett_regression_25_layers_15_subtitles_one_collision(tmp_path, put_file):
+    """Az omlett-teszt 2. pontja: 25 réteg + 15 felirat, köztük egy szándékosan ütköző szöveg → needs_check, nevesítve."""
+    from app.tools import video
+    clip = tmp_path / "o.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=10", "-t", "30",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)], check=True)
+    kinds = [{"type": "lower_third", "name": "Tamás", "role": "szakács"}, {"type": "source", "text": "Forrás: Tamás TV"},
+             {"type": "chapter", "text": "Második lépés"},
+             {"type": "graphic", "elements": [{"shape": "arrow", "from": [0.2, 0.3], "to": [0.5, 0.5]}]}]
+    layers = [{"id": f"L{i + 1}", "at": i * 1.1, "dur": 1.0, **kinds[i % len(kinds)]} for i in range(24)]
+    layers.append({"id": "utkozik", "at": 27, "dur": 2, "type": "graphic", "elements": [
+        {"shape": "text", "text": "Jöhet a tálalás", "x": 0.5, "y": 0.3, "size": 70},
+        {"shape": "text", "text": "Voilà!", "x": 0.5, "y": 0.31, "size": 60}]})
+    subs = [{"start": i * 2, "end": i * 2 + 1.8, "text": f"Felirat {i + 1}: sonkával, fakanállal."} for i in range(15)]
+    res = asyncio.run(video.overlay({"file_id": put_file(clip), "layers": layers, "subtitles": subs, "render": False}))
+    assert len(res["layers"]) == 25 and res["subtitles"]["count"] == 15
+    hit = [f for f in res["check"]["findings"] if f.startswith("Layer utkozik, element 1") and "runs into element 2" in f]
+    assert res["check"]["status"] == "needs_check" and hit, res["check"]["findings"]
