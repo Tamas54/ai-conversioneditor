@@ -1569,14 +1569,21 @@ async function subtitleSubmit(fd, form) {
     if (form.dataset.subsFor && form.dataset.subsFor !== vid) delete form.dataset.subsFor;
     inp.value = ""; presetSlot(form, "vsubvideo", [vid]);
   }
-  if (form.dataset.subsFor !== vid) {
-    const job = await api("/api/video/transcript", { method: "POST", body: JSON.stringify({ file_id: vid, language }) });
+  // jobb felismerés (Omlett 3.5): várható szavak, téma, modell, AI-javítás, újrahallgatás — a kulcsuk része a „már hallott”-nak
+  const hear = { vocabulary: (fd.get("vsubvocab") || "").trim() || null, prompt: (fd.get("vsubprompt") || "").trim() || null,
+    model: fd.get("vsubmodel") || null, correct: fd.get("vsubfix") ? true : null, force: !!fd.get("vsubforce") };
+  const heardKey = JSON.stringify([vid, language, hear.vocabulary, hear.prompt, hear.model, hear.correct]);
+  if (form.dataset.subsFor !== vid || form.dataset.subsKey !== heardKey || hear.force) {
+    const job = await api("/api/video/transcript", { method: "POST", body: JSON.stringify({ file_id: vid, language, ...hear }) });
     const t = await pollJob(job, () => "Listening to the video — about a minute for every few minutes of speech…");
     const lines = t.subtitles || t.sentences || [];           // feliratméretű sorok (régi szerveren a mondatok)
     if (!lines.length) throw new Error("No speech was found in this video.");
-    form.dataset.subsFor = vid; subRows(form, lines);
+    form.dataset.subsFor = vid; form.dataset.subsKey = heardKey; subRows(form, lines);
+    const force = form.querySelector("[name=vsubforce]"); if (force) force.checked = false;
     form.dispatchEvent(new Event("change"));
-    throw new Error(`${lines.length} line${lines.length > 1 ? "s" : ""} heard — check them below, then press “Add the subtitles”.`);
+    const fixed = (t.corrections || []).length;
+    throw new Error(`${lines.length} line${lines.length > 1 ? "s" : ""} heard` + (fixed ? `, ${fixed} misheard word${fixed > 1 ? "s" : ""} fixed (${(t.corrections || []).slice(0, 3).map(c => `“${c.heard}” → “${c.fixed}”`).join(", ")}${fixed > 3 ? "…" : ""})` : "")
+      + ` — check them below, then press “Add the subtitles”.`);
   }
   const cues = subCues(form);
   if (!cues.length) throw new Error("No subtitle lines are left — choose the video again to listen to it again.");
@@ -1780,6 +1787,13 @@ const MAKERS = {
           <option value="de">German</option><option value="fr">French</option><option value="es">Spanish</option><option value="it">Italian</option>
           <option value="pl">Polish</option><option value="ro">Romanian</option><option value="sk">Slovak</option><option value="cs">Czech</option></select></label>
         <p class="muted small" style="margin:-6px 0 12px">First the video is listened to. Then you check every line — fix a misheard name or number, change a time, remove a line — and the subtitles go on in the Studio caption style.</p>
+        <details class="more-fields"><summary>Better recognition — names, dishes, foreign words</summary>
+          <label>Words to expect<input type="text" name="vsubvocab" maxlength="1500" placeholder="e.g. sonkával, fakanállal, Voilà, Jöhet a tálalás"></label>
+          <label>What is it about?<input type="text" name="vsubprompt" maxlength="600" placeholder="e.g. A cooking show: an omelette with ham, stirred with a wooden spoon"></label>
+          <label>Accuracy<select name="vsubmodel"><option value="">Fast (large-v3-turbo)</option><option value="large-v3">Most accurate, slower (large-v3)</option></select></label>
+          <div class="checks"><label><input type="checkbox" name="vsubfix"> Proofread with AI <em class="ai-badge">AI</em></label>
+            <label><input type="checkbox" name="vsubforce"> Listen again from scratch</label></div>
+          <p class="muted small" style="margin:6px 0 0">Misheard words close to yours are fixed without AI; every fix is shown.</p></details>
         <div data-subs hidden><p class="small" style="margin:0 0 8px;font-weight:600">The subtitles — check them</p><div class="sub-rows"></div>
           <div class="checks"><label><input type="checkbox" name="vsubburn" checked> Burn them into the picture (Studio caption style)</label></div>
           <p class="muted small" style="margin:6px 0 0">Unticked: a video with switchable subtitles, plus the .srt file.</p></div></div>

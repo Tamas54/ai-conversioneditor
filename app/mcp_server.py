@@ -1864,6 +1864,8 @@ async def video(
     duration_mode: Optional[str] = None,
     camera: Optional[Any] = None,
     subtitles: Optional[Any] = None,
+    prompt: Optional[str] = None, vocabulary: Union[list[str], str, None] = None, model: Optional[str] = None,
+    force: bool = False, correct: Optional[bool] = None,
 ) -> dict:
     """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
     text, or graphics on the person's OWN footage (action="overlay").
@@ -2010,7 +2012,9 @@ async def video(
     action="transcript": what is said in a video or sound file (or an overlay project's footage), with times →
       sentences [{at, until, text}] + an .srt subtitle file (file_id) — as a job. Offline speech recognition (Whisper
       large-v3-turbo; `language` helps, else detected); a file heard once is not transcribed again. Use it to suggest
-      where a graphic would help, then tie layers to what is said (below).
+      where a graphic would help, then tie layers to what is said (below). Names, dishes, foreign words: vocabulary=[…]
+      (+ prompt = what it is about) — misheard ones are fixed and listed in `corrections`; correct=true lets the Studio AI
+      proofread the rest (an AI step); model="large-v3" (slower), force=true listens again.
     layers (overlay; make and edit too): [{"id"? ("L1", "L2"… given when left out — stable across edits), "at":
       seconds | "MM:SS" | "HH:MM:SS.ms" | {"say": "words that are said"} (overlay: the layer starts as they are said
       in the footage and stays to the end of that sentence; not said → left out, the check quotes what was heard),
@@ -2088,7 +2092,8 @@ async def video(
         return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha})
     if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
         from app.routes.video import transcript_video
-        return await transcript_video({"file_id": file_id or "", "language": language})
+        return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
+                                       "vocabulary": vocabulary, "model": model, "force": force, "correct": correct})
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
