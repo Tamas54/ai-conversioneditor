@@ -148,7 +148,7 @@ def test_encoding_profile_reads_the_environment(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     assert encoding.x264()[encoding.x264().index("-crf") + 1] == "17"
     assert encoding.x264("final")[encoding.x264("final").index("-crf") + 1] == "19"
-    assert encoding.aac() == ["-c:a", "aac", "-b:a", "192k"] and encoding.final_encoder() == "x264"
+    assert encoding.aac() == ["-c:a", "aac", "-b:a", "256k"] and encoding.final_encoder() == "x264"
     monkeypatch.setenv("VIDEO_CRF_INTERMEDIATE", "16")
     monkeypatch.setenv("VIDEO_X264_PRESET", "rm -rf")                     # rossz érték → az alap marad
     monkeypatch.setenv("VIDEO_FINAL_ENCODER", "engine")
@@ -157,7 +157,7 @@ def test_encoding_profile_reads_the_environment(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_media_ops_encode_with_the_profile(tmp_path, put_file, monkeypatch):
-    """resize/merge: x264 CRF 17 (a régi CRF 20 helyett), AAC 192k, moov elöl; a kép a forráshoz közel marad."""
+    """resize/merge: x264 CRF 17 (a régi CRF 20 helyett), AAC 256k, moov elöl; a kép a forráshoz közel marad."""
     for k in ("VIDEO_CRF_INTERMEDIATE", "VIDEO_X264_PRESET", "VIDEO_AUDIO_BITRATE"):
         monkeypatch.delenv(k, raising=False)
     from app.tools import ios_safe
@@ -182,7 +182,7 @@ def _engine_ok() -> bool:
 @pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI (EFFECTCRAFT_CLI) needed")
 @pytest.mark.asyncio
 async def test_final_render_is_x264_crf_from_a_prores_master(tmp_path, put_file, monkeypatch):
-    """A végső MP4 nem a renderelő rögzített 8 Mbps-os H.264-e: ProRes LT köztes → x264 CRF 19, AAC 192k, BT.709."""
+    """A végső MP4 nem a renderelő rögzített 8 Mbps-os H.264-e: ProRes LT köztes → x264 CRF 19, AAC 256k, BT.709."""
     for k in ("VIDEO_CRF_FINAL", "VIDEO_FINAL_ENCODER", "VIDEO_AUDIO_BITRATE"):
         monkeypatch.delenv(k, raising=False)
     from app.tools import video

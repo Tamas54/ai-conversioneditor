@@ -1868,7 +1868,7 @@ async def video(
     images: Optional[list] = None,
     pictures: str = "stock",
     music_file_id: Optional[str] = None,
-    music: Optional[str] = None,
+    music: Union[str, dict, None] = None,
     voice_file_id: Optional[str] = None,
     narration: str = "ai",
     narration_voice: Optional[str] = None,
@@ -1913,7 +1913,7 @@ async def video(
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
       scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
       MP4. format vertical|landscape|square; duration (s) + duration_mode fixed|narration.
-      AI NARRATION IS ON BY DEFAULT (narration="none" turns it off); music = a mood.
+      AI NARRATION IS ON BY DEFAULT (narration="none" = off); music_file_id = their song.
     action="overlay": file_id = their mp4|mov|webm|m4v (kept as is) + layers=[{"at", "dur"|"until", "type", …}]
       and/or subtitles=[{start, end, text}] | "auto". Types: lower_third · title · chapter · source · stat · quote ·
       chart (a layer with a "chart" object) · graphic · fullscreen · split. text = the source: numbers and quotes
@@ -1963,7 +1963,8 @@ async def video(
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
-                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera,
+                                    "accent": accent, "brand": brand, "alpha": alpha, "music": music,
+                                    "music_file_id": music_file_id, "camera": camera,
                                     "subtitles": subtitles, "language": language, "render": render,
                                     "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
                                     "transcript": transcript, "draft": draft})

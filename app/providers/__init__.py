@@ -2,7 +2,8 @@
 mezőnevek) itt marad; a saját szintézis-/renderréteg (app/tools/video.py) csak a letöltött, saját tárhelyen lévő fájlt látja.
 
 Kapcsoló (kockázatos — valódi pénzt költ):
-    KIE_API_KEY         a kie.ai kulcsa (csak env-ből); nélküle minden AI-videó funkció ki van kapcsolva
+    KIE_API_KEY         a kie.ai kulcsa (csak env-ből): AI-klip (Seedance), Topaz a kie-n
+    FAL_KEY             a fal.ai kulcsa (csak env-ből): élesítés (SeedVR2 / Topaz) — ENHANCE_ENGINE választ
     AI_VIDEO            "" (alap: ki) | "admin" (csak az admin próbálhatja) | "1" (mindenki, kreditért)
 """
 from __future__ import annotations
@@ -21,8 +22,14 @@ def flag() -> str:
 
 
 def _configured() -> dict[str, type]:
+    from app.providers.fal import FalProvider
     from app.providers.kie import KieProvider
-    return {"kie": KieProvider} if os.getenv("KIE_API_KEY") else {}
+    return {**({"kie": KieProvider} if os.getenv("KIE_API_KEY") else {}),
+            **({"fal": FalProvider} if os.getenv("FAL_KEY") else {})}
+
+
+def configured(name: str) -> bool:
+    return name in _configured()
 
 
 def enabled_for(uid: Optional[str] = None) -> bool:

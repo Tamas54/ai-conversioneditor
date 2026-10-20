@@ -47,9 +47,9 @@ pictures: stock (free stock photos fill the scenes without one) | mine | none (|
 AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked from the
 text or `language`) reads the title and every caption aloud. narration="none" turns it off (captions only).
 narration_voice: "female" | "male" | a Piper voice id (e.g. "hu_HU-imre-medium", "en_US-ryan-medium").
-MUSIC (none by default): music = a mood — upbeat | calm | cinematic | lofi | corporate | playful | romantic | dramatic —
-or a track id → built-in CC0 music fitted to the length; music_file_id = the person's own music. Under speech the music
-drops and comes back in the pauses; "none" = no music. voice_file_id: the person's own voice-over (replaces the AI
+MUSIC (none by default): the person's OWN music — music_file_id (or music={"file_id"}) = their uploaded mp3 | m4a | wav…;
+ask them for it. Under speech the music drops and comes back in the pauses; "none" = no music. (music = a mood works
+only where the built-in library is switched on.) voice_file_id: the person's own voice-over (replaces the AI
 narration). accent: a hex colour for bars and numbers. brand: a saved brand (name, "mine"); "none" = off.
 ken_burns: some (default — every other scene a clear Ken Burns move) | all | off.
 scrim: 0–1, how dark the veil over the pictures is (title card, scenes, chart scenes, end card; default: the built-in
@@ -68,9 +68,13 @@ base track with its size, fps, length and sound (never re-cut, never forced to 9
 upright). → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status).
 layers=[…] (topic "layers") and/or subtitles=[…] | "auto" (topic "subtitles"). text = the source: numbers, dates and
 quotes in the layers are checked against it (one that isn't there drops that layer, said in the check); without text
-they are kept and the check says "not checked against a source". title, accent, brand, music as for make (the music
-drops under the footage's own speech). camera=[{"at": time, "zoom", "to"?, "dur"?}] punches in on the footage (back
-out with zoom 1); changes.camera in an edit.
+they are kept and the check says "not checked against a source". title, accent, brand as for make. camera=[{"at":
+time, "zoom", "to"?, "dur"?}] punches in on the footage (back out with zoom 1); changes.camera in an edit.
+MUSIC: the person's OWN music first — music={"file_id": <their uploaded mp3 | m4a | wav | flac…>, "start"?: where the
+song begins (seconds | "MM:SS"), "level"?: background (default: drops 14 dB under the footage's speech) | even (6 dB
+under it) | front (the music as it is, the footage's sound 14 dB lower) | only (the footage's sound muted)} (music_file_id
+works too); kept lossless until the one final encode, not looped (a shorter song ends, then silence). Or music = a mood
+of the built-in library. In an edit: changes.music = {…} (only "start" / "level" keeps the song) | "none".
 END CARD: end_card={"title", "subtitle"?, "kicker"?, "dur"? (seconds, 1.5–20, default 4)} — or end_title (+ end_subtitle)
 — adds a closing card AFTER the footage: the last frame is held (frozen) under it and the sound padded with silence, so
 the video gets that much longer; the credits of pictures and animations go on it. An overlay with only an end card is

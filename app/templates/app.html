@@ -1927,11 +1927,7 @@ const MAKERS = {
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
           ${seg("vnarr", [["female", "AI voice — female"], ["male", "AI voice — male"], ["none", "No voice"]], 0)}
           <p class="muted small" style="margin:6px 0 0">A natural voice reads the captions aloud, in the text's language; each scene lasts as long as its narration.</p></fieldset>
-        <label>Music<select name="vmood"><option value="">No music</option>${[["calm", "Calm"], ["cinematic", "Cinematic"],
-          ["corporate", "Corporate"], ["dramatic", "Dramatic"], ["lofi", "Lo-fi"], ["playful", "Playful"], ["romantic", "Romantic"],
-          ["upbeat", "Upbeat"]].map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
-        <p class="muted small" style="margin:-6px 0 12px">From the built-in library — free to use, no credit line needed. It drops under the voice and comes back in the pauses.</p>
-        ${fileSlot("vmusic", { exts: EXT.audio, label: "Your own music (optional — used instead of the library)" })}
+        ${fileSlot("vmusic", { exts: EXT.audio, label: "Music (optional — your own mp3, m4a, wav…; it drops under the voice)" })}
         ${fileSlot("vvoice", { exts: EXT.audio, label: "Your voice-over (optional — replaces the AI voice; the video follows its length)" })}
         ${swatches()}</div>`,
     wire(form, o = {}) {
@@ -1978,7 +1974,6 @@ const MAKERS = {
       [body.data_file_id = null] = await readSlot(form, "vdata");
       if (body.pictures === "mine" && !body.images.length) throw Object.assign(new Error("Add your pictures — or choose Stock photos."), { slot: "vpics" });
       [body.music_file_id = null] = await readSlot(form, "vmusic");
-      if (!body.music_file_id && fd.get("vmood")) body.music = fd.get("vmood");   // beépített tár (hangulat) — eddig csak MCP-n
       [body.voice_file_id = null] = await readSlot(form, "vvoice");
       const job = await api("/api/make/video", { method: "POST", body: JSON.stringify(body) });
       const STAGES = { "reading the source": "Reading it…", "writing the script": "Writing the script…", "finding pictures": "Finding pictures…",

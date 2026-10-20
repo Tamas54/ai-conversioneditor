@@ -531,6 +531,12 @@ if (D.audio && D.audio.music && !D.alpha) {
   var lv = mu.property("ADBE Audio Group").property("ADBE Audio Levels"), g = D.audio.musicDb;
   lv.setValueAtTime(0, [g, g]); lv.setValueAtTime(Math.max(0, D.total - 2.5), [g, g]); lv.setValueAtTime(D.total, [-48, -48]);
 }
+// a felvétel saját hangja a zenéhez képest (music level: front = halkabb, only = néma; alapból 0 dB)
+var baseDb = (D.audio && typeof D.audio.baseDb === "number") ? D.audio.baseDb : 0;
+for (var bk = 0; baseDb !== 0 && !D.alpha && bk < baseLayers.length; bk++) {
+  try { baseLayers[bk].property("ADBE Audio Group").property("ADBE Audio Levels").setValue([baseDb, baseDb]); }
+  catch (e) { writeLn("footage sound level: " + e); }
+}
 // bevágott felvételek hangja: a helyén szól; „replace” — közben a felvétel saját hangja elhalkul (mint egy vágásnál)
 for (var ci = 0; D.audio && D.audio.clips && !D.alpha && ci < D.audio.clips.length; ci++) {
   var cs = D.audio.clips[ci];
@@ -539,8 +545,8 @@ for (var ci = 0; D.audio && D.audio.clips && !D.alpha && ci < D.audio.clips.leng
   if (cs.mode === "replace") for (var bj = 0; bj < baseLayers.length; bj++) {
     try {
       var bl = baseLayers[bj].property("ADBE Audio Group").property("ADBE Audio Levels");
-      bl.setValueAtTime(Math.max(0, cs.t0 - 0.12), [0, 0]); bl.setValueAtTime(cs.t0, [-48, -48]);
-      bl.setValueAtTime(cs.t0 + cs.dur - 0.05, [-48, -48]); bl.setValueAtTime(cs.t0 + cs.dur + 0.15, [0, 0]);
+      bl.setValueAtTime(Math.max(0, cs.t0 - 0.12), [baseDb, baseDb]); bl.setValueAtTime(cs.t0, [-48, -48]);
+      bl.setValueAtTime(cs.t0 + cs.dur - 0.05, [-48, -48]); bl.setValueAtTime(cs.t0 + cs.dur + 0.15, [baseDb, baseDb]);
     } catch (e) { writeLn("cut-in sound: " + e); }
   }
 }

@@ -26,7 +26,6 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 import httpx
 
@@ -37,7 +36,6 @@ log = logging.getLogger("aice.kie")
 BASE = os.getenv("KIE_BASE_URL", "https://api.kie.ai/api/v1")
 UPLOAD_URL = os.getenv("KIE_UPLOAD_URL", "https://kieai.redpandaai.co/api/file-stream-upload")
 STATES = {"waiting": PENDING, "queuing": PENDING, "generating": RUNNING, "success": SUCCESS, "fail": FAIL}
-RESULT_MAX_BYTES = 2 * 1024 ** 3
 
 # Modellenkénti mezőnevek: a saját (egységes) bemenetünk kulcsa → a modell mezője (és típusa). Ami nincs a táblában,
 # az nem mehet ki (elírás ne számlázzon más beállítást); a modell saját nevét is elfogadjuk.
@@ -192,22 +190,6 @@ class KieProvider(Provider):
     async def status(self, task_id: str) -> TaskState:
         data = await self._call("GET", f"{BASE}/jobs/recordInfo", params={"taskId": task_id}) or {}
         return parse_record(data, task_id)
-
-    async def fetch_result(self, state: TaskState) -> list[str]:
-        """Minden eredmény-URL letöltése a saját tárhelyre (output) → file_id-k. A link 14 napig él — ezért most."""
-        from app import net
-        from app.storage import new_file_id, output_path
-        out: list[str] = []
-        for url in state.urls:
-            ext = Path(urlparse(url).path).suffix.lstrip(".").lower() or "mp4"
-            fid = new_file_id(ext if ext.isalnum() and len(ext) <= 5 else "mp4")
-            try:
-                await net.download(url, output_path(fid), RESULT_MAX_BYTES, timeout=600)
-            except Exception:
-                output_path(fid).unlink(missing_ok=True)
-                raise
-            out.append(fid)
-        return out
 
     async def cancel(self, task_id: str) -> bool:
         return False            # a kie API-ban nincs megszakítás: a hívó nálunk zárja le (a hold visszajár)

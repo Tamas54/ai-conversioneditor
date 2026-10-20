@@ -22,6 +22,12 @@ from typing import Any, Optional
 _LIB = Path(__file__).with_name("music_library.json")
 
 
+def enabled() -> bool:
+    """A beépített zenetár csak bekapcsolva (MUSIC_LIBRARY=1) kínálható. Alapból KI (Kommandant 10-19, a „korrekt” elv:
+    a tár szintetizált hurkai nem olyan minőségűek, amit a nevünkkel adunk) — a saját zene (music_file_id) mindig megy."""
+    return os.getenv("MUSIC_LIBRARY", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def music_dir() -> Path:
     return Path(os.getenv("MUSIC_DIR", "/opt/music"))
 
@@ -53,7 +59,7 @@ def find(track_id: str) -> Optional[dict[str, Any]]:
 def pick(choice: Optional[str], seed: str = "") -> Optional[dict[str, Any]]:
     """choice: egy darab azonosítója (pl. "still-water") vagy egy hangulat ("calm") → a darab. Hangulaton belül a
     seed (pl. a videó címe) dönt, determinisztikusan — ugyanaz a videó újrarenderelve ugyanazt a zenét kapja."""
-    if not choice:
+    if not choice or not enabled():
         return None
     t = find(choice)
     if t is not None:
@@ -93,6 +99,39 @@ async def bed(t: dict[str, Any], seconds: float, out: Path, fade_in: float = 1.0
     return out
 
 
+# a saját zene és a felvétel hangjának aránya: (a zene a beszéd alatt ennyi dB-lel | None = nincs halkítás,
+# a zene erősítése dB, a felvétel saját hangja dB — −48 = néma, a builder ezt használja csendnek)
+LEVELS: dict[str, tuple[Optional[float], float, float]] = {
+    "background": (14.0, 0.0, 0.0),   # háttérzene: a beszéd alatt 14 dB-lel halkul (eddig is így)
+    "even": (6.0, 0.0, 0.0),          # egyenrangú: a beszéd alatt csak 6 dB-lel
+    "front": (None, -1.0, -14.0),     # elöl: a zene a saját szintjén (−1 dB tartalék az összegnek), a felvétel 14 dB-lel halkabb
+    "only": (None, 0.0, -48.0),       # csak zene: a felvétel saját hangja néma
+}
+
+
+async def own_bed(src: Path, seconds: float, out: Path, start: float = 0.0, fade_out: float = 2.5) -> float:
+    """A saját zene a videó hosszára, `start` másodperctől: NEM hurkolva (egy dal nem hurok — ha rövidebb, utána csend),
+    veszteségmentes WAV-ba (a lánc végén egyetlen kódolás); a vágásnál rövid be-, a végén kiúsztatás.
+    → a zene hossza a kezdőponttól (mp; 0, ha a kezdőpont a dal vége után van)."""
+    seconds = max(1.0, float(seconds))
+    proc = await asyncio.create_subprocess_exec("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                                str(src), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    raw, _ = await proc.communicate()
+    try:
+        left = max(0.0, float(raw.decode().strip()) - start)
+    except ValueError:
+        left = seconds
+    if left <= 0.05:
+        raise ValueError(f"music start: {start:g} s is past the end of your music ({start - left:g} s long).")
+    played = min(seconds, left)
+    fo = min(fade_out, played / 3)
+    await _ffmpeg("-ss", f"{start:.3f}", "-i", str(src), "-t", f"{seconds:.3f}",
+                  "-af", f"afade=t=in:d={0.05 if start <= 0 else 0.4:.2f},afade=t=out:st={played - fo:.3f}:d={fo:.2f},"
+                         f"apad=whole_dur={seconds:.3f}",
+                  "-ac", "2", "-ar", "48000", str(out))
+    return round(left, 2)
+
+
 async def loudness(path: Path) -> Optional[float]:
     """Integrált hangosság (LUFS, EBU R128) — None, ha néma vagy nem mérhető."""
     proc = await asyncio.create_subprocess_exec("ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af",
@@ -120,11 +159,12 @@ async def level_below(speech: Path, music: Path, below: float = 14.0, fallback: 
 _SAME = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
 
 
-async def duck(speech: Path, music: Path, out: Path, music_db: Optional[float] = None, depth: float = 4.0) -> Path:
-    """A zene a beszéd alatt halkul (sidechain): music_db = a zene erősítése (alapból: a beszéd alatt 14 dB-lel,
+async def duck(speech: Path, music: Path, out: Path, music_db: Optional[float] = None, depth: float = 4.0,
+               below: float = 14.0) -> Path:
+    """A zene a beszéd alatt halkul (sidechain): music_db = a zene erősítése (alapból: a beszéd alatt `below` dB-lel,
     mérve), depth = mennyit enged a beszéd alatt (arány). → csak a halkított zene (külön sáv: szerkeszthető marad)."""
     if music_db is None:
-        music_db = await level_below(speech, music)
+        music_db = await level_below(speech, music, below)
     await _ffmpeg("-i", str(music), "-i", str(speech), "-filter_complex",
                   f"[0:a]{_SAME},volume={music_db:.1f}dB[m];[1:a]{_SAME}[s];"
                   f"[m][s]sidechaincompress=threshold=0.015:ratio={depth:.1f}:attack=15:release=450:makeup=1[d]",

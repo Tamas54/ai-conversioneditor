@@ -3,10 +3,13 @@ fájlok, cancel(feladat); plusz egyenleg és bemenet-feltöltés. Egy új szolg�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 # egységes állapotok (a szolgáltatóé a raw-ban marad)
 PENDING, RUNNING, SUCCESS, FAIL = "pending", "running", "success", "fail"
+RESULT_MAX_BYTES = 2 * 1024 ** 3
 TERMINAL = (SUCCESS, FAIL)
 
 
@@ -31,6 +34,7 @@ class TaskState:
 
 class Provider:
     name = "provider"
+    has_balance = True                            # van-e egyenleg-lekérdezése (a napi egyeztetés csak ezeket nézi)
 
     def same_key(self) -> bool:                   # a kulcs változott-e (env) — akkor új példány kell
         return True
@@ -43,7 +47,19 @@ class Provider:
 
     async def fetch_result(self, state: TaskState) -> list[str]:
         """Az eredményfájlok AZONNAL a saját tárhelyre (a szolgáltató csak napokig tartja) → file_id-k."""
-        raise NotImplementedError
+        from app import net
+        from app.storage import new_file_id, output_path
+        out: list[str] = []
+        for url in state.urls:
+            ext = Path(urlparse(url).path).suffix.lstrip(".").lower() or "mp4"
+            fid = new_file_id(ext if ext.isalnum() and len(ext) <= 5 else "mp4")
+            try:
+                await net.download(url, output_path(fid), RESULT_MAX_BYTES, timeout=600)
+            except Exception:
+                output_path(fid).unlink(missing_ok=True)
+                raise
+            out.append(fid)
+        return out
 
     async def cancel(self, task_id: str) -> bool:
         raise NotImplementedError

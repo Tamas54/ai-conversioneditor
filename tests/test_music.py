@@ -12,6 +12,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _library_on(monkeypatch):
+    monkeypatch.setenv("MUSIC_LIBRARY", "1")          # a tár alapból KI (a „korrekt” elv) — ezek a tesztek a bekapcsolt tárról szólnak
+
+
 def test_library_is_cc0_and_pinned():
     lib = json.loads((Path(__file__).resolve().parents[1] / "app/tools/music_library.json").read_text("utf-8"))
     assert lib["license"]["spdx"] == "CC0-1.0"
