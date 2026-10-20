@@ -46,6 +46,8 @@ async def lifespan(app: FastAPI):
     log_auth_state()
     from app import db
     await db.start()
+    from app import credits
+    await credits.start()                 # induló árak, napi egyeztetés (kie ↔ könyv), félbemaradt AI-feladatok
     pool = WorkerPool(
         libreoffice_warm=settings.LO_WARM,
         chromium_warm=settings.CHROMIUM_WARM,
@@ -72,6 +74,7 @@ async def lifespan(app: FastAPI):
             log.info("Shutting down…")
             cleanup_task.cancel()
             warmup_task.cancel()
+            await credits.stop()
             await pool.stop()
             await db.stop()
 
@@ -106,6 +109,16 @@ async def _http_error(request, exc):            # a felhasználó soha nem lát 
 @app.exception_handler(DamagedFile)
 async def _damaged_file(request, exc):          # bármelyik feltöltési út: a sérült fájl azonnal, érthetően
     return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+from app.sharing import AccessDenied  # noqa: E402
+
+
+@app.exception_handler(AccessDenied)
+async def _not_shared(request, exc):            # megosztott munkaterület: csak megtekintés / nincs megosztva → 403
+    return JSONResponse({"detail": str(exc), "not_shared": True}, status_code=getattr(exc, "status", 403))
+
+
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.include_router(auth_router)
@@ -129,6 +142,10 @@ app.include_router(video_routes.router)
 app.include_router(checks_routes.router)
 app.include_router(jobs.router)
 app.include_router(billing.router)
+from app.routes import credits as credits_routes  # noqa: E402  (kreditkönyv, árazás, admin-egyeztetés)
+app.include_router(credits_routes.router)
+from app.routes import ai_video as ai_video_routes  # noqa: E402  (kie.ai: webhook, AI-klip, minőségjavítás)
+app.include_router(ai_video_routes.router)
 app.include_router(product.router)
 from app import seo  # noqa: E402
 app.include_router(seo.router)
@@ -136,6 +153,8 @@ from app.routes import convert_web  # noqa: E402  (a weboldal konverter-widgetje
 app.include_router(convert_web.router)
 from app.routes import formkit_web  # noqa: E402  (aláírások, adatprofil — titkosítva)
 app.include_router(formkit_web.router)
+from app.routes import share as share_routes  # noqa: E402  (megosztás: meghívás, link, megosztva velem, ütközés)
+app.include_router(share_routes.router)
 from app.site.routes import build_router as _site_router  # noqa: E402  (nyilvános, többnyelvű oldalak)
 app.include_router(_site_router())
 from app.api_v1.app import v1 as _api_v1  # noqa: E402  (nyilvános REST API, saját OpenAPI-val)

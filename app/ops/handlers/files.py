@@ -4,12 +4,12 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from app.catalog.formats import FORMATS, from_filename
 from app.convert.engines import run
 from app.convert.options import OptionError
-from app.convert.steps import VIDEO_TIMEOUT, _has_audio, extract, pack, probe
+from app.convert.steps import VIDEO_TIMEOUT, extract, pack, probe
 from app.ops.handlers import out_name, to_pdf
 
 
@@ -21,7 +21,8 @@ def _cat(p: Path) -> str:
 async def merge(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
     cats = {_cat(p) for p in inputs}
     if cats <= {"video"}:
-        return [await _concat_av(inputs, out, video=True, fmt=o.get("output_format") or "mp4")]
+        return [await _concat_av(inputs, out, video=True, fmt=o.get("output_format") or "mp4", canvas=o.get("canvas"),
+                                 fit=o.get("fit"))]
     if cats <= {"audio"}:
         return [await _concat_av(inputs, out, video=False, fmt=o.get("output_format") or "mp3")]
     if cats & {"video", "audio"}:
@@ -30,23 +31,32 @@ async def merge(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
     return await pdf_merge(inputs, {}, out)
 
 
-async def _concat_av(inputs: list[Path], out: Path, video: bool, fmt: str) -> Path:
-    """Különböző forrásokat is összefűz: egységes felbontásra/mintavételre kódolva (concat szűrő)."""
+async def _concat_av(inputs: list[Path], out: Path, video: bool, fmt: str, canvas: Optional[str] = None,
+                     fit: Optional[str] = None) -> Path:
+    """Különböző forrásokat is összefűz: egységes felbontásra/mintavételre kódolva (concat szűrő).
+    Videó: a vászon az első klip MEGJELENÍTÉSI mérete (elforgatás után — az álló telefonos klip álló marad), vagy
+    canvas = vertical | landscape | square | WxH; fit = blur (alap: a más arányú klip mögé a saját elmosott képe) |
+    contain (fekete sáv) | cover (kitölt, a széle levágva). Az ffmpeg a klipeket magától elforgatja (autorotate)."""
     dst = out_name(out, inputs[0], "-merged", fmt)
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
     for p in inputs:
         args += ["-i", str(p)]
     n = len(inputs)
     if video:
-        infos = [await probe(p) for p in inputs]
-        v0 = next(s for s in infos[0]["streams"] if s["codec_type"] == "video")
-        W, H = int(v0["width"]) // 2 * 2, int(v0["height"]) // 2 * 2
-        all_audio = all(_has_audio(i) for i in infos)
+        from app.tools import mediaprobe, videonorm
+        ms = [mediaprobe.summarize(await probe(p)) for p in inputs]
+        if not all(m["has_video"] for m in ms):
+            raise OptionError("every file must have a picture to merge videos")
+        W, H = videonorm.canvas_size(canvas, ms[0])
+        fit = fit if fit in videonorm.FITS else "blur"
+        rates = {round(m["fps"] or 0, 2) for m in ms}
+        fps = rates.pop() if len(rates) == 1 and 1 <= next(iter(rates)) <= 60 else 30      # közös fps marad, eltérőnél 30
+        all_audio = all(m["has_audio"] for m in ms)
         parts = []
-        for i in range(n):
-            parts.append(f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}]")
+        for i, m in enumerate(ms):
+            parts.append(f"[{i}:v]{videonorm.input_chain(m, W, H, fit, f'f{i}')},fps={fps:g}[v{i}]")
             if all_audio:
-                parts.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+                parts.append(f"[{i}:a:{m['audio_stream'] or 0}]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
         streams = "".join(f"[v{i}]" + (f"[a{i}]" if all_audio else "") for i in range(n))
         fc = ";".join(parts) + f";{streams}concat=n={n}:v=1:a={1 if all_audio else 0}[v]" + ("[a]" if all_audio else "")
         from app.ops.handlers.media import _acodec_for, _faststart, _vcodec_for

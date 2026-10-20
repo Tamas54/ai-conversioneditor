@@ -19,6 +19,7 @@ class AdvancedError(ValueError):
 
 
 _NUM = r"-?\d{1,7}(\.\d{1,4})?"
+_DUR = r"\d{1,4}(\.\d{1,3})?"
 _INT = r"\d{1,7}"
 _RATE = r"\d{1,6}(\.\d{1,3})?[kKmM]?"
 _GEOM = r"\d{0,5}(x\d{0,5})?([+-]\d{1,5}[+-]\d{1,5})?[%!<>^]?"
@@ -55,6 +56,11 @@ _FV = {
     "deband": "", "deflicker": "", "hqdn3d": r"(" + _NUM + r")(:" + _NUM + r"){0,3}", "yadif": r"[0-3]?",
     "reverse": "", "negate": "", "boxblur": r"\d{1,2}(:\d{1,2})?", "vignette": "", "colorchannelmixer": r"(" + _NUM + r":?){1,12}",
     "setpts": r"(PTS|[\d.]+\*PTS|PTS/[\d.]+)",
+    # meghosszabbítás / kimerevítés (OMLETT 3.4): tpad=stop_mode=clone:stop_duration=3, loop=loop=90:size=1:start=45
+    # (korlátos: legfeljebb 1 óra toldás, a loop ismétlés × méret legfeljebb 18 000 kocka — végtelen kimenet nincs)
+    "tpad": r"((start|stop)=\d{1,6}|(start|stop)_duration=" + _DUR + r"|(start|stop)_mode=(add|clone)|color=" + _COLOR + r")"
+            r"(:((start|stop)=\d{1,6}|(start|stop)_duration=" + _DUR + r"|(start|stop)_mode=(add|clone)|color=" + _COLOR + r")){0,6}",
+    "loop": r"\d{1,5}(:\d{1,5}(:\d{1,7})?)?|(loop=\d{1,5}|size=\d{1,5}|start=\d{1,7})(:(loop=\d{1,5}|size=\d{1,5}|start=\d{1,7})){0,2}",
 }
 _FA = {
     "volume": r"\d{1,2}(\.\d{1,3})?|[+-]?\d{1,2}(\.\d)?dB", "loudnorm": r"(I=-?\d{1,2}(:TP=-?\d(\.\d)?)?(:LRA=\d{1,2})?)?",
@@ -62,6 +68,7 @@ _FA = {
     "lowpass": r"f=\d{1,5}", "afade": r"t=(in|out):st=" + _NUM + ":d=" + _NUM, "areverse": "", "dynaudnorm": "",
     "equalizer": r"f=\d{1,5}:width_type=(h|q|o|s):width=" + _NUM + ":g=" + _NUM, "silenceremove": r"(start|stop)_periods=\d",
     "pan": r"(mono|stereo)\|c0=[c0-9+*.]{1,30}(\|c1=[c0-9+*.]{1,30})?", "aecho": r"[\d.:|]{3,60}",
+    "apad": r"(pad_dur|whole_dur)=" + _DUR + r"|(pad_len|whole_len)=\d{1,8}",
 }
 
 IM_FLAGS: dict[str, Optional[str]] = {
@@ -88,13 +95,21 @@ def _filter_chain(chain: str, allowed: dict[str, str]) -> None:
     for part in chain.split(","):
         name, _, args = part.strip().partition("=")
         if name not in allowed:
-            raise AdvancedError(f"filter not allowed: {name}")
+            raise AdvancedError(f"filter not allowed: {name[:30]}. Allowed {'video' if allowed is _FV else 'audio'} "
+                                f"filters: {', '.join(sorted(allowed))}")
         pat = allowed[name]
         if not args:
-            if pat and name not in ("yadif", "loudnorm"):
+            if pat and name not in ("yadif", "loudnorm"):           # apad alone would pad forever
                 raise AdvancedError(f"{name} needs parameters")
         elif not pat or not re.fullmatch(pat, args):
             raise AdvancedError(f"invalid parameters for {name}")
+        if name in ("tpad", "apad") and any(float(v) > 3600 for v in re.findall(r"_dur(?:ation)?=([\d.]+)", args)):
+            raise AdvancedError(f"{name}: at most 3600 s")
+        if name == "loop":
+            kv = dict(zip(("loop", "size", "start"), args.split(":"))) if "=" not in args else \
+                dict(x.split("=", 1) for x in args.split(":"))
+            if int(kv.get("loop") or 0) * max(1, int(kv.get("size") or 0)) > 18000:
+                raise AdvancedError("loop: repeats × size at most 18000 frames")
 
 
 def check(args: list, tool: str = "ffmpeg") -> list[str]:
@@ -107,7 +122,9 @@ def check(args: list, tool: str = "ffmpeg") -> list[str]:
     while i < len(out):
         flag = out[i]
         if flag not in flags:
-            raise AdvancedError(f"option not allowed: {flag[:30]}")
+            raise AdvancedError(f"option not allowed: {flag[:30]}. Allowed: {', '.join(flags)}"
+                                + (" (-vf / -af take these filters: " + ", ".join(sorted(_FV)) + " / " + ", ".join(sorted(_FA)) + ")"
+                                   if tool != "imagemagick" else ""))
         pat = flags[flag]
         if pat is None:
             i += 1

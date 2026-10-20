@@ -33,7 +33,7 @@ router = APIRouter()
 COOKIE = "aice_session"
 SESSION_TTL_S = 30 * 24 * 3600
 _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favicon.ico", "/apple-touch-icon", "/icon-192.png",
-                    "/icon-512.png", "/static/", "/api/stripe/webhook",
+                    "/icon-512.png", "/static/", "/api/stripe/webhook", "/webhooks/",
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
                     "/.well-known/", "/oauth/",
                     "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
@@ -58,6 +58,7 @@ _GUEST_OK = (
     ("GET", "/api/design/columns"),                                     # tömeges személyre szabás: a táblázat oszlopai
     ("GET", "/api/video/assets"), ("POST", "/api/video/asset"),         # a videószerkesztő médiafájljai (a projekt mellé)
     ("DELETE", "/api/files/"), ("DELETE", "/api/jobs/"),                # (eddig egy komment végére csúszva — vendég nem tudott törölni)
+    ("GET", "/api/photos/"),                                            # Mentés a Fotókba (iOS): a saját fájl a megosztó lapra
 )
 GUEST_MAX_UPLOAD_MB = 25
 _GUEST_POSTS, _GUEST_WINDOW_S = 60, 10 * 60          # vendég POST-ok IP-nként (feltöltés + gyártás)
@@ -202,9 +203,18 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/dashboard") and uid != tenancy.ADMIN_ID:
         return RedirectResponse("/app", status_code=303)
     token = tenancy.set_user(uid)
+    from app import sharing
+    shared_tok = None
     try:
+        try:   # más munkaterületének fájlja (megosztás): EZ a jogellenőrzés minden fájl-, projekt-, render- és MCP-kérésre
+            shared_tok = await sharing.enter_request(request, uid)
+        except sharing.AccessDenied as e:
+            if e.mcp:                   # MCP: az eszköz hibája a JSON-RPC válaszban (nem HTTP-hiba)
+                return JSONResponse(e.mcp)
+            return JSONResponse({"detail": str(e), "not_shared": True}, status_code=getattr(e, "status", 403))
         resp = await call_next(request)
     finally:
+        sharing.leave_request(shared_tok)
         tenancy.reset(token)
     if new_guest:
         resp.set_cookie(COOKIE, new_session(new_guest, ttl=GUEST_TTL_S), max_age=GUEST_TTL_S, httponly=True,
@@ -297,6 +307,7 @@ async def login(request: Request, password: str = Form(...), email: str = Form("
         return _login_form(nxt, "Wrong email or password.", email.strip(), 401)
     _fails[ip].clear()
     await _adopt_guest(request, uid)
+    await _claim_invites(uid, email)
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(uid), max_age=SESSION_TTL_S, httponly=True,
                     secure=request.url.scheme == "https", samesite="lax")
@@ -335,9 +346,8 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     except ValueError as e:
         return _signup_form(nxt, str(e), name, email, 400)
     _signups[ip].append(time.time())
-    if settings.SIGNUP_CREDITS:
-        await db.credits_add(user["id"], 0, "signup")  # napló-sor a kezdő egyenlegről
     await _adopt_guest(request, user["id"])
+    await _claim_invites(user["id"], user.get("email"))
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(COOKIE, new_session(user["id"]), max_age=SESSION_TTL_S, httponly=True,
                     secure=request.url.scheme == "https", samesite="lax")
@@ -355,6 +365,19 @@ async def _adopt_guest(request: Request, uid: str) -> None:
         except Exception:
             log.warning("vendég-verziók átírása nem sikerült", exc_info=True)
         log.info("vendég %s → %s: %d fájl", guest, uid, moved)
+
+
+async def _claim_invites(uid: str, email: Optional[str]) -> None:
+    """Az e-mail címre szóló függő megosztások (app/sharing.py) a fiókhoz kerülnek — regisztrációkor és belépéskor."""
+    from app import sharing
+    if not sharing.enabled() or not email or "@" not in email:
+        return
+    try:
+        n = await sharing.claim_invites(uid, email)
+        if n:
+            log.info("függő megosztás feloldva: %s (%d)", uid, n)
+    except Exception:
+        log.warning("függő megosztások feloldása nem sikerült", exc_info=True)
 
 
 @router.get("/logout", include_in_schema=False)
@@ -396,10 +419,23 @@ async def api_account(request: Request) -> dict:
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
         "image_credit_cost": settings.IMAGE_CREDIT_COST,
+        "ai_video": _ai_video_on(uid),
         "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
         "keys": await db.api_key_list(uid) if db.enabled() and not guest else [],
+        "sharing": _sharing_on() and not guest,
         "mcp_url": f"{base}/mcp", "product": settings.PRODUCT_NAME,
     }
+
+
+def _sharing_on() -> bool:
+    from app import sharing
+    return sharing.enabled()
+
+
+def _ai_video_on(uid: str) -> bool:
+    """kie.ai AI-videó (klip, minőségjavítás): KIE_API_KEY + AI_VIDEO kapcsoló (app/providers)."""
+    from app import providers
+    return not tenancy.is_guest(uid) and providers.enabled_for(uid)
 
 
 @router.post("/api/account/keys")
@@ -432,5 +468,8 @@ async def api_admin_credits(body: dict) -> dict:
     rows = await db._rows("SELECT id FROM users WHERE email = lower(%s) OR id = %s", (body.get("email") or "", body.get("user_id") or ""))
     if not rows:
         raise HTTPException(404, "no such user")
-    bal = await db.credits_add(rows[0]["id"], int(body.get("delta", 0)), body.get("reason") or "admin grant")
+    try:
+        bal = await db.credits_add(rows[0]["id"], int(body.get("delta", 0)), body.get("reason") or "admin grant", kind="adjust")
+    except db.InsufficientCredits as e:
+        raise HTTPException(400, f"The balance is only {e.available} credits.")
     return {"user_id": rows[0]["id"], "credits": bal}

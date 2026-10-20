@@ -58,6 +58,7 @@ async def make_video(body: dict[str, Any]) -> dict[str, Any]:
     try:
         video.fmt_name(body.get("format"))
         video.check_music(body.get("music"))
+        video.scrim_of(body.get("scrim"))
     except ValueError as e:
         raise HTTPException(400, str(e))
     if str(body.get("pictures") or "").lower() == "ai" and not tenancy.client_makes_images.get():
@@ -149,7 +150,8 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
     async def work(progress):
         try:
             res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress,
-                                   alpha=body.get("alpha"))
+                                   alpha=body.get("alpha"), render=body.get("render", True) is not False,
+                                   draft=bool(body.get("draft")))
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})
@@ -159,7 +161,8 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/api/video/transcript")
 async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
-    """{file_id: <videó | hang | overlay-projekt>, language?} → job (időbélyeges mondatok + .srt)."""
+    """{file_id: <videó | hang | overlay-projekt>, language?, prompt?, vocabulary?, model?, force?, correct?} → job
+    (időbélyeges mondatok + .srt + a javítások) — a paraméterek: app/tools/transcript.py."""
     from app import jobs
     from app.tools import transcript, video
     if tenancy.is_guest():
@@ -172,10 +175,17 @@ async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
         crafts.existing(fid)
     except (FileNotFoundError, ValueError):
         raise HTTPException(400, "That file isn't in the workspace — upload it first (upload_file), then pass its file_id.")
+    try:
+        flag = lambda v: None if v is None or v == "" else str(v).strip().lower() not in ("0", "false", "no", "off")  # noqa: E731
+        opts = {"prompt": body.get("prompt"), "vocabulary": transcript.vocab_list(body.get("vocabulary")),
+                "model": transcript.model_name(body.get("model")), "force": bool(flag(body.get("force"))),
+                "correct": flag(body.get("correct"))}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     async def work(progress):
         try:
-            return await video.transcribe_file(fid, body.get("language"), progress)
+            return await video.transcribe_file(fid, body.get("language"), progress, **opts)
         except Exception as e:
             raise _fail(e)
     return jobs.start("video", work)

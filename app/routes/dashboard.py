@@ -80,11 +80,13 @@ async def dashboard() -> HTMLResponse:
 # ----- File listing -----
 
 
-def _list_dir(d: Path, kind: str, include_ephemeral: bool = False) -> list[dict[str, Any]]:
+def _list_dir(d: Path, kind: str, include_ephemeral: bool = False, only: Optional[set] = None) -> list[dict[str, Any]]:
     if not d.exists():
         return []
     items = []
     for p in d.iterdir():
+        if only is not None and p.name not in only:
+            continue                  # megosztott munkaterület: csak a megosztott család (app/sharing.py)
         if not p.is_file():
             continue
         if is_meta_path(p.name):
@@ -112,6 +114,7 @@ def _list_dir(d: Path, kind: str, include_ephemeral: bool = False) -> list[dict[
             "original_filename": meta.get("original_filename"),
             "group": meta.get("group"),          # egy készítés testvér-fájljai (méretek × formátumok)
             "variant": meta.get("variant"),
+            **({"edited_by": meta["edited_by"]} if meta.get("edited_by") else {}),   # megosztott projektben: ki csinálta
         })
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
@@ -166,14 +169,27 @@ async def api_files(include_ephemeral: bool = False) -> dict[str, Any]:
         ),
     }
     _mark_versions(out["inputs"] + out["outputs"])
+    from app import sharing
+    if sharing.enabled():               # megosztva velem (más munkaterületéről) + ki szerkesztette a sajátjaimat
+        uid = tenancy.current_user_id()
+        out["shared"] = await sharing.shared_with_me(uid)
+        eds = {f["edited_by"] for f in out["inputs"] + out["outputs"] if f.get("edited_by")}
+        if eds:
+            nm = await sharing.names(eds)
+            for f in out["inputs"] + out["outputs"]:
+                if f.get("edited_by"):
+                    f["edited_by_name"] = nm.get(f["edited_by"])
     return out
 
 
 @router.delete("/api/files/{file_id}")
 async def api_delete_file(file_id: str) -> dict[str, Any]:
     removed = []
-    for d in (tenancy.user_root() / "inputs", tenancy.user_root() / "outputs"):
-        p = d / file_id
+    try:                 # fájlonként feloldva: megosztott fájlt csak owner szereppel (a middleware ellenőrzi), mást nem
+        paths = (input_path(file_id), output_path(file_id))
+    except FileNotFoundError:
+        raise HTTPException(404, "not found") from None
+    for p in paths:
         if p.exists():
             p.unlink()
             removed.append(str(p))

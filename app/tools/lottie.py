@@ -3,12 +3,15 @@ kereskedelmi célra is szabad, forrásmegjelölés nem kötelező — mi a zár�
 
     search(query, n)   → jelöltek: név, JSON-link, előnézeti kép, GIF, alkotó, oldal
     fetch(url)         → a Lottie JSON ellenőrizve (fr + layers, méretkorlát, külső képfájl nélkül)
-    pick(query, context) → a látómodell választ a jelöltek előnézeteiből (videó: _rank), az első betölthető nyer
+    pick(query, context, aspect, n) → a jelöltek sorrendje: átlátszó háttér, a doboz arányához illő alak, a látómodell
+                       rangsora (az előnézetekből); n = a sorrend hányadik eleme (1 = a legjobb) — a választott neve,
+                       előnézete és a többi jelölt vele jön (10-19: a „confetti” lila háromszögfoltként ült a szövegen)
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from typing import Any, Optional
 
@@ -76,8 +79,47 @@ async def fetch(url: str) -> dict[str, Any]:
     return check(json.loads(bytes(buf).decode("utf-8")))
 
 
-async def pick(query: str, context: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
-    """→ (a Lottie JSON, a választott jelölt). A látómodell az előnézetekből rangsorol (nem szűr), az első betölthető nyer."""
+def _static(v: Any) -> Any:
+    return v.get("k") if isinstance(v, dict) and not v.get("a") else None
+
+
+def opaque_background(data: dict[str, Any]) -> bool:
+    """Teli háttere van-e: egy szilárd réteg (solid) vagy egy kitöltött téglalap, amely a vászon ~egészét fedi — az ilyen
+    animáció dobozként takarja, ami alatta van."""
+    W, H = float(data.get("w") or 0), float(data.get("h") or 0)
+    if not W or not H:
+        return False
+    big = lambda w, h: float(w or 0) >= 0.9 * W and float(h or 0) >= 0.9 * H        # noqa: E731
+
+    def filled_rect(items: list[Any]) -> bool:
+        if not any(isinstance(it, dict) and it.get("ty") == "fl" for it in items):
+            return any(isinstance(it, dict) and it.get("ty") == "gr" and filled_rect(it.get("it") or []) for it in items)
+        for it in items:
+            sz = _static(it.get("s")) if isinstance(it, dict) and it.get("ty") == "rc" else None
+            if isinstance(sz, list) and len(sz) >= 2 and big(sz[0], sz[1]):
+                return True
+        return any(isinstance(it, dict) and it.get("ty") == "gr" and filled_rect(it.get("it") or []) for it in items)
+    for ly in data.get("layers") or []:
+        if not isinstance(ly, dict):
+            continue
+        if ly.get("ty") == 1 and big(ly.get("sw"), ly.get("sh")):
+            return True
+        if ly.get("ty") == 4 and filled_rect(ly.get("shapes") or []):
+            return True
+    return False
+
+
+def _shape(data: dict[str, Any]) -> tuple[float, bool]:
+    w, h = float(data.get("w") or 1), float(data.get("h") or 1)
+    return w / max(h, 1.0), not opaque_background(data)
+
+
+async def pick(query: str, context: str = "", aspect: Optional[float] = None, n: Optional[int] = None,
+               tries: int = 5) -> tuple[dict[str, Any], dict[str, Any]]:
+    """→ (a Lottie JSON, a választott jelölt + "pick": a sorszáma, "of", "transparent", "aspect", "alternatives").
+    Sorrend: az átlátszó hátterű előre, aztán az, amelyiknek az alakja a doboz arányához (aspect = szélesség / magasság)
+    illik, aztán a látómodell rangsora (az előnézetekből; nem szűr). n: a sorrend n-edik eleme (1-től) — a kliens így
+    választhat másikat, ha az első nem tetszik."""
     from app.tools.images import rank as _rank
     cands = (await search(query, n=8))[:6]
     if not cands:
@@ -86,11 +128,28 @@ async def pick(query: str, context: str = "") -> tuple[dict[str, Any], dict[str,
               "Rank the numbered animation previews by how well they fit: a clear, simple, on-topic illustration first; "
               "cluttered, off-topic or text-heavy ones last. Return JSON only: {\"ranking\": [numbers, best first]}")
     order = await _rank(query, context, cands, prompt=prompt) if len(cands) > 1 else [0]
+    order = list(dict.fromkeys(list(order) + list(range(len(cands)))))
+    loaded: list[tuple[int, int, dict[str, Any], float, bool]] = []
     last: Exception = ValueError("nothing loaded")
-    for k in order:
+    for pos, k in enumerate(order[:max(1, tries)]):
         try:
-            return await fetch(cands[k]["json_url"]), cands[k]
+            data = await fetch(cands[k]["json_url"])
         except Exception as e:
             last = e
             log.info("lottie-jelölt kimarad (%s): %s", cands[k]["name"], e)
-    raise ValueError(f"no usable animation for “{query}”: {last}")
+            continue
+        asp, clear = _shape(data)
+        loaded.append((pos, k, data, asp, clear))
+    if not loaded:
+        raise ValueError(f"no usable animation for “{query}”: {last}")
+    def key(x: tuple[int, int, dict[str, Any], float, bool]) -> tuple[int, int, int]:
+        miss = abs(math.log(x[3] / aspect)) if aspect else 0.0
+        return (0 if x[4] else 1, 0 if miss < 0.2 else 1 if miss < 0.6 else 2, x[0])
+    loaded.sort(key=key)
+    i = max(1, min(int(n or 1), len(loaded))) - 1
+    _, k, data, asp, clear = loaded[i]
+    alts = [{"pick": j + 1, "name": cands[x[1]]["name"], "thumb_url": cands[x[1]].get("thumb_url"), "transparent": x[4]}
+            for j, x in enumerate(loaded) if j != i]
+    return data, {**cands[k], "pick": i + 1, "of": len(loaded), "transparent": clear,
+                  "aspect": f"{int(data.get('w') or 0)}×{int(data.get('h') or 0)}", "alternatives": alts,
+                  **({"pick_asked": int(n)} if n and int(n) != i + 1 else {})}

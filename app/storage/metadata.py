@@ -46,6 +46,10 @@ def write_meta(
     """Write/merge the sidecar. Best-effort — never raises (metadata is
     cosmetic, must not block real operations)."""
     try:
+        from app import tenancy
+        sh = tenancy.shared()
+        if sh is not None and not sh.can_write(file_id):
+            return                       # megosztott fájl, csak megtekintésre: a tulajdonos metájához nem nyúlunk
         p = _meta_path_for(file_id)
         existing: dict[str, Any] = {}
         if p.exists():
@@ -64,6 +68,8 @@ def write_meta(
             merged["original_filename"] = original_filename
         if extra:
             merged.update(extra)
+        if sh is not None and not existing and sh.actor != sh.owner:
+            merged["edited_by"] = sh.actor   # megosztott munkaterületen: ki hozta létre ezt a változatot
         merged.setdefault("created_at", time.time())
         merged["updated_at"] = time.time()
         p.parent.mkdir(parents=True, exist_ok=True)

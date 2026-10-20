@@ -207,6 +207,11 @@ async def preview(file_id: str, request: Request, view: str = "", page: int = 0)
         )
 
     if fmt in IMAGE_FORMATS:
+        from app.storage import privacy
+        try:
+            src = await privacy.export_path(src)        # a böngészőből menthető: helyadat (GPS) nélkül
+        except privacy.LocationNotRemoved as e:
+            raise HTTPException(422, str(e)) from None
         return FileResponse(
             src, media_type=IMAGE_MIME.get(fmt, "image/png"),
             headers={"Content-Disposition": _inline_disposition(file_id, fmt)},

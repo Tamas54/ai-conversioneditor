@@ -102,7 +102,8 @@ mcp = FastMCP(
         "but a step where this server runs its OWN AI model (choosing stock photos with a vision model, finding image search "
         "words, writing a video script from an article, describe_image / ocr_image / extract_table_from_image, "
         "edit_with_instruction, facts checks) is a Studio AI step: a monthly allowance, then credits (result field "
-        "`studio_ai`). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
+        "`studio_ai`: steps, credits_used, balance; without enough credits a paid call fails with insufficient_credits "
+        "before anything starts). Do those parts yourself when you can: give scenes their own images or \"image_query\" words, pass a "
         "finished scenes=[…] plan, look at pictures with files(action=\"preview\"), and use the editing commands directly."
     ),
     streamable_http_path="/",
@@ -167,25 +168,39 @@ def linked(fn):
     async def w(*a, **k):
         import time
         from app import tenancy
-        from app import billing
+        from app import billing, credits
         tok = tenancy.client_makes_images.set(True)    # MCP-hívás: AI-képet a kliens csinál, nem a szerver
         t0 = time.monotonic()
         try:
-            with billing.count_steps() as used:        # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
-                res = await _finalize(fn.__name__, k, await fn(*a, **k))
-            if used[0] and isinstance(res, dict):
-                res["studio_ai"] = {"steps": used[0], "credits": used[1],
-                                    "note": "Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
-                                            f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions."}
+            # a kreditút (OMLETT 1.5): a token felhasználója fizet, mint a webes felületen; fedezet nélkül el sem indul
+            async with credits.mcp_call(fn.__name__, k) as acct:
+                with billing.count_steps() as used:    # a szerver saját modellhívásai (AI-lépés) ebben a hívásban
+                    res = await _finalize(fn.__name__, k, await fn(*a, **k))
+                acct["steps"] = used[0]
+            if isinstance(res, dict) and (used[0] or acct["used"] or acct["held"] or acct["would"]):
+                res["studio_ai"] = {"steps": used[0], "credits": used[1], **_credit_report(acct)}
+                if used[0]:
+                    res["studio_ai"]["note"] = ("Steps run on the Studio's own AI model (monthly allowance, then 1 credit per "
+                                                f"{billing.AI_STEPS_PER_CREDIT}). You can do most of them yourself — see the server instructions.")
             st = (res.get("check") or {}).get("status") if isinstance(res, dict) else None
             log.info("mcp %s(%s) ok %.1fs%s", fn.__name__, _arg_brief(k), time.monotonic() - t0, f" check={st}" if st else "")
             return res
         except Exception as e:
             log.warning("mcp %s(%s) FAILED %.1fs: %s", fn.__name__, _arg_brief(k), time.monotonic() - t0, str(e)[:300])
+            if isinstance(e, credits.InsufficientCredits):
+                raise ValueError(credits.insufficient_message(e)) from None
             raise
         finally:
             tenancy.client_makes_images.reset(tok)
     return w
+
+
+def _credit_report(acct: dict) -> dict:
+    """studio_ai bővítése: a hívásban felhasznált (és lefoglalt) kredit, az egyenleg utána; admin: nem fizet."""
+    from app import tenancy
+    if acct.get("uid") == tenancy.ADMIN_ID:
+        return {"credits_used": 0, "balance": None, "admin": True, **({"would_charge": acct["would"]} if acct["would"] else {})}
+    return {"credits_used": acct["used"], **({"credits_held": acct["held"]} if acct["held"] else {}), "balance": acct["balance"]}
 
 
 # a közvetlen szerkesztők (edits.py) eredménye eddig címke nélkül maradt („3fa8c1e2.docx") — itt kap nevet
@@ -258,6 +273,11 @@ async def _finalize(tool: str, args: dict, res):
         _sizes(res)
     except Exception as e:
         log.info("méret kimaradt (%s): %s", tool, e)
+    try:                                 # megosztott projekt: ütközés (más közben új változatot mentett) → conflict
+        from app import share_versions
+        await share_versions.annotate(res)
+    except Exception as e:
+        log.info("megosztás-jelzés kimaradt (%s): %s", tool, e)
     from app.tools import checks
     check, page = await checks.run(tool, args, res)
     pages = {}
@@ -454,8 +474,10 @@ async def files(
     at: Optional[Union[float, list[float]]] = None,
     frames: Optional[int] = None,
     versions: bool = False,
+    email: Optional[str] = None,
+    role: Optional[str] = None,
 ) -> dict:
-    """The person's files, and empty new ones; see a file; compare two versions.
+    """The person's files, and empty new ones; see a file; compare two versions; share.
 
     action="list": their files (uploads and results, newest first) — {file_id, name, ext, size_kb, when, made_from,
       edit_url}, plus total. To FIND a file ("the application form photo", "my contract"), pass query = words from
@@ -479,6 +501,9 @@ async def files(
       deck or PDF: validate_document checks it for you (pictures + a machine-checked list of problems).
     action="compare": what changed between file_id and other_file_id (default: the file it was made from) —
       changed pages with preview pairs, text added/removed, and things that disappeared (pictures, slides, lines).
+    action="share": file_id + email + role (viewer|editor|owner|none) — share a file or video project (none = remove);
+      without email: who has access and who changed what. action="share_link" (role) — a link for signed-in people.
+      action="choose": after a version conflict, make file_id the current version. list also returns shared_with_me.
     """
     if action in ("list", "find", "search"):
         import datetime
@@ -505,11 +530,17 @@ async def files(
         hint = ({"hint": "Nothing has those words in its name — names are often in the person's own language (or a "
                          "camera name like IMG_1234): try other words, or list by kind (e.g. kind=\"image\") and look."}
                 if query and query.strip() and not items else {})
+        from app import sharing
+        mine = sharing.mcp_shared_items(d.get("shared") or [], query=query, kind=kinds, ext=ext, versions=versions)
         return {**hint, "total": len(items), "offset": o, "more": o + n < len(items), "files": [{
             "file_id": f["file_id"], "name": f.get("label"), "ext": f.get("ext"), "size_kb": f.get("size_kb"),
             "when": datetime.datetime.fromtimestamp(f.get("mtime", 0), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "made_from": f.get("source_label"),
-            **({"older_versions": f["older_versions"]} if f.get("older_versions") and not versions else {})} for f in page]}
+            **({"older_versions": f["older_versions"]} if f.get("older_versions") and not versions else {})} for f in page],
+            **({"shared_with_me": mine} if mine else {})}
+    if action in ("share", "share_link", "choose", "shared"):
+        from app import sharing
+        return await sharing.mcp_action(action, file_id, email=email, role=role)
     if action == "preview":
         return await _preview_content(file_id, page or 1, scene, at, frames)
     if action == "compare":
@@ -521,7 +552,7 @@ async def files(
             raise ValueError("Give other_file_id — this file wasn't made from another one.")
         return await cmp.compare(other, file_id) if not other_file_id else await cmp.compare(file_id, other_file_id)
     if action != "new":
-        raise ValueError('action: "list", "new", "preview" or "compare"')
+        raise ValueError('action: "list", "new", "preview", "compare", "share", "share_link" or "choose"')
     k = (kind or "").lower()
     if k in ("document", "doc", "word"):
         from app.routes.make import make_document
@@ -1864,210 +1895,48 @@ async def video(
     duration_mode: Optional[str] = None,
     camera: Optional[Any] = None,
     subtitles: Optional[Any] = None,
+    topic: Optional[str] = None,
+    render: bool = True,
+    end_card: Optional[Any] = None,
+    transcript: Optional[dict] = None,
+    scrim: Optional[float] = None,
+    wait: Optional[float] = None,
+    prompt: Optional[str] = None, vocabulary: Union[list[str], str, None] = None, model: Optional[str] = None,
+    force: bool = False, correct: Optional[bool] = None,
+    factor: Optional[float] = None,
+    ai: Optional[dict] = None,
 ) -> dict:
-    """Short videos with an EDITABLE timeline (an After Effects-like video editor opens from edit_url) — made from a
-    text, or graphics on the person's OWN footage (action="overlay").
-
-    YOUR OWN SCENE PLAN (most reliable): action="make" with scenes=[{"headline", "caption", "image"? (file_id | URL
-      — e.g. a picture you made — | {"stock": "words"}), "image_query"? (English words for a stock photo — give it for every scene without an image: without it the search uses the headline), "stat"?
-      {value, label}, "chart"? (see below), "duration"? seconds, "id"? }] + title, kicker?, title_image?, end_title?,
-      end_subtitle?, format, duration (total; scenes without one share the rest). It is made exactly as given (no
-      re-planning).
-      MOVEMENT AND BACKGROUNDS, per scene (in scenes=[…] and in edit changes.scenes): "images": [up to 4 pictures]
-      — the scene's backgrounds one after another, crossfading, each moving; "motion": how the picture moves —
-      zoom_in | zoom_out (toward / away from its subject, Ken Burns) | pan_left | pan_right | pan_up | pan_down |
-      still | auto, "focus"?: [x, y] 0–1 (the point on the picture to move toward; found automatically otherwise),
-      "zoom"?: 1.03–1.8 (how far); "camera": a camera on the scene's picture AND graphic together — "push_in" |
-      "pull_out" | "drift" | [{"at": seconds, "zoom": 1–3 (1 = the whole frame again), "to"?: [x, y] 0–1 of the
-      frame, "dur"?: seconds}] (e.g. punch in on a detail of the photo at 1 s, or on the forecast part of a chart at
-      3 s, back out at 6 s); the scene's title, big number and captions stay put. "fit": cover (the picture fills
-      the frame, edges may be cut) | contain (the whole picture, its blurred copy filling the rest — e.g. a group
-      photo in a vertical video) | auto (default: contain for the person's own photo when its shape is far from the
-      frame's, cover otherwise). "background" for a scene without a picture: gradient | motion (light drifting slowly) | dark | "#RRGGBB". A scene with a chart shows the CHART's title at the top, not the headline (a graphic without a
-      title shows the headline) — put what should be on screen into the chart title. Put the source in text too: chart numbers are checked against it (without it, against your scenes).
-
-    action="make": an article (url, or its text in text), a document (source_file_id) or the person's own words
-      (text + keep_wording=true ONLY when they want their own sentences word for word as the captions; for an
-      article or notes to turn into a video, leave it false) → title card, scenes with full-screen pictures
-      in gentle motion, headlines, timed captions, end card with picture credits → a video project (.ecproj) + the
-      MP4. Takes 1–3 minutes, so it returns a job: call video(action="status", job_id=…) until status is "done"
-      (result.project / result.video, each with edit_url) or "failed".
-      format: vertical (9:16 — Reels, TikTok, Shorts) | landscape (16:9 — YouTube) | square. duration: seconds,
-      4–180 (default 60; with keep_wording and no duration the reading pace sets it). duration_mode: "fixed" (the default
-      when you give duration — the video is that long INCLUDING the title card and the end card, which get shorter on a
-      short video: scenes hold longer or get shorter (down to 1.2 s), the narration is read up to 1.2× faster; what
-      still doesn't fit is said in the check) | "narration" (the default without duration — the voice sets the
-      length). Every result has duration = {requested, actual, mode}; a gap beyond a second or so is a check finding
-      ("Asked for 24 s, it is 17 s (…)"), never "ok". images: pictures in order —
-      file_ids or {"url": …} — images[0] is the TITLE CARD, images[1] scene 1, images[2] scene 2… (the check lists where
-      each went; with scenes=[…] give each scene its own image instead); this server doesn't make AI pictures for you, so make them with your own image tool
-      and pass their URLs. pictures: stock (free stock photos fill the scenes without one) | mine | none (| ai: AI
-      photos — only in the Studio web app, for credits; here, make them yourself and pass them as images).
-      AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked
-      from the text or `language`) reads the title and every scene's caption aloud.
-      narration="none" turns it off (captions only). narration_voice: "female" | "male" | a Piper voice id (e.g.
-      "hu_HU-imre-medium", "en_US-ryan-medium").
-      MUSIC (none by default): music = a mood — upbeat | calm | cinematic | lofi | corporate | playful | romantic |
-      dramatic — or a track id → built-in CC0 music (no credit needed) fitted to the video's length; music_file_id =
-      the person's own music. Under speech (the narration, a voice file, or overlay footage's own sound) the music
-      drops and comes back in the pauses; "none" = no music.
-      voice_file_id: the person's own voice-over (upload it first); it replaces the AI narration; the video follows
-      its length (with duration in fixed mode: at least that long). accent: a hex colour for bars and numbers.
-      ken_burns: some (default — every other scene a clear Ken Burns move: zoom and pan toward the picture's subject)
-      | all | off (only a gentle drift).
-      Animated graphics for any topic — chart = {"type", "title", "unit", "total"?, "min"?, "max"?, "items": [{"label",
-      "value"?, "text"?}]}: column | bar | line | area (values over time) | donut (parts of a whole) | ring (one %) |
-      icons ("1 in 4", x of 100) | counter (one number counting up) | compare (2–3 numbers side by side) | progress
-      (separate %s) | gauge (one value on a min–max scale) | funnel (shrinking stages) | timeline (dated events: label =
-      date) | steps (how-to) | proscons (label "+"/"-", text) | quote (text word for word from the source, label =
-      who) | table ({"columns": [2–5 headings], "rows": [[cells]…] up to 7 rows}). With their own shape: waterfall (a start, then + / − changes; the end is computed and checked against
-      "total"? — {"items": [{"label", "value"}…], "total_label"?}) | slope (before → after per item — {"labels": [before,
-      after], "items": [{"label", "from", "to"}]}) | scatter (points, bubble when "size" — {"x_title", "y_title" (what
-      each axis measures, with the unit), "items": [{"label", "x", "y", "size"?}]}) | band (a line with its low–high
-      range, the forecast part dashed — {"items": [{"label": period, "value", "low"?, "high"?}], "forecast_from"?: the
-      first forecast period}) | lines (2–4 series over the same periods, e.g. scenarios, named at their ends —
-      {"labels": [periods], "series": [{"name", "values"}]}) | race (a ranking re-ordering period by period, the bars
-      gliding into place — {"labels": [periods], "items": [{"label", "values"}]}, 3–10 items, 3–12 periods) | sankey
-      (amounts flowing between stages, e.g. money from sources → programmes → projects; ribbons as thick as the flow,
-      each node labelled with its computed total — {"flows": [{"from", "to", "value"}], "nodes"?: [{"name", "color"?}]
-      (order and colour)}, 2–24 flows, at most 14 nodes, one way only: a loop drops it).
-      Every number, date and quote is checked against the source — one that isn't there drops the graphic.
-      graphic — draw your own (flow diagram, map with pins, labelled photo, org chart, before/after, moving type):
-      {"type": "graphic", "title"?, "backdrop"? (0–1 dark veil over the picture, default 0.58; 0 = none), "elements": [
-      {"shape": rect | circle | line | arrow | path | polygon | text | pin | image | lottie | map, x, y (centre, 0–1 of
-      the frame), w, h (0–1), r (circle/pin radius, 0–1 of the short side), from / to [x, y] (line, arrow), points [[x, y]…]
-      (path, polygon), text (text, pin label), size (px at 1080), weight bold|semibold|regular, align, fill / stroke /
-      color ("accent" | "white" | "muted" | "red"… | "#hex" | "none"), width (line px), radius (corner px), opacity (0–1),
-      anim: appear | pop | grow (a rect grows from its base: upward when taller than wide — a bar —, else from the left)
-      | draw (lines, and rect / circle outlines without fill, draw themselves) | slide-left | slide-right | slide-up |
-      slide-down | pulse | none, at (seconds into the scene), dur, move_to [x, y] (then glides there), dash (line, arrow,
-      path: "dashed" | "dotted" | [dash, gap] px), dim [[from, to] seconds] (faded while something else is shown),
-      image (file_id | URL | {"stock": "words"} — or the person's VIDEO file_id: its picture plays there from when the
-      element appears; "clip": [from, to] seconds of it; on an overlay "sound": "replace" | "mix" plays its sound, muted
-      by default) + fit cover|contain, lottie (file_id | URL of a Lottie JSON |
-      {"search": "bicycle"} — the server picks a free LottieFiles animation and credits it; it loops unless
-      loop=false)}]}. video(action="lottie", text="bicycle") lists animations with previews, to choose one yourself.
-      map — a REAL map under the other elements: {"shape": "map", "place": "Szeged" (or "bbox": [south, west, north,
-      east]), "detail": auto | streets | outline, x/y/w/h = its box (default the whole frame)}. Streets, rivers and
-      parks come from OpenStreetMap (a city or district), country borders from Natural Earth (a country or region,
-      the named country highlighted); both credited on screen. Then place anything ON it by name or coordinates
-      instead of x, y: {"shape": "pin", "place": "Dóm tér, Szeged", "text": "Dóm tér"}; from / to / points take
-      {"place": …} or {"lat": …, "lon": …} too (a route between places is drawn straight, point to point). Pins and a
-      route may also sit inside the map: {"shape": "map", "place": …, "pins": [{"place", "label"}], "route": [places]}.
-      The map widens to show every placed element. Anything left out of a graphic (unknown shape, no position, a
-      number not in the source) is listed in the check's findings. Up to 80 elements, each its own layer (editable by hand); a text
-      with a number that isn't in the source is left out (the check says which).
-      Explainer diagrams — give the relationship, the server lays it out (9:16, 16:9 and 1:1 each their own way) and builds
-      it up step by step: {"type": "decision_tree" | "swimlane" | "network", "title"?, "nodes": [{"id", "text" (≤ 70
-      characters), "kind"? (tree: question|condition|outcome · swimlane: start|step|decision|end), "actor"? (swimlane: its
-      lane) | "group"? (network colour + legend), "order"? (swimlane: same order = same column), "size"? 1–3, "at"? (seconds:
-      when it appears)}], "edges": [{"from", "to", "label"? ("yes", "if …", an amount), "kind"? sequence (then — the default)
-      | hierarchy (is above) | money (money/goods flow, thicker) | cause | correlation (moves together: never drawn as a
-      cause, no arrowhead) | link, "certainty"? certain | uncertain (dashed) | disputed (dotted + ?)}], "actors"? {"Name":
-      {"color"?, "short"?}} (the same actor keeps its colour in every scene and edit), "reveal"? steps (default: tree root
-      then branch by branch, swimlane in order, network centre then rings — the new part bright, the rest faded) | all,
-      "pace"? seconds per step (the scene lengthens to fit), "focus"? false (no fading), "direction"? auto | down | right |
-      outline (tree as indented rows), "center"? (network node id)}. Shorthands: tree "root" + nested "branches": [{"label",
-      "text", "kind"?, "branches"?}]; swimlane "steps" (= nodes; without edges they follow in order); network edges alone
-      (names as from/to). The legend lists the arrow kinds used. Numbers in boxes and labels are checked against the
-      source (a label without one is left out, a box without one drops the diagram); a broken diagram is refused with
-      what to fix. Change one with action=edit {"chart": {…}} WITHOUT "type": only the nodes (by id) and edges (by
-      from + to) you send change — e.g. {"edges": [{"from": "a", "to": "b", "certainty": "uncertain"}]}, {"nodes": [{"id":
-      "n3", "branches": [{"label", "text"}]}]} adds branches, {"remove": true} deletes, {"pace": 1.5} slows the build-up.
-      threejs — a 3D scene you write in three.js (r170): {"type": "threejs", "title"?, "transparent"? (default true:
-      it floats over the scene's picture or background), "code": "…"} — a function body that gets THREE, renderer, W,
-      H (px), dur (s), accent (THREE.Color) and label(text, {size, height, color, bg}) (a text sprite in the Studio
-      font) and returns {scene, camera, update(t)}. update(t) runs for every frame (t = 0…dur, 30 fps) — animate from
-      t, never from the clock; Math.random is seeded. Rendered with software WebGL in a sandbox (no network, nothing
-      to load: build textures with canvases); keep it light (~10 s of 1080p renders in a minute or two). Works as a
-      scene chart and as a layer chart (on footage, split screen); a code error comes back in the check — fix it
-      with action=edit {"chart": {"code": "…"}}. Text you draw in 3D is not checked against the source.
-      script — when nothing above fits: your own EffectCraft code for the scene (After Effects-style JavaScript —
-      comp.layers.addShape()/addText(), "ADBE …" match names, new Shape(), setValueAtTime keyframes, expressions):
-      {"type": "script", "title"?, "backdrop"?, "code": "…"}; the code gets comp (the scene composition), W, H, dur
-      (seconds), accent ([r, g, b], 0–1) and D (D.font.bold|semibold|regular). It runs in a sandbox (no files outside
-      the project, no network, no processes; 20 000 characters at most). A script error, or a number on screen that
-      isn't in the source, comes back in the check; fix it with action=edit {"chart": {"code": "…"}} and look at it
-      with files(action="preview", scene=…, frames=6) or video(action="render", scene=…).
-      Or pass data_file_id (CSV/XLSX: a chart per column, values from the cells).
-      The result's check also reports COVERAGE (which source sentences and numbers made it in — `coverage` lists the
-      missing ones), shortened texts, and where your pictures went. See it scene by scene: files(action="preview",
-      file_id, scene="all") or scene="s3".
-      layers=[…] (see below) put time-coded graphics on the made video too, at absolute times on its timeline.
-    action="overlay": graphics on the person's OWN video. file_id = their uploaded mp4 | mov | webm | m4v — it stays
-      the base track with its size, fps, length and sound (never re-cut, never forced to 9:16); camera=[{"at": time,
-      "zoom", "to"?, "dur"?}] punches in on the footage (and back out with zoom 1), changes.camera in an edit;
-      SUBTITLES in the Studio caption style (the dark caption bar of made videos): subtitles=[{"start", "end", "text"}]
-      (seconds or "MM:SS" — e.g. the transcript's sentences, corrected with the person) or "auto" (the transcript as
-      heard — show it to the person first when names or numbers matter); an .srt comes with the result;
-      changes.subtitles in an edit replaces them. Layers are optional when there are subtitles;
-      layers=[…] go on top
-      → a project (.ecproj, editable in the video editor) + the MP4, as a job (poll status). text = the source: numbers,
-      dates and quotes in the layers are checked against it (one that isn't there drops that layer, said in the
-      check); without text they are kept and the check says "not checked against a source". title, accent, brand,
-      music as for make (the music drops under the footage's own speech). The result's duration is the footage's
-      (mode "footage").
-    action="transcript": what is said in a video or sound file (or an overlay project's footage), with times →
-      sentences [{at, until, text}] + an .srt subtitle file (file_id) — as a job. Offline speech recognition (Whisper
-      large-v3-turbo; `language` helps, else detected); a file heard once is not transcribed again. Use it to suggest
-      where a graphic would help, then tie layers to what is said (below).
-    layers (overlay; make and edit too): [{"id"? ("L1", "L2"… given when left out — stable across edits), "at":
-      seconds | "MM:SS" | "HH:MM:SS.ms" | {"say": "words that are said"} (overlay: the layer starts as they are said
-      in the footage and stays to the end of that sentence; not said → left out, the check quotes what was heard),
-      "dur": seconds | "until": time | {"say": …}, "type", "position"?: auto | top | bottom | left |
-      right | center | [x, y, w, h] (centre and size, 0–1 of the frame — a graphic in such a box draws in the box: its
-      x/y/w/h are 0–1 of the box and its sizes are px at 1080 on the box's short side), "anim"?: fade | slide | pop | none (or
-      {"in", "out"})}]. Types: lower_third {name, role?, side?: left|right} · title {text, subtitle?, kicker?} (a band
-      across the frame) · chapter {text, subtitle?, kicker?} · source {text} (a small credit) · stat {value, label} ·
-      quote {text, author} (word for word from the source) · chart {chart: any chart above (column … quote, graphic
-      with map / lottie / image, script), panel?: false = no dark panel} — type may be the chart type itself, e.g.
-      {"type": "column", "title", "unit", "items"}; a graphic without position covers the frame transparently (an
-      arrow or a label on the footage) · fullscreen {chart | image | text (+ subtitle, kicker)}: covers the picture,
-      the sound goes on (image may be another VIDEO of theirs — a cut-in: + "clip": [from, to] seconds of it; its own
-      sound plays instead of the footage's ("sound": "replace", the default here) | "mix" (both) | "off"; split takes a
-      video too, muted unless "sound" is given) · split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base
-      shrinks to the other half. A lower third or source caption without position goes where nothing else is (other
-      layers, a made video's headlines and charts). Overlaps that remain, a layer past the end, a dropped number all
-      come back in the check's findings.
-    alpha (make, overlay, edit): true = also a transparent, graphics-only video: ProRes 4444 .mov (yuva444p12le — for
-      Premiere, Resolve, Final Cut) | "webm" (WebM VP9 with alpha — for the web; slower to render) | "both". It has
-      no base (footage, pictures, darkening) and no sound; the check proves the alpha (pixel format + a decoded frame).
-    action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.
-      changes = {"scenes": [{"id": "s3" (stable — info lists the ids; or "scene": n, 1 = first after the title card), "headline"?, "caption"?,
-      "image"? (file_id | URL — e.g. a picture you made with your own image tool | {"stock": "words"} | "none"),
-      "stat"? {value, label} | null, "chart"? (any graphic type above; WITHOUT "type" it is a fix of the scene's chart —
-      e.g. {"unit": "million"} or {"title": …} changes only that) | null, "duration"?, "remove"? true}],
-      "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption", "image" | "image_query", "stat"?, "chart"?, "duration"?}],
-      "title"?, "title_image"?, "end_title"?, "end_subtitle"?, "format"? (vertical|landscape|square — pictures are
-      fetched again in the new shape), "duration"?, "ken_burns"?, "accent"?, "music"? (a mood | a track id | "none"),
-      "music_file_id"? | "none",
-      "voice_file_id"? | "none", "narration"? "ai" | "none", "narration_voice"?, "duration_mode"?,
-      "layers"?: [{"id": "L2", …only the fields that change} | {"id": "L2", "remove": true}] (a "chart" without "type" fixes
-      just those chart fields), "add_layers"?: [new layers]}. Untouched layers stay as they are. The AI narration is
-      recorded again from the changed captions. Numbers in a new chart or stat must be in the video's source or in
-      `text` (pass the person's words there). An overlay project takes only layers, add_layers, accent, title and music.
-      alpha=… renders the transparent version again (it is kept from the previous version otherwise).
-      video(action="info") shows the scenes and layers (id, at, dur, type, text); check and preview_url come with the result.
-    action="render" with scene="s3": just that scene as a short draft MP4 (a job, seconds) — check a change without
-      rendering the whole video; scene="L2" (a layer): the video's span of that layer, with what is under it.
-      (Without scene: re-render the whole project, e.g. after hand edits.) See a layer: files(action="preview",
-      file_id, scene="L2") (its finished moment) or + frames=6 (in → out).
-    brand: the person's saved brand (name, "mine") colours the video; left out, their default brand is used; "none" = off.
-    action="to_pptx": put the video on a slide — a new one-slide deck, or deck_file_id (+ after_slide, title) adds a
-      slide to an existing deck; the MP4 is embedded (plays in PowerPoint/Keynote, first frame as its poster). For a
-      deck, make the video in the deck's colours (accent = the deck's accent colour, or the same brand) so it fits in.
-    action="render": render a project again (file_id = .ecproj, e.g. after hand edits in the editor) → job → MP4;
-      draft=true renders half size, fast.
-    action="info": a project's compositions, length, scenes, layers, media files and last render (file_id).
-    action="status": a make / overlay / edit / render job (job_id).
+    """Short videos with an EDITABLE timeline (edit_url: an After Effects-like editor): made from a text, or
+    graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
+    FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit |
+    transcript | adjust | ai_clip | enhance. Read "layers" before a first overlay, "graphic" before your own.
+    action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
+      scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
+      MP4. format vertical|landscape|square; duration (s) + duration_mode fixed|narration.
+      AI NARRATION IS ON BY DEFAULT (narration="none" turns it off); music = a mood.
+    action="overlay": file_id = their mp4|mov|webm|m4v (kept as is) + layers=[{"at", "dur"|"until", "type", …}]
+      and/or subtitles=[{start, end, text}] | "auto". Types: lower_third · title · chapter · source · stat · quote ·
+      chart (a layer with a "chart" object) · graphic · fullscreen · split. text = the source: numbers and quotes
+      are checked against it (else "not checked against a source").
+    action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
+    action="render": a project again (draft=true: half size); scene="s3" / scene="L2": just that scene / layer.
+    action="transcript": what is said, with times (+ .srt; vocabulary=[names]). action="lottie": text → animations.
+    action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
+    AI video (credits): action="ai_clip" (ai={…}) · "enhance" (factor 1|2|4) · "estimate".
+    alpha=true | "webm" | "both": also transparent graphics only (ProRes 4444 / WebM).
+    render=false (make / overlay / edit): save the project only (the layout check still runs); draft=true: fast.
+    Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs
     from app.tools import video as vid
     act = (action or "make").lower()
+    if act in ("schema", "help", "reference"):       # a részletes referencia témánként (a leírás rövid — OMLETT 1.4)
+        from app.tools import video_schema
+        return video_schema.reference(topic)
     if act in ("status", "job") or (act == "info" and job_id):
         if not job_id:
             raise ValueError("status needs job_id")
-        return await jobs.job_status(job_id)
+        return await jobs.wait_status(job_id, wait)              # wait: legfeljebb ennyi mp-ig vár, amíg fut
     if act == "info":
         if not file_id:
             raise ValueError("info needs file_id (a video project or movie)")
@@ -2085,15 +1954,19 @@ async def video(
         return await render_video({"file_id": file_id or "", "draft": draft})
     if act == "edit":
         from app.routes.video import edit_video
-        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha})
+        return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha,
+                                 "render": render, "draft": draft})
     if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
         from app.routes.video import transcript_video
-        return await transcript_video({"file_id": file_id or "", "language": language})
+        return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
+                                       "vocabulary": vocabulary, "model": model, "force": force, "correct": correct})
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
                                     "accent": accent, "brand": brand, "alpha": alpha, "music": music, "camera": camera,
-                                    "subtitles": subtitles, "language": language})
+                                    "subtitles": subtitles, "language": language, "render": render,
+                                    "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
+                                    "transcript": transcript, "draft": draft})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
@@ -2106,8 +1979,12 @@ async def video(
                 "how": 'Put one in a graphic: {"shape": "lottie", "lottie": {"url": json_url, "credit": …}} — or let the '
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
+    if act in ("ai_clip", "enhance", "estimate"):    # kie.ai — a logika és a referencia: app/tools/ai_video.py
+        from app.tools import ai_video
+        return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
-        raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | "lottie"')
+        raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | '
+                         '"lottie" | "schema" (the full reference: video(action="schema", topic="layers"))')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
@@ -2115,7 +1992,8 @@ async def video(
             "language": language, "narration": narration, "narration_voice": narration_voice,
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
             "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle,
-            "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode}
+            "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode, "render": render, "scrim": scrim,
+            "draft": draft}
     return await make_video(body)
 
 
@@ -2194,6 +2072,9 @@ def _annotate_tools() -> None:
     for t in mcp._tool_manager.list_tools():
         t.annotations = ToolAnnotations(readOnlyHint=t.name in _READ_ONLY, destructiveHint=False,
                                         openWorldHint=t.name in _OPEN_WORLD)
+        if t.name == "video":          # a behúzás nélkül: a kliensek (claude.ai) a hosszú leírást levágják (OMLETT 1.4)
+            import inspect
+            t.description = inspect.cleandoc(t.description or "")
 
 
 _annotate_tools()

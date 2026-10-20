@@ -591,7 +591,6 @@ async def _office_read_run(app: str, file_id: str, src: Path, parsed: list[tuple
 async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path, save: bool = True) -> str:
     """PdfCraft lépéssor: a file_ids sorban doc 1…n-ként nyílik meg; a lépések args-ában a "$out" a
     kimeneti útvonal, a {"file_id": …} paraméter útvonallá oldódik; save=True → a végén doc 1 mentése out-ba."""
-    from app import tenancy
     from app.storage import temp_path
     script = [{"tool": "doc_open", "args": {"path": str(f if isinstance(f, Path) else existing(f))}} for f in file_ids]
     for st in steps:
@@ -605,9 +604,49 @@ async def pdf_script(file_ids: list[str], steps: list[dict[str, Any]], out: Path
     tmp = temp_path(new_file_id("json"))
     tmp.write_text(json.dumps(script, ensure_ascii=False))
     try:
-        return await run_cli(office_cli("pdf"), "pdfcraft-cli", "run", "--script", str(tmp), "--root", str(tenancy.user_root()))
+        return await run_cli(office_cli("pdf"), "pdfcraft-cli", "run", "--script", str(tmp), "--root", str(script_root(script)))
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _script_paths(o: Any, out: list[str]) -> None:
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k in ("path", "paths"):
+                out += [x for x in (v if isinstance(v, list) else [v]) if isinstance(x, str)]
+            else:
+                _script_paths(v, out)
+    elif isinstance(o, list):
+        for v in o:
+            _script_paths(v, out)
+
+
+def script_root(script: Any) -> Path:
+    """A pdfcraft --root (a lépéssor útvonalainak homokozója), kimondva és fájlonként: saját munkán a saját
+    munkaterület (mint eddig). Megosztott projektben a lépéssor útvonalai a tulajdonos (a megosztott család, ACL-lel
+    feloldva) és a belépett felhasználó munkaterületére eshetnek: a homokozó a legszűkebb, amely mindet lefedi — ami
+    e kettőn kívül esik, azt nem futtatjuk. (A kérés minden fájl-azonosítóját a megosztás-kapu már ellenőrizte.)"""
+    from app import tenancy
+    sh = tenancy.shared()
+    if sh is None or sh.owner == sh.actor:
+        return tenancy.user_root()
+    roots = [tenancy.user_root(sh.owner).resolve(), tenancy.user_root(sh.actor).resolve()]
+    paths: list[str] = []
+    _script_paths(script, paths)
+    used = set()
+    for raw in paths:
+        p = Path(raw).resolve()
+        hit = [r for r in roots if p == r or r in p.parents]
+        if not hit:
+            raise ValueError("That path is outside your workspace and the files shared with you.")
+        root = max(hit, key=lambda r: len(r.parts))              # az admin gyökere (DATA_DIR) a többit is tartalmazza
+        if root == roots[0] and p.name not in sh.visible():      # a tulajdonosnál csak a megosztott család
+            from app.sharing import NOT_SHARED, AccessDenied
+            raise AccessDenied(NOT_SHARED)
+        used.add(root)
+    if len(used) == 1:
+        return next(iter(used))
+    return Path(os.path.commonpath([str(r) for r in used]))
 
 
 async def office_read(app: str, mode: str, file_id: Optional[str] = None, query: Optional[str] = None,

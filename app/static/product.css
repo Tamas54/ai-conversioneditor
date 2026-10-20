@@ -367,6 +367,7 @@ body:has(#revise:not([hidden])) #toast { bottom: 118px; }
 .plans-grid2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; }
 .costs { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
 .costs td { padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 14.5px; } .costs td:last-child { text-align: right; font: 600 13px/1 var(--f-mono); }
+.ledger td { padding: 7px 8px 7px 0; vertical-align: top; } .ledger tr.k-hold, .ledger tr.k-release { opacity: .6; }
 .use { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; margin-bottom: 12px; font-size: 14px; }
 .use i { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--mat) var(--w), var(--rule) var(--w)); }
 @media (max-width: 900px) { .plan-cards, .plans-grid2 { grid-template-columns: 1fr; } }
@@ -669,3 +670,21 @@ input[type=file].needs { outline: 2px solid var(--err); outline-offset: 3px; bor
   .sub-row { grid-template-columns: 1fr 1fr 32px; }
   .sub-row textarea { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* megosztás (OMLETT 4): ki fér hozzá, link, napló; az ütközés- / „épp szerkeszti” sáv a fájlnézetben */
+.share-dlg { width: min(560px, calc(100vw - 32px)); }
+.share-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0 2px; }
+.share-add input[type=email] { flex: 1 1 220px; min-width: 0; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; font: inherit; background: var(--card); }
+.share-dlg select { padding: 9px 10px; border: 1px solid var(--rule); border-radius: 10px; font: inherit; background: var(--card); }
+.share-add .checks { flex-basis: 100%; margin: 2px 0 0; }
+.share-people { list-style: none; margin: 4px 0 14px; padding: 0; }
+.share-people li { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.share-people li > span:first-child { margin-right: auto; min-width: 0; overflow-wrap: anywhere; }
+.share-link .rev-row { margin: 4px 0; }
+.share-url { width: min(100%, 360px); padding: 7px 9px; border: 1px solid var(--rule); border-radius: 8px; font: 13px var(--f-mono); }
+.share-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--rule); background: var(--paper-2); font-size: 14px; }
+.share-bar.warn { background: #fff3d1; color: #3a2a00; }
+.share-bar > span { margin-right: auto; min-width: 0; }
+.work-bar h2 .share-tag { text-transform: none; letter-spacing: 0; }
+.shared-head { margin-top: 28px; }
+@media (max-width: 600px) { .share-bar { padding: 10px 14px; } }

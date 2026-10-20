@@ -107,6 +107,9 @@ TOOLS_LIST: list[Tool] = [
     _t("gif-to-video", "video", "gif webp apng", f"{_H}.media:gif_to_video", ("loops",), output="mp4", engines=("ffmpeg",), related=("video-to-gif",)),
     _t("extract-audio", "video", _VID, f"{_H}.media:extract_audio", ("audio_format", "audio_bitrate"), output="mp3", engines=("ffmpeg",), related=("mute-video", "trim-audio")),
     _t("add-subtitles", "video", f"{_VID} srt vtt ass", f"{_H}.media:subtitles", ("burn", "language"), min_files=2, max_files=2, engines=("ffmpeg",), tier=2, related=("trim-video",)),
+    _t("extend-video", "video", _VID, f"{_H}.media:extend_video", ("duration", "at"), engines=("ffmpeg",), tier=2, related=("trim-video", "image-to-video", "merge-files")),
+    _t("image-to-video", "video", _IMG, f"{_H}.media:image_to_video", ("duration", "motion", "canvas", "fit", "fps"), output="mp4", engines=("ffmpeg", "pillow"), tier=2, related=("extend-video", "merge-files", "gif-to-video")),
+    _t("adjust-video", "video", _VID, f"{_H}.media:adjust_video", ("auto", "brightness", "contrast", "gamma", "saturation", "shadows", "highlights", "highlight_rolloff", "temperature", "vibrance", "lut", "denoise", "sharpen", "sharpen_method", "stabilize", "preview"), engines=("ffmpeg",), tier=2, related=("resize-video", "trim-video", "compress-video")),
     _t("trim-audio", "audio", _AUD, f"{_H}.media:trim", ("start", "end", "fade_in", "fade_out"), engines=("ffmpeg",), related=("adjust-volume", "compress-mp3", "merge-files")),
     _t("adjust-volume", "audio", f"{_AUD} {_VID}", f"{_H}.media:volume", ("volume", "normalize"), engines=("ffmpeg",), related=("trim-audio", "mute-video")),
     # ---------- vízjel ----------
@@ -117,12 +120,12 @@ TOOLS_LIST: list[Tool] = [
     _t("website-to-pdf", "web", "url", f"{_H}.web:to_pdf", ("url", "page_size", "full_page", "wait_ms"), min_files=0, max_files=0, output="pdf", engines=("chromium",), related=("website-to-image", "html-to-pdf")),
     _t("website-to-image", "web", "url", f"{_H}.web:to_image", ("url", "width", "full_page", "image_format", "wait_ms"), min_files=0, max_files=0, output="png", engines=("chromium",), related=("website-to-pdf", "thumbnail")),
     # ---------- fájlok ----------
-    _t("merge-files", "files", "@document @image @video @audio pdf", f"{_H}.files:merge", ("output_format",), min_files=2, max_files=100, engines=("pymupdf", "ffmpeg"), related=("merge-pdf", "collage-maker", "create-archive")),
+    _t("merge-files", "files", "@document @image @video @audio pdf", f"{_H}.files:merge", ("output_format", "canvas", "fit"), min_files=2, max_files=100, engines=("pymupdf", "ffmpeg"), related=("merge-pdf", "collage-maker", "create-archive")),
     _t("thumbnail", "files", "@document @image @video @presentation @ebook @vector @cad pdf", f"{_H}.files:thumbnail", ("width", "height", "image_format", "page", "at"), max_files=100, output="png", related=("website-to-image", "resize-image")),
     _t("create-archive", "files", "*", f"{_H}.files:create_archive", ("archive_format", "password", "level"), max_files=500, output="zip", engines=("python",), related=("extract-archive", "merge-files")),
     _t("extract-archive", "files", "@archive", f"{_H}.files:extract_archive", ("password",), output="zip", engines=("python",), related=("create-archive",)),
     # ---------- metaadat ----------
-    _t("read-metadata", "metadata", "*", f"{_H}.metadata:read", (), output="json", engines=("exiftool",), related=("edit-metadata", "remove-metadata")),
+    _t("read-metadata", "metadata", "*", f"{_H}.metadata:read", (), max_files=100, output="json", engines=("exiftool",), related=("edit-metadata", "remove-metadata")),
     _t("edit-metadata", "metadata", "@image @video @audio pdf docx xlsx pptx", f"{_H}.metadata:edit", ("fields",), engines=("exiftool",), tier=2, related=("read-metadata", "remove-metadata")),
     _t("remove-metadata", "metadata", "@image @video @audio pdf docx xlsx pptx", f"{_H}.metadata:remove", (), max_files=100, engines=("exiftool",), related=("read-metadata", "redact-pdf")),
     # ---------- haladó ----------

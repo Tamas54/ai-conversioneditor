@@ -127,6 +127,8 @@ async def resize(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]
     from app.convert.steps import _apply_image_opts
     if not (o.get("width") or o.get("height") or o.get("percent")):
         raise OptionError("give width, height or percent")
+    if o.get("fit") == "blur":
+        raise OptionError("fit: inside, cover, contain or fill (blur is for videos)")
 
     def fn(im, fmt):
         if o.get("percent"):
