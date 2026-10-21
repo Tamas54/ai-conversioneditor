@@ -86,9 +86,9 @@ def test_users_do_not_see_our_cost_basis(db_client, prov, tmp_path):
     db_client.cookies.clear()
     entries = db_client.get("/api/account/ledger", headers=hs).json()["entries"]
     assert entries and not any(k in e for e in entries for k in ("provider_cost", "provider_task_id", "meta"))
-    q = {"operation": "ai_clip", "model": "bytedance/seedance-2-5", "tier": "720p", "units": 5}
+    q = {"operation": "ai_clip", "model": "wan/3-0-video", "tier": "720p", "units": 5}
     est = db_client.get("/api/estimate", params=q, headers=hs).json()
-    assert est["credits"] == 48 and "provider_cost" not in est
+    assert est["credits"] == 26 and "provider_cost" not in est
     assert "provider_cost" in db_client.get("/api/estimate", params=q).json()               # az admin látja
     fid = _put_as(uid, _clip(tmp_path))
     e2 = db_client.post("/api/ai/estimate", json={"action": "enhance", "file_id": fid, "factor": 2}, headers=hs).json()

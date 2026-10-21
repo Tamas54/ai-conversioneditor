@@ -507,14 +507,14 @@ const views = {
       ${P.enabled ? `<button class="btn" data-pack="${k}">Buy</button>` : `<span class="muted small">Soon</span>`}</article>`).join("");
     $("#packs").querySelectorAll("[data-pack]").forEach(b => b.addEventListener("click", () => buy(b.dataset.pack)));
     const c = P.costs;
-    $("#costs").innerHTML = [["AI image, AI background, AI retouch", c.ai_image], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
+    $("#costs").innerHTML = [["AI image or AI background (square, about 1 megapixel)", c.ai_image], ["AI image for a slide or a video scene (larger)", c.ai_image_large],
+      ["AI retouch, AI text removal", c.ai_edit], ["Restore an old photo", c.restore], ["…and colourise it", `+${c.colourise}`],
+      ...(c.ai_clip_5s || []).map(e => [`AI video clip, 5 seconds — ${e.label} (paid credits)`, Object.entries(e.credits).map(([r, n]) => `${r} ${n}`).join(" · ")]),
       [`Scanned pages beyond your monthly pages`, `1 per ${c.scan_pages_per_credit} pages`],
       [`Studio AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps`, `1 per ${c.ai_steps_per_credit} steps`]].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
-    if (account.ai_video) {                                         // AI-videó (kie.ai): az árszabályokból, 10 mp-re
+    if (account.ai_video) {                                         // élesítés: az árszabályokból, 10 mp-re
       const per10 = (op, model, tier) => api(`/api/estimate?operation=${op}&model=${encodeURIComponent(model)}&tier=${encodeURIComponent(tier)}&units=10`).then(e => e.credits).catch(() => null);
-      const rows = [["AI video clip, 480p (also drafts)", "ai_clip", "bytedance/seedance-2-5", "480p"], ["AI video clip, 720p", "ai_clip", "bytedance/seedance-2-5", "720p"],
-        ["AI video clip, 1080p", "ai_clip", "bytedance/seedance-2-5", "1080p"], ["Enhance a video 1×–2× (Topaz)", "enhance", "topaz/video-upscale", "2x"],
-        ["Enhance a video 4× (Topaz)", "enhance", "topaz/video-upscale", "4x"]];
+      const rows = [["Enhance a video 1×–2× (Topaz)", "enhance", "topaz/video-upscale", "2x"], ["Enhance a video 4× (Topaz)", "enhance", "topaz/video-upscale", "4x"]];
       const got = await Promise.all(rows.map(([, ...a]) => per10(...a)));
       $("#costs").insertAdjacentHTML("beforeend", rows.map(([l], i) => got[i] === null ? "" : `<tr><td>${l}</td><td>${got[i]} per 10 s</td></tr>`).join(""));
     }
@@ -920,7 +920,7 @@ function wirePicker(form, name) {
     const v = form.querySelector(`[name=${name}-src]:checked`).value;
     form.querySelector(`[data-upload-of="${name}"]`).hidden = v !== "upload";
     q.hidden = !(v === "stock" || v === "ai");
-    q.placeholder = v === "ai" ? `Describe the image — costs ${account?.image_credit_cost ?? 1} credit` : "Search words, e.g. city skyline — then click the one you want";
+    q.placeholder = v === "ai" ? `Describe the image — up to ${account?.image_credit_cost ?? 3} credits` : "Search words, e.g. city skyline — then click the one you want";
     cands.enable(v === "stock");
   };
   form.querySelectorAll(`[name=${name}-src]`).forEach(r => r.addEventListener("change", sync)); sync();
@@ -990,7 +990,7 @@ async function pickPicture(fileId) {
   const { pictures } = await api(`/api/pictures?file_id=${encodeURIComponent(fileId)}`);
   if (!pictures.length) throw new Error("This file has no pictures yet — ask for one below, e.g. “add a photo of the Colosseum after the first paragraph”.");
   let slot = pre?.slot && pictures.some(p => p.slot === pre.slot) ? pre.slot : pictures[0].slot;
-  const form = $("#make-form"), dlg = $("#drawer"), credit = account?.image_credit_cost ?? 1;
+  const form = $("#make-form"), dlg = $("#drawer"), credit = account?.image_credit_cost ?? 3;
   const imgUrl = s => `/api/pictures/img?file_id=${encodeURIComponent(fileId)}&slot=${encodeURIComponent(s)}`;
   form.innerHTML = `<h2 id="drawer-title">Change a picture</h2>
     <p class="muted" style="margin:0 0 16px">${esc(pre?.note || "Choose the picture to change, then the new one — a stock photo, an AI picture or one of your own. Every change is a new version.")}</p>
@@ -1000,7 +1000,7 @@ async function pickPicture(fileId) {
     <div data-psrc="stock"><label>What should it show?<input type="text" name="pq" autocomplete="off" placeholder="e.g. smiling blonde girl, city skyline at dusk"></label>
       <div class="pick-grid" id="pick-grid" hidden></div><p class="pick-info muted small" id="pick-info" hidden></p></div>
     <div data-psrc="ai" hidden><label>Describe the picture <em class="ai-badge">AI</em><textarea name="pprompt" placeholder="e.g. A smiling young woman with blonde hair in a sunny meadow, natural light, photograph"></textarea></label>
-      <p class="muted small" style="margin:-6px 0 12px">${account?.guest ? "AI pictures need a free account — it takes a minute." : `Costs ${credit} credit${credit > 1 ? "s" : ""}. You'll see it right away and can still pick another.`}</p></div>
+      <p class="muted small" style="margin:-6px 0 12px">${account?.guest ? "AI pictures need a free account — it takes a minute." : `Costs up to ${credit} credit${credit > 1 ? "s" : ""}. You'll see it right away and can still pick another.`}</p></div>
     <div data-psrc="own" hidden>${fileSlot("pfile", { exts: EXT.image, label: "Picture" })}</div>
     <p class="status" id="make-status"></p>
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="make-go" value="go">Use this picture</button></div>`;
@@ -1320,22 +1320,22 @@ const AI_ENHANCE = { label: "Enhance…", ai: true, show: aiOn, doing: "Enhancin
     return { file_id: r.file_id, view: "preview", msg: `Enhanced — ${r.width}×${r.height}, ${r.credits_charged} credits` };
   } };
 const AI_CLIP = { label: "AI clip…", ai: true, show: aiOn, doing: "Generating the clip — usually 1–3 minutes…",
-  hint: "A generated clip (Seedance 2.5): from words, from this frame or a picture",
-  form: () => `<p class="muted small" style="margin:0 0 10px">A new clip made by AI (Seedance 2.5). Start with a cheap 480p draft, then make the one you like final. Only what the AI service really charges is taken; a failed job costs nothing.</p>
+  hint: "A generated clip (Wan 3.0): from words, from this frame or a picture",
+  form: () => `<p class="muted small" style="margin:0 0 10px">A new clip made by AI. It runs on paid credits; only what the AI service really charges is taken, and a failed job costs nothing. 480p is the cheap preview.</p>
     <label>What happens in the clip<textarea name="prompt" rows="3" placeholder="The camera slowly pushes in on the pan as the omelette is flipped, warm kitchen light"></textarea></label>
     <label>Start from<select name="from"><option value="text">Only the words</option><option value="frame">This video's frame at…</option><option value="pic">A picture</option></select></label>
     <label data-show="frame" hidden>Frame at (seconds)<input type="number" name="at_frame" min="0" step="0.1" value="0"></label>
     <div data-show="pic" hidden>${fileSlot("pic", { exts: EXT.image, label: "First frame" })}</div>
-    <div class="row2"><label>Quality<select name="res"><option value="draft">Draft (480p, cheap)</option><option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option></select></label>
-    <label>Seconds<input type="number" name="dur" min="4" max="30" value="5"></label></div>
+    <div class="row2"><label>AI engine<select name="engine"><option value="wan-3" selected>Wan 3.0</option><option value="wan-3-fast">Wan 3.0 Fast (quicker, dearer)</option></select></label>
+    <label>Quality<select name="res"><option value="480p">480p (preview)</option><option value="720p" selected>720p</option><option value="1080p">1080p</option></select></label></div>
+    <label>Seconds<input type="number" name="dur" min="2" max="30" value="5"></label>
     <div class="checks"><label><input type="checkbox" name="audio"> With sound</label></div>
     ${cur?.ext === "ecproj" ? `<label>Put it<select name="place"><option value="">Only make the clip</option><option value="at">As a cut-in at…</option><option value="after">As a new scene after…</option></select></label>
     <label data-show="at" hidden>At (seconds)<input type="number" name="at" min="0" step="0.1" value="0"></label>
     <label data-show="after" hidden>After scene (e.g. s2; 0 = first)<input type="text" name="after" value="0"></label>` : ""}`,
   wire: fm => {
-    const body = () => { const r = field(fm, "res").value;
-      return { action: "ai_clip", prompt: field(fm, "prompt").value.trim() || "preview", duration: +field(fm, "dur").value || 5,
-        ...(r === "draft" ? { draft: true } : { resolution: r }) }; };
+    const body = () => ({ action: "ai_clip", prompt: field(fm, "prompt").value.trim() || "preview", duration: +field(fm, "dur").value || 5,
+      engine: field(fm, "engine").value, resolution: field(fm, "res").value });
     const show = () => { const on = new Set([field(fm, "from").value, field(fm, "place")?.value || ""]);
       fm.querySelectorAll("[data-show]").forEach(x => x.hidden = !on.has(x.dataset.show)); };
     let t = null; const go = () => { clearTimeout(t); t = setTimeout(() => aiEstimate(fm, body()), 250); };
@@ -1345,9 +1345,9 @@ const AI_CLIP = { label: "AI clip…", ai: true, show: aiOn, doing: "Generating 
   run: async (id, fm, st) => {
     const prompt = field(fm, "prompt").value.trim();
     if (!prompt) { field(fm, "prompt").focus(); throw new Error("Say what should happen in the clip."); }
-    const r = field(fm, "res").value, from = field(fm, "from").value, place = field(fm, "place")?.value || "";
+    const from = field(fm, "from").value, place = field(fm, "place")?.value || "";
     const body = { file_id: id, prompt, duration: +field(fm, "dur").value || 5, audio: field(fm, "audio").checked,
-      ...(r === "draft" ? { draft: true } : { resolution: r }) };
+      engine: field(fm, "engine").value, resolution: field(fm, "res").value };
     if (from === "frame") body.image = { frame: +field(fm, "at_frame").value || 0 };
     if (from === "pic") body.image = (await readSlot(fm, "pic", "the first-frame picture"))[0];
     if (place === "at") body.at = +field(fm, "at").value || 0;
@@ -1359,16 +1359,7 @@ const AI_CLIP = { label: "AI clip…", ai: true, show: aiOn, doing: "Generating 
     if (res.timeline_error) toast(res.timeline_error);
     const to = res.timeline?.file_id || res.file_id;
     return { file_id: to, view: res.timeline ? "edit" : "preview",
-      msg: `${res.draft ? "Draft" : "Clip"} ready — ${res.credits_charged} credits${res.draft ? ". Like it? Make it final from the clip's AI panel." : ""}` };
-  } };
-const AI_FINAL = { label: "Make final (1080p)", ai: true, doing: "Making the final 1080p clip…", hint: "The same shot as the draft, at 1080p",
-  show: () => aiOn() && /\(draft\)/.test(cur?.label || cur?.name || ""),
-  run: async (id, fm, st) => {
-    const meta = await api(`/api/ai/draft-of?file_id=${encodeURIComponent(id)}`);
-    const job = await api("/api/ai/clip", { method: "POST", body: JSON.stringify({ finalize: meta.task_id }) });
-    const res = await pollJob(job, () => "Making the final 1080p clip…", st);
-    await loadAccount();
-    return { file_id: res.file_id, view: "preview", msg: `Final clip ready — ${res.credits_charged} credits` };
+      msg: `Clip ready — ${res.credits_charged} credits` };
   } };
 const QUICK = [
   { title: "PDF tools", exts: EXT.pdf, uses: ["deck", "scan"], covers: ["pdf"], items: [
@@ -1429,7 +1420,7 @@ const QUICK = [
     { label: "Quick draft", doing: "Rendering a quick draft…", hint: "Half size — to check the timing fast", run: id => videoRender(id, true) },
     AI_CLIP, AI_ENHANCE,
   ] },
-  { title: "Video", exts: EXT.video, uses: [], covers: [], center: false, when: () => Promise.resolve(aiOn()), items: [AI_FINAL, AI_CLIP, AI_ENHANCE] },
+  { title: "Video", exts: EXT.video, uses: [], covers: [], center: false, when: () => Promise.resolve(aiOn()), items: [AI_CLIP, AI_ENHANCE] },
   // Pakli / Word: a képek cseréje a KÉPVÁLASZTÓVAL (a jobb oldali fiókban). A sáv csak akkor látszik, ha van kép a fájlban;
   // a „Kérj változtatást” után magától nyílik az új/kicserélt képre. center:false — ettől még nem a szerkesztő a nyitónézet.
   { title: "Pictures", exts: ["pptx", "docx"], uses: [], covers: [], center: false,
@@ -1921,7 +1912,7 @@ const MAKERS = {
           <option value="60">1 minute</option><option value="90">1½ minutes</option></select></label>
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Pictures</legend>
           ${seg("vpicmode", [["stock", "Stock photos"], ["ai", "AI photos"], ["mine", "Only mine"], ["none", "No pictures"]], 0)}
-          <p class="muted small" data-vpic-ai hidden style="margin:6px 0 0">${account?.guest ? "AI photos need a free account." : `A new photo for every scene, made from its subject — ${account?.image_credit_cost ?? 1} credit each (about one per 5 seconds of video).`}</p></fieldset>
+          <p class="muted small" data-vpic-ai hidden style="margin:6px 0 0">${account?.guest ? "AI photos need a free account." : `A new photo for every scene, made from its subject — ${account?.image_credit_cost ?? 3} credits each (about one per 5 seconds of video).`}</p></fieldset>
         ${fileSlot("vpics", { exts: EXT.image, multiple: true, label: "Your pictures (optional — used in order)" })}
         ${fileSlot("vdata", { exts: ["csv", "tsv", "xlsx", "xls"], label: "Data for animated charts (optional — a spreadsheet)" })}
         <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;font-size:13px;margin-bottom:6px">Voice</legend>
@@ -2000,7 +1991,7 @@ const MAKERS = {
       <div data-mode="new" hidden>${blankFields("photo")}</div>
       <div data-mode="open" hidden><p class="muted small" style="margin:-4px 0 12px">Opens in the photo editor — layers, selections, adjustments, text, like in Photoshop.</p></div>
       <div data-mode="restore" hidden>
-        <p class="muted small" style="margin:0 0 10px">Scratches, dust, stains, tears, fading and blur are repaired. Photograph a whole album page and every picture on it is found and straightened. The original stays as the bottom layer, so anything the AI got wrong can be brought back. <em class="ai-badge">AI</em> ${account?.image_credit_cost ?? 1} credit per photo, +${account?.image_credit_cost ?? 1} to colourise.</p>
+        <p class="muted small" style="margin:0 0 10px">Scratches, dust, stains, tears, fading and blur are repaired. Photograph a whole album page and every picture on it is found and straightened. The original stays as the bottom layer, so anything the AI got wrong can be brought back. <em class="ai-badge">AI</em> ${account?.edit_credit_cost ?? 2} credits per photo, +${account?.edit_credit_cost ?? 2} to colourise.</p>
         <div class="checks"><label><input type="checkbox" name="colorize" checked> Colourise black-and-white photos</label>
         <label><input type="checkbox" name="split" checked> Several pictures on one photo — find each one</label></div></div>
       <div data-mode="edit">
@@ -2263,7 +2254,7 @@ MAKERS.infographic = {
 const REBUILD_MODE = { value: "rebuild", label: "Rebuild from a picture", cta: "Rebuild it",
   fields: () => `<p class="muted small" style="margin:-4px 0 12px">A photo, screenshot or PDF of a poster, flyer or social graphic comes back as the same design — every word a real text box, solid blocks as shapes, photos and logos as movable pictures. <em class="ai-badge">AI</em></p>
     ${fileSlot("rebuild-file", { exts: [...EXT.image, "pdf"], label: "The design — a photo, screenshot or PDF of it" })}
-    <div class="checks"><label><input type="checkbox" name="ai_clean"> Also wipe the old text off the background with AI — for busy photo backgrounds (${account?.image_credit_cost ?? 1} credit)</label></div>`,
+    <div class="checks"><label><input type="checkbox" name="ai_clean"> Also wipe the old text off the background with AI — for busy photo backgrounds (${account?.edit_credit_cost ?? 2} credits)</label></div>`,
   async submit(fd, form) {
     if (account?.guest) throw needAccount();
     const [id] = await readSlot(form, "rebuild-file", "a photo, screenshot or PDF of the design");

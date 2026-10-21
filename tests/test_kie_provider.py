@@ -19,21 +19,28 @@ import pytest
 def test_field_mapping_per_model():
     from app.providers import ProviderError
     from app.providers.kie import map_input
-    got = map_input("bytedance/seedance-2-5", {"prompt": "a cat", "duration": "5", "resolution": "480p", "audio": 0,
-                                               "first_frame": "https://x/f.jpg", "draft": True})
-    assert got == {"prompt": "a cat", "duration": 5, "resolution": "480p", "generate_audio": False,
-                   "first_frame_url": "https://x/f.jpg", "draft": True}
+    got = map_input("wan/3-0-video", {"prompt": "a cat", "duration": "5", "resolution": "480p", "audio": 0,
+                                      "first_frame": "https://x/f.jpg", "aspect": "9:16", "nsfw_checker": 1})
+    assert got == {"prompt": "a cat", "duration": 5, "resolution": "480P", "audio": False,
+                   "first_frame_url": "https://x/f.jpg", "aspect_ratio": "9:16", "nsfw_checker": True}
+    assert map_input("wan/3-0-video-prime", {"reference_images": ["a", "b"]}) == {"reference_image_urls": ["a", "b"]}
     assert map_input("topaz/video-upscale", {"video": "https://x/v.mp4", "factor": 2}) == \
         {"video_url": "https://x/v.mp4", "upscale_factor": "2"}
-    assert map_input("bytedance/seedance-2-5", {"generate_audio": True}) == {"generate_audio": True}   # a modell saját neve is
+    assert map_input("wan/3-0-video", {"aspect_ratio": "1:1"}) == {"aspect_ratio": "1:1"}   # a modell saját neve is
+    assert map_input("flux-2/pro-text-to-image", {"prompt": "p", "aspect": "16:9", "resolution": "2K"}) == \
+        {"prompt": "p", "aspect_ratio": "16:9", "resolution": "2K"}
+    assert map_input("flux1-kontext", {"prompt": "p", "image": "u", "kontext_model": "flux-kontext-pro"}) == \
+        {"prompt": "p", "input_image": "u", "model": "flux-kontext-pro"}
     with pytest.raises(ProviderError, match="doesn't take"):
         map_input("topaz/video-upscale", {"video": "u", "resolution": "1080p"})
+    with pytest.raises(ProviderError, match="doesn't take"):
+        map_input("wan/3-0-video", {"prompt": "x", "draft": True})          # a Seedance mezője: nem megy ki
     with pytest.raises(ProviderError, match="can't be mixed"):
-        map_input("bytedance/seedance-2-5", {"first_frame": "a", "reference_images": ["b"]})
+        map_input("wan/3-0-video", {"first_frame": "a", "reference_images": ["b"]})
     with pytest.raises(ProviderError, match="first frame"):
-        map_input("bytedance/seedance-2-5", {"last_frame": "a"})
+        map_input("wan/3-0-video", {"last_frame": "a"})
     with pytest.raises(ProviderError, match="mapping table"):
-        map_input("bytedance/seedance-9", {"prompt": "x"})
+        map_input("bytedance/seedance-2-5", {"prompt": "x"})
 
 
 _REAL_CLIENT = httpx.AsyncClient

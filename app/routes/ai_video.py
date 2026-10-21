@@ -7,8 +7,7 @@
     GET  /api/ai/config            be van-e kapcsolva, választható értékek
     POST /api/ai/estimate          ár (Studio-kredit) — a gombon
     POST /api/ai/enhance           Topaz minőségjavítás → job (új változat)
-    POST /api/ai/clip              Seedance klip → job (draft, véglegesítés, a timeline-ra: at / after_scene)
-    GET  /api/ai/draft-of          egy fájl AI-feladata (a draft véglegesítéséhez)
+    POST /api/ai/clip              AI-klip (Wan 3.0, motorválasztással) → job (a timeline-ra: at / after_scene)
 """
 from __future__ import annotations
 
@@ -40,10 +39,14 @@ logging.getLogger("uvicorn.access").addFilter(_NoWebhookToken())
 
 
 def _fail(e: Exception) -> HTTPException:
-    from app import db
+    from app import credits, db
     from app.tools import ai_video
     if isinstance(e, HTTPException):
         return e
+    if isinstance(e, credits.PaidCreditsOnly):
+        return HTTPException(402, {"error": "paid_credits_only", "needed": e.needed, "available": e.available,
+                                   "message": f"AI video runs on paid credits only: this needs {e.needed}, you have "
+                                              f"{e.available} paid credits. Buy a credit pack or subscribe in Plans."})
     if isinstance(e, db.InsufficientCredits):
         return HTTPException(402, {"error": "insufficient_credits", "needed": e.needed, "available": e.available,
                                    "message": f"This needs {e.needed} credits — you have {e.available}. Add credits in Plans."})
@@ -108,6 +111,8 @@ async def ai_config() -> dict[str, Any]:
     from app import providers
     from app.tools import ai_video
     return {"enabled": providers.enabled_for() and not tenancy.is_guest(), "resolutions": list(ai_video.RESOLUTIONS),
+            "resolution": ai_video.DEFAULT_RESOLUTION, "engine": ai_video.DEFAULT_ENGINE,
+            "engines": [{"id": e, "label": label} for e, (_, label) in ai_video.CLIP_ENGINES.items()],
             "aspects": list(ai_video.ASPECTS), "duration": [ai_video.CLIP_MIN_S, ai_video.CLIP_MAX_S],
             "factors": list(ai_video.FACTORS)}
 
@@ -140,19 +145,10 @@ async def ai_enhance(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/api/ai/clip")
 async def ai_clip(body: dict[str, Any]) -> dict[str, Any]:
-    """{prompt, resolution?, duration?, audio?, aspect?, draft?, image? | first_frame? (+ last_frame?) — file_id vagy
-    {frame: mp} a file_id videójából —, reference_*?, finalize?: draft task_id, file_id?: a projekt, at? | after_scene?} → job."""
+    """{prompt, engine?, resolution?, duration?, audio?, aspect?, image? | first_frame? (+ last_frame?) — file_id vagy
+    {frame: mp} a file_id videójából —, reference_*?, file_id?: a projekt, at? | after_scene?} → job."""
     from app.tools import ai_video
     try:
         return await ai_video.start_clip({k: v for k, v in body.items() if k != "file_id"}, project=body.get("file_id"))
-    except Exception as e:
-        raise _fail(e)
-
-
-@router.get("/api/ai/draft-of")
-async def ai_task_of_file(file_id: str) -> dict[str, Any]:
-    from app.tools import ai_video
-    try:
-        return await ai_video.task_of_file(file_id)
     except Exception as e:
         raise _fail(e)

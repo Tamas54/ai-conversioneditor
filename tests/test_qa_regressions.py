@@ -646,7 +646,7 @@ def test_restore_photos_layers_and_jpg(client, samples, put_file, monkeypatch):
     from app.tools import restore
     prompts = []
 
-    async def fake_kontext(src, prompt):                        # a FLUX Kontext hívás helyett: „helyreállított” kép
+    async def fake_kontext(src, prompt, bill=None):             # a FLUX Kontext hívás helyett: „helyreállított” kép
         prompts.append(prompt)
         with Image.open(src) as im:
             out = im.convert("RGB").filter(ImageFilter.SMOOTH_MORE)

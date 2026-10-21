@@ -89,8 +89,11 @@ def _probe(path):
 
 
 def _user(call, n):
+    """n FIZETETT kredit (az élesítés csak abból foglalhat: credits.PAID_ONLY_OPS)."""
     from app import db
-    u = call(db.user_create, f"{secrets.token_hex(6)}@example.com", "jelszó123456", None, n)
+    from paid import add_paid
+    u = call(db.user_create, f"{secrets.token_hex(6)}@example.com", "jelszó123456", None, 0)
+    add_paid(call, u["id"], n)
     return u["id"], call(db.api_key_create, u["id"], "mcp")["key"]
 
 
@@ -136,10 +139,10 @@ def test_enhance_makes_a_new_version_with_the_original_sound(db_client, prov, tm
     uid, _ = _user(call, 20)
     fid = _put_as(uid, _clip(tmp_path))
     job, j = _run_job(call, prov, uid, lambda: ai_video.start_enhance(fid, 2))
-    assert job["estimate"]["credits"] >= 4                       # 3 s × 8 × 0.15 = 3.6 → 4 (foglalva)
+    assert job["estimate"]["credits"] == 8                       # 3 s × 8 kie-kredit × padló = 7,6 → 8 (foglalva)
     assert j["status"] == "done", j.get("error")
     r = j["result"]
-    assert r["credits_charged"] == 4 and r["made_from"] == fid and r["label"] == "konyha (enhanced 2x).mp4"
+    assert r["credits_charged"] == 8 and r["made_from"] == fid and r["label"] == "konyha (enhanced 2x).mp4"
     tok = tenancy.set_user(uid)
     try:
         info = _probe(output_path(r["file_id"]))
@@ -147,7 +150,7 @@ def test_enhance_makes_a_new_version_with_the_original_sound(db_client, prov, tm
         assert read_meta(r["file_id"])["source_file_id"] == fid               # a forrás új változata (verziófa)
     finally:
         tenancy.reset(tok)
-    assert call(db.user_get, uid)["credits"] == 16
+    assert call(db.user_get, uid)["credits"] == 12
 
 
 def test_big_input_goes_in_parts_and_comes_back_whole(db_client, prov, tmp_path, monkeypatch):
@@ -160,7 +163,7 @@ def test_big_input_goes_in_parts_and_comes_back_whole(db_client, prov, tmp_path,
     src = _clip(tmp_path, secs=8, size="640x360", gop=25)            # telefonos felvétel: másodpercenként kulcskocka
     assert src.stat().st_size > 0.06 * 1024 * 1024
     fid = _put_as(uid, src)
-    _, j = _run_job(call, prov, uid, lambda: ai_video.start_enhance(fid, 1))
+    job, j = _run_job(call, prov, uid, lambda: ai_video.start_enhance(fid, 1))
     assert j["status"] == "done", j.get("error")
     assert len(prov.tasks) >= 2                                     # több szolgáltatói feladat, egy felhasználói művelet
     tok = tenancy.set_user(uid)
@@ -169,7 +172,7 @@ def test_big_input_goes_in_parts_and_comes_back_whole(db_client, prov, tmp_path,
     finally:
         tenancy.reset(tok)
     assert abs(info["dur"] - 8) < 0.6 and (info["w"], info["h"]) == (640, 360) and info["audio"]
-    assert j["result"]["credits_charged"] == min(j["result"]["credits_charged"], 10)    # sosem több a foglaltnál
+    assert 0 < j["result"]["credits_charged"] <= job["estimate"]["credits"]           # sosem több a foglaltnál
 
 
 def test_failed_enhance_costs_nothing(db_client, prov, tmp_path):
@@ -195,15 +198,15 @@ def test_enhance_over_mcp_estimate_and_insufficient(db_client, prov, tmp_path):
                                                         "params": {"name": "video", "arguments": args}}).json()["result"]
         t = res["content"][0]["text"]
         return res.get("isError"), (json.loads(t) if t.startswith("{") else t)
-    uid, key = _user(call, 5)
+    uid, key = _user(call, 10)
     fid = _put_as(uid, _clip(tmp_path))
     err, est = mcp(key, {"action": "estimate", "file_id": fid, "factor": 4})
-    assert not err and est["credits"] >= 7 and est["balance"] == 5             # ≥ 3 s × 14 × 0.15 = 6.3 → 7
+    assert not err and est["credits"] == 14 and est["balance"] == 10            # 3 s × 14 × padló = 13,4 → 14
     err, text = mcp(key, {"action": "enhance", "file_id": fid, "factor": 4})
-    assert err and "insufficient_credits" in text and f"needs {est['credits']}" in text and "have 5" in text
-    assert prov.tasks == {} and call(db.user_get, uid)["credits"] == 5          # semmi nem indult
+    assert err and "insufficient_credits" in text and f"needs {est['credits']}" in text and "have 10" in text
+    assert prov.tasks == {} and call(db.user_get, uid)["credits"] == 10         # semmi nem indult
     err, job = mcp(key, {"action": "enhance", "file_id": fid, "factor": 2})
-    assert not err and job["status"] == "running" and job["estimate"]["credits"] <= 5
+    assert not err and job["status"] == "running" and job["estimate"]["credits"] == 8
 
     async def finish():
         from app import jobs

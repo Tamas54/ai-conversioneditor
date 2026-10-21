@@ -412,13 +412,14 @@ async def api_account(request: Request) -> dict:
     if user:                       # a csatlakoztatott AI-k (MCP) lépései a szerver saját modelljén
         usage["ai_steps"] = {"used": await db.usage_get(uid, month, "ai_steps"), "limit": billing.PLANS[plan]["ai_steps"]}
     base = settings.PUBLIC_BASE_URL.rstrip("/")
+    from app.tools import ai_image
     return {
         "guest": guest, "guest_max_upload_mb": GUEST_MAX_UPLOAD_MB if guest else None,
         "plan": plan, "plan_name": billing.PLANS[plan]["name"], "usage": usage, "billing_enabled": billing.enabled(),
         "has_subscription": bool((user or {}).get("stripe_customer_id")),
         "id": uid, "email": (user or {}).get("email"), "name": (user or {}).get("name") or ("Admin" if uid == tenancy.ADMIN_ID else None),
         "is_admin": uid == tenancy.ADMIN_ID, "credits": None if uid == tenancy.ADMIN_ID else (user or {}).get("credits", 0),
-        "image_credit_cost": settings.IMAGE_CREDIT_COST,
+        "image_credit_cost": ai_image.picture_price(), "edit_credit_cost": ai_image.edit_price(),
         "ai_video": _ai_video_on(uid),
         "ocr_max_pages": 1000 if uid == tenancy.ADMIN_ID else settings.OCR_MAX_PAGES,
         "keys": await db.api_key_list(uid) if db.enabled() and not guest else [],

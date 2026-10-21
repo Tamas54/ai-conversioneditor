@@ -364,8 +364,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "generate_image",
             "description": (
-                "Generate an image from a text prompt via SiliconFlow image-gen "
-                "(FLUX.2-pro by default). Returns image_file_id usable in "
+                "Generate an image from a text prompt (FLUX.2 [pro]; costs the "
+                "user credits). Returns image_file_id usable in "
                 "insert_image / pptx_add_slide-with-image. Use for: missing "
                 "figures, conceptual illustrations, decorative covers, icons, "
                 "diagrams that don't need to be data-driven (use charts for those). "
@@ -380,10 +380,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "prompt": {"type": "string"},
                     "size": {"type": "string", "enum": ["1024x1024", "1792x1024", "1024x1792"]},
-                    "model": {
-                        "type": "string",
-                        "description": "Default FLUX.2-pro. Alternatives: 'black-forest-labs/FLUX.1-schnell' (faster), 'Qwen/Qwen-Image'.",
-                    },
                 },
                 "required": ["prompt"],
             },
@@ -2764,11 +2760,7 @@ async def _tool_find_stock_photo(state: AgentState, args: dict, pool) -> dict:
 
 
 async def _tool_generate_image(state: AgentState, args: dict, pool) -> dict:
-    return await vision_ops.generate_image(
-        args["prompt"],
-        model=args.get("model", "black-forest-labs/FLUX.2-pro"),
-        size=args.get("size", "1024x1024"),
-    )
+    return await vision_ops.generate_image(args["prompt"], size=args.get("size", "1024x1024"))
 
 
 async def _tool_ocr_image(state: AgentState, args: dict, pool) -> dict:

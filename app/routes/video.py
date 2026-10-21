@@ -63,13 +63,13 @@ async def make_video(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(400, str(e))
     if str(body.get("pictures") or "").lower() == "ai" and not tenancy.client_makes_images.get():
         # AI-fotók: a munka ELŐTT kiderüljön, ha nincs rá kredit (a pakli ugyanígy) — becsült darabszám: címkép + jelenetek
-        from app.config import settings
         from app.routes.make import _credits_left
+        from app.tools import ai_image
         n = 1 + (len(body.get("scenes") or []) or max(2, min(12, round(((float(body.get("duration") or 60)) - 7) / 6.5))))
-        left = await _credits_left()
-        if left is not None and left < n * settings.IMAGE_CREDIT_COST:
-            raise HTTPException(402, f"AI photos for this video need about {n * settings.IMAGE_CREDIT_COST} credits "
-                                     f"({settings.IMAGE_CREDIT_COST} per picture); you have {left}. Choose stock photos or add credits.")
+        left, per = await _credits_left(), ai_image.picture_price()
+        if left is not None and left < n * per:
+            raise HTTPException(402, f"AI photos for this video need about {n * per} credits "
+                                     f"({per} per picture); you have {left}. Choose stock photos or add credits.")
 
     async def work(progress):
         try:

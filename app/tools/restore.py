@@ -18,16 +18,14 @@ Mérve 10-11 (szintetikus 1950-es családi fotó, ismert tiszta eredetivel; SSIM
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from app.config import settings
 
 log = logging.getLogger("aice.restore")
 
-MODEL = "black-forest-labs/FLUX.1-Kontext-pro"
+MODEL = "flux1-kontext"                 # FLUX.1 Kontext [pro] a kie.ai-n (app/tools/ai_image.py)
 _KEEP = ("Keep exactly the same people, faces, expressions, poses, hands, clothing, background and framing; "
          "do not add, remove or reinterpret anything.")
 PROMPT_RESTORE = ("Restore this damaged old photograph: remove scratches, cracks, dust spots, stains and creases, repair torn "
@@ -132,45 +130,13 @@ def trim_border(img):
 
 # ---------- AI-lépés + ráillesztés ----------
 
-async def _kontext(src: Path, prompt: str) -> bytes:
-    import httpx
-    from PIL import Image
-    with Image.open(src) as im:
-        w, h = im.size
-    ratio = w / h
-    aspect = min(("21:9", 21 / 9), ("16:9", 16 / 9), ("3:2", 1.5), ("4:3", 4 / 3), ("1:1", 1.0), ("3:4", 0.75), ("2:3", 2 / 3),
-                 ("9:16", 9 / 16), ("9:21", 9 / 21), key=lambda a: abs(a[1] - ratio))[0]
-    data = "data:image/png;base64," + base64.b64encode(_png_for_model(src)).decode()
-    last: Exception = RuntimeError("no answer")
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=300) as c:
-                r = await c.post(f"{settings.SILICONFLOW_BASE_URL}/images/generations",
-                                 headers={"Authorization": f"Bearer {settings.SILICONFLOW_API_KEY}"},
-                                 json={"model": MODEL, "prompt": prompt, "input_image": data, "aspect_ratio": aspect})
-                if r.status_code >= 500:
-                    raise RuntimeError(f"{r.status_code} {r.text[:200]}")
-                r.raise_for_status()
-                img = (r.json().get("images") or r.json().get("data"))[0]
-                g = await c.get(img["url"], timeout=60)     # ugyanabban a kliensben (az aláírt link érzékeny)
-                g.raise_for_status()
-                return g.content
-        except Exception as e:
-            last = e
-            await asyncio.sleep(3 * (attempt + 1))
-    raise RuntimeError(f"The restoration service did not answer: {last}")
-
-
-def _png_for_model(src: Path) -> bytes:
-    """≤ 1600 px PNG (a modell úgyis ~1 MP-en dolgozik; a nagy szken csak lassít)."""
-    import io
-    from PIL import Image
-    with Image.open(src) as im:
-        im = im.convert("RGB")
-        im.thumbnail((1600, 1600))
-        buf = io.BytesIO()
-        im.save(buf, "PNG")
-        return buf.getvalue()
+async def _kontext(src: Path, prompt: str, bill=None) -> bytes:
+    """FLUX.1 Kontext [pro] a kie.ai-n (app/tools/ai_image.py); bill: a fizetős művelet számlája (ai_image.paid)."""
+    from app.tools import ai_image
+    try:
+        return await ai_image.kontext(src, prompt, bill)
+    except Exception as e:
+        raise RuntimeError(f"The restoration service did not answer: {e}") from e
 
 
 def align(ref: Path, moving: bytes, dst: Path) -> int:
@@ -220,20 +186,6 @@ def _is_mono(path: Path) -> bool:
     return float(np.std(hsv[:, :, 0][hsv[:, :, 1] > 40])) < 12 if (hsv[:, :, 1] > 40).mean() > 0.05 else True
 
 
-async def _charge(n: int, ref: str, reason: str = "photo restoration") -> bool:
-    from app import db, tenancy
-    uid = tenancy.current_user_id()
-    charged = db.enabled() and uid != tenancy.ADMIN_ID and settings.IMAGE_CREDIT_COST > 0
-    if charged:
-        await db.credits_spend(uid, settings.IMAGE_CREDIT_COST * n, reason, ref=ref)
-    return charged
-
-
-async def _refund(n: int, ref: str) -> None:
-    from app import db, tenancy
-    await db.credits_add(tenancy.current_user_id(), settings.IMAGE_CREDIT_COST * n, "refund: restoration failed", ref=ref)
-
-
 async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_id: str,
                         layers_out: Optional[list] = None) -> list[dict[str, Any]]:
     """Egy papírkép → PSD (eredeti + helyreállított + szín) és JPG. colorize=None: fekete-fehérnél igen.
@@ -243,23 +195,19 @@ async def restore_print(src: Path, colorize: Optional[bool], stem: str, source_i
     from app.tools import crafts
     mono = await asyncio.to_thread(_is_mono, src)
     color = mono if colorize is None else (colorize and mono)
-    steps = 3 if color else 2           # árazás 10-11: helyreállítás 2, színezés +1 (kredit ≈ €0,10; önktsg 4 ¢ / lépés)
-    charged = await _charge(steps, stem)
+    from app.tools import ai_image
+    calls = 2 if color else 1           # Kontext-hívásonként a listaár (helyreállítás, + színezés); hibánál semmi
     work = src.parent
-    try:
+    async with ai_image.paid("ai_edit", calls * ai_image.edit_price(), f"restore:{stem}") as bill:
         restored = work / f"{src.stem}-restored.png"
-        raw = await _kontext(src, PROMPT_RESTORE if mono else PROMPT_RESTORE_TONE)
+        raw = await _kontext(src, PROMPT_RESTORE if mono else PROMPT_RESTORE_TONE, bill)
         inliers = await asyncio.to_thread(align, src, raw, restored)
         layers = [("Restored (AI)", restored, None)]
         if color:
             colored = work / f"{src.stem}-colour.png"
-            raw_c = await _kontext(restored, PROMPT_COLOR)
+            raw_c = await _kontext(restored, PROMPT_COLOR, bill)
             await asyncio.to_thread(align, src, raw_c, colored)
             layers.append(("Colour (AI)", colored, "color"))
-    except Exception:
-        if charged:
-            await _refund(steps, stem)
-        raise
     if layers_out is not None:
         layers_out += [("Original", src, None)] + layers
     # PSD: alul az eredeti (Background), felette a beágyazott AI-rétegek, pontosan fedésben

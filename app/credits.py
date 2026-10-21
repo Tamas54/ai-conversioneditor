@@ -55,14 +55,15 @@ def _note(uid: str, delta: int, kind: str, balance: Optional[int]) -> None:
 async def apply(uid: str, delta: int, kind: str, reason: str, *, ref: Optional[str] = None, operation: Optional[str] = None,
                 provider: Optional[str] = None, provider_task_id: Optional[str] = None, provider_cost: Any = None,
                 idempotency_key: Optional[str] = None, meta: Optional[dict[str, Any]] = None,
-                workspace_id: Optional[str] = None, top_up_to: Optional[int] = None) -> dict[str, Any]:
+                workspace_id: Optional[str] = None, top_up_to: Optional[int] = None, paid_only: bool = False) -> dict[str, Any]:
     """Egy könyvsor + az egyenleg, egy tranzakcióban, a felhasználó sorát zárolva. Ugyanaz az idempotency_key másodszor
     nem ír (duplicate=True). Levonás fedezet nélkül → InsufficientCredits (needed, available). top_up_to: a delta a sorzár
-    alatt számolva „legalább ennyire” (ingyenes havi feltöltés). Vissza: {balance, delta, id, duplicate}."""
+    alatt számolva „legalább ennyire” (ingyenes havi feltöltés). paid_only: a levonás csak fizetett kreditből (PaidCreditsOnly).
+    Vissza: {balance, delta, id, duplicate}."""
     res = await apply_many(uid, [dict(delta=delta, kind=kind, reason=reason, ref=ref, operation=operation, provider=provider,
                                       provider_task_id=provider_task_id, provider_cost=provider_cost,
                                       idempotency_key=idempotency_key, meta=meta, workspace_id=workspace_id,
-                                      top_up_to=top_up_to)])
+                                      top_up_to=top_up_to, paid_only=paid_only)])
     return res[0]
 
 
@@ -110,6 +111,10 @@ async def _book(cur, uid: str, bal: int, e: dict[str, Any], out: list[dict[str, 
             return bal
     if delta < 0 and bal + delta < 0:
         raise InsufficientCredits(needed=-delta, available=bal)
+    if delta < 0 and e.get("paid_only"):
+        left = await _paid_left(cur, uid)
+        if -delta > left:
+            raise PaidCreditsOnly(needed=-delta, available=max(0, min(left, bal)))
     bal += delta
     await cur.execute(
         """INSERT INTO credit_ledger (user_id, workspace_id, delta, balance_after, reason, ref, kind, operation,
@@ -120,6 +125,27 @@ async def _book(cur, uid: str, bal: int, e: dict[str, Any], out: list[dict[str, 
          Jsonb(e["meta"]) if e.get("meta") else None))
     out.append({"balance": bal, "delta": delta, "id": (await cur.fetchone())["id"], "duplicate": False, "kind": e["kind"]})
     return bal
+
+
+# A külső AI-videó (kie / fal) csak FIZETETT kreditből (Kommandant 10-21: „semmilyen veszteség”): az ingyenes havi és a
+# kezdő/ajándék kredit mögött nincs bevétel. Fizetett = a Stripe-ból jött jóváírás (kreditcsomag, előfizetés havi
+# kreditje: idempotency_key „stripe:…”); ebből vonódik le minden eddigi PAID_ONLY_OPS-foglalás és -levonás.
+PAID_ONLY_OPS = ("ai_clip", "enhance")
+
+
+class PaidCreditsOnly(InsufficientCredits):
+    def __init__(self, *, needed: int, available: int):
+        super().__init__(f"paid_credits_only: AI video runs on paid credits only (free and welcome credits can't pay for it): "
+                         f"this needs {needed} credits, you have {available} paid credits left.",
+                         needed=needed, available=available)
+
+
+async def _paid_left(cur, uid: str) -> int:
+    await cur.execute(
+        """SELECT COALESCE(sum(delta) FILTER (WHERE delta > 0 AND idempotency_key LIKE 'stripe:%%'), 0)
+                  + COALESCE(sum(delta) FILTER (WHERE kind IN ('hold', 'release', 'capture') AND operation = ANY(%s)), 0) AS left
+           FROM credit_ledger WHERE user_id = %s""", (list(PAID_ONLY_OPS), uid))
+    return int((await cur.fetchone())["left"])
 
 
 async def free_topup(uid: str, month: str, amount: int) -> int:
@@ -183,11 +209,12 @@ def _who(uid: str) -> str:
 
 async def hold(uid: str, amount: int, op_id: str, *, operation: str, provider: Optional[str] = None,
                meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """A becsült maximum lefoglalása (−amount). Admin: nem foglal (a használata a settle-nél kerül a könyvbe)."""
+    """A becsült maximum lefoglalása (−amount). Admin: nem foglal (a használata a settle-nél kerül a könyvbe). A PAID_ONLY_OPS
+    műveletei csak fizetett kreditből foglalhatnak (PaidCreditsOnly)."""
     if _who(uid) == "admin" or not db.enabled() or amount <= 0:
         return {"balance": await balance(uid), "held": 0}
     r = await apply(uid, -int(amount), "hold", f"{operation} (reserved)", operation=operation, provider=provider,
-                    idempotency_key=f"hold:{op_id}", meta=meta)
+                    idempotency_key=f"hold:{op_id}", meta=meta, paid_only=operation in PAID_ONLY_OPS)
     return {"balance": r["balance"], "held": int(amount) if not r["duplicate"] else 0}
 
 
@@ -232,21 +259,60 @@ async def release(uid: str, op_id: str, held: int, *, operation: str, provider: 
 
 _rules_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
 _RULES_TTL_S = 30
-# Studio-kredit / kie-kredit (a haszonnal együtt). 1 kie-kredit = $0.005 ≈ €0.0046; a legolcsóbban eladott Studio-kredit a
-# Pro csomagé (€19 / 400 = €0.0475, ÁFÁ-val együtt) → 0.15-nél a Pro-kreditből is ~1.2–1.5× az önköltség, a kreditcsomagból
-# (€0.10) ~3×. Tulajdonosi döntés: KIE_CREDIT_MULTIPLIER (vagy soronként az adminban).
-# FIGYELEM: csak az induló (még nem létező) sorokba kerül be — a meglévő árakat az admin-felületen kell módosítani.
-KIE_MULTIPLIER = float(os.getenv("KIE_CREDIT_MULTIPLIER", "0.15"))
+
+# Veszteség soha (Kommandant 10-21): minden külső (kie / fal) ár = a szolgáltató költsége × MARKUP ÷ a legkevesebb, ami egy
+# eladott krediten nálunk marad (credit_floor_eur: minden csomag és kreditcsomag közül a legrosszabb, a legmagasabb ÁFÁ-val
+# és a legdrágább kártyadíjjal). Így a legolcsóbban eladott kreditből vett AI-n is legalább MARKUP-szoros a fedezet. A sor
+# szorzóját az admin emelheti, ez alá nem mehet (price() is ide emel); a gépi invariáns: tests/test_pricing_floor.py.
+MARKUP = 2.0
+USD_EUR = 0.95                      # tartalék az euró gyengülésére (EKB 2026-10-21: 0,89)
+VAT_MAX = 0.27                      # a legmagasabb uniós ÁFA (HU) — az áraink bruttók
+CARD_FEE = (0.0325, 0.25)           # Stripe, a legdrágább (nem EGT-s) kártya: 3,25% + €0,25 terhelésenként
+USD_PER_UNIT = {"kie": 0.005, "fal": 1.0}       # a szolgáltató egysége dollárban (1 kie-kredit = $0.005; a fal dollárban)
+
+
+def credit_floor_eur() -> float:
+    """A legkevesebb euró, ami egy eladott kreditből ÁFA és kártyadíj után nálunk marad: a havi és az éves csomagok (az
+    éves 12 havi kerettel) és a kreditcsomagok közül a legrosszabb — a csomagárakból számolva, hogy kövesse a változást."""
+    from app import billing
+
+    def net(gross: float) -> float:
+        return gross / (1 + VAT_MAX) - (gross * CARD_FEE[0] + CARD_FEE[1])
+    per = [net(p["month"]) / p["monthly_credits"] for p in billing.PLANS.values() if p.get("month")]
+    per += [net(p["year"]) / (12 * p["monthly_credits"]) for p in billing.PLANS.values() if p.get("year")]
+    per += [net(p["price"]) / p["credits"] for p in billing.PACKS.values()]
+    return min(per)
+
+
+def provider_of(rule: dict[str, Any]) -> Optional[str]:
+    """A szabály szolgáltatója — ha a sorból hiányzik (kézzel / adminból mentve), a modell nevéből (kie / fal árlap):
+    a padló így sem kerülhető meg."""
+    if rule.get("provider"):
+        return rule["provider"]
+    from app.providers import fal, kie
+    model = rule.get("model") or ""
+    return "kie" if model in kie.MODELS else "fal" if model in fal.MODELS else None
+
+
+def floor_multiplier(provider: Optional[str]) -> float:
+    """Studio-kredit / szolgáltatói egység, ami alá egy külső ár nem mehet (0: nem külső szolgáltató)."""
+    usd = USD_PER_UNIT.get(provider or "")
+    return usd * USD_EUR * MARKUP / credit_floor_eur() if usd else 0.0
 
 
 def default_rules() -> list[dict[str, Any]]:
-    """A szolgáltatói modellek induló árai (a kie és a fal ellenőrzött árlapjából: app/providers/kie.py és fal.py PRICES).
-    A fal dollárban számláz: ugyanaz a Studio-kredit / dollár arány, mint a kie-nél (1 kie-kredit = $0.005)."""
+    """A szolgáltatói modellek induló árai (a kie és a fal ellenőrzött árlapjából: app/providers/kie.py és fal.py PRICES),
+    a szorzó a padló (floor_multiplier)."""
     from app.providers import fal, kie
     return [{"operation": op, "model": model, "tier": tier, "unit": unit, "provider": name, "provider_cost": cost,
-             "multiplier": mult, "min_charge": 1, "note": note}
-            for name, prices, mult in (("kie", kie.PRICES, KIE_MULTIPLIER), ("fal", fal.PRICES, KIE_MULTIPLIER / 0.005))
+             "multiplier": floor_multiplier(name), "min_charge": 1, "note": note}
+            for name, prices in (("kie", kie.PRICES), ("fal", fal.PRICES))
             for op, model, tier, unit, cost, note in prices]
+
+
+def list_price(provider: str, cost: float, units: float = 1) -> int:
+    """Egy rögzített (nem adminból szerkesztett) külső ár, pl. egy AI-kép: ugyanaz a képlet, mint a szabályoké."""
+    return price({"provider": provider, "provider_cost": cost, "multiplier": floor_multiplier(provider), "min_charge": 1}, units)
 
 
 def _num(v: Any) -> float:
@@ -254,18 +320,31 @@ def _num(v: Any) -> float:
 
 
 async def seed_rules(rules: Optional[list[dict[str, Any]]] = None) -> int:
-    """Induló árak — csak ami még nincs (az admin módosítása megmarad). Vissza: hány sor jött létre."""
+    """Induló árak: ami még nincs, létrejön; a meglévő sor szorzója és szolgáltatói költsége legalább a kódbeli lesz (az admin
+    emelése megmarad, a padló alatti ár nem). A kódból kikerült kie / fal modellek sorai sírkövet kapnak (pl. a Seedance).
+    Vissza: hány sor jött létre."""
     if not db.enabled():
         return 0
     n = 0
-    for r in rules if rules is not None else default_rules():
+    defaults = rules is None
+    for r in default_rules() if defaults else rules:
         got = await db._rows(
             """INSERT INTO pricing_rules (operation, model, tier, unit, provider, provider_cost, multiplier, min_charge, note)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (operation, model, tier) DO NOTHING RETURNING id""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (operation, model, tier) DO UPDATE
+                 SET multiplier = GREATEST(pricing_rules.multiplier, EXCLUDED.multiplier),
+                     provider_cost = GREATEST(pricing_rules.provider_cost, EXCLUDED.provider_cost), updated_at = now()
+                 WHERE pricing_rules.multiplier < EXCLUDED.multiplier OR pricing_rules.provider_cost < EXCLUDED.provider_cost
+               RETURNING (xmax = 0) AS inserted""",
             (r["operation"], r.get("model") or "", r.get("tier") or "", r.get("unit") or "job", r.get("provider"),
              r.get("provider_cost") or 0, r.get("multiplier") if r.get("multiplier") is not None else 1,
              int(r.get("min_charge") or 0), r.get("note")))
-        n += len(got)
+        n += sum(1 for g in got if g["inserted"])
+    if defaults:
+        from app.providers import fal, kie
+        await db._rows("""UPDATE pricing_rules SET deleted_at = now(), updated_at = now()
+                          WHERE provider IN ('kie', 'fal') AND deleted_at IS NULL AND NOT (model = ANY(%s)) RETURNING id""",
+                       ([m for prices in (kie.PRICES, fal.PRICES) for _, m, *_ in prices],))
     _forget_rules()
     return n
 
@@ -303,12 +382,13 @@ async def rule_for(operation: str, model: str = "", tier: str = "") -> Optional[
 
 
 def price(rule: Optional[dict[str, Any]], units: float = 1, provider_units: Optional[float] = None) -> int:
-    """Studio-kredit: ceil(provider_cost × egység × multiplier), legalább min_charge (0 ár: 0, a min_charge sem számít).
+    """Studio-kredit: ceil(provider_cost × egység × multiplier), legalább min_charge (0 ár: 0, a min_charge sem számít); külső
+    szolgáltatónál a szorzó legalább a padló (floor_multiplier) — az adminban elállított sor sem mehet veszteségbe.
     provider_units: a szolgáltató TÉNYLEGES költsége a saját egységében (pl. kie-kredit) — a capture ebből számol."""
     if not rule:
         return 0
     cost = _num(provider_units) if provider_units is not None else _num(rule["provider_cost"]) * max(0.0, float(units))
-    raw = cost * _num(rule["multiplier"])
+    raw = cost * max(_num(rule["multiplier"]), floor_multiplier(provider_of(rule)))
     if raw <= 0:
         return 0
     return max(int(rule.get("min_charge") or 0), math.ceil(raw - 1e-9))
@@ -328,6 +408,12 @@ async def rule_save(r: dict[str, Any]) -> dict[str, Any]:
     for k in ("provider_cost", "multiplier"):
         if r.get(k) is not None and float(r[k]) < 0:
             raise ValueError(f"{k} can't be negative")
+    if not r.get("provider") and provider_of(r):
+        r = {**r, "provider": provider_of(r)}            # egy kie / fal modell sora szolgáltató nélkül sem menthető
+    fl = floor_multiplier(r.get("provider"))
+    if fl and float(r["multiplier"] if r.get("multiplier") is not None else 1) < fl * (1 - 1e-9):   # numeric-kerekítés
+        raise ValueError(f"multiplier: at least {fl:.4f} for {r['provider']} — below that the cheapest credit we sell "
+                         f"(€{credit_floor_eur():.4f} net) wouldn't cover {MARKUP:g}× what the provider charges")
     rows = await db._rows(
         """INSERT INTO pricing_rules (operation, model, tier, unit, provider, provider_cost, multiplier, min_charge, note)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -404,6 +490,9 @@ def insufficient_message(e: InsufficientCredits) -> str:
     from app.config import settings
     if e.needed is None:
         return str(e)
+    if isinstance(e, PaidCreditsOnly):
+        return (f"{e} Nothing was started. Buy a credit pack or subscribe (Plans: "
+                f"{settings.PUBLIC_BASE_URL.rstrip('/')}/app/plans), or choose a cheaper option.")
     return (f"insufficient_credits: this needs {e.needed} credits, you have {e.available}. Nothing was started. Add credits "
             f"(Plans: {settings.PUBLIC_BASE_URL.rstrip('/')}/app/plans) or choose a cheaper option.")
 
@@ -514,6 +603,8 @@ async def start() -> None:
     # már kiszámlázott eredmény nem ragadhat be)
     from app.tools import ai_video
     _tasks.append(asyncio.create_task(ai_video.resume_loop()))
+    from app import billing                     # éves előfizetők: a havi keret havonta
+    _tasks.append(asyncio.create_task(billing.yearly_loop()))
 
 
 async def stop() -> None:

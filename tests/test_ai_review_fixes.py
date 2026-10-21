@@ -7,7 +7,6 @@
  4    a job megszakítása előkészítés közben: a hold visszajár, az op nem ragad a „figyelt” halmazban.
  6    hamis hossz a fejlécben: a valódi hosszat fizeti, és csak a kifizetett másodperceket töltjük fel.
  7    ár nélkül (törölt / 0 szabály) nem indul fizetős feladat.
- 10   más draftjának becslése tilos.
  11   az utófeldolgozás egyszer fut (az eredmény elszámolás ELŐTT a meta-ban).
 """
 from __future__ import annotations
@@ -21,6 +20,7 @@ import subprocess
 
 import pytest
 
+from paid import paid_user
 from test_ai_enhance import UpscaleProv, _clip, _put_as, _user  # noqa: F401
 
 
@@ -78,8 +78,8 @@ def test_cancel_after_launch_keeps_the_hold_and_charges_the_real_cost(db_client,
     prov.finish_all(True)                                                # a kie befejezi és 24 kie-kreditet számláz
     call(ai_video.resume_once)                                           # egy folytatási kör (újraindítás / resume_loop)
     st = call(_as(uid, lambda: ai_video.get(job["task_id"])))
-    assert st["status"] == "cancelled" and st["credits_charged"] == 4    # ceil(24 × 0.15) — a tényleges költség
-    assert call(db.user_get, uid)["credits"] == 16
+    assert st["status"] == "cancelled" and st["credits_charged"] == 8    # ceil(24 × padló) — a tényleges költség
+    assert call(db.user_get, uid)["credits"] == 12
     tok = tenancy.set_user(uid)
     try:
         assert output_path(st["result"]["file_id"]).exists()             # kifizette: a fájljai közé kerül
@@ -154,7 +154,7 @@ def test_job_cancel_while_waiting_follows_the_same_rule(db_client, prov, tmp_pat
     prov.finish_all(True)
     call(ai_video.resume_once)
     st = call(_as(uid, lambda: ai_video.get(job["task_id"])))
-    assert st["status"] == "cancelled" and st["credits_charged"] == 4 and call(db.user_get, uid)["credits"] == 16
+    assert st["status"] == "cancelled" and st["credits_charged"] == 8 and call(db.user_get, uid)["credits"] == 12
 
 
 # ---------- 4: a job megszakítása előkészítés közben ----------
@@ -193,7 +193,7 @@ def test_shared_enhance_finished_by_the_webhook_lands_in_the_owners_workspace(db
     monkeypatch.setattr(ai_video, "POLL_FIRST_S", 60.0)                # a job saját lekérdezése ne előzze meg
     call = db_client.portal.call
     a = call(db.user_create, f"a{os.urandom(3).hex()}@example.com", "jelszó12345", "A", 5)["id"]
-    b = call(db.user_create, f"b{os.urandom(3).hex()}@example.com", "jelszó12345", "B", 20)["id"]
+    b = paid_user(call, 20, "B")
     fid = _put_as(a, _clip(tmp_path))
     call(lambda: sharing.share(a, fid, user_id=b, role="editor"))
     db_client.cookies.clear()
@@ -210,7 +210,7 @@ def test_shared_enhance_finished_by_the_webhook_lands_in_the_owners_workspace(db
     rows = call(lambda: ai_video._rows_of(op))
     out = rows[0]["meta"].get("output") or {}
     assert rows[0]["settled"] and rows[0]["status"] == "success" and out.get("made_from") == fid, rows[0]["error"]
-    assert call(db.user_get, b)["credits"] == 16 and call(db.user_get, a)["credits"] == 5     # B fizet, nem A
+    assert call(db.user_get, b)["credits"] == 12 and call(db.user_get, a)["credits"] == 5     # B fizet, nem A
     assert (tenancy.user_root(a) / "outputs" / out["file_id"]).exists()                         # A munkaterületén
 
 
@@ -225,7 +225,7 @@ def test_shared_enhance_after_the_share_was_revoked_never_writes_into_the_owners
     monkeypatch.setattr(ai_video, "POLL_FIRST_S", 60.0)
     call = db_client.portal.call
     a = call(db.user_create, f"a{os.urandom(3).hex()}@example.com", "jelszó12345", "A", 5)["id"]
-    b = call(db.user_create, f"b{os.urandom(3).hex()}@example.com", "jelszó12345", "B", 20)["id"]
+    b = paid_user(call, 20, "B")
     fid = _put_as(a, _clip(tmp_path))
     call(lambda: sharing.share(a, fid, user_id=b, role="editor"))
     db_client.cookies.clear()
@@ -265,13 +265,14 @@ def test_a_spoofed_header_pays_for_the_real_length_and_uploads_only_that(db_clie
     from app import db
     from app.tools import ai_video, crafts, video
     call = db_client.portal.call
-    uid, _ = _user(call, 40)
+    uid, _ = _user(call, 80)
     src = _spoofed(tmp_path)
     fid = _put_as(uid, src)
     assert call(_as(uid, lambda: video.probe_movie(crafts.existing(fid))))["duration"] < 2      # a fejléc hazudik
     est = call(_as(uid, lambda: ai_video.estimate_enhance(fid, 2)))
-    assert est["seconds"] >= 20 and est["credits"] == 24                                        # 20 s × 8 × 0.15
-    assert call(_as(uid, lambda: ai_video._ref_video_seconds([fid]))) >= 20
+    assert est["seconds"] >= 20 and est["credits"] == 51                                        # 20 s × 8 × padló
+    with pytest.raises(ai_video.AIVideoError, match=r"is 2\d\.\d s"):        # referenciának is a valódi hossz számít
+        call(_as(uid, lambda: ai_video._ref_seconds([fid], "video")))
 
     async def go():
         job = await _as(uid, lambda: ai_video.start_enhance(fid, 2))()
@@ -292,7 +293,7 @@ def test_a_spoofed_header_pays_for_the_real_length_and_uploads_only_that(db_clie
                 return True
             await asyncio.sleep(0.05)
     assert call(done)
-    assert call(db.user_get, uid)["credits"] == 40 - 4                  # a tényleges kie-költség (24 × 0.15), a foglalt 24-en belül
+    assert call(db.user_get, uid)["credits"] == 80 - 8                  # a tényleges kie-költség (24 × padló), a foglalt 51-en belül
 
 
 def test_the_upload_is_cut_to_the_paid_seconds(tmp_path):
@@ -314,18 +315,6 @@ def test_no_price_no_paid_job(db_client, prov):
     with pytest.raises(ai_video.AIVideoError, match="no price"):
         call(_as(uid, lambda: ai_video.reserve("enhance", "topaz/video-upscale", hold=0, meta={})))
     assert call(db.user_get, uid)["credits"] == 30
-
-
-# ---------- 10: más draftja ----------
-
-def test_finalize_estimate_only_for_your_own_draft(db_client, prov):
-    from app.tools import ai_video
-    call = db_client.portal.call
-    a, _ = _user(call, 40)
-    b, _ = _user(call, 40)
-    op = call(_as(a, lambda: ai_video.reserve("ai_clip", ai_video.CLIP_MODEL, hold=17, meta={"units": 4, "tier": "480p"})))
-    with pytest.raises(ai_video.AIVideoError, match="No such AI clip"):
-        call(_as(b, lambda: ai_video.estimate_clip({"finalize": op})))
 
 
 # ---------- 11: az utófeldolgozás egyszer fut ----------
@@ -358,4 +347,4 @@ def test_post_processing_runs_once_even_if_settling_crashes(db_client, prov, mon
         call(lambda: ai_video.poll(rows))
     call(ai_video.resume_once)
     rows = call(lambda: ai_video._rows_of(op))
-    assert ran == [1] and all(r["settled"] for r in rows) and call(db.user_get, uid)["credits"] == 36
+    assert ran == [1] and all(r["settled"] for r in rows) and call(db.user_get, uid)["credits"] == 32

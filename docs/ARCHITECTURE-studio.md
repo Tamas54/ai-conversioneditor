@@ -34,12 +34,15 @@ assumes something the code does differently, it is marked **≠ spec**.
   called from `GET /api/account`). Paid credits arrive by Stripe webhook (`billing._apply`, idempotent via
   `stripe_events`). Admin grant: `POST /api/admin/credits` (`auth.py:api_admin_credits`). 1 credit ≈ €0.10.
 - **Monthly counters**: `usage_monthly(user_id, month, kind, n)`; `db.usage_add` is atomic with an optional limit.
+- **External AI prices** (`credits.py`): credits = provider cost × `MARKUP` (2) ÷ `credit_floor_eur()` — the least we net
+  on a credit we sell (from `billing.PLANS` / `PACKS`, 27% VAT, the dearest card fee). A price row can't go below it.
 - **What charges what** (all skip admin, guests and a DB-less server):
 
   | Path | Mechanism | Where |
   |---|---|---|
-  | AI image (FLUX), web only | `IMAGE_CREDIT_COST` credits, refund on failure | `tools/vision_ops.py:generate_image` |
-  | Photo restore / colourise | credits | `tools/restore.py` |
+  | AI image (FLUX.2 [pro] on kie.ai), web only | list price from the pricing rule, reserve → charge with kie's real cost, nothing on failure | `tools/ai_image.py`, `tools/vision_ops.py:generate_image` |
+  | Photo restore / colourise / retouch / AI text removal (FLUX.1 Kontext [pro] on kie.ai) | the same, per Kontext call | `tools/ai_image.py`, `tools/restore.py` |
+  | AI clip (Wan 3.0) / enhance | estimate reserved, the provider's real cost charged; **paid credits only** | `tools/ai_video.py`, `credits.PAID_ONLY_OPS` |
   | Scan pages | quota, then 1 credit / 20 pages | `billing.scan_pages` (`routes/make.py:make_digitize`, `ops._charge`) |
   | Fact check | credits per `FACTCHECK_CLAIMS_PER_CREDIT` claims | `routes/checks.py:_charge_claims` |
   | AI form recognition | credits | `formkit/deep.py` |

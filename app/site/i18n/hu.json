@@ -2639,18 +2639,23 @@
   "packs_note": "Előfizetés nélkül — nem járnak le.",
   "credits": "kredit",
   "costs_h": "Mibe kerül kredit",
-  "c_image": "AI-kép, AI-háttér, AI-retus",
+  "c_image": "AI-kép vagy AI-háttér (négyzetes, kb. 1 megapixel)",
+  "c_image_large": "AI-kép diára vagy videójelenetbe (nagyobb)",
+  "c_edit": "AI-retus, AI-szövegtörlés",
   "c_restore": "Régi fotó helyreállítása",
   "c_colour": "…és kiszínezése",
   "c_scan": "A havi keret feletti szkennelt oldalak",
   "c_scan_v": "{n} oldalanként 1",
   "c_steps": "A csatlakoztatott AI (ChatGPT, Claude…) havi keret feletti AI-lépései",
   "c_steps_v": "{n} lépésenként 1",
+  "c_clip": "AI-videóklip, 5 másodperc — {engine}",
+  "c_clip_v": "480p {p480} · 720p {p720} · 1080p {p1080}",
+  "ai_note": "Az AI-kép és -videó árát az AI-szolgáltató díjából számoljuk: a legolcsóbban eladott kreditünkön is legalább a költség kétszerese, így az ár követi a szolgáltatót. AI-videóhoz csak fizetett kredit használható (a havi ingyenes és a kezdő kredit nem); a sikertelen feladat semmibe sem kerül.",
   "included": "Minden más — dokumentum, prezentáció, a havi keretbe férő szkennelés, módosítás, PDF-eszközök, átalakítás, szerkesztők — benne van a csomagban.",
   "faq": [
    [
     "Mi az a kredit?",
-    "Egy kredit nagyjából 0,10 €. Kredit csak arra megy el, aminek az elkészítése pénzbe kerül: AI-képre, fotó-helyreállításra, a havi keret feletti szkennelt oldalakra, és a havi keret feletti AI-lépésekre, amikor a saját AI-od dolgozik vele. Minden más benne van a csomagban."
+    "Egy kredit nagyjából 0,10 €. Kredit csak arra megy el, aminek az elkészítése pénzbe kerül: AI-képre és -videóklipre, fotó-helyreállításra, a havi keret feletti szkennelt oldalakra, és a havi keret feletti AI-lépésekre, amikor a saját AI-od dolgozik vele. Minden más benne van a csomagban."
    ],
    [
     "Kell hozzá fiók?",

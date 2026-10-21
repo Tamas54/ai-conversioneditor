@@ -508,8 +508,11 @@ def pricing(lang: str) -> dict[str, Any]:
     eur = lambda x: tr("eur", n=x)  # noqa: E731
     plans = [{"key": k, "name": P_[k]["name"], "price": eur(P_[k].get("month", 0)), "paid": k != "free",
               "year": P_[k].get("year"), "features": plan_features(lang, k)} for k in ("free", "plus", "pro")]
-    costs_ = [(tr("c_image"), str(c["ai_image"])), (tr("c_restore"), str(c["restore"])), (tr("c_colour"), f"+{c['colourise']}"),
-              (tr("c_scan"), tr("c_scan_v", n=c["scan_pages_per_credit"])), (tr("c_steps"), tr("c_steps_v", n=c["ai_steps_per_credit"]))]
+    costs_ = [(tr("c_image"), str(c["ai_image"])), (tr("c_image_large"), str(c["ai_image_large"])), (tr("c_edit"), str(c["ai_edit"])),
+              (tr("c_restore"), str(c["restore"])), (tr("c_colour"), f"+{c['colourise']}")]
+    costs_ += [(tr("c_clip", engine=e["label"]), tr("c_clip_v", **{f"p{r[:-1]}": n for r, n in e["credits"].items()}))
+               for e in c["ai_clip_5s"]]
+    costs_ += [(tr("c_scan"), tr("c_scan_v", n=c["scan_pages_per_credit"])), (tr("c_steps"), tr("c_steps_v", n=c["ai_steps_per_credit"]))]
     crumbs = crumbs_home(lang) + [(t(lang, "nav.pricing"), urls.pricing(lang))]
     p = base_page(lang, "pricing", tr("title", plus=P_["plus"]["month"], pro=P_["pro"]["month"]),
                   tr("desc", plus=P_["plus"]["month"], pro=P_["pro"]["month"]), urls.pricing(lang), alternates(urls.pricing), crumbs,

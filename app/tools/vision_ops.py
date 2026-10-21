@@ -86,32 +86,25 @@ def _image_ext(data: bytes) -> str:
 async def generate_image(
     prompt: str,
     *,
-    model: str = "black-forest-labs/FLUX.2-pro",
     size: str = "1024x1024",
+    **_: Any,
 ) -> dict[str, Any]:
-    """Generate an image from a text prompt. Saves to outputs/ and returns
+    """Generate an image from a text prompt (FLUX.2 [pro] on kie.ai). Saves to outputs/ and returns
     image_file_id ready for insert_image / pptx insertion."""
     t0 = time.time()
-    from app import db, tenancy
+    from app import tenancy
+    from app.tools import ai_image
     if tenancy.client_makes_images.get():          # MCP: a kliens a saját képeszközével generál (nem a mi FLUX-unk)
         raise ValueError(tenancy.CLIENT_IMAGE_MSG)
-    # AI-kép kreditbe kerül (admin korlátlan); hiba esetén visszajár
-    from app.config import settings
-    uid = tenancy.current_user_id()
-    charged = db.enabled() and uid != tenancy.ADMIN_ID and settings.IMAGE_CREDIT_COST > 0
-    if charged:
-        await db.credits_spend(uid, settings.IMAGE_CREDIT_COST, "image_generation", ref=prompt[:80])
-    try:
-        img_bytes = await v.generate_image(prompt, model=model, size=size)
-    except Exception:
-        if charged:
-            await db.credits_add(uid, settings.IMAGE_CREDIT_COST, "refund: image generation failed", ref=prompt[:80])
-        raise
+    model = "FLUX.2-pro"
+    # AI-kép kreditbe kerül (admin: naplózva); hiba esetén a foglalás visszajár
+    async with ai_image.paid("ai_image", ai_image.gen_price(size), prompt) as bill:
+        img_bytes = await ai_image.generate(prompt, size, bill)
     fid = new_file_id(_image_ext(img_bytes))
     with open(output_path(fid), "wb") as f:
         f.write(img_bytes)
     from app.tools import ai_label
-    ai_label.label(output_path(fid), ai_label.GENERATED, f"Generated with AI ({model.split('/')[-1]})")
+    ai_label.label(output_path(fid), ai_label.GENERATED, f"Generated with AI ({model})")
     from app.storage import write_meta
     write_meta(fid, operation="generate_image", label=f"{prompt[:40].strip()}.{fid.rsplit('.', 1)[1]}",
                extra={"prompt": prompt, "model": model, "size": size})

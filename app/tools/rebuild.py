@@ -536,7 +536,7 @@ class _Prep:
     cleared: dict[int, bool]
     shapes: dict[int, str]
     notes: list[str]
-    charged: bool = False
+    charged: int = 0
 
 
 async def _prep_pdf(src: Path, page: int, tmp: Path) -> _Prep:
@@ -586,22 +586,19 @@ async def _prep_image(src: Path, tmp: Path, file_id: str, ai_clean: bool, hint: 
     if not any(it.kind == "text" for it in items):
         raise ValueError("No text found on this picture — rebuild needs a poster, flyer or graphic with text.")
     measures = {i: _measure_text(img, it) for i, it in enumerate(items) if it.kind == "text"}
-    notes, charged = [], False
+    notes, charged = [], 0
     if ai_clean:                                        # kérésre: a Kontext tünteti el a szöveget (kreditbe kerül)
-        from app.tools import restore
-        charged = await restore._charge(1, f"rebuild:{file_id}", "AI text removal")
-        try:
+        from app.tools import ai_image, restore
+        async with ai_image.paid("ai_edit", ai_image.edit_price(), f"rebuild:{file_id}") as bill:
             out = await restore._kontext(orig, "Remove all the text, letters and numbers from this image. Keep everything "
-                                               "else exactly the same: the photos, shapes, colours, background and framing.")
+                                               "else exactly the same: the photos, shapes, colours, background and framing.",
+                                         bill)
             cleaned = tmp / "ai_clean.png"
             pts = await asyncio.to_thread(restore.align, orig, out, cleaned)
             bg_img = cv2.cvtColor(cv2.imread(str(cleaned)), cv2.COLOR_BGR2RGB)
             if bg_img.shape[:2] != img.shape[:2]:
                 bg_img = cv2.resize(bg_img, (iw, ih), interpolation=cv2.INTER_CUBIC)
-        except Exception:
-            if charged:
-                await restore._refund(1, f"rebuild:{file_id}")
-            raise
+        charged = ai_image.edit_price()
         cleared, shapes = {i: False for i, it in enumerate(items) if it.kind != "text"}, {}
         notes.append(f"The old text was removed from the background by AI (aligned on {pts} points).")
     else:
@@ -675,6 +672,6 @@ async def rebuild(file_id: str, *, page: int = 1, ai_clean: bool = False, hint: 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return {"files": res["files"], "file_id": res["file_id"], "template": "rebuild", "comparison": cmp_id,
-            "comparison_url": public_url(cmp_id), "charged_credits": 1 if P.charged else 0,
+            "comparison_url": public_url(cmp_id), "charged_credits": P.charged,
             "check": {"status": "ok" if not findings else "needs_check", "findings": findings, "verified": verified},
             "items": {"text": len(texts), "pictures": len(P.pics), "shapes": len(P.shapes)}}

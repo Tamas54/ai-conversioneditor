@@ -157,7 +157,7 @@ def _deck_look(deck: dict[str, Any], template_id: Optional[str], style: Optional
 async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
     """Három mód: blank (üres pakli, AI nélkül → rögtön a szerkesztő), brief (leírásból), document (egy meglévő
     dokumentumból — szerkezet, tények és képek a dokumentumból)."""
-    from app.tools import pptx_deck
+    from app.tools import ai_image, pptx_deck
     mode = body.get("mode") or ("document" if body.get("source_file_id") else "brief")
     if mode == "blank":
         template_id, style = await _deck_style(body, ai_ok=not tenancy.is_guest())
@@ -195,7 +195,7 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
     template_id, style = await _deck_style(body, ai_ok=True)
     if pics == "ai":  # az LLM-vázlat ELŐTT: kredit nélkül ne várjon fél percet a semmire
         left = await _credits_left()
-        if left is not None and left < settings.IMAGE_CREDIT_COST:
+        if left is not None and left < ai_image.picture_price():
             raise HTTPException(402, f"AI images need credits (you have {left}). Choose stock photos or add credits.")
     try:
         style_note = f"\n\nMatch this visual style and tone: {style['mood']}" if style and style.get("mood") else ""
@@ -226,8 +226,8 @@ async def make_deck(body: dict[str, Any]) -> dict[str, Any]:
         wanted = [s for s in slides if isinstance(s.get("image"), dict) and not doc_pic_peek(s.get("image"), doc_pics)]
         if pics == "ai":
             left = await _credits_left()
-            if left is not None and left < len(wanted) * settings.IMAGE_CREDIT_COST:
-                raise HTTPException(402, f"This deck needs {len(wanted) * settings.IMAGE_CREDIT_COST} credits for AI images; "
+            if left is not None and left < len(wanted) * ai_image.picture_price():
+                raise HTTPException(402, f"This deck needs {len(wanted) * ai_image.picture_price()} credits for AI images; "
                                          f"you have {left}. Choose stock photos or add credits.")
         for s in slides:
             img = s.get("image")
