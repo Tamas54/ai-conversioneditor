@@ -1855,6 +1855,29 @@ async def generate_image(
 # ============================================================
 
 
+async def _stock_videos(words: str, orientation: Optional[str] = None):
+    """Stock videó-jelöltek a Pexels-ről, számozott bélyegképekkel (a hívó AI maga látja őket) és a Pexels-hivatkozással."""
+    import json
+    from mcp.types import CallToolResult, ImageContent, TextContent
+    from app.tools import images, stock_video
+    try:
+        cands = await stock_video.search(words, 12, orientation)
+    except stock_video.StockVideoError as e:
+        raise ValueError(str(e)) from None
+    info = {"query": words, "videos": cands, "attribution": stock_video.ATTRIBUTION,
+            "how": 'Put one in a layer: {"type": "fullscreen" | "split" | "pip", "at", "dur", "image": {"stock_video": '
+                   '"pexels:<id>"}, "clip": [from, to]?} — or {"stock_video": "words"} and the server takes the first that '
+                   "fits the box. Free to use and edit under the Pexels License (pexels.com/license); the videographer is "
+                   "credited on the end card. Don't show identifiable people in a bad light or as endorsing anything."}
+    sheet = await images.candidate_sheet(cands[:16]) if cands else None
+    if not sheet:
+        return info
+    info["note"] = "The picture below shows the videos' first frames, numbered in the order of this list (1 = the first)."
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(info, ensure_ascii=False)),
+                                   ImageContent(type="image", data=base64.b64encode(sheet).decode(), mimeType="image/jpeg")],
+                          structuredContent=info)
+
+
 @mcp.tool()
 @linked
 async def video(
@@ -1916,14 +1939,15 @@ async def video(
       AI NARRATION IS ON BY DEFAULT (narration="none" = off); music_file_id = their song.
     action="overlay": file_id = their mp4|mov|webm|m4v (kept as is) + layers=[{"at", "dur"|"until", "type", …}]
       and/or subtitles=[{start, end, text}] | "auto". Types: lower_third · title · chapter · source · stat · quote ·
-      chart (a layer with a "chart" object) · graphic · fullscreen · split. text = the source: numbers and quotes
+      chart · graphic · fullscreen · split · pip. text = the source: numbers and quotes
       are checked against it (else "not checked against a source").
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
-    action="render": a project again (draft=true: half size); scene="s3" / scene="L2": just that scene / layer.
+    action="render": a project again; scene="s3" | "L2": just that scene / layer.
     action="transcript": what is said, with times (+ .srt; vocabulary=[names]). action="lottie": text → animations.
     action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
+    action="stock": text → free real footage (Pexels) for cut-ins.
     AI video (credits): action="ai_clip" (ai={…}) · "enhance" (factor 1|2|4) · "estimate".
-    alpha=true | "webm" | "both": also transparent graphics only (ProRes 4444 / WebM).
+    alpha=true | "webm" | "both": also a transparent graphics-only file.
     render=false (make / overlay / edit): save the project only (the layout check still runs); draft=true: fast.
     Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
@@ -1980,12 +2004,14 @@ async def video(
                 "how": 'Put one in a graphic: {"shape": "lottie", "lottie": {"url": json_url, "credit": …}} — or let the '
                        'server choose: {"shape": "lottie", "lottie": {"search": "words"}}. Free LottieFiles animations '
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
+    if act in ("stock", "stock_video"):              # ingyenes valódi videó bejátszásnak (Pexels — app/tools/stock_video.py)
+        return await _stock_videos(text or "", (ai or {}).get("orientation"))
     if act in ("ai_clip", "enhance", "estimate"):    # kie.ai — a logika és a referencia: app/tools/ai_video.py
         from app.tools import ai_video
         return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
         raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | '
-                         '"lottie" | "schema" (the full reference: video(action="schema", topic="layers"))')
+                         '"lottie" | "stock" | "schema" (the full reference: video(action="schema", topic="layers"))')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,

@@ -105,6 +105,8 @@ Types:
     "replace", the default here) | "mix" | "off")
   split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base shrinks to the other half
     (a video plays muted unless "sound" is given). In a vertical video the base becomes small — there use pip.
+  Real video for a cut-in (free, Pexels): image={"stock_video": "pexels:<id>"} from video(action="stock", text="words"),
+    or {"stock_video": "words"} (the first that fits the box) — in fullscreen, split or pip.
   pip {image (a video or picture), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
     of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
     off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a

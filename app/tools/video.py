@@ -3271,6 +3271,10 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
             ext = ".json" if e["shape"] == "lottie" else ".jpg"
             name = e.get("asset") if e.get("asset") and parent_assets.get(e["asset"]) else f"gfx-{n:02d}-{sc.get('id') or si}{ext}"
             try:
+                if e["shape"] == "image" and isinstance(e.get("src"), dict) and e["src"].get("stock_video") and \
+                        not (e.get("asset") and parent_assets.get(e["asset"])):          # stock videó: le a munkaterületre
+                    e["src"], e["credit"] = await _stock_video(e, sizes.get(id(sc)) or (frame[:2] if frame else None))
+                    credits.append(e["credit"])
                 if e.get("asset") and parent_assets.get(e["asset"]):
                     shutil.copyfile(crafts.existing(parent_assets[e["asset"]]), work / name)
                     if e.get("sound_file") and parent_assets.get(e["sound_file"]):     # a bevágás hangja is marad
@@ -3334,6 +3338,21 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
                 e["file"] = None
                 e["_failed"] = re.sub(r"\s+", " ", str(ex))[:160] or type(ex).__name__     # a check megnevezi (_gfx_failures)
     return names, lotties, credits
+
+
+async def _stock_video(e: dict[str, Any], box: Optional[tuple[float, float]]) -> tuple[str, str]:
+    """Egy stock videó (Pexels) a felhasználó munkaterületére a doboz alakjához illő irányban és felbontásban →
+    (file_id, kredit). A licenc és a kredit a fájl adataiban; a kredit a stáblistára is kerül."""
+    from app.tools import stock_video
+    orient, short = None, 1080
+    if box:
+        bw, bh = box[0] * float(e.get("w", 1.0)), box[1] * float(e.get("h", 1.0))
+        orient = "landscape" if bw > bh * 1.2 else "portrait" if bh > bw * 1.2 else "square"
+        short = max(720, min(1080, int(min(bw, bh))))
+    try:
+        return await stock_video.fetch(e["src"], short=short, orientation=orient)
+    except stock_video.StockVideoError as err:
+        raise ValueError(str(err)) from None
 
 
 def _movie_src(src: Any) -> Optional[str]:
@@ -4233,8 +4252,10 @@ def _credit_line(credit_list: list[str], story: dict[str, Any]) -> tuple[str, st
     if not credit_list:
         return "", ""
     anim = _has_lottie(story) or any(c.startswith("Animation ") for c in credit_list)
-    label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else "Pictures: "
-    short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^Photo:\s*", "", c)).strip() for c in credit_list]
+    footage = [c for c in credit_list if c.startswith("Video:")]             # stock videó (Pexels)
+    label = ("Pictures and animations: " if len(credit_list) > 1 else "") if anim else \
+        ("Footage: " if len(footage) == len(credit_list) else "Pictures and footage: ") if footage else "Pictures: "
+    short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^(Photo|Video):\s*", "", c)).strip() for c in credit_list]
     return label + " · ".join(credit_list), (label + " · ".join(dict.fromkeys(x for x in short if x)))[:300]
 
 
@@ -4861,7 +4882,11 @@ def _img_spec(x: Any) -> Any:
         out = [y for y in (_img_spec(v) for v in x[:4]) if y]
         return out if len(out) > 1 else (out[0] if out else None)
     if isinstance(x, str):
+        if re.search(r"pexels\.com/(?:[\w-]+/)*video", x):            # egy Pexels-videó linkje: stock videó (letöltjük)
+            return {"stock_video": x[:300]}
         return {"url": x} if x.startswith("http") else x
+    if isinstance(x, dict) and x.get("stock_video"):                     # ingyenes valódi videó (app/tools/stock_video.py)
+        return {"stock_video": str(x["stock_video"])[:300]}
     if isinstance(x, dict) and x.get("generate"):
         from app import tenancy
         if tenancy.client_makes_images.get():
@@ -4870,7 +4895,8 @@ def _img_spec(x: Any) -> Any:
     if isinstance(x, dict) and (x.get("file_id") or x.get("url") or x.get("stock")):
         return x.get("file_id") or ({"url": x["url"], **({"credit": x["credit"]} if x.get("credit") else {})} if x.get("url")
                                     else {"stock": _clean(x["stock"], 60)})
-    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}}, {{\"generate\": \"a description\"}}, a list "
+    raise ValueError(f"image: a file_id, a URL, {{\"stock\": \"words\"}}, {{\"stock_video\": \"words\" | \"pexels:<id>\"}}, "
+                     f"{{\"generate\": \"a description\"}}, a list "
                      f"of up to 4 of these, or none — not {x!r}")
 
 

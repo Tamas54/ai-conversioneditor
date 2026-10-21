@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-22 — Free real footage for cut-ins (Pexels)
+
+Owner's question: can we do free cut-ins with real footage?
+- **`video(action="stock", text="words")`** → free stock video candidates from Pexels, with a numbered picture of their
+  first frames so the connected AI sees them. Each has its title, length, size and the videographer
+  ("Video: Name / Pexels"); the result carries "Videos provided by Pexels", as Pexels' API guidelines ask.
+- **Any cut-in layer takes it**:
+  - in `fullscreen`, `split` and `pip`: `image={"stock_video": "pexels:<id>"}`, a Pexels link, or
+    `{"stock_video": "words"}` (the first that fits the box);
+  - the file is chosen for the box: landscape / portrait / square, the smallest with the short side ≥ the box (720–1080 px);
+  - it is downloaded into the person's workspace with its licence, source and credit in the file's details.
+  The videographer is credited on screen and on the end card ("Footage: Name / Pexels").
+- **Licence** (pexels.com/license, checked 2026-10-22):
+  - free to use and edit, also in ads; attribution isn't required but we always give it;
+  - not allowed: identifiable people in a bad light, selling unaltered copies, redistributing on other stock sites,
+    implying endorsement. The `how` text says so.
+- `PEXELS_API_KEY` (env). Searches are cached for an hour (Pexels: 200 requests an hour, 20 000 a month).
+
 ## 2026-10-22 — Even sound, picture in picture
 
 From the Wan version of the "Reggeli különkiadás" product test.
