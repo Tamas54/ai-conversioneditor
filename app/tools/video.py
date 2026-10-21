@@ -812,12 +812,21 @@ def _clean(s: Any, n: int, what: Optional[str] = None) -> str:
 _FIT: "contextvars.ContextVar[Optional[list[str]]]" = contextvars.ContextVar("video_fit", default=None)
 
 
+_NARROW = set("iljI.,:;'!|()[]")
+
+
+def _word_w(w: str, size: float) -> float:
+    """Egy szó becsült szélessége: nagybetű ~0,7 em, keskeny betű ~0,32, a többi ~0,56 (10-21: a csupa nagybetűs név
+    az átlaggal számolva elfért egy sorban, a valóságban kettőbe tört és a tisztségre csúszott)."""
+    return size * sum(0.32 if c in _NARROW else 0.7 if c.isupper() else 0.56 for c in w)
+
+
 def _wrap(st: str, size: float, box_w: float) -> tuple[int, bool, float]:
-    """A szöveg tördelve a doboz szélességére (~0,56 em átlagos betűszélesség) → (sorok, van-e szó, ami magában
-    sem fér ki, a legszélesebb sor px-ben)."""
-    cw, lines, cur, wide, widest = 0.56 * size, 1, 0.0, False, 0.0
+    """A szöveg tördelve a doboz szélességére (betűfajtánként becsült szélességgel: _word_w) → (sorok, van-e szó, ami
+    magában sem fér ki, a legszélesebb sor px-ben)."""
+    cw, lines, cur, wide, widest = 0.3 * size, 1, 0.0, False, 0.0           # cw: a szóköz
     for w in str(st or "").split() or [""]:
-        ww = len(w) * cw
+        ww = _word_w(w, size)
         wide = wide or ww > box_w
         nxt = ww if cur == 0 else cur + cw + ww
         if nxt > box_w and cur > 0:
@@ -828,7 +837,7 @@ def _wrap(st: str, size: float, box_w: float) -> tuple[int, bool, float]:
 
 
 def _fit_size(st: str, size: float, box_w: float, box_h: float, name: str = "") -> int:
-    """Elfér-e a szöveg a dobozában (szótördeléssel, ~0,56 em átlagos betűszélesség, 1,22 sormagasság)? Ha nem,
+    """Elfér-e a szöveg a dobozában (szótördeléssel, betűfajtánként becsült szélesség, 1,22 sormagasság)? Ha nem,
     kisebb betű — legfeljebb az eredeti 55%-áig; az illesztést feljegyzi."""
     s0, size = int(size), float(size)
     while size > s0 * 0.55:
@@ -1886,6 +1895,51 @@ def _own_text(x: Any) -> str:
     return "" if x is None or isinstance(x, bool) else str(x)
 
 
+_PIP_CORNERS = ("top-right", "top-left", "bottom-right", "bottom-left")
+
+
+def _pip_layer(r: dict[str, Any], what: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Kép a képben (Kommandant 10-21): egy másik videó (vagy kép) keretes ablakban a felvétel egyik sarkában — a felvétel
+    teljes képen marad. Grafika-réteg lesz belőle (keret + a videó-elem); a helyét és a magasságát a képkocka ismeretében
+    _pip_geometry adja (az ablak aránya: aspect, alap 16:9; a videó kitölti, a széle levágva)."""
+    img = r.get("image") or r.get("file_id")
+    if not img:
+        raise ValueError(f"{what} (pip): image = a video or a picture (file_id or URL) — it plays in a framed window over the "
+                         "footage, e.g. {\"at\": 4, \"dur\": 6, \"type\": \"pip\", \"image\": \"<video file_id>\", \"corner\": "
+                         "\"top-right\"}.")
+    corner = str(r.get("corner") or "top-right").lower().replace("_", "-").replace(" ", "-")
+    if corner not in _PIP_CORNERS:
+        raise ValueError(f"{what} (pip): corner {r.get('corner')!r} — {' | '.join(_PIP_CORNERS)}.")
+    try:
+        size = max(0.2, min(0.7, float(r.get("size") or 0.45)))
+        a, b = (float(v) for v in str(r.get("aspect") or "16:9").split(":"))
+        aspect = max(0.3, min(3.0, a / b))
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} (pip): size = 0.2–0.7 of the frame's width, aspect = \"16:9\" | \"9:16\" | \"1:1\"…") from None
+    sound = r.get("sound") if r.get("sound") in ("replace", "mix", "off") else "off"
+    box = {"x": 0.5, "y": 0.5, "w": size, "h": 0.25, "anim": "pop", "at": 0, "dur": 0.3}
+    chart = {"type": "graphic", "backdrop": 0, "elements": [
+        {"shape": "rect", **box, "fill": "white", "radius": 10},
+        {"shape": "image", **box, "image": img, "fit": "cover", "sound": sound, **({"clip": r["clip"]} if r.get("clip") else {})}]}
+    return {**r, "chart": chart, "panel": False}, {"corner": corner, "size": size, "aspect": aspect}
+
+
+def _pip_geometry(ly: dict[str, Any], W: int, H: int) -> None:
+    """A kép-a-képben ablak helye és magassága a képkocka arányában (a keret ~0,6% vastag), a sarokban, a széltől 4%-ra."""
+    p, els = ly["pip"], (ly.get("chart") or {}).get("elements") or []
+    if len(els) < 2:
+        return
+    w = p["size"]
+    h = w * W / p["aspect"] / H
+    if h > 0.6:
+        h, w = 0.6, 0.6 * H * p["aspect"] / W
+    mx, my, bx = 0.04, 0.04 * W / H, 0.006
+    x = 1 - mx - w / 2 if p["corner"].endswith("right") else mx + w / 2
+    y = my + h / 2 if p["corner"].startswith("top") else 1 - my - h / 2
+    els[0].update(x=round(x, 4), y=round(y, 4), w=round(w + 2 * bx, 4), h=round(h + 2 * bx * W / H, 4))
+    els[1].update(x=round(x, 4), y=round(y, 4), w=round(w, 4), h=round(h, 4))
+
+
 def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     """Egy réteg (a kliensé, vagy szerkesztésnél base + a változó mezők) tisztítva: időkód → s, szöveghatárok, az ábra /
     szám / idézet a forrás számaival (ami nincs benne, kimarad — None, a ⚠ megjegyzés a check-be kerül)."""
@@ -1906,13 +1960,17 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     what = f"Layer {lid}"
     typ = _LAYER_ALIAS.get(str(r.get("type") or "").strip().lower().replace(" ", "_"),
                            str(r.get("type") or "").strip().lower().replace(" ", "_"))
+    pip = (base or {}).get("pip") if typ == "chart" else None             # szerkesztés: a kép a képben marad
+    if typ in ("pip", "picture_in_picture", "inset"):
+        r, pip = _pip_layer(r, what)
+        raw, typ = {**raw, "chart": r["chart"]}, "chart"
     if typ in _CHART_TYPES and typ != "quote":          # rövidítés: {"type": "column", "items": …} = ábra-réteg
         # (szerkesztésnél a meglévő ábrára: {"id": "L3", "type": "bar"} csak a típust cseréli, a tételek maradnak)
         r = {**r, "chart": {**((base or {}).get("chart") or {}), "type": typ, **{k: raw[k] for k in _CHART_KEYS if k in raw}}}
         raw = {**raw, "chart": r["chart"]}
         typ = "chart"
     if typ not in LAYER_TYPES:
-        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} (or a chart type such as \"column\"), "
+        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} | pip (or a chart type such as \"column\"), "
                          f"e.g. {_LAYER_EXAMPLE} — the full list: video(action=\"schema\", topic=\"layers\").")
     if r.get("at") is None:
         raise ValueError(f"{what}: give at — when it starts (seconds, or a timecode such as \"01:24\"), e.g. {_LAYER_EXAMPLE}.")
@@ -1926,6 +1984,8 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     if dur < 0.5:
         raise ValueError(f"{what}: it must last at least 0.5 s (dur, or an until after its at).")
     ly: dict[str, Any] = {"id": lid, "type": typ, "at": round(at, 3), "dur": round(min(dur, 6 * 3600.0), 3)}
+    if pip:
+        ly["pip"] = pip
     pos = r.get("position")
     if isinstance(pos, (list, tuple)):
         if len(pos) != 4 or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in pos):
@@ -3193,6 +3253,10 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
     from app.tools import images as imgs
     parent_assets = assets_of(parent) if parent else {}
     names, lotties, credits = [], [], []
+    if frame:                                   # kép a képben: az ablak a képkocka arányában
+        for ly in story.get("layers") or []:
+            if ly.get("pip"):
+                _pip_geometry(ly, frame[0], frame[1])
     n = 0
     holders = list(story.get("scenes") or []) + [ly for ly in story.get("layers") or [] if ly.get("chart")]   # jelenetek és rétegek
     sizes = {id(h): (w_, h_) for _, h, w_, h_ in _gfx_holders(story, frame)} if frame else {}      # a doboz aránya (Lottie)
@@ -3295,6 +3359,23 @@ async def _cut_sound(src: Path, span: tuple[float, float], dst: Path) -> bool:
     await run("ffmpeg", "-v", "error", "-y", "-ss", f"{span[0]:.3f}", "-i", str(src), "-t", f"{span[1]:.3f}", "-map", f"0:a:{k}",
               "-vn", "-ac", "2", "-ar", "48000", str(dst), timeout=settings.VIDEO_TIMEOUT_S)
     return dst.exists() and dst.stat().st_size > 1000
+
+
+async def _level_cuts(cuts: list[dict[str, Any]], work: Path, base: Optional[Path]) -> None:
+    """A bevágások hangja a felvétel hangosságára (ha a felvétel néma vagy mérhetetlen: a közös célszintre), hogy a
+    bevágásnál ne ugorjon a hangerő; a fájl helyben cserélődik. Hiba: marad az eredeti."""
+    from app.tools import loudness
+    ref = await loudness.measure(base) if base else None
+    target = min(-12.0, max(-28.0, ref["i"])) if ref and ref["i"] > loudness.SILENT_LUFS else loudness.TARGET_LUFS
+    for c in {c["file"] for c in cuts}:
+        src, tmp = work / c, work / f"lvl-{c}"
+        try:
+            if (await loudness.level_file(src, tmp, target, video=False))["changed"]:
+                tmp.replace(src)
+        except Exception as e:
+            log.warning("bevágás hangja nem lett kiegyenlítve (%s): %s", c, e)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _clip_sounds(layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4332,6 +4413,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         D["layers"], rows, problems = layer_comps(all_layers, W, H, total, lang, acc, safe)
         cuts = _clip_sounds(layers)                           # bevágott felvételek hangja (teljes képen a felvételé helyett)
         if cuts:
+            await _level_cuts(cuts, work, work / base["asset"] if base.get("audio") else None)
             D["audio"]["clips"] = cuts
         m_v, m_f, track = [], [], None
         own = await _own_music_source(opts, work, parent)    # saját zene: az új feltöltés, vagy a szülőprojekté

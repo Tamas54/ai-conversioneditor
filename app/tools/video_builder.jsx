@@ -291,8 +291,9 @@ function dims(layer, el) {       // irányított figyelem: a megadott szakaszokb
 function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | grow | slide-* | pulse | none (+ move_to)
   var T = tp(layer), a = el.anim || "appear", t0 = el.t0 || 0, d = el.dur || 0.6, full = el.opacity || 100;
   var O = T.property("ADBE Opacity"), S = T.property("ADBE Scale"), P = T.property("ADBE Position"), home = P.value;
+  var s0 = S.value[0];             // a doboz méretére illesztett kép / videó saját mérete (mediaLayer) — a pop ide nő, nem 100%-ra
   if (a === "appear" || a === "grow" || a.indexOf("slide-") === 0) { O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + Math.min(d, 0.5), full); }
-  if (a === "pop" || a === "grow") { S.setValueAtTime(t0, [0, 0]); S.setValueAtTime(t0 + d, [100, 100]); ease(S); }
+  if (a === "pop" || a === "grow") { S.setValueAtTime(t0, [0, 0]); S.setValueAtTime(t0 + d, [s0, s0]); ease(S); }
   if (a.indexOf("slide-") === 0) {
     var p = P.value, off = Math.min(D.W, D.H) * 0.12;
     var dx = a === "slide-left" ? off : a === "slide-right" ? -off : 0, dy = a === "slide-up" ? off : a === "slide-down" ? -off : 0;
@@ -300,7 +301,7 @@ function animate(layer, el) {    // a saját grafika mozgásai: appear | pop | g
   }
   if (a === "pulse") {
     O.setValueAtTime(t0, 0); O.setValueAtTime(t0 + 0.3, full);
-    for (var q = 0; q < 3; q++) { var b = t0 + 0.3 + q * 0.8; S.setValueAtTime(b, [100, 100]); S.setValueAtTime(b + 0.4, [112, 112]); S.setValueAtTime(b + 0.8, [100, 100]); }
+    for (var q = 0; q < 3; q++) { var b = t0 + 0.3 + q * 0.8; S.setValueAtTime(b, [s0, s0]); S.setValueAtTime(b + 0.4, [s0 * 1.12, s0 * 1.12]); S.setValueAtTime(b + 0.8, [s0, s0]); }
     ease(S);
   }
   if (el.move_to) {                // odasiklik: amint megjelent, move_dur alatt (alap: dur), lágyan indul és érkezik

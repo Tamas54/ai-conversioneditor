@@ -1118,6 +1118,16 @@ async def _post_clip(rows: list[dict[str, Any]], files: list[list[str]]) -> dict
     head = rows[0]
     fid = files[0][0]
     info = await _probe(output_path(fid))
+    if info["audio_stream"] is not None:          # a generált hang a közös szintre (a Wan hangja ~13 dB-lel hangosabb volt)
+        from app.tools import loudness
+        tmp = output_path(fid).with_suffix(".lvl.mp4")
+        try:
+            if (await loudness.level_file(output_path(fid), tmp))["changed"]:
+                tmp.replace(output_path(fid))
+        except Exception as e:
+            log.warning("AI-klip hangja nem lett kiegyenlítve (%s): %s", fid, e)
+        finally:
+            tmp.unlink(missing_ok=True)
     words = " ".join(str(head["meta"].get("prompt") or "AI clip").split()[:6])
     label = f"AI clip — {words}.mp4"
     write_meta(fid, label=label, operation="ai_clip",

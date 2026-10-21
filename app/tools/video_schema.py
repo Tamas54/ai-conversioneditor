@@ -104,7 +104,11 @@ Types:
     VIDEO of theirs — a cut-in: + "clip": [from, to] seconds of it; its sound plays instead of the footage's ("sound":
     "replace", the default here) | "mix" | "off")
   split {side: left|right|top|bottom (where the graphic goes), chart | image | text}: the base shrinks to the other half
-    (a video plays muted unless "sound" is given).
+    (a video plays muted unless "sound" is given). In a vertical video the base becomes small — there use pip.
+  pip {image (a video or picture), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
+    of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
+    off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a
+    framed window in a corner.
 A lower third or source caption without position goes where nothing else is (other layers, a made video's headlines and
 charts). Overlaps that remain, a layer past the end, a dropped number, a text that collides or runs out of its box all
 come back in the check's findings. Edit by id: changes={"layers": [{"id": "L2", …only the fields that change} | {"id":

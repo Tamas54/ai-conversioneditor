@@ -211,6 +211,7 @@ TOOL_OPTIONS: dict[str, Opt] = {o.key: o for o in [
     # videó-vászon és illesztés (merge-files, resize-video — app/tools/videonorm.py)
     Opt("canvas", "str", "auto", pattern=r"^(auto|vertical|landscape|square|portrait|horizontal|9:16|16:9|1:1|\d{2,5}[x×]\d{2,5})$"),
     Opt("fit", "enum", None, ("inside", "cover", "contain", "fill", "blur")),
+    Opt("level_audio", "bool", None),          # merge-files: a részek hangereje egy szintre (videónál alapból be)
     Opt("aspect_mode", "enum", "pad", ("pad", "crop", "stretch", "blur")),
     # meghosszabbítás, kép → videó (extend-video, image-to-video)
     Opt("duration", "float", None, min=0.1, max=600),
