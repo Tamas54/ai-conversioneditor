@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-22 — Scene transitions
+
+From the same look at vanta / MoneyPrinterTurbo: we only had a 0.5 s crossfade between scenes.
+- **`transition`** on make (and `changes.transition` in an edit), or a scene's own `"transition"` for how it comes in:
+  - motion: `fade` (default) | `dip` (through black) | `slide` | `slide-up` | `push` | `push-up` | `zoom`;
+  - EffectCraft's transition effects: `wipe` | `wipe-up` | `clock` | `iris` | `blinds` | `blocks` | `cards` (3D
+    flipping cards) | `grid` | `jaws` | `light` (a glowing ring) | `twister` | `sweep`;
+  - `mix`: a different one at each cut.
+- **How it is drawn:** the effects run "Transition Completion" 100 → 0 over the cut. An effect the engine refuses
+  falls back to a fade.
+
 ## 2026-10-22 — Word-by-word captions
 
 From the owner's look at vanta and MoneyPrinterTurbo: the short-video caption styles we didn't have.

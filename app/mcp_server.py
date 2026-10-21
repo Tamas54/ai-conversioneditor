@@ -1919,6 +1919,7 @@ async def video(
     camera: Optional[Any] = None,
     subtitles: Optional[Any] = None,
     caption_style: Optional[str] = None,
+    transition: Optional[str] = None,
     topic: Optional[str] = None,
     render: bool = True,
     end_card: Optional[Any] = None,
@@ -2021,7 +2022,7 @@ async def video(
             "ken_burns": ken_burns, "data_file_id": data_file_id, "scenes": scenes, "title": title, "kicker": kicker, "brand": brand,
             "title_image": title_image, "end_title": end_title, "end_subtitle": end_subtitle,
             "layers": layers or [], "alpha": alpha, "duration_mode": duration_mode, "render": render, "scrim": scrim,
-            "draft": draft}
+            "draft": draft, "transition": transition}
     return await make_video(body)
 
 
