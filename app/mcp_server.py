@@ -1918,6 +1918,7 @@ async def video(
     duration_mode: Optional[str] = None,
     camera: Optional[Any] = None,
     subtitles: Optional[Any] = None,
+    caption_style: Optional[str] = None,
     topic: Optional[str] = None,
     render: bool = True,
     end_card: Optional[Any] = None,
@@ -1989,8 +1990,8 @@ async def video(
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
                                     "accent": accent, "brand": brand, "alpha": alpha, "music": music,
                                     "music_file_id": music_file_id, "camera": camera,
-                                    "subtitles": subtitles, "language": language, "render": render,
-                                    "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
+                                    "subtitles": subtitles, "caption_style": caption_style, "language": language,
+                                    "render": render, "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
                                     "transcript": transcript, "draft": draft})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx

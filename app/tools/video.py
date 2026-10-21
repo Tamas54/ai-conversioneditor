@@ -3941,6 +3941,7 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
     try:
         notes: list[str] = []
         topts = transcript_opts(body.get("transcript"))       # a kliens súgása a felismerőnek (prompt, vocabulary, model)
+        cstyle = caption_style(body.get("caption_style"))     # a hibás stílus a hosszú munka (átirat) ELŐTT derüljön ki
         raw = await said_to_times(body.get("layers"), crafts.existing(fid), notes, step, body.get("language"), new_ids=True,
                                   topts=topts)
         layers = layers_from(raw, body.get("text") or "", notes)
@@ -3969,7 +3970,8 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": mc["mood"],
                 "music_file_id": mc["file_id"], "music_start": mc["start"], "music_level": mc["level"],
                 "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
-                "camera": _footage_camera(body.get("camera")), "subtitles": subs, **({"transcript": topts} if topts else {})}
+                "camera": _footage_camera(body.get("camera")), "subtitles": subs, **({"transcript": topts} if topts else {}),
+                "caption_style": cstyle}
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
                                        render=body.get("render", True) is not False, draft=bool(body.get("draft")))
@@ -4295,16 +4297,47 @@ def subtitle_cues(raw: Any) -> list[dict[str, Any]]:
         a = timecode(c.get("start", c.get("at", 0)), "subtitle start")
         b = c.get("end", c.get("until"))
         b = timecode(b, "subtitle end") if b not in (None, "") else a + max(1.5, len(txt) / 15)
-        out.append({"start": round(a, 3), "end": round(max(b, a + 0.4), 3), "text": txt})
+        cue = {"start": round(a, 3), "end": round(max(b, a + 0.4), 3), "text": txt}
+        ws = c.get("words")                             # szavankénti kezdőidők (az átiratból): a szöveg tokenjeinként
+        if isinstance(ws, list) and len(ws) == len(txt.split()) and all(isinstance(v, (int, float)) for v in ws):
+            cue["words"] = [round(min(max(float(v), cue["start"]), cue["end"]), 3) for v in ws]
+        out.append(cue)
     out.sort(key=lambda x: x["start"])
     for x, y in zip(out, out[1:]):                       # egyszerre egy felirat látszik
         x["end"] = round(min(x["end"], y["start"]), 3)
     return [x for x in out if x["end"] - x["start"] >= 0.2]
 
 
-def caption_track(cues: list[dict[str, Any]], W: int, H: int, total: float) -> list[dict[str, Any]]:
+CAPTION_STYLES = ("box", "karaoke", "highlight", "reveal", "bold")
+
+
+def caption_style(v: Any) -> str:
+    st = str(v or "box").strip().lower()
+    if st not in CAPTION_STYLES:
+        raise ValueError(f"caption_style: {' | '.join(CAPTION_STYLES)} (box = the sentence on a dark bar; karaoke = the "
+                         "spoken words light up; highlight = the word being said lights up; reveal = the words appear as "
+                         "they are said; bold = big words in short groups, the word being said in colour)")
+    return st
+
+
+def _word_times(text: str, a: float, b: float, given: Optional[list[float]] = None) -> list[float]:
+    """A szöveg szavainak kezdőideje: az átiratból (ha a tokenek száma egyezik), különben a betűszám arányában."""
+    toks = text.split()
+    if given and len(given) == len(toks):
+        return [round(float(v), 3) for v in given]
+    tot = sum(len(t) + 1 for t in toks) or 1
+    out, cur = [], a
+    for t in toks:
+        out.append(round(cur, 3))
+        cur += (b - a) * (len(t) + 1) / tot
+    return out
+
+
+def caption_track(cues: list[dict[str, Any]], W: int, H: int, total: float, style: str = "box") -> list[dict[str, Any]]:
     """A feliratok a make-videó feliratsávjának méretében: legfeljebb két sor, a hosszú mondat darabokra (mondat- és
-    tagmondathatáron), a darabok a mondat idején belül a hosszuk arányában."""
+    tagmondathatáron), a darabok a mondat idején belül a hosszuk arányában. Szavankénti stílusnál (karaoke, highlight,
+    reveal, bold) minden darab a szavai kezdőidejét is viszi ("words") — az átiratból, különben becsülve. A bold: nagy,
+    körvonalas betű, legfeljebb 3 szó egyszerre (mondatvégnél, vesszőnél előbb vált)."""
     L = _layout(W, H)
     cpl = L["capW"] / (0.53 * L["capSize"])
     out = []
@@ -4312,12 +4345,36 @@ def caption_track(cues: list[dict[str, Any]], W: int, H: int, total: float) -> l
         a, b = max(0.0, c["start"]), min(total, c["end"])
         if b - a < 0.2:
             continue
+        times = _word_times(c["text"], a, b, c.get("words"))
+        toks = c["text"].split()
+        if style == "bold":
+            size = round(L["capSize"] * 1.5)
+            groups, cur = [], []
+            for i, t in enumerate(toks):
+                cur.append(i)
+                if len(cur) == 3 or re.search(r"[.!?…,;:—–]$", t) or len(" ".join(toks[j] for j in cur)) > 18:
+                    groups.append(cur); cur = []
+            groups += [cur] if cur else []
+            for gi, g in enumerate(groups):
+                t0 = times[g[0]] if gi else a
+                t1 = times[groups[gi + 1][0]] if gi + 1 < len(groups) else b
+                txt = " ".join(toks[j] for j in g)
+                s_ = _fit_size(txt.upper(), size, L["capW"], size * 1.22 * 2, "Caption")
+                out.append({"t0": round(t0, 3), "t1": round(max(t1, t0 + 0.2), 3), "text": txt, "size": s_,
+                            "lines": _wrap(txt.upper(), s_, L["capW"])[0], "words": [times[j] for j in g]})
+            continue
         parts = _chunks(c["text"], int(cpl * 2 * 0.9)) or [c["text"]]
-        tot, cur = sum(len(x) for x in parts) or 1, a
+        tot, cur, k = sum(len(x) for x in parts) or 1, a, 0
         for x in parts:
             span = (b - a) * len(x) / tot
-            out.append({"t0": round(cur, 3), "t1": round(cur + span, 3), "text": x, "lines": 1 if len(x) <= cpl * 0.95 else 2})
+            n = len(x.split())
+            row = {"t0": round(cur, 3), "t1": round(cur + span, 3), "text": x, "lines": 1 if len(x) <= cpl * 0.95 else 2}
+            if style != "box":
+                row["words"] = times[k:k + n] if c.get("words") and len(times) == len(toks) else \
+                    _word_times(x, cur, cur + span)
+            out.append(row)
             cur += span
+            k += n
     return out
 
 
@@ -4423,7 +4480,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         if subs:                                              # a make-videó feliratsávja: ugyanaz a builder-kód rajzolja
             Lc = _layout(W, H)
             D["L"] = {k: Lc[k] for k in ("capW", "capSize", "capY", "capPad")}
-            D["captions"] = caption_track(subs, W, H, total)
+            D["captions"] = caption_track(subs, W, H, total, opts.get("caption_style") or "box")
+            D["captionStyle"] = opts.get("caption_style") or "box"
         card, all_layers = base.get("end_card"), layers
         if card:                                              # zárókártya a kimerevített vég fölött, a kreditekkel
             _, on_screen = _credit_line(credit_list, story)
@@ -5270,6 +5328,8 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     for k in ("accent", "title"):
         if k in changes:
             opts[k] = changes[k]
+    if "caption_style" in changes:
+        opts["caption_style"] = caption_style(changes["caption_style"])
     if "music" in changes or "music_file_id" in changes:  # saját zene / tár / "none" / csak a kezdőpont vagy a szint
         mc = music_choice(changes.get("music"), changes.get("music_file_id"))
         part = changes["music"] if isinstance(changes.get("music"), dict) else {}

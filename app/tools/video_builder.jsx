@@ -515,15 +515,51 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
   }
 }
 overlayLayers(main, baseLayers);      // a rétegek a jelenetek / a felvétel fölött, a feliratok alatt
-// feliratok: sáv + szöveg, a jelenetek fölött (a szerkesztőben egyenként átírhatók)
+// feliratok: sáv + szöveg, a jelenetek fölött (a szerkesztőben egyenként átírhatók). Stílus (D.captionStyle): box (alap) |
+// karaoke | highlight | reveal — a sávon, szavanként animálva | bold — sáv nélkül, nagy körvonalas betű, 1–3 szó
+function wordAnim(t, cp, st, size) {   // szavankénti animátor: a kijelölés (index, szavak) a szavak kezdőidején ugrik
+  var a = t.property("ADBE Text Properties").property("ADBE Text Animators").addProperty("ADBE Text Animator");
+  var ap = a.property("ADBE Text Animator Properties"), n = cp.words.length, ac = D.accent;
+  if (st === "reveal") ap.addProperty("ADBE Text Opacity").setValue(0);
+  else ap.addProperty("ADBE Text Fill Color").setValue([ac[0], ac[1], ac[2], 1]);
+  if (st === "highlight" || st === "bold") ap.addProperty("ADBE Text Position 3D").setValue([0, -Math.round(size * 0.07), 0]);
+  var sel = a.property("ADBE Text Selectors").property(1), adv = sel.property("advanced");
+  adv.property("units").setValue(2); adv.property("basedOn").setValue(3);       // index · szavak
+  var s = sel.property("start"), e = sel.property("end");
+  function key(tm, x, y) { s.setValueAtTime(tm, x); e.setValueAtTime(tm, y); }
+  key(cp.t0, 0, st === "reveal" ? n : 0);                                         // a darab elején: semmi / minden rejtve
+  for (var i = 0; i < n; i++) {
+    var tm = Math.max(cp.t0 + 0.001 * (i + 1), cp.words[i]);
+    if (st === "karaoke") key(tm, 0, i + 1);
+    else if (st === "reveal") key(tm, i + 1, n);
+    else key(tm, i, i + 1);
+  }
+  for (var kk = 1; kk <= s.numKeys; kk++) {
+    s.setInterpolationTypeAtKey(kk, KeyframeInterpolationType.HOLD); e.setInterpolationTypeAtKey(kk, KeyframeInterpolationType.HOLD);
+  }
+}
+var capSt = D.captionStyle || "box";
 for (var k = 0; k < (D.captions || []).length; k++) {
-  var cp = D.captions[k], Lc = D.L;
-  var bar = rect(main, "Caption box " + (k + 1), [Lc.capW + Lc.capPad * 2, cp.lines * Lc.capSize * 1.28 + Lc.capPad * 1.4],
-    [D.W / 2, Lc.capY], [0.04, 0.045, 0.06], 72, Lc.capPad * 0.7);
-  var tx = textLayer(main, [Lc.capW, cp.lines * Lc.capSize * 1.4 + 8], cp.text, { size: Lc.capSize, align: "center",
-    pos: [D.W / 2, Lc.capY + Lc.capSize * 0.08], leading: Lc.capSize * 1.28, name: "Caption " + (k + 1), font: D.font.semibold });
-  var lays = [bar, tx];
-  for (var q = 0; q < 2; q++) { lays[q].inPoint = cp.t0; lays[q].outPoint = cp.t1; }
+  var cp = D.captions[k], Lc = D.L, lays;
+  if (capSt === "bold") {
+    var bs = cp.size || Math.round(Lc.capSize * 1.5);
+    var tb = textLayer(main, [Lc.capW, cp.lines * bs * 1.3 + 12], cp.text, { size: bs, align: "center", leading: bs * 1.18,
+      pos: [D.W / 2, Lc.capY - (cp.lines - 1) * bs * 0.59], name: "Caption " + (k + 1), font: D.font.bold });
+    var tdp = tb.property("ADBE Text Properties").property("ADBE Text Document"), dd = tdp.value;
+    dd.allCaps = true; dd.applyStroke = true; dd.strokeColor = [0, 0, 0]; dd.strokeWidth = Math.max(3, Math.round(bs * 0.11));
+    dd.strokeOverFill = false; tdp.setValue(dd);
+    tb.property("ADBE Text Properties").property("ADBE Text More Options").property("anchorGrouping").setValue(2);   // szavanként
+    if (cp.words && cp.words.length) wordAnim(tb, cp, capSt, bs);
+    lays = [tb];
+  } else {
+    var bar = rect(main, "Caption box " + (k + 1), [Lc.capW + Lc.capPad * 2, cp.lines * Lc.capSize * 1.28 + Lc.capPad * 1.4],
+      [D.W / 2, Lc.capY], [0.04, 0.045, 0.06], 72, Lc.capPad * 0.7);
+    var tx = textLayer(main, [Lc.capW, cp.lines * Lc.capSize * 1.4 + 8], cp.text, { size: Lc.capSize, align: "center",
+      pos: [D.W / 2, Lc.capY + Lc.capSize * 0.08], leading: Lc.capSize * 1.28, name: "Caption " + (k + 1), font: D.font.semibold });
+    if (capSt !== "box" && cp.words && cp.words.length) wordAnim(tx, cp, capSt, Lc.capSize);
+    lays = [bar, tx];
+  }
+  for (var q = 0; q < lays.length; q++) { lays[q].inPoint = cp.t0; lays[q].outPoint = cp.t1; }
 }
 // hang: saját hang teljes hangerőn, a zene alá keverve, a végén elhalkul (az átlátszó változatban nincs hang)
 if (D.audio && D.audio.voice && !D.alpha) { var v = main.layers.add(app.project.importFile(new ImportOptions(new File(D.audio.voice)))); v.name = "Voice-over"; }

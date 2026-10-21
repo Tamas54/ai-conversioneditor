@@ -205,6 +205,10 @@ subtitles=[{"start", "end", "text"}] (seconds or "MM:SS" — e.g. the transcript
 or "auto" (the transcript as heard — show it to the person first when names or numbers matter); an .srt comes with the
 result; changes.subtitles in an edit replaces them. Layers are optional when there are subtitles; layers stay above the
 caption bar. Long lines are split at sentence / clause boundaries into two-line parts.
+caption_style: box (default: the sentence on the dark bar) | karaoke (the words light up as they are said) |
+highlight (the word being said lights up and lifts) | reveal (the words appear as they are said) | bold (no bar: big
+outlined capitals, 1–3 words at a time, the word being said in the accent colour — the short-video look). The word
+times come from the transcript with subtitles="auto"; for your own subtitles they are estimated from the letters.
 action="transcript": what is said in a video or sound file (or an overlay project's footage), with times → sentences
 [{at, until, text}] + an .srt (file_id), as a job. Offline speech recognition (Whisper large-v3-turbo; `language`
 helps, else detected). Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …}.

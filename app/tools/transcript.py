@@ -447,13 +447,29 @@ def srt(tr: dict[str, Any]) -> str:
                    for i, s in enumerate(tr.get("sentences") or [], 1))
 
 
+def _glued(out: str, t: str) -> bool:
+    """A token az előzőhöz tapad-e (szóköz nélkül): kötőjellel / írásjellel kezdődik, vagy nyitó zárójel / idézőjel után jön."""
+    return bool(out) and (bool(re.match(r"[-‐–,.;:!?…)\]”»]", t)) or out.endswith(("(", "„", "«")))
+
+
 def _join(words: list[dict[str, Any]]) -> str:
     """Szavak szöveggé: a kötőjellel/írásjellel kezdődő token az előzőhöz tapad („ilyen-olyan”, nem „ilyen -olyan”)."""
     out = ""
     for w in words:
         t = w["w"]
-        out += t if not out or re.match(r"[-‐–,.;:!?…)\]”»]", t) or out.endswith(("(", "„", "«")) else " " + t
+        out += t if not out or _glued(out, t) else " " + t
     return out
+
+
+def _token_starts(words: list[dict[str, Any]]) -> list[float]:
+    """A _join szövegének szóközzel elválasztott tokenjei mikor hangzanak el (a tapadó írásjel nem új token) — a
+    szavankénti feliratnak (karaoke, kiemelés)."""
+    out, starts = "", []
+    for w in words:
+        if not out or not _glued(out, w["w"]):
+            starts.append(round(float(w["start"]), 2))
+        out += w["w"] if not out or _glued(out, w["w"]) else " " + w["w"]
+    return starts
 
 
 def cues(tr: dict[str, Any], max_chars: int = 84, max_dur: float = 6.5, gap: float = 0.8) -> list[dict[str, Any]]:
@@ -468,7 +484,7 @@ def cues(tr: dict[str, Any], max_chars: int = 84, max_dur: float = 6.5, gap: flo
 
     def flush() -> None:
         if cur:
-            out.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": _join(cur)})
+            out.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": _join(cur), "words": _token_starts(cur)})
             cur.clear()
 
     for w in words:
