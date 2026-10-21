@@ -39,6 +39,41 @@ function textLayer(comp, box, str, o) {
   }
   return t;
 }
+// jelenetváltás (D.transitions): a belépő jelenet (L) a t-től d hosszan jelenik meg az előző (prev) fölött — mozgással,
+// vagy az EffectCraft átmeneti effektjével (Transition Completion / Completion: 100 → 0)
+var TRANS_FX = { wipe: ["Linear Wipe", { "Wipe Angle": 270, "Feather": 0 }], "wipe-up": ["Linear Wipe", { "Wipe Angle": 0 }],
+  clock: ["Radial Wipe", {}], iris: ["CC Radial ScaleWipe", {}], blinds: ["Venetian Blinds", {}],
+  blocks: ["Block Dissolve", { "Block Width": 24, "Block Height": 24 }], cards: ["Card Wipe", {}], grid: ["CC Grid Wipe", {}],
+  jaws: ["CC Jaws", {}], light: ["CC Light Wipe", {}], twister: ["CC Twister", {}], sweep: ["CC Line Sweep", {}] };
+function transIn(comp, L, prev, t, d, kind) {
+  var T = tp(L), O = T.property("ADBE Opacity"), P = T.property("ADBE Position"), S = T.property("ADBE Scale"), home = P.value;
+  if (TRANS_FX[kind]) {
+    try {
+      var fx = L.property("ADBE Effect Parade").addProperty(TRANS_FX[kind][0]), c = fx.property(1);
+      for (var nm in TRANS_FX[kind][1]) { try { fx.property(nm).setValue(TRANS_FX[kind][1][nm]); } catch (e) {} }
+      c.setValueAtTime(t, 100); c.setValueAtTime(t + d, 0); ease(c);
+      return;
+    } catch (e) { writeLn("transition " + kind + ": " + e + " — fade instead"); }
+    kind = "fade";
+  }
+  var dx = kind.indexOf("-up") > 0 ? 0 : D.W, dy = kind.indexOf("-up") > 0 ? D.H : 0;
+  if (kind === "slide" || kind === "slide-up" || kind === "push" || kind === "push-up") {
+    P.setValueAtTime(t, [home[0] + dx, home[1] + dy]); P.setValueAtTime(t + d, home); ease(P);
+    if (kind.indexOf("push") === 0 && prev) {
+      var PP = tp(prev).property("ADBE Position"), ph = PP.value;
+      PP.setValueAtTime(t, ph); PP.setValueAtTime(t + d, [ph[0] - dx, ph[1] - dy]); ease(PP);
+    }
+  } else if (kind === "zoom") {
+    S.setValueAtTime(t, [130, 130]); S.setValueAtTime(t + d, [100, 100]); ease(S);
+    O.setValueAtTime(t, 0); O.setValueAtTime(t + d * 0.6, 100);
+  } else if (kind === "dip") {                    // feketén át: az előző elsötétül, az új a sötétből jön elő
+    var blk = comp.layers.addSolid([0, 0, 0], "Dip to black", D.W, D.H, 1);
+    blk.moveBefore(L); blk.inPoint = t; blk.outPoint = t + d;
+    var BO = tp(blk).property("ADBE Opacity");
+    BO.setValueAtTime(t, 0); BO.setValueAtTime(t + d * 0.5, 100); BO.setValueAtTime(t + d, 0);
+    O.setValueAtTime(t + d * 0.5 - 0.001, 0); O.setValueAtTime(t + d * 0.5, 100);
+  } else { O.setValueAtTime(t, 0); O.setValueAtTime(t + d, 100); }
+}
 function rect(comp, name, size, pos, color, opacity, round, stroke, strokeW) {
   var s = comp.layers.addShape(); s.name = name;
   var g = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
@@ -510,7 +545,7 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
   for (var j = 0; j < order.length; j++) {    // alulról fölfelé: a későbbi jelenet a korábbi FÖLÉ kerül, és beúszik
     var L = main.layers.add(order[j]);
     L.startTime = starts[j];
-    if (j > 0) { var o = tp(L).property("ADBE Opacity"); o.setValueAtTime(starts[j], 0); o.setValueAtTime(starts[j] + D.xfade, 100); }
+    if (j > 0) transIn(main, L, baseLayers[j - 1], starts[j], D.xfade, (D.transitions || [])[j - 1] || "fade");
     baseLayers.push(L);
   }
 }

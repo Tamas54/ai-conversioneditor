@@ -55,6 +55,11 @@ _ALIASES = {"9:16": "vertical", "story": "vertical", "stories": "vertical", "ree
             "wide": "landscape", "horizontal": "landscape", "1:1": "square", "post": "square", "instagram": "square"}
 FPS = 30
 XFADE = 0.5                            # jelenetek közti áttűnés (s)
+# jelenetváltások (10-22, a vanta / MoneyPrinterTurbo ötletlistájából): mozgás, illetve az EffectCraft átmeneti effektjei
+# (a „Transition Completion” 100 → 0 a váltás alatt); a „mix” váltakozik
+TRANSITIONS = ("fade", "dip", "slide", "slide-up", "push", "push-up", "zoom", "wipe", "wipe-up", "clock", "iris", "blinds",
+               "blocks", "cards", "grid", "jaws", "light", "twister", "sweep")
+_TRANSITION_MIX = ("wipe", "slide", "iris", "push", "clock", "zoom", "blinds", "light")
 MIN_TOTAL = 4.0                        # a legrövidebb kérhető videó (cím + egy jelenet + zárókép) — korábban 10 s volt a
                                        # padló, és a 8 s-os kérésből 10–13 s lett
 MIN_SCENE = 1.2                        # szoros fix hossznál ennél rövidebb jelenet nem olvasható
@@ -1730,6 +1735,27 @@ def _cards(total: Optional[float]) -> tuple[float, float]:
     return round(min(2.6, max(1.0, 0.16 * t)), 2), round(min(3.0, max(1.2, 0.18 * t)), 2)
 
 
+def transition_of(v: Any, what: str = "transition") -> Optional[str]:
+    """Egy jelenetváltás neve (None: nincs megadva)."""
+    if v in (None, ""):
+        return None
+    t = str(v).strip().lower().replace("_", "-")
+    if t not in TRANSITIONS + ("mix",):
+        raise ValueError(f"{what}: {' | '.join(TRANSITIONS)} | mix (a different one at each cut)")
+    return t
+
+
+def transitions_for(story: dict[str, Any], default: Optional[str]) -> list[str]:
+    """A váltások sorban: a címkártya után minden jelenetbe, végül a zárókártyába; a jelenet saját "transition"-je (a
+    belépésére) felülírja a videóét."""
+    base = transition_of(default) or "fade"
+    out = []
+    for i, sc in enumerate(list(story.get("scenes") or []) + [{}]):
+        t = transition_of(sc.get("transition"), f"scene {sc.get('id') or i + 1} transition") or base
+        out.append(_TRANSITION_MIX[i % len(_TRANSITION_MIX)] if t == "mix" else t)
+    return out
+
+
 def _scene_floor(total: float, n: int, Tt: float, Te: float) -> float:
     """A jelenet legrövidebb hossza: rendesen 3 s; ha a kért hossz ennél szorosabb, ami jut (legalább MIN_SCENE)."""
     return max(MIN_SCENE, min(3.0, (total - Tt - Te + XFADE * (n + 1)) / max(n, 1)))
@@ -1738,7 +1764,8 @@ def _scene_floor(total: float, n: int, Tt: float, Te: float) -> float:
 def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: list[Optional[str]],
             accent: Optional[str], credits: str, voice: Optional[str], voice_s: Optional[float], music: Optional[str],
             focus: Optional[dict[str, list[float]]] = None, ken_burns: str = "some",
-            fits: Optional[dict[str, str]] = None, fill: bool = False, scrim: Optional[float] = None) -> dict[str, Any]:
+            fits: Optional[dict[str, str]] = None, fill: bool = False, scrim: Optional[float] = None,
+            transition: Optional[str] = None) -> dict[str, Any]:
     """A forgatókönyvből a builder adatcsomagja (D): méretek, jelenet-hosszak, feliratok időzítve. fill (fix hossz): ha
     minden jelenetnek saját hossza van, és együtt rövidebbek a kértnél, arányosan nyúlnak — az áttűnések átfedését is
     kiegyenlítve. scrim: a képek fölötti sötétítés (0–1; None = a beépített), a jelenet saját scrim-je felülírja."""
@@ -1840,7 +1867,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     D = {
         "timeline": tl,
         "W": W, "H": H, "fps": FPS, "total": total, "xfade": X, "accent": _rgb(accent), "dark": [0.055, 0.06, 0.08],
-        "font": FONT,
+        "font": FONT, "transitions": transitions_for(story, transition),
         "L": {**L, "titleH": m * 0.44, "headH": m * 0.36,
               "kickerY": L["kickerTop"] + L["kickerSize"] * 0.8, "titleY": L["titleTop"] + m * 0.22, "headY": L["headTop"] + m * 0.18},
         "title": {"text": title, "kicker": story.get("kicker") or "", "image": _slots(images[0])[0] if images else None, "dur": Tt,
@@ -2868,7 +2895,7 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
             "keep_wording": keep,
             "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language"),
             "requested": float(dur) if dur else None, "duration_mode": body.get("duration_mode"), "alpha": body.get("alpha"),
-            "layer_source": text, "scrim": scrim_of(body.get("scrim"))}
+            "layer_source": text, "scrim": scrim_of(body.get("scrim")), "transition": transition_of(body.get("transition"))}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text, draft=bool(body.get("draft")),
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True) is not False,
                            pre_verified=pre_v, pre_findings=pre_f, layer_notes=lnotes)
@@ -2942,7 +2969,7 @@ async def _make_from_scenes(body: dict[str, Any], step: Callable[..., None], fmt
             "keep_wording": False,
             "narration": body.get("narration"), "narration_voice": body.get("narration_voice"), "language": body.get("language"),
             "requested": float(dur) if dur else None, "duration_mode": body.get("duration_mode"), "alpha": body.get("alpha"),
-            "layer_source": text, "scrim": scrim_of(body.get("scrim"))}
+            "layer_source": text, "scrim": scrim_of(body.get("scrim")), "transition": transition_of(body.get("transition"))}
     return await _assemble(story, specs, opts, chart_notes=chart_notes, source_text=text or source, draft=bool(body.get("draft")),
                            source_file_id=body.get("source_file_id"), step=step, render=body.get("render", True) is not False,
                            pre_verified=pre_v, pre_findings=pre_f, scene_plan=True, layer_notes=lnotes)
@@ -3745,7 +3772,7 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
         fits = _auto_fits(names, specs, work, W / H)
         D = compose(story_c, fmt=fmt, total=c_total, images=names, accent=opts.get("accent"), credits=on_screen, focus=focus, ken_burns=kb,
                     fits=fits, fill=mode == "fixed" and bool(c_total), scrim=scrim_of(opts.get("scrim")),
-                    voice=voice, voice_s=c_voice, music=music)
+                    voice=voice, voice_s=c_voice, music=music, transition=opts.get("transition"))
         if narr_clips:                   # a darabok a jelenetek elejére, egy sávban, a videó teljes hosszára
             from app.tools import narration
             segs = narration_segments(D, narr_clips)
@@ -5115,6 +5142,8 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
     _scene_motion(ch, sc)
     if "scrim" in ch:                             # a jelenet saját sötétítése (0–1; None = a videóé)
         sc["scrim"] = scrim_of(ch["scrim"], "scene scrim")
+    if "transition" in ch:                        # a belépése (None: a videóé)
+        sc["transition"] = transition_of(ch["transition"], "scene transition")
     if "stat" in ch:
         st = ch["stat"]
         sc["stat"] = ({"value": _clean(st.get("value"), 10, "Stat value"), "label": _clean(st.get("label"), 48, "Stat label")}
@@ -5276,6 +5305,8 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
             opts[key] = changes[key]
     if "scrim" in changes:
         opts["scrim"] = scrim_of(changes["scrim"])
+    if "transition" in changes:
+        opts["transition"] = transition_of(changes["transition"])
     if "music" in changes:                               # a tár zenéje (vagy "none") a saját zene helyére
         opts["music_asset"], opts["music_file_id"] = None, None
     elif changes.get("music_file_id") not in (None, "", "none"):

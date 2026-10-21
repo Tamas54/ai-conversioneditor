@@ -23,6 +23,11 @@ without it the search uses the headline), "stat"? {value, label}, "chart"? (topi
 "id"?}] + title, kicker?, title_image?, end_title?, end_subtitle?, format, duration (total; scenes without one share the
 rest). It is made exactly as given (no re-planning).
 
+TRANSITIONS between scenes: transition="fade" (default) | dip (through black) | slide | slide-up | push | push-up | zoom |
+wipe | wipe-up | clock | iris | blinds | blocks | cards (3D flipping cards) | grid | jaws | light (a glowing ring) |
+twister | sweep | mix (a different one at each cut); a scene's own "transition" is how IT comes in (also in an edit:
+changes.transition / changes.scenes[{"id", "transition"}]).
+
 MOVEMENT AND BACKGROUNDS, per scene (in scenes=[…] and in edit changes.scenes): "images": [up to 4 pictures] — the
 scene's backgrounds one after another, crossfading, each moving; "motion": zoom_in | zoom_out (Ken Burns, toward / away
 from its subject) | pan_left | pan_right | pan_up | pan_down | still | auto, "focus"?: [x, y] 0–1 (the point to move
