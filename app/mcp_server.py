@@ -1934,7 +1934,7 @@ async def video(
     """Short videos with an EDITABLE timeline (edit_url: an After Effects-like editor): made from a text, or
     graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
     FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit |
-    transcript | adjust | ai_clip | enhance. Read "layers" before a first overlay, "graphic" before your own.
+    transcript | adjust | ai_clip | avatar | enhance. Read "layers" before a first overlay, "graphic" before your own.
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
       scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
       MP4. format vertical|landscape|square; duration (s) + duration_mode fixed|narration.
@@ -1948,7 +1948,7 @@ async def video(
     action="transcript": what is said, with times (+ .srt; vocabulary=[names]). action="lottie": text → animations.
     action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
     action="stock": text → free real footage (Pexels) for cut-ins.
-    AI video (credits): action="ai_clip" (ai={…}) · "enhance" (factor 1|2|4) · "estimate".
+    AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
     render=false (make / overlay / edit): save the project only (the layout check still runs); draft=true: fast.
     Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
@@ -2008,7 +2008,7 @@ async def video(
                        "(Lottie Simple License: commercial use allowed); the author is credited on the end card."}
     if act in ("stock", "stock_video"):              # ingyenes valódi videó bejátszásnak (Pexels — app/tools/stock_video.py)
         return await _stock_videos(text or "", (ai or {}).get("orientation"))
-    if act in ("ai_clip", "enhance", "estimate"):    # kie.ai — a logika és a referencia: app/tools/ai_video.py
+    if act in ("ai_clip", "enhance", "estimate", "avatar"):   # kie.ai — a logika és a referencia: app/tools/ai_video.py
         from app.tools import ai_video
         return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":

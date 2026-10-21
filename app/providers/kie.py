@@ -54,6 +54,8 @@ _FLUX2 = {"fields": {"prompt": "prompt", "aspect": "aspect_ratio", "resolution":
 MODELS: dict[str, dict[str, Any]] = {
     "wan/3-0-video": _WAN,                     # szöveg→videó, kép→videó (első / első+utolsó kocka), referencia mód
     "wan/3-0-video-prime": _WAN,               # ugyanaz, a kie „high-speed” változata (drágább)
+    "kling/ai-avatar-standard": {"fields": {"image": "image_url", "audio": "audio_url", "prompt": "prompt"}},   # beszélő avatar
+    "kling/ai-avatar-pro": {"fields": {"image": "image_url", "audio": "audio_url", "prompt": "prompt"}},
     "flux-2/pro-text-to-image": _FLUX2,
     "flux-2/pro-image-to-image": _FLUX2,
     "flux1-kontext": {                         # FLUX.1 Kontext [pro]: retus, helyreállítás, színezés (input.model választ)
@@ -84,6 +86,8 @@ PRICES: list[tuple[str, str, str, str, float, str]] = [
     ("ai_clip", "wan/3-0-video-prime", "480p", "second", 12.2, "Wan 3.0 Prime (fast) 480p, $0.061/s"),
     ("ai_clip", "wan/3-0-video-prime", "720p", "second", 25.2, "Wan 3.0 Prime (fast) 720p, $0.126/s"),
     ("ai_clip", "wan/3-0-video-prime", "1080p", "second", 50.4, "Wan 3.0 Prime (fast) 1080p, $0.252/s"),
+    ("avatar", "kling/ai-avatar-standard", "720p", "second", 8, "Kling AI Avatar 720p (lip sync, ≤ 5 min audio), $0.04/s"),
+    ("avatar", "kling/ai-avatar-pro", "1080p", "second", 16, "Kling AI Avatar Pro 1080p, $0.08/s"),
     ("enhance", "topaz/video-upscale", "1x", "second", 8, "Topaz video upscale 1x/2x, $0.04/s"),
     ("enhance", "topaz/video-upscale", "2x", "second", 8, "Topaz video upscale 1x/2x, $0.04/s"),
     ("enhance", "topaz/video-upscale", "4x", "second", 14, "Topaz video upscale 4x, $0.07/s"),

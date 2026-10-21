@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-10-22 — Talking avatar
+
+From the look at vanta: a talking video from one photo.
+- **`video(action="avatar", ai={…})`** (Kling AI Avatar via kie.ai, lip-synced). The `ai` fields:
+  - `image`: a photo of the face;
+  - `audio`: a recording, ≤ 5 min (a video's sound works too), OR `text`: read out by the built-in Piper voice
+    (`voice`, `language`);
+  - `quality`: 720p (default) | 1080p;
+  - `prompt`: expression and camera;
+  - `consent: true` — required: the person in the photo agreed.
+- **Placement** like an AI clip (`at` / `after_scene`) or a file of its own. The result's sound is levelled like the clips.
+- **Price:** the seconds of speech × 8 (720p) / 16 (1080p) kie credits, through the common rule. Paid credits only
+  (`avatar` joins `PAID_ONLY_OPS`). `action="estimate"` with `ai={"for": "avatar", …}` gives the price.
+- **No AI label in the files** (owner, 10-22: "vedd ki az ai jelölést, majd a legvégén lehet, hogy betesszük" — telling
+  viewers it's AI is the user's call). The AI clips' post-processing only levels the sound. The XMP label on AI pictures,
+  edits and restorations is off too; `AI_LABEL=1` turns it back on.
+
 ## 2026-10-22 — Scene transitions
 
 From the same look at vanta / MoneyPrinterTurbo: we only had a 0.5 s crossfade between scenes.
