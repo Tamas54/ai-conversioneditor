@@ -11,6 +11,7 @@ from app.convert.engines import run
 from app.convert.options import OptionError
 from app.convert.steps import VIDEO_TIMEOUT, extract, pack, probe
 from app.ops.handlers import out_name, to_pdf
+from app.tools import loudness
 
 
 def _cat(p: Path) -> str:
@@ -22,9 +23,9 @@ async def merge(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
     cats = {_cat(p) for p in inputs}
     if cats <= {"video"}:
         return [await _concat_av(inputs, out, video=True, fmt=o.get("output_format") or "mp4", canvas=o.get("canvas"),
-                                 fit=o.get("fit"))]
+                                 fit=o.get("fit"), level=o.get("level_audio") is not False)]
     if cats <= {"audio"}:
-        return [await _concat_av(inputs, out, video=False, fmt=o.get("output_format") or "mp3")]
+        return [await _concat_av(inputs, out, video=False, fmt=o.get("output_format") or "mp3", level=bool(o.get("level_audio")))]
     if cats & {"video", "audio"}:
         raise OptionError("merge videos with videos and audio with audio")
     from app.ops.handlers.pdf import merge as pdf_merge
@@ -32,11 +33,13 @@ async def merge(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
 
 
 async def _concat_av(inputs: list[Path], out: Path, video: bool, fmt: str, canvas: Optional[str] = None,
-                     fit: Optional[str] = None) -> Path:
+                     fit: Optional[str] = None, level: bool = False) -> Path:
     """Különböző forrásokat is összefűz: egységes felbontásra/mintavételre kódolva (concat szűrő).
     Videó: a vászon az első klip MEGJELENÍTÉSI mérete (elforgatás után — az álló telefonos klip álló marad), vagy
     canvas = vertical | landscape | square | WxH; fit = blur (alap: a más arányú klip mögé a saját elmosott képe) |
-    contain (fekete sáv) | cover (kitölt, a széle levágva). Az ffmpeg a klipeket magától elforgatja (autorotate)."""
+    contain (fekete sáv) | cover (kitölt, a széle levágva). Az ffmpeg a klipeket magától elforgatja (autorotate).
+    level (videónál alap, level_audio=false kikapcsolja): minden rész hangja ugyanarra a hangosságra (app/tools/
+    loudness.py), hogy a bevágásnál ne ugorjon. A hang nélküli rész csendet kap (különben az egész néma lenne)."""
     dst = out_name(out, inputs[0], "-merged", fmt)
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
     for p in inputs:
@@ -51,12 +54,16 @@ async def _concat_av(inputs: list[Path], out: Path, video: bool, fmt: str, canva
         fit = fit if fit in videonorm.FITS else "blur"
         rates = {round(m["fps"] or 0, 2) for m in ms}
         fps = rates.pop() if len(rates) == 1 and 1 <= next(iter(rates)) <= 60 else 30      # közös fps marad, eltérőnél 30
-        all_audio = all(m["has_audio"] for m in ms)
+        all_audio = any(m["has_audio"] for m in ms)           # ha egynek van hangja: a többi csendet kap
+        lv = [await loudness.measure(p, m["audio_stream"]) if level and m["has_audio"] else None for p, m in zip(inputs, ms)]
         parts = []
         for i, m in enumerate(ms):
             parts.append(f"[{i}:v]{videonorm.input_chain(m, W, H, fit, f'f{i}')},fps={fps:g}[v{i}]")
-            if all_audio:
-                parts.append(f"[{i}:a:{m['audio_stream'] or 0}]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+            if all_audio and m["has_audio"]:
+                parts.append(f"[{i}:a:{m['audio_stream'] or 0}]{loudness.chain(lv[i])},aresample=48000,"
+                             f"aformat=channel_layouts=stereo[a{i}]")
+            elif all_audio:
+                parts.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={float(m['duration'] or 0):.3f}[a{i}]")
         streams = "".join(f"[v{i}]" + (f"[a{i}]" if all_audio else "") for i in range(n))
         fc = ";".join(parts) + f";{streams}concat=n={n}:v=1:a={1 if all_audio else 0}[v]" + ("[a]" if all_audio else "")
         from app.ops.handlers.media import _acodec_for, _faststart, _vcodec_for
@@ -64,7 +71,8 @@ async def _concat_av(inputs: list[Path], out: Path, video: bool, fmt: str, canva
         args += _vcodec_for(fmt) + _faststart(fmt)
     else:
         from app.convert.steps import _AUDIO_DEF
-        parts = [f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]" for i in range(n)]
+        lv = [await loudness.measure(p) if level else None for p in inputs]
+        parts = [f"[{i}:a]{loudness.chain(lv[i])},aresample=48000,aformat=channel_layouts=stereo[a{i}]" for i in range(n)]
         fc = ";".join(parts) + ";" + "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[a]"
         args += ["-filter_complex", fc, "-map", "[a]", *_AUDIO_DEF.get(fmt, (["-c:a", "libmp3lame"], "mp3", None))[0]]
         if fmt == "mp3":

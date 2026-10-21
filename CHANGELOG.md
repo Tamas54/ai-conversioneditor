@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-22 — Even sound, picture in picture
+
+From the Wan version of the "Reggeli különkiadás" product test.
+- **Sound levelling** (`app/tools/loudness.py`, EBU R128 two-pass `loudnorm`, linear, target −16 LUFS / −1.5 dBTP):
+  - **merge-files**: every part comes out at the same loudness. The Wan clips' generated sound was ~13 dB louder than
+    the speech footage, so the volume jumped at each clip. On the test video the parts now sit within 2 dB, where
+    before they spread from −16 to −39 dB mean volume. On by default for videos; `level_audio: false` keeps the
+    original levels, and audio merges can turn it on. A near-silent part is never boosted.
+  - **A part without sound no longer mutes the merge.** Before, one silent clip (an AI clip without audio) made the
+    whole merged video silent; now that part gets silence.
+  - **AI clips** are levelled when they arrive.
+  - **Cut-ins** (fullscreen / split / pip with sound) are levelled to the footage's own loudness, kept within −28…−12 LUFS.
+- **Picture in picture** — `{"type": "pip", "image": <video or picture>, "corner": "top-right" | …, "size": 0.2–0.7,
+  "aspect": "16:9", "sound": "off" | "mix" | "replace", "clip"?}`: the footage stays full screen and the other video
+  plays in a framed window in a corner, sized for the frame. It is the vertical-video answer to `split`, which shrinks
+  a vertical base into a small window.
+- **Engine fix: a `pop` / `grow` / `pulse` animation no longer resets a fitted picture or video to its native size**
+  (the builder keyframed scale to 100%). A 1280×720 video in a 648-px window came out at 1280 px wide, covering its own
+  frame.
+- **All-caps text is measured wider** (capitals ~0.7 em, narrow letters ~0.32, the rest ~0.56, instead of 0.56 for
+  every letter). An all-caps lower-third name was counted as one line, broke into two on screen and ran over the role
+  line. Now it is set smaller and fits.
+
 ## 2026-10-21 — Wan 3.0 instead of Seedance, AI pictures on kie.ai, prices that can't lose money
 
 Owner's decisions: Seedance goes ("kidobjuk a seedance-t. Wan lesz"); 720p is the default; the person can choose the AI

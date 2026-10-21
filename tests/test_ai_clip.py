@@ -185,6 +185,15 @@ def test_image_to_video_from_the_timeline_frame(db_client, prov, tmp_path):
                                   capture_output=True, text=True).stdout)["streams"][0]
     assert min(d["width"], d["height"]) >= 300 and d["codec_name"] == "mjpeg"     # a kie minimuma: 300 px
     assert j["result"]["audio"] is True and j["result"]["credits_charged"] == 26   # 5 s 720p
+    # a generált hang a közös szintre kerül (a Wan hangja ~13 dB-lel hangosabb volt a felvételnél)
+    from app import tenancy
+    from app.storage import output_path
+    from app.tools import loudness
+    tok = tenancy.set_user(uid)
+    try:
+        assert abs(call(lambda: loudness.measure(output_path(j["result"]["file_id"])))["i"] - loudness.TARGET_LUFS) < 1.0
+    finally:
+        tenancy.reset(tok)
 
 
 def test_failed_clip_and_insufficient_or_free_credits_over_mcp(db_client, prov):
