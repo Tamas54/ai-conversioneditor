@@ -1,6 +1,7 @@
 """Csomagok, kreditek, havi keretek és Stripe (Checkout + ügyfélportál + webhook).
 
-Árazás (10-11, a mért önköltségre): 1 kredit ≈ €0,10. Kreditbe az kerül, amibe kép kerül (FLUX/Kontext 3–4 ¢);
+Árazás (10-11, a mért önköltségre): 1 kredit ≈ €0,10. Kreditbe az kerül, amibe kép kerül (10-21 óta a kie.ai-n: FLUX.2,
+Kontext; az ár a közös képletből, app/credits.py — veszteség soha);
 a szöveges AI (DeepSeek, ~0,1 ¢/hívás) a webes felületen az előfizetésben „fair use”, az ingyenes fióknak havi keret.
 MCP-n (ChatGPT, Claude… — a gondolkodás a kliens modelljén, a felhasználó előfizetésén fut) a szerver SAJÁT
 modellhívása (képválasztás látómodellel, képkereső szavak, cikkből forgatókönyv, képleírás, tényellenőrzés…) egy
@@ -359,8 +360,12 @@ async def _apply(event: dict[str, Any]) -> str:
 # ---------- végpontok ----------
 
 def costs() -> dict[str, Any]:
-    """Mibe kerül kredit — az app Plans oldala és a nyilvános árlap (/pricing) is innen."""
-    return {"ai_image": settings.IMAGE_CREDIT_COST, "restore": 2, "colourise": 1,
+    """Mibe kerül kredit — az app Plans oldala és a nyilvános árlap (/pricing) is innen. A külső AI ára a közös képletből
+    (app/credits.py: a szolgáltató költsége × 2 ÷ a legolcsóbban eladott kredit értéke): a kódbeli árlap szerint."""
+    from app.tools import ai_image, ai_video
+    edit = ai_image.edit_price()
+    return {"ai_image": ai_image.gen_price("1024x1024"), "ai_image_large": ai_image.picture_price(), "ai_edit": edit,
+            "restore": edit, "colourise": edit, "ai_clip_5s": ai_video.clip_prices(5),
             "scan_pages_per_credit": SCAN_PAGES_PER_CREDIT, "ai_steps_per_credit": AI_STEPS_PER_CREDIT}
 
 

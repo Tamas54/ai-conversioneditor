@@ -2,7 +2,7 @@
 mezőnevek) itt marad; a saját szintézis-/renderréteg (app/tools/video.py) csak a letöltött, saját tárhelyen lévő fájlt látja.
 
 Kapcsoló (kockázatos — valódi pénzt költ):
-    KIE_API_KEY         a kie.ai kulcsa (csak env-ből): AI-klip (Seedance), Topaz a kie-n
+    KIE_API_KEY         a kie.ai kulcsa (csak env-ből): AI-klip (Wan 3.0), AI-képek (FLUX.2, Kontext), Topaz a kie-n
     FAL_KEY             a fal.ai kulcsa (csak env-ből): élesítés (SeedVR2 / Topaz) — ENHANCE_ENGINE választ
     AI_VIDEO            "" (alap: ki) | "admin" (csak az admin próbálhatja) | "1" (mindenki, kreditért)
 """

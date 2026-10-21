@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-10-21 — Wan 3.0 instead of Seedance, AI pictures on kie.ai, prices that can't lose money
+
+Owner's decisions: Seedance goes ("kidobjuk a seedance-t. Wan lesz"); 720p is the default; the person can choose the AI
+engine; no loss in any case; pictures come from kie.ai too ("nem akarom keverni").
+- **AI clips: Wan 3.0** (`wan/3-0-video`, the default) or **Wan 3.0 Fast** (`wan/3-0-video-prime`, kie's high-speed
+  version, dearer). `engine` on `ai_clip` and an "AI engine" picker in the web form; resolution 480p | 720p (default) |
+  1080p; 2–30 s; aspect 16:9 | 9:16 | 1:1 | 4:3 | 3:4 | adaptive. Text, first (+last) frame and reference mode as before;
+  Wan's limits: ≤ 10 reference pictures, ≤ 5 reference videos / sounds, 1–15 s each and ≤ 15 s in total, reference video
+  + clip ≤ 30 s (billed seconds = clip + reference video). The prompt calls the references Image1, Video1, Audio1….
+  kie's content filter (`nsfw_checker`) is on. Same price with or without sound.
+- **Seedance is gone**: the models, prices, the draft → final flow (`draft`, `finalize`, `/api/ai/draft-of`, the "Make
+  final" button). A `draft` / `finalize` request gets a clear message; the old Seedance price rows are retired on start.
+- **One pricing rule for every external AI cost** (`app/credits.py`): credits = provider cost × 2 ÷ the least we net on
+  a credit we sell. That floor is computed from the plans and packs (`credit_floor_eur`): 27% VAT (the highest in the EU),
+  the dearest card fee (3.25% + €0.25), and the yearly plans' 12 monthly allowances. Today that's Pro yearly,
+  €0.0298 a credit. Dollars count at €0.95 (ECB today: 0.89). So even the cheapest credit buys AI at twice its cost.
+  The rule follows a change of plan or pack prices by itself.
+  - A price row can be raised in the admin but not saved below the floor, and `price()` lifts a row below it anyway.
+    A row without a provider is recognised from its model. On start, rows below the floor are raised; an admin's
+    higher price stays.
+  - Today: a 5 s clip is 13 / 26 / 51 credits (480p / 720p / 1080p) on Wan 3.0 and 20 / 41 / 81 on Wan 3.0 Fast. Topaz
+    on kie is 8 credits per 3 s at 1–2×.
+  - Machine invariant: `tests/test_pricing_floor.py`.
+- **AI video runs on paid credits only.** The free monthly and the welcome credits have no revenue behind them. Paid means
+  credited from Stripe (pack or subscription): the sum of those, minus everything ever reserved or charged for
+  `ai_clip` / `enhance`, checked under the account's row lock. Otherwise `paid_credits_only` (MCP and HTTP 402), with how
+  much is needed and how much is left.
+- **The provider charging more than we reserved is reported** (admin notice `ai_cost_above_hold` /
+  `image_price_below_cost`). The charge still stops at the reservation.
+- **AI pictures on kie.ai, the same models**:
+  - FLUX.2 [pro] generates: 1K up to ~1 MP, 2K above. Slide and video-scene pictures (1792×1024…) are 2K, never smaller
+    than asked.
+  - FLUX.1 Kontext [pro] edits: restoration, colourising, retouch, AI text removal. The original's ratio is kept.
+  - SiliconFlow no longer makes pictures. Its language and vision models stay.
+  - Prices from the same rule: 2 credits (≤ 1 MP), 3 (larger), 2 per Kontext edit. A restoration is 2, +2 to colourise
+    (was 2 and +1).
+  - Every picture goes through the ledger: reserve → charge with kie's real cost (`provider_cost`), so the daily
+    reconciliation sees it and admin use is logged. A failure costs nothing.
+  - Pictures can still use free credits.
+  - `IMAGE_CREDIT_COST` is gone; the account carries `image_credit_cost` (a framed picture) and `edit_credit_cost`.
+- **Pricing page and Plans** list every AI price: picture, larger picture, edit, restore and colourise, and a 5 s clip
+  per engine and resolution. They also explain the rule and the paid-credits-only rule.
+- Needs `KIE_API_KEY` in production for pictures (as for AI video). The `AI_VIDEO` switch still gates video only.
+
 ## 2026-10-19 — Own music on own footage
 
 From the owner's product test ("Tamás TV – Reggeli különkiadás"). Music is the person's own; what we offer ourselves has

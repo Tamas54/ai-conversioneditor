@@ -2746,18 +2746,23 @@
   "packs_note": "No subscription — they don't expire.",
   "credits": "credits",
   "costs_h": "What costs credits",
-  "c_image": "AI image, AI background, AI retouch",
+  "c_image": "AI image or AI background (square, about 1 megapixel)",
+  "c_image_large": "AI image for a slide or a video scene (larger)",
+  "c_edit": "AI retouch, AI text removal",
   "c_restore": "Restore an old photo",
   "c_colour": "…and colourise it",
   "c_scan": "Scanned pages beyond your monthly pages",
   "c_scan_v": "1 per {n} pages",
   "c_steps": "{product} AI steps your connected AI (ChatGPT, Claude…) uses beyond the monthly steps",
   "c_steps_v": "1 per {n} steps",
+  "c_clip": "AI video clip, 5 seconds — {engine}",
+  "c_clip_v": "480p {p480} · 720p {p720} · 1080p {p1080}",
+  "ai_note": "AI pictures and video are priced from what the AI service charges us: at least twice its cost even for the cheapest credit we sell, so the price follows the service. AI video runs on paid credits only (not the free monthly or welcome credits); a failed job costs nothing.",
   "included": "Everything else — documents, decks, scans within your monthly pages, changes, PDF tools, conversions, editors — is included in your plan.",
   "faq": [
    [
     "What is a credit?",
-    "A credit is worth about €0.10. Credits pay only for work that costs money to make: AI pictures, photo restoration, scanned pages beyond your monthly pages, and AI steps beyond the monthly steps when your own AI works with {product}. Everything else is included in your plan."
+    "A credit is worth about €0.10. Credits pay only for work that costs money to make: AI pictures and video clips, photo restoration, scanned pages beyond your monthly pages, and AI steps beyond the monthly steps when your own AI works with {product}. Everything else is included in your plan."
    ],
    [
     "Do I need an account?",

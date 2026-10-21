@@ -18,6 +18,7 @@
 <div class="packs">{% for k in p.packs %}<article class="pack"><b>{{ k.credits }}</b> {{ t('price.credits') }}<span>{{ k.price }}</span></article>{% endfor %}</div></section>
 <section><h2 class="plans-h">{{ t('price.costs_h') }}</h2>
 <table class="costs"><tbody>{% for a, b in p.costs %}<tr><td>{{ a }}</td><td>{{ b }}</td></tr>{% endfor %}</tbody></table>
+<p class="muted small">{{ t('price.ai_note') }}</p>
 <p class="muted small">{{ t('price.included') }}</p></section>
 {{ faq(p.faq, t) }}
 {% endblock %}

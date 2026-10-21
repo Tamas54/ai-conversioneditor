@@ -349,7 +349,7 @@ async def edit_one(file_id: str, steps: list[dict[str, Any]], logo_file_id: Opti
 
 async def _ai_edits(src: Path, instructions: list[str]) -> list[dict[str, Any]]:
     """Generatív retus (FLUX.1-Kontext-pro) egymás után; minden eredmény az eredetire illesztve, külön rétegként
-    (az eredeti alatta marad → maszkkal bármi visszahozható). Kredit: lépésenként IMAGE_CREDIT_COST."""
+    (az eredeti alatta marad → maszkkal bármi visszahozható). Kredit: lépésenként a Kontext listaára (ai_image.edit_price)."""
     from PIL import Image
     from app.storage import temp_path
     from app.storage.files import new_file_id
@@ -360,15 +360,12 @@ async def _ai_edits(src: Path, instructions: list[str]) -> list[dict[str, Any]]:
         from PIL import ImageOps
         ImageOps.exif_transpose(im).convert("RGB").save(cur)
     cmds: list[dict[str, Any]] = []
+    from app.tools import ai_image
     for k, ins in enumerate(instructions, 1):
-        charged = await restore._charge(1, ins[:80], "AI retouch")
-        try:
+        async with ai_image.paid("ai_edit", ai_image.edit_price(), f"retouch:{ins[:72]}") as bill:
             raw = await restore._kontext(cur, f"{ins.strip().rstrip('.')}. Change nothing else: keep the same subject, "
-                                              "pose, colours, lighting, framing and every other detail exactly as they are.")
-        except Exception:
-            if charged:
-                await restore._refund(1, ins[:80])
-            raise
+                                              "pose, colours, lighting, framing and every other detail exactly as they are.",
+                                         bill)
         nxt = temp_path(new_file_id("png"))
         await asyncio.to_thread(restore.align, cur, raw, nxt)
         cmds += [{"command": "file.placeEmbedded", "params": {"path": str(nxt), "scale": 100, "fit": False, "center": [W / 2, H / 2]}},

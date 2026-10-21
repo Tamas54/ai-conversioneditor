@@ -1,4 +1,4 @@
-"""AI-videó külső szolgáltatóval (kie.ai: Seedance 2.5 klip, Topaz felskálázás) — a szolgáltatói réteg (app/providers) és a
+"""AI-videó külső szolgáltatóval (kie.ai: Wan 3.0 klip, Topaz felskálázás; fal.ai: SeedVR2 / Topaz) — a szolgáltatói réteg (app/providers) és a
 saját videóréteg (app/tools/video.py) között: kredit (becslés → hold → feladat → capture / release), a feladat
 nyilvántartása (provider_tasks), várakozás (lekérdezés visszalépéssel, a webhook felébreszti), eredmény AZONNAL a saját
 tárhelyre, újraindítás után folytatás (resume_loop).
@@ -354,6 +354,11 @@ async def _finish_op_locked(op: str) -> None:
     rule = await credits.rule_for(head["operation"], head["model"], head["meta"].get("tier") or "")
     est = credits.price(rule, float(head["meta"].get("units") or 1))
     charge = credits.price(rule, provider_units=cost) if any(r["provider_cost"] is not None for r in rows) else est
+    if charge > head["hold"] and head["user_id"] != tenancy.ADMIN_ID:     # a levonás a foglalásnál megáll — szólunk
+        await credits.notice("ai_cost_above_hold", f"{head['provider']} charged {cost:g} for {head['model']} "
+                                                   f"({head['meta'].get('tier')}): {charge} credits, but only {head['hold']} "
+                                                   "were reserved — check the price list (app/providers).",
+                             {"op": op, "charge": charge, "hold": head["hold"]})
     res = await credits.settle(head["user_id"], op, head["hold"], charge, operation=head["operation"],
                                provider=head["provider"], provider_task_id=head["provider_task_id"], provider_cost=cost,
                                meta={"model": head["model"], "tier": head["meta"].get("tier"), "parts": len(rows),
@@ -545,12 +550,18 @@ def _ts(v: Any) -> float:
 
 # ---------- modellek és becslés (OMLETT 2.2) ----------
 
-CLIP_MODEL = "bytedance/seedance-2-5"             # szöveg→videó, kép→videó (első / első+utolsó kocka), referencia mód
-FINAL_MODEL = "bytedance/seedance-2-5-draft"      # egy draft (480p) véglegesítése 1080p-re, ugyanazzal a mozgással
+# AI-klip motorok — a felhasználó választ (Kommandant 10-21: a Seedance ki, a Wan 3.0 az alap, az alap felbontás a 720p).
+# Mind szöveg→videó, kép→videó (első / első+utolsó kocka) és referencia mód; az ár a motor árlapjából (credits.PRICES).
+CLIP_ENGINES: dict[str, tuple[str, str]] = {
+    "wan-3": ("wan/3-0-video", "Wan 3.0"),
+    "wan-3-fast": ("wan/3-0-video-prime", "Wan 3.0 Fast"),       # a kie „high-speed” változata, drágább
+}
+DEFAULT_ENGINE, DEFAULT_RESOLUTION = "wan-3", "720p"
 UPSCALE_MODEL = "topaz/video-upscale"             # 1x / 2x / 4x
 RESOLUTIONS = ("480p", "720p", "1080p")
-ASPECTS = ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive")
-CLIP_MIN_S, CLIP_MAX_S = 4, 30
+ASPECTS = ("16:9", "9:16", "1:1", "4:3", "3:4", "adaptive")
+CLIP_MIN_S, CLIP_MAX_S = 2, 30
+REF_MEDIA_MAX_S = 15                              # referencia-videó / -hang: darabonként és összesen is ≤ 15 s (a kie szabálya)
 FACTORS = (1, 2, 4)
 TOPAZ_MAX_MB = 50                                 # a kie API bemeneti korlátja (mp4 / mov / mkv)
 # élesítő motorok (ENHANCE_ENGINE): név → (szolgáltató, modell, a bemenet többi mezője, egy darab legfeljebb MB).
@@ -583,7 +594,16 @@ def _enhance_units(engine: str, f: int, info: dict[str, Any], secs: int) -> tupl
         short = min(w, h)
         return ("720p" if short <= 720 else "1080p" if short <= 1080 else "4k"), float(secs)
     return f"{f}x", float(secs)
-REF_LIMITS = {"reference_images": 30, "reference_videos": 10, "reference_audios": 10}
+REF_LIMITS = {"reference_images": 10, "reference_videos": 5, "reference_audios": 5}
+
+
+def clip_prices(seconds: int = 5) -> list[dict[str, Any]]:
+    """Egy `seconds` hosszú klip ára motoronként és felbontásonként (a kódbeli árlapból, a közös képlettel) — az árlaphoz."""
+    from app.providers import kie
+    per_s = {(m, t): c for op, m, t, _, c, _ in kie.PRICES if op == "ai_clip"}
+    return [{"engine": e, "label": label, "default": e == DEFAULT_ENGINE,
+             "credits": {r: credits.list_price("kie", per_s[(model, r)], seconds) for r in RESOLUTIONS}}
+            for e, (model, label) in CLIP_ENGINES.items()]
 
 
 def _ids(v: Any) -> list[str]:
@@ -593,21 +613,24 @@ def _ids(v: Any) -> list[str]:
 
 
 def clip_options(o: dict[str, Any]) -> dict[str, Any]:
-    """Az AI-klip beállításai, ellenőrizve: mode = text | first_frame | first_last | reference (nem keverhető)."""
+    """Az AI-klip beállításai, ellenőrizve: engine (CLIP_ENGINES), mode = text | first_frame | first_last | reference."""
     o = dict(o or {})
+    if o.get("finalize") or o.get("draft"):
+        raise AIVideoError("Drafts were a Seedance feature and are gone: make the clip at the resolution you want "
+                           "(480p is the cheap preview).")
     prompt = str(o.get("prompt") or "").strip()
-    if not prompt and not o.get("finalize"):
+    if not prompt:
         raise AIVideoError('Say what should happen in the clip: ai={"prompt": "…"} (or text=…).')
-    draft = bool(o.get("draft"))
-    res = str(o.get("resolution") or ("480p" if draft else "720p")).lower().replace("p", "") + "p"
+    engine = str(o.get("engine") or DEFAULT_ENGINE).lower()
+    if engine not in CLIP_ENGINES:
+        raise AIVideoError(f"engine: {' | '.join(CLIP_ENGINES)}")
+    res = str(o.get("resolution") or DEFAULT_RESOLUTION).lower().replace("p", "") + "p"
     if res not in RESOLUTIONS:
         raise AIVideoError(f"resolution: {' | '.join(RESOLUTIONS)}")
-    if draft and res != "480p":
-        raise AIVideoError("A draft is always 480p (cheap preview) — finalise it to 1080p afterwards.")
     try:
         dur = int(round(float(o.get("duration") or 5)))
     except (TypeError, ValueError):
-        raise AIVideoError("duration: seconds, 4–30") from None
+        raise AIVideoError(f"duration: seconds, {CLIP_MIN_S}–{CLIP_MAX_S}") from None
     if not CLIP_MIN_S <= dur <= CLIP_MAX_S:
         raise AIVideoError(f"duration: {CLIP_MIN_S}–{CLIP_MAX_S} seconds (got {dur})")
     first = o.get("first_frame") or o.get("image")
@@ -625,34 +648,40 @@ def clip_options(o: dict[str, Any]) -> dict[str, Any]:
     if aspect not in ASPECTS:
         raise AIVideoError(f"aspect: {' | '.join(ASPECTS)}")
     mode = "reference" if any(refs.values()) else "first_last" if last else "first_frame" if first else "text"
-    return {"prompt": prompt, "resolution": res, "duration": dur, "audio": bool(o.get("audio", False)), "draft": draft,
-            "aspect": aspect, "mode": mode, "first_frame": first, "last_frame": last, **refs}
+    return {"prompt": prompt, "engine": engine, "model": CLIP_ENGINES[engine][0], "resolution": res, "duration": dur,
+            "audio": bool(o.get("audio", False)), "aspect": aspect, "mode": mode, "first_frame": first, "last_frame": last,
+            **refs}
 
 
-async def _ref_video_seconds(ids: list[str]) -> float:
-    from app.tools import crafts, video
+async def _ref_seconds(ids: list[str], what: str) -> float:
+    """A referencia-videók / -hangok hossza: darabonként 1–15 s, összesen ≤ 15 s (a kie szabálya)."""
+    from app.tools import crafts
     total = 0.0
     for fid in ids:
-        total += await true_seconds(crafts.existing(fid))
-    if total > 30:
-        raise AIVideoError(f"Reference videos may be 30 seconds in total (these are {total:.1f} s).")
+        s = await true_seconds(crafts.existing(fid))
+        if not 1 <= s <= REF_MEDIA_MAX_S + 0.05:
+            raise AIVideoError(f"Each reference {what} must be 1–{REF_MEDIA_MAX_S} seconds ({fid} is {s:.1f} s) — trim it first.")
+        total += s
+    if total > REF_MEDIA_MAX_S + 0.05:
+        raise AIVideoError(f"Reference {what}s may be {REF_MEDIA_MAX_S} seconds in total (these are {total:.1f} s).")
     return total
 
 
 async def estimate_clip(o: dict[str, Any]) -> dict[str, Any]:
-    """Az AI-klip ára (Studio-kredit) a becsült maximumra — ezt foglaljuk le; a levonás a tényleges költség."""
-    if o.get("finalize"):
-        fin = await _draft_row(str(o["finalize"]))       # csak a hívó saját, kész draftja
-        dur = int((fin["input"] or {}).get("duration") or fin["meta"].get("duration") or 5)
-        est = await credits.estimate("ai_clip", FINAL_MODEL, "1080p", dur)
-        return {**est, "what": f"final 1080p of the draft ({dur} s)"}
+    """Az AI-klip ára (Studio-kredit) a becsült maximumra — ezt foglaljuk le; a levonás a tényleges költség. A díjköteles
+    másodpercek: a klip + a referencia-videók hossza (ugyanazon az áron)."""
     c = clip_options(o)
-    ref_s = await _ref_video_seconds(c["reference_videos"]) if c["reference_videos"] else 0.0
-    tier = c["resolution"] + ("+video" if ref_s else "")
+    ref_s = await _ref_seconds(c["reference_videos"], "video") if c["reference_videos"] else 0.0
+    if c["reference_audios"]:
+        await _ref_seconds(c["reference_audios"], "sound")
+    if ref_s and ref_s + c["duration"] > CLIP_MAX_S:
+        raise AIVideoError(f"The reference videos ({ref_s:.0f} s) and the clip ({c['duration']} s) may be {CLIP_MAX_S} "
+                           "seconds together — make the clip shorter.")
     units = c["duration"] + (math.ceil(ref_s) if ref_s else 0)
-    est = await credits.estimate("ai_clip", CLIP_MODEL, tier, units)
-    return {**est, "what": f"{'draft ' if c['draft'] else ''}{c['resolution']} {c['duration']} s clip"
-                           + (f" (+{ref_s:.0f} s reference video)" if ref_s else "")}
+    est = await credits.estimate("ai_clip", c["model"], c["resolution"], units)
+    return {**est, "engine": c["engine"],
+            "what": f"{CLIP_ENGINES[c['engine']][1]} {c['resolution']} {c['duration']} s clip"
+                    + (f" (+{ref_s:.0f} s reference video)" if ref_s else "")}
 
 
 async def estimate_enhance(file_id: str, factor: Any) -> dict[str, Any]:
@@ -881,19 +910,20 @@ AI_VIDEO_REFERENCE: dict[str, str] = {
         'video(action="status", job_id=…). Cancelling (jobs cancel) before the upload reaches the AI service costs nothing; '
         "after that the service can't be stopped: you pay what it really charged and the result is kept in your files."),
     "ai_clip": (
-        'video(action="ai_clip", ai={…}, file_id?=<project to put the clip in>) — a generated clip (Seedance 2.5 via '
-        "kie.ai). ai: prompt (what happens, camera, style), resolution 480p|720p|1080p (default 720p), duration 4–30 s "
-        "(default 5), audio true|false (default false), aspect 16:9|9:16|1:1|4:3|3:4|21:9|adaptive. Picture to start "
-        "from (pick ONE mode): image / first_frame = file_id of a picture, or {\"frame\": seconds} = that moment of the "
-        "file_id video/project (its last render) — the clip continues the shot; + last_frame = where it should end; OR "
-        "reference_images [≤30 file_ids] / reference_videos [≤10, ≤30 s in total] / reference_audios — the look, the "
-        "person, the sound to follow (not mixable with first/last frame). draft=true → a cheap 480p preview, then "
-        'ai={"finalize": task_id} makes the same clip final at 1080p. Where it goes (with file_id = a video project): '
-        "at=seconds → a full-screen cut-in over the timeline at that time (its sound mixed if audio) | after_scene=\"s3\" "
-        "(or 0 = first) → a new scene of its own; without them the clip just comes back as a file. Costs credits by "
-        "length × resolution (480p/720p/1080p: 28/63/158 kie credits a second × the Studio multiplier); the estimate is "
-        'reserved, only the real cost is taken, a failed job costs nothing. action="estimate" → the price only. Cancelling '
-        "after the AI service has the job: you pay what it charged, the clip is kept in your files (not on the timeline)."),
+        'video(action="ai_clip", ai={…}, file_id?=<project to put the clip in>) — a generated clip (via kie.ai). ai: prompt '
+        "(what happens, camera, style), engine wan-3 (Wan 3.0, default) | wan-3-fast (Wan 3.0 Fast: quicker, dearer), "
+        "resolution 480p|720p|1080p (default 720p), duration 2–30 s (default 5), audio true|false (default false), aspect "
+        "16:9|9:16|1:1|4:3|3:4|adaptive. Picture to start from (pick ONE mode): image / first_frame = file_id of a "
+        "picture, or {\"frame\": seconds} = that moment of the file_id video/project (its last render) — the clip continues "
+        "the shot; + last_frame = where it should end; OR reference_images [≤10 file_ids] / reference_videos [≤5, 1–15 s "
+        "each, ≤15 s in total] / reference_audios [≤5, ≤15 s in total] — the look, the person, the sound to follow (not "
+        "mixable with first/last frame); in the prompt call them Image1, Image2…, Video1…, Audio1… in the order given. "
+        "Where it goes (with file_id = a video project): at=seconds → a full-screen cut-in over the timeline at that time "
+        "(its sound mixed if audio) | after_scene=\"s3\" (or 0 = first) → a new scene of its own; without them the clip "
+        "just comes back as a file. Costs paid credits (not the free monthly ones) by length × resolution × engine — "
+        'action="estimate" gives the exact price; it is reserved, only the real cost is taken, a failed job costs nothing. '
+        "Cancelling after the AI service has the job: you pay what it charged, the clip is kept in your files (not on the "
+        "timeline)."),
 }
 
 
@@ -920,27 +950,25 @@ async def _mcp(act: str, *, file_id, factor, ai: dict[str, Any], text, duration,
             raise AIVideoError('enhance needs file_id (a video or a video project) and factor 1|2|4.')
         return await start_enhance(file_id, factor if factor is not None else ai.get("factor") or 2)
     if act == "ai_clip":
-        if ai.get("task_id") and not ai.get("finalize"):
+        if ai.get("task_id"):
             return await get(str(ai["task_id"]))
         return await start_clip(_clip_args(ai, text, duration, draft), project=file_id)
     raise AIVideoError(f"unknown AI action {act}")
 
 
 def _clip_args(ai: dict[str, Any], text: Optional[str], duration: Any, draft: bool) -> dict[str, Any]:
+    """A video eszköz draft kapcsolója a render gyors előnézete — az AI-klipre nem vonatkozik."""
     out = dict(ai)
     if text and not out.get("prompt"):
         out["prompt"] = text
     if duration is not None and out.get("duration") is None:
         out["duration"] = duration
-    if draft and "draft" not in out:
-        out["draft"] = True
     return out
 
 
-# ---------- AI-klip (Seedance 2.5, OMLETT 2.4) ----------
+# ---------- AI-klip (Wan 3.0, Kommandant 10-21) ----------
 
 IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff"}
-DRAFT_VALID_S = 7 * 86400                         # a kie a draft azonosítóját 7 napig fogadja el
 
 
 def _frame_ref(v: Any) -> Optional[dict[str, Any]]:
@@ -951,8 +979,8 @@ def _frame_ref(v: Any) -> Optional[dict[str, Any]]:
 
 
 async def _image_input(spec: Any, project: Optional[str], work) -> Any:
-    """Egy kép-bemenet (első/utolsó kocka, referenciakép) → helyi JPEG a kie követelményei szerint (300–6000 px, 0,4–2,5
-    arány), vagy egy nyilvános URL ahogy van. A timeline kockája: a projekt (vagy videó) legutóbbi renderjéből."""
+    """Egy kép-bemenet (első/utolsó kocka, referenciakép) → helyi JPEG a kie követelményei szerint (240–8000 px, legfeljebb
+    8:1 arány), vagy egy nyilvános URL ahogy van. A timeline kockája: a projekt (vagy videó) legutóbbi renderjéből."""
     from app.tools import crafts, video
     fr = _frame_ref(spec)
     dst = work / f"img_{uuid.uuid4().hex[:8]}.jpg"
@@ -977,19 +1005,19 @@ async def _image_input(spec: Any, project: Optional[str], work) -> Any:
         except FileNotFoundError:
             raise AIVideoError(f"No such picture in this workspace: {fid}") from None
         pre = []
-    # 300–6000 px, az arány 0,4–2,5 között (kívül: a középre vágva), JPEG
+    # 300–4096 px, az arány legfeljebb 8:1 (kívül: a középre vágva), JPEG
     vf = ("scale='if(lt(min(iw,ih),300),iw*300/min(iw,ih),if(gt(max(iw,ih),4096),iw*4096/max(iw,ih),iw))':-2,"
-          "crop='min(iw,ih*2.5)':'min(ih,iw*2.5)'")
+          "crop='min(iw,ih*8)':'min(ih,iw*8)'")
     await _ffmpeg(*pre, "-i", str(src), "-frames:v", "1", "-vf", vf, "-q:v", "2", str(dst))
     return dst
 
 
 async def _video_ref(fid: str, work) -> Any:
-    """Referencia-videó a kie követelményei szerint: 480p/720p (409 600–927 408 pixel), 24–60 fps, ≤ 200 MB."""
+    """Referencia-videó a kie követelményei szerint: mp4, ~0,8 MP (oldalanként 240–4096 px), 24–60 fps, ≤ 15 s, ≤ 100 MB."""
     from app.tools import crafts
     src = crafts.existing(fid)
     fps = min(60.0, max(24.0, float((await _probe(src))["fps"] or 30)))
-    secs = min(30.0, await true_seconds(src))     # a becslés ugyanebből számolt: többet nem küldünk
+    secs = min(float(REF_MEDIA_MAX_S), await true_seconds(src))     # a becslés ugyanebből számolt: többet nem küldünk
     dst = work / f"ref_{uuid.uuid4().hex[:8]}.mp4"
     await _ffmpeg("-i", str(src), "-t", f"{secs:.3f}", "-vf", "scale='trunc(sqrt(800000*iw/ih)/2)*2':-2", "-r", f"{fps:g}",
                   "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", str(dst))
@@ -999,7 +1027,8 @@ async def _video_ref(fid: str, work) -> Any:
 async def _audio_ref(fid: str, work) -> Any:
     from app.tools import crafts
     dst = work / f"aud_{uuid.uuid4().hex[:8]}.mp3"
-    await _ffmpeg("-i", str(crafts.existing(fid)), "-t", "30", "-vn", "-c:a", "libmp3lame", "-b:a", "160k", str(dst))
+    await _ffmpeg("-i", str(crafts.existing(fid)), "-t", str(REF_MEDIA_MAX_S), "-vn", "-c:a", "libmp3lame", "-b:a", "160k",
+                  str(dst))
     return dst
 
 
@@ -1015,9 +1044,7 @@ async def _inputs_for(c: dict[str, Any], project: Optional[str]) -> dict[str, An
         return p if isinstance(p, str) else await prov.upload(p)
     try:
         inp: dict[str, Any] = {"prompt": c["prompt"], "resolution": c["resolution"], "duration": c["duration"],
-                               "audio": c["audio"], "aspect": c["aspect"], "format": "mp4"}
-        if c["draft"]:
-            inp["draft"] = True
+                               "audio": c["audio"], "aspect": c["aspect"], "nsfw_checker": True}
         if c["first_frame"]:
             inp["first_frame"] = await up(await _image_input(c["first_frame"], project, work))
         if c["last_frame"]:
@@ -1033,20 +1060,6 @@ async def _inputs_for(c: dict[str, Any], project: Optional[str]) -> dict[str, An
         shutil.rmtree(work, ignore_errors=True)
 
 
-async def _draft_row(op: str) -> dict[str, Any]:
-    rows = await _rows_of(op)
-    if not rows or rows[0]["user_id"] != tenancy.current_user_id():
-        raise AIVideoError(f"No such AI clip: {op}")
-    r = rows[0]
-    if r["model"] != CLIP_MODEL or not (r["input"] or {}).get("draft"):
-        raise AIVideoError("Only a draft clip (draft=true) can be finalised.")
-    if not r["meta"].get("output"):
-        raise AIVideoError("That draft isn't finished (or failed) — make a new draft first.")
-    if time.time() - _ts(r["created_at"]) > DRAFT_VALID_S:
-        raise AIVideoError("That draft is older than 7 days — the AI service no longer keeps it; make a new draft.")
-    return r
-
-
 def timeline_changes(clip_fid: str, dur: float, *, at: Any = None, after_scene: Any = None, audio: bool = False) -> dict[str, Any]:
     """Az elkészült klip helye a videóprojektben (a meglévő szerkesztő-úton, app/tools/video.py edit): at → teljes képes
     bevágás (fullscreen réteg) azon az időponton; after_scene → egy saját jelenet a klippel (graphic + image elem)."""
@@ -1059,8 +1072,8 @@ def timeline_changes(clip_fid: str, dur: float, *, at: Any = None, after_scene: 
 
 
 async def start_clip(opts: dict[str, Any], project: Optional[str] = None) -> dict[str, Any]:
-    """Seedance 2.5 klip → job. opts: prompt, resolution, duration, audio, aspect, draft, first_frame/image, last_frame,
-    reference_*; finalize = egy draft task_id-je (1080p). project + at / after_scene → a klip a timeline-ra kerül."""
+    """AI-klip (CLIP_ENGINES) → job. opts: prompt, engine, resolution, duration, audio, aspect, first_frame/image,
+    last_frame, reference_*. project + at / after_scene → a klip a timeline-ra kerül."""
     require_enabled()
     at, after = opts.get("at"), opts.get("after_scene", opts.get("scene"))
     if (at is not None or after is not None) and not project:
@@ -1071,31 +1084,18 @@ async def start_clip(opts: dict[str, Any], project: Optional[str] = None) -> dic
             video.project_of(project)
         except ValueError as e:
             raise AIVideoError(str(e)) from None
-    fin = await _draft_row(str(opts["finalize"])) if opts.get("finalize") else None
-    c = None if fin else clip_options(opts)
+    c = clip_options(opts)
     est = await estimate_clip(opts)
-    if fin:
-        dur = int(fin["input"].get("duration") or 5)
-        op = await reserve("ai_clip", FINAL_MODEL, hold=est["credits"],
-                           meta={"units": dur, "tier": "1080p", "prompt": fin["meta"].get("prompt"), "duration": dur,
-                                 "audio": bool(fin["input"].get("audio")), "draft_of": fin["id"]})
-    else:
-        op = await reserve("ai_clip", CLIP_MODEL, hold=est["credits"],
-                           meta={"units": est["units"], "tier": est["tier"], "prompt": c["prompt"][:300],
-                                 "duration": c["duration"], "audio": c["audio"], "draft": c["draft"], "mode": c["mode"]})
+    op = await reserve("ai_clip", c["model"], hold=est["credits"],
+                       meta={"units": est["units"], "tier": c["resolution"], "engine": c["engine"], "prompt": c["prompt"][:300],
+                             "duration": c["duration"], "audio": c["audio"], "mode": c["mode"]})
 
     async def prepare() -> list[dict[str, Any]]:
-        if fin:
-            return [{"draft_task_id": fin["provider_task_id"], "resolution": "1080p"}]
         return [await _inputs_for(c, project)]
 
     async def work(progress):
         progress(0, 1, "preparing")
         res = _job_result(await run_reserved(op, prepare, progress))
-        if c and c["draft"]:
-            res["draft"] = True
-            res["next"] = (f'A cheap 480p preview. Happy with it? video(action="ai_clip", ai={{"finalize": "{res["task_id"]}"}}) '
-                           "makes it final at 1080p (the same shot). Not happy? Change the prompt and make a new draft.")
         if project and (at is not None or after is not None):
             progress(1, 1, "putting it on the timeline")
             from app.tools import video
@@ -1119,26 +1119,12 @@ async def _post_clip(rows: list[dict[str, Any]], files: list[list[str]]) -> dict
     fid = files[0][0]
     info = await _probe(output_path(fid))
     words = " ".join(str(head["meta"].get("prompt") or "AI clip").split()[:6])
-    final = head["model"] == FINAL_MODEL
-    label = f"AI clip — {words}{' (draft)' if head['meta'].get('draft') else ' (1080p)' if final else ''}.mp4"
-    src = None
-    if final:
-        prev = await _rows_of(head["meta"].get("draft_of") or "")
-        src = ((prev[0]["meta"].get("output") or {}) if prev else {}).get("file_id")
-    write_meta(fid, label=label, operation="ai_clip", source_file_id=src,
+    label = f"AI clip — {words}.mp4"
+    write_meta(fid, label=label, operation="ai_clip",
                extra={"ai": {"provider": head["provider"], "model": head["model"], "prompt": head["meta"].get("prompt"),
-                             "mode": head["meta"].get("mode"), "draft": bool(head["meta"].get("draft"))}})
+                             "mode": head["meta"].get("mode"), "resolution": head["meta"].get("tier")}})
     return {"file_id": fid, "url": public_url(fid), "label": label, "width": info["width"], "height": info["height"],
             "duration": info["duration"], "audio": info["audio_stream"] is not None}
 
 
 POST["ai_clip"] = _post_clip
-
-
-async def task_of_file(file_id: str) -> dict[str, Any]:
-    """Melyik AI-feladat készítette ezt a fájlt (pl. a draft véglegesítéséhez a felületről)."""
-    rows = await db._rows("""SELECT id FROM provider_tasks WHERE user_id = %s AND meta->'output'->>'file_id' = %s
-                             ORDER BY created_at DESC LIMIT 1""", (tenancy.current_user_id(), file_id))
-    if not rows:
-        raise AIVideoError("This file wasn't made by an AI clip job.")
-    return await get(rows[0]["id"])

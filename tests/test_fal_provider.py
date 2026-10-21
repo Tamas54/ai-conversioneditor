@@ -117,7 +117,7 @@ def test_engine_choice_and_price_per_engine(monkeypatch):
 def test_fal_prices_use_the_same_credit_per_dollar_as_kie():
     from app import credits
     rules = {(r["provider"], r["model"], r["tier"]): r for r in credits.default_rules()}
-    kie = rules[("kie", "bytedance/seedance-2-5", "720p")]
+    kie = rules[("kie", "wan/3-0-video", "720p")]
     seed = rules[("fal", "fal-ai/seedvr/upscale/video", "any")]
     # 1 kie-kredit = $0.005 → ugyanannyi Studio-kredit egy dollárért
     assert seed["multiplier"] == pytest.approx(kie["multiplier"] / 0.005)

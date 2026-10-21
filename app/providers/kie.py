@@ -1,4 +1,4 @@
-"""kie.ai adapter (docs.kie.ai, ellenőrizve 2026-10-19).
+"""kie.ai adapter (docs.kie.ai, ellenőrizve 2026-10-19; Wan 3.0 és a képmodellek 2026-10-21).
 
     POST https://api.kie.ai/api/v1/jobs/createTask   {model, input, callBackUrl?} → data.taskId
     GET  https://api.kie.ai/api/v1/jobs/recordInfo?taskId=…   state: waiting | queuing | generating | success | fail;
@@ -39,21 +39,27 @@ STATES = {"waiting": PENDING, "queuing": PENDING, "generating": RUNNING, "succes
 
 # Modellenkénti mezőnevek: a saját (egységes) bemenetünk kulcsa → a modell mezője (és típusa). Ami nincs a táblában,
 # az nem mehet ki (elírás ne számlázzon más beállítást); a modell saját nevét is elfogadjuk.
+_WAN = {
+    "fields": {"prompt": "prompt", "first_frame": "first_frame_url", "last_frame": "last_frame_url",
+               "reference_images": "reference_image_urls", "reference_videos": "reference_video_urls",
+               "reference_audios": "reference_audio_urls", "audio": "audio", "resolution": "resolution",
+               "aspect": "aspect_ratio", "duration": "duration", "seed": "seed", "nsfw_checker": "nsfw_checker"},
+    "types": {"duration": int, "audio": bool, "resolution": lambda v: str(v).upper(), "seed": int, "nsfw_checker": bool},
+    # első (+utolsó) kocka ÉS referencia mód nem keverhető (a kie elutasítaná — itt érthetőbben)
+    "exclusive": (("first_frame", "last_frame"), ("reference_images", "reference_videos", "reference_audios")),
+}
+_FLUX2 = {"fields": {"prompt": "prompt", "aspect": "aspect_ratio", "resolution": "resolution", "images": "input_urls",
+                     "nsfw_checker": "nsfw_checker"},
+          "types": {"nsfw_checker": bool}}
 MODELS: dict[str, dict[str, Any]] = {
-    "bytedance/seedance-2-5": {
-        "fields": {"prompt": "prompt", "first_frame": "first_frame_url", "last_frame": "last_frame_url",
-                   "reference_images": "reference_image_urls", "reference_videos": "reference_video_urls",
-                   "reference_audios": "reference_audio_urls", "audio": "generate_audio", "resolution": "resolution",
-                   "aspect": "aspect_ratio", "duration": "duration", "draft": "draft", "format": "output_format",
-                   "return_last_frame": "return_last_frame"},
-        "types": {"duration": int, "audio": bool, "draft": bool, "return_last_frame": bool},
-        # első (+utolsó) kocka ÉS referencia mód nem keverhető (a kie elutasítaná — itt érthetőbben)
-        "exclusive": (("first_frame", "last_frame"), ("reference_images", "reference_videos", "reference_audios")),
-    },
-    "bytedance/seedance-2-5-draft": {          # egy draft feladat (draft=true, 480p) véglegesítése 1080p-re
-        "fields": {"draft_task_id": "draft_task_id", "resolution": "resolution", "format": "output_format",
-                   "return_last_frame": "return_last_frame"},
-        "types": {"return_last_frame": bool},
+    "wan/3-0-video": _WAN,                     # szöveg→videó, kép→videó (első / első+utolsó kocka), referencia mód
+    "wan/3-0-video-prime": _WAN,               # ugyanaz, a kie „high-speed” változata (drágább)
+    "flux-2/pro-text-to-image": _FLUX2,
+    "flux-2/pro-image-to-image": _FLUX2,
+    "flux1-kontext": {                         # FLUX.1 Kontext [pro]: retus, helyreállítás, színezés (input.model választ)
+        "fields": {"prompt": "prompt", "image": "input_image", "aspect": "aspect_ratio", "kontext_model": "model",
+                   "format": "output_format", "translate": "enable_translation", "safety": "safety_tolerance"},
+        "types": {"translate": bool, "safety": int},
     },
     "topaz/video-upscale": {
         "fields": {"video": "video_url", "factor": "upscale_factor"},      # upscale_factor SZÖVEG: "1" | "2" | "4"
@@ -68,22 +74,31 @@ MODELS: dict[str, dict[str, Any]] = {
 }
 
 
-# kie-árak (a kie.ai/pricing adatforrása, ellenőrizve 2026-10-19; 1 kie-kredit = $0.005) — a pricing_rules induló sorai:
-# (művelet, modell, szint, egység, kie-kredit/egység, megjegyzés). A draft (draft=true, 480p) élesben mérve a 480p ára
-# (4 s = 112). A véglegesítés (seedance-2-5-draft, csak 1080p) ára nincs kiírva: a foglalás az 1080p-s ár, a levonás a
-# tényleges creditsConsumed. Videóreferenciával a díjköteles mp = a referencia-videók + a kimenet hossza.
+# kie-árak (a kie.ai/pricing adatforrása — api.kie.ai/client/v1/model-pricing/page —, ellenőrizve 2026-10-21; 1 kie-kredit
+# = $0.005) — a pricing_rules induló sorai: (művelet, modell, szint, egység, kie-kredit/egység, megjegyzés). A Wan 3.0
+# díjköteles másodpercei = a kimenet + a referencia-videók hossza (ugyanazon az áron); hang nélkül sem olcsóbb.
 PRICES: list[tuple[str, str, str, str, float, str]] = [
-    ("ai_clip", "bytedance/seedance-2-5", "480p", "second", 28, "Seedance 2.5 480p (also draft), $0.14/s"),
-    ("ai_clip", "bytedance/seedance-2-5", "720p", "second", 63, "Seedance 2.5 720p, $0.315/s"),
-    ("ai_clip", "bytedance/seedance-2-5", "1080p", "second", 158, "Seedance 2.5 1080p, $0.79/s"),
-    ("ai_clip", "bytedance/seedance-2-5", "480p+video", "second", 17, "with reference video: (ref + output) s, $0.085/s"),
-    ("ai_clip", "bytedance/seedance-2-5", "720p+video", "second", 38, "with reference video: (ref + output) s, $0.19/s"),
-    ("ai_clip", "bytedance/seedance-2-5", "1080p+video", "second", 95, "with reference video: (ref + output) s, $0.475/s"),
-    ("ai_clip", "bytedance/seedance-2-5-draft", "1080p", "second", 158, "draft → final 1080p; price not published, held at 1080p"),
+    ("ai_clip", "wan/3-0-video", "480p", "second", 8, "Wan 3.0 480p, $0.04/s (+ reference video seconds)"),
+    ("ai_clip", "wan/3-0-video", "720p", "second", 16, "Wan 3.0 720p, $0.08/s (+ reference video seconds)"),
+    ("ai_clip", "wan/3-0-video", "1080p", "second", 32, "Wan 3.0 1080p, $0.16/s (+ reference video seconds)"),
+    ("ai_clip", "wan/3-0-video-prime", "480p", "second", 12.2, "Wan 3.0 Prime (fast) 480p, $0.061/s"),
+    ("ai_clip", "wan/3-0-video-prime", "720p", "second", 25.2, "Wan 3.0 Prime (fast) 720p, $0.126/s"),
+    ("ai_clip", "wan/3-0-video-prime", "1080p", "second", 50.4, "Wan 3.0 Prime (fast) 1080p, $0.252/s"),
     ("enhance", "topaz/video-upscale", "1x", "second", 8, "Topaz video upscale 1x/2x, $0.04/s"),
     ("enhance", "topaz/video-upscale", "2x", "second", 8, "Topaz video upscale 1x/2x, $0.04/s"),
     ("enhance", "topaz/video-upscale", "4x", "second", 14, "Topaz video upscale 4x, $0.07/s"),
 ]
+# AI-képek: rögzített listaár (credits.list_price, ugyanaz a képlet), képenként: (művelet, modell, szint, kie-kredit).
+# FLUX.2 [pro]: 1K ≈ 1 MP, 2K ≈ 4 MP (a nagyobb kért méret a 2K — kisebbet nem adunk, mint amit kértek).
+IMAGE_PRICES: list[tuple[str, str, str, float]] = [
+    ("ai_image", "flux-2/pro-text-to-image", "1K", 5),
+    ("ai_image", "flux-2/pro-text-to-image", "2K", 7),
+    ("ai_edit", "flux1-kontext", "pro", 5),
+]
+
+
+def image_cost(model: str, tier: str) -> float:
+    return next(c for _, m, t, c in IMAGE_PRICES if m == model and t == tier)
 
 
 def map_input(model: str, data: dict[str, Any]) -> dict[str, Any]:

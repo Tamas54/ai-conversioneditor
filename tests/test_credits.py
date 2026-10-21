@@ -7,6 +7,7 @@ import asyncio
 import secrets
 
 import pytest
+from paid import paid_user
 
 
 def _uid() -> str:
@@ -72,7 +73,7 @@ def test_apply_idempotent_insufficient_and_locked(db_client):
 def test_hold_capture_release(db_client):
     from app import credits, db
     call = db_client.portal.call
-    u = call(db.user_create, f"{_uid()}@example.com", "jelszó123456", None, 50)["id"]
+    u = paid_user(call, 50)                              # az AI-videó csak fizetett kreditből foglal
     h = call(lambda: credits.hold(u, 20, "op1", operation="ai_clip", provider="kie"))
     assert h == {"balance": 30, "held": 20}
     # siker: a tényleges ár (12) — a webhook és a lekérdezés is elszámolna: másodszor semmi
@@ -80,7 +81,7 @@ def test_hold_capture_release(db_client):
         call(lambda: credits.settle(u, "op1", 20, 12, operation="ai_clip", provider="kie", provider_task_id="t1", provider_cost=80))
     assert _balance(call, u) == 38 and _ledger_sum(call, u) == (38, 4)
     kinds = [r["kind"] for r in call(db._rows, "SELECT kind FROM credit_ledger WHERE user_id = %s ORDER BY id", (u,))]
-    assert kinds == ["grant", "hold", "release", "capture"]
+    assert kinds == ["purchase", "hold", "release", "capture"]
     # hiba: teljes feloldás
     call(lambda: credits.hold(u, 30, "op2", operation="enhance"))
     assert _balance(call, u) == 8
@@ -161,7 +162,7 @@ def test_reconcile_low_balance_and_drift(db_client, monkeypatch):
     out = call(credits.reconcile)
     assert out["providers"]["fake"]["balance"] == 5000 and out["providers"]["fake"]["drift"] is None
     # a könyv szerint 300 ment el (egy elszámolt feladat), a szolgáltató viszont 1000-et vont le → eltérés, és alacsony
-    u = call(db.user_create, f"{_uid()}@example.com", "jelszó123456", None, 100)["id"]
+    u = paid_user(call, 100)
     call(lambda: credits.hold(u, 50, "rc1", operation="ai_clip", provider="fake"))
     call(lambda: credits.settle(u, "rc1", 50, 45, operation="ai_clip", provider="fake", provider_cost=300))
     fake.bal = 1000.0
