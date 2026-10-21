@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-22 — Word-by-word captions
+
+From the owner's look at vanta and MoneyPrinterTurbo: the short-video caption styles we didn't have.
+- **`caption_style`** on overlay (and in an edit's `changes`):
+  - `box` (default, as before);
+  - `karaoke`: the spoken words light up;
+  - `highlight`: the word being said lights up and lifts;
+  - `reveal`: the words appear as they are said;
+  - `bold`: no bar, big outlined capitals, 1–3 words at a time (a new group at a comma or the end of a sentence), the
+    word being said in the accent colour.
+- **Word times:** with `subtitles="auto"` they come from Whisper's word timestamps (`transcript.cues` now carries one
+  start per text token; punctuation glued to a word is not a token). Own subtitles may give `words` (one start per
+  word); otherwise the times are estimated from the letters.
+- **Engine:** one text animator per caption: fill colour / position lift / opacity, with a word-based range selector
+  keyed at each word's start (hold). The words lift instead of growing: a scale-up runs into the next word in this engine.
+
 ## 2026-10-22 — Free real footage for cut-ins (Pexels)
 
 Owner's question: can we do free cut-ins with real footage?
