@@ -112,6 +112,9 @@ Types:
     (a video plays muted unless "sound" is given). In a vertical video the base becomes small — there use pip.
   Real video for a cut-in (free, Pexels): image={"stock_video": "pexels:<id>"} from video(action="stock", text="words"),
     or {"stock_video": "words"} (the first that fits the box) — in fullscreen, split or pip.
+  waveform {style: bars (default, around a centre line) | rise (growing from the bottom), bars?: 8–64 (28),
+    color?: "#hex" (default the accent), position?: bottom (default) | center | top | [x, y, w, h]}: the footage's
+    sound as moving bars — e.g. over a podcast or interview; dur = how long (whole video: "until" its end).
   pip {image (a video or picture), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
     of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
     off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a
@@ -203,6 +206,14 @@ back in the check — fix it with action=edit {"chart": {"code": "…"}}.
 script — your own EffectCraft code (After Effects-style JavaScript): {"type": "script", "title"?, "backdrop"?, "code":
 "…"}; gets comp, W, H, dur, accent ([r, g, b] 0–1) and D (D.font.bold|semibold|regular); sandboxed (no files outside the
 project, no network, 20 000 characters at most). Errors and numbers not in the source come back in the check."""
+
+TOPICS["audiogram"] = """\
+action="audiogram" — a podcast / interview / voice note as a video: file_id = the sound (mp3, wav, m4a…) or a video
+whose sound to use (≤ 30 min); title_image? = the cover (file_id | URL | {"stock": "words"}; without it a dark accent
+background), format vertical (default) | square | landscape, title? (default: the file's name), accent?,
+ai={"style": "bars" | "rise", "captions": false?} — the waveform's look; captions are automatic (Whisper) and word by
+word, caption_style bold by default (topic "subtitles"). The result is an editable overlay project (topic "layers":
+change or add layers with action="edit"). Returns a job."""
 
 TOPICS["subtitles"] = """\
 SUBTITLES on the person's own footage (overlay), in the Studio caption style (the dark caption bar of made videos):

@@ -112,6 +112,26 @@ async def overlay_video(body: dict[str, Any]) -> dict[str, Any]:
     return jobs.start("video", work)
 
 
+@router.post("/api/video/audiogram")
+async def audiogram_video(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: hang vagy videó, image?, format?, title?, style?, captions?, caption_style?, language?} → job (podcast-videó:
+    borító, hullámforma, cím, felirat — szerkeszthető projekt)."""
+    from app import jobs
+    from app.tools import video
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    if not video.available():
+        raise HTTPException(503, "The video engine isn't installed on this server.")
+
+    async def work(progress):
+        try:
+            return await video.audiogram(body, progress)
+        except Exception as e:
+            raise _fail(e)
+    return jobs.start("video", work)
+
+
 @router.post("/api/video/render")
 async def render_video(body: dict[str, Any]) -> dict[str, Any]:
     """{file_id: <.ecproj>, format?: mp4|webm|gif, draft?: bool} → job (result: a renderelt fájl)."""

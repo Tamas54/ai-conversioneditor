@@ -1945,8 +1945,9 @@ async def video(
       are checked against it (else "not checked against a source").
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again; scene="s3" | "L2": just that scene / layer.
-    action="transcript": what is said, with times (+ .srt; vocabulary=[names]). action="lottie": text → animations.
-    action="info": scenes and layers (ids). action="to_pptx": the video on a slide.
+    action="transcript": what is said, with times. action="lottie": text → animations.
+    action="audiogram": a sound → podcast video.
+    action="info": scenes, layers (ids). action="to_pptx": onto a slide.
     action="stock": text → free real footage (Pexels) for cut-ins.
     AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
@@ -1986,6 +1987,12 @@ async def video(
         from app.routes.video import transcript_video
         return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
                                        "vocabulary": vocabulary, "model": model, "force": force, "correct": correct})
+    if act in ("audiogram", "podcast"):              # hangból videó: borító, hullámforma, cím, szavankénti felirat
+        from app.routes.video import audiogram_video
+        return await audiogram_video({"file_id": file_id or "", "image": title_image, "format": format, "title": title,
+                                      "accent": accent, "style": (ai or {}).get("style"), "language": language,
+                                      "caption_style": caption_style, "captions": (ai or {}).get("captions", True),
+                                      "render": render, "transcript": transcript})
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,
@@ -2013,7 +2020,7 @@ async def video(
         return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
         raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | '
-                         '"lottie" | "stock" | "schema" (the full reference: video(action="schema", topic="layers"))')
+                         '"lottie" | "stock" | "audiogram" | "schema" (the full reference: video(action="schema", topic="layers"))')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,

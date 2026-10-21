@@ -507,11 +507,34 @@ function splitBase(Lb, ly) {
   P.setValueAtTime(a, p0); P.setValueAtTime(a + d, s.to); P.setValueAtTime(b - d, s.to); P.setValueAtTime(b, p0);
   ease(S); ease(P);
 }
+function waveLayer(c, ly) {    // hullámforma: a hangerő (a Python számolta, WAVE_STEP-enként) egy csúszkán, a sávok követik
+  var wv = ly.wave, n = wv.bars, W = ly.w, H = ly.h, gap = W / n, bw = Math.max(3, Math.round(gap * 0.55)), col = wv.color;
+  var nl = c.layers.addNull(); nl.name = "Audio Level";
+  var sl = nl.property("ADBE Effect Parade").addProperty("Slider Control"); sl.name = "Level";
+  var sv = sl.property(1);
+  if (!wv.levels.length) sv.setValue(0);
+  for (var i = 0; i < wv.levels.length; i++) sv.setValueAtTime(i * wv.step, wv.levels[i]);
+  var rise = wv.style === "rise";
+  for (var b = 0; b < n; b++) {
+    var s = c.layers.addShape(); s.name = "Bar " + (b + 1);
+    var g = s.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+    var r = g.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Rect");
+    r.property("ADBE Vector Rect Roundness").setValue(bw / 2);
+    var f = g.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");
+    f.property("ADBE Vector Fill Color").setValue([col[0], col[1], col[2], 1]);
+    var hx = 'var v = thisComp.layer("Audio Level").effect("Level")("Slider") / 100; var h = Math.max(' + bw + ', ' +
+      (rise ? H : H * 0.96) + ' * v * ' + wv.shape[b] + ' * (0.8 + 0.2 * Math.sin(time * 11 + ' + (b * 1.9).toFixed(2) + ')));';
+    r.property("ADBE Vector Rect Size").expression = hx + ' [' + bw + ', h]';
+    if (rise) r.property("ADBE Vector Rect Position").expression = hx + ' [0, -h / 2]';
+    tp(s).property("ADBE Position").setValue([gap * (b + 0.5), rise ? H : H / 2]);
+  }
+}
 function overlayLayers(main, base) {
   for (var i = 0; i < (D.layers || []).length; i++) {
     var ly = D.layers[i];
     var c = app.project.items.addComp(ly.name, ly.w, ly.h, 1, ly.dur, D.fps);
     chartLayers(c, ly);
+    if (ly.wave) waveLayer(c, ly);
     if (ly.code) runScript(c, { chart: { code: ly.code, id: ly.id }, dur: ly.dur });
     var L = main.layers.add(c); L.name = ly.name; L.startTime = ly.at;
     var T = tp(L), P = T.property("ADBE Position"), O = T.property("ADBE Opacity"), S = T.property("ADBE Scale");
