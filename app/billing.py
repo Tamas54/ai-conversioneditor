@@ -201,12 +201,64 @@ async def ai_step(n: int = 1) -> int:
 
 
 async def monthly_topup(uid: str) -> None:
-    """Ingyenes fiók: hónaponként feltöltés legalább 10 kreditre (nem halmozódik). A fizetős csomag havi
-    kreditje a Stripe invoice.paid eseményére jön."""
+    """Ingyenes fiók: hónaponként feltöltés legalább 10 kreditre (nem halmozódik). A havi előfizetés kreditje a Stripe
+    invoice.paid eseményére jön; az ÉVES előfizetésé havonta (yearly_grant) — nem egyszer a számlával."""
     from app import db
     if uid == tenancy.ADMIN_ID or tenancy.is_guest(uid) or not db.enabled():
         return
     await db.free_topup(uid, month_key(), PLANS["free"]["monthly_credits"])
+    await yearly_grant(uid)
+
+
+async def yearly_grant(uid: str, user: Optional[dict[str, Any]] = None) -> int:
+    """Éves előfizetés (Kommandant 10-21: „a korrektséget fenn kell tartani”): a meghirdetett havi keret minden hónapban
+    jár, amíg az előfizetés él — a hónap kulcsával idempotensen (a számla hónapja és ez ugyanaz a kulcs). A kulcs
+    „stripe:”-ral kezdődik: kifizetett kredit (credits.PAID_ONLY_OPS). Vissza: a jóváírt kredit (0, ha már megkapta)."""
+    from app import credits, db
+    u = user or await db.user_get(uid)
+    if not u or u.get("plan") not in ("plus", "pro") or u.get("billing_interval") != "year" or not u.get("stripe_subscription_id"):
+        return 0
+    n = PLANS[u["plan"]]["monthly_credits"]
+    r = await credits.apply(uid, n, "grant", f"{u['plan']} monthly credits (yearly plan)", ref=month_key(),
+                            idempotency_key=f"stripe:yearly:{uid}:{month_key()}")
+    return 0 if r["duplicate"] else n
+
+
+async def yearly_grants() -> int:
+    """Minden éves előfizető e havi kerete (a háttérhurok hívja; a webes fiók megnyitása is jóváírja). Vissza: hány fiók kapott."""
+    from app import db
+    n = 0
+    for u in await db._rows("""SELECT id, plan, billing_interval, stripe_subscription_id FROM users
+                               WHERE plan IN ('plus', 'pro') AND billing_interval = 'year' AND stripe_subscription_id IS NOT NULL"""):
+        try:
+            n += bool(await yearly_grant(u["id"], u))
+        except Exception:
+            log.exception("éves havi keret (%s)", u["id"])
+    return n
+
+
+async def yearly_loop() -> None:
+    """Hathavonta: a hónap első napjain is legfeljebb néhány óra a késés. Több példány: az idempotencia-kulcs véd."""
+    import asyncio
+    while True:
+        try:
+            got = await yearly_grants()
+            if got:
+                log.info("éves előfizetők havi kerete: %d fiók", got)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("éves havi keret")
+        await asyncio.sleep(6 * 3600)
+
+
+def _invoice_interval(obj: dict[str, Any]) -> Optional[str]:
+    """A számla tételének ciklusa (month | year) — a price.recurring vagy a régi plan mezőből."""
+    for line in ((obj.get("lines") or {}).get("data") or []):
+        iv = ((line.get("price") or {}).get("recurring") or {}).get("interval") or (line.get("plan") or {}).get("interval")
+        if iv:
+            return iv
+    return None
 
 
 def batch_limit(plan: str) -> int:
@@ -334,7 +386,8 @@ async def _apply(event: dict[str, Any]) -> str:
                                  idempotency_key=f"stripe:{obj.get('id')}")
             return f"pack {item}"
         if item in ("plus", "pro"):
-            await db.user_set_billing(uid, plan=item, subscription=obj.get("subscription"))
+            iv = "year" if (obj.get("metadata") or {}).get("interval") == "year" else "month"
+            await db.user_set_billing(uid, plan=item, subscription=obj.get("subscription"), interval=iv)
             return f"plan {item}"           # a havi kredit az invoice.paid-re jön (az első számla is)
         return "ignored"
     if kind == "invoice.paid":
@@ -344,7 +397,11 @@ async def _apply(event: dict[str, Any]) -> str:
             return "no user"
         plan = u.get("plan") if u.get("plan") in ("plus", "pro") else \
             ((obj.get("subscription_details") or {}).get("metadata") or {}).get("item") or "plus"
-        await db.user_set_billing(u["id"], plan=plan, subscription=sub)
+        iv = _invoice_interval(obj) or u.get("billing_interval") or "month"
+        await db.user_set_billing(u["id"], plan=plan, subscription=sub, interval=iv)
+        if iv == "year":                    # az éves díj: a havi keret most és utána havonta (yearly_grant)
+            await yearly_grant(u["id"])
+            return f"credits {plan} (yearly)"
         await db.credits_add(u["id"], PLANS[plan]["monthly_credits"], f"{plan} monthly credits", ref=obj.get("id"), kind="grant",
                              idempotency_key=f"stripe:{obj.get('id')}")
         return f"credits {plan}"

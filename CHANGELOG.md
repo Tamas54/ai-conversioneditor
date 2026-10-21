@@ -43,6 +43,12 @@ engine; no loss in any case; pictures come from kie.ai too ("nem akarom keverni"
 - **Pricing page and Plans** list every AI price: picture, larger picture, edit, restore and colourise, and a 5 s clip
   per engine and resolution. They also explain the rule and the paid-credits-only rule.
 - Needs `KIE_API_KEY` in production for pictures (as for AI video). The `AI_VIDEO` switch still gates video only.
+- **Yearly plans get their credits every month.** Until now a yearly subscriber got one month's credits per invoice,
+  which is once a year (400 on Pro yearly instead of 12 × 400). Now the billing cycle is recorded (`users.billing_interval`:
+  at checkout and from the invoice). The yearly plan's monthly credits come in every month while the subscription lives:
+  at the invoice, then from a background loop every 6 hours and when the account is opened. The key is idempotent per
+  month (`stripe:yearly:<user>:<YYYY-MM>`), so the invoice and the monthly grant never both pay. They are paid credits.
+  Monthly plans are unchanged (one grant per invoice).
 
 ## 2026-10-19 — Own music on own footage
 

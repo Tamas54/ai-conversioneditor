@@ -86,6 +86,12 @@ DO $$ BEGIN
                       ADD COLUMN stripe_subscription_id text, ADD COLUMN topup_month text;
   END IF;
 END $$;
+-- éves előfizetés (10-21): a havi keret havonta jár, nem a számlával egyszer — ehhez kell a számlázási ciklus
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'billing_interval') THEN
+    ALTER TABLE users ADD COLUMN billing_interval text;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS usage_monthly (
     user_id         text NOT NULL,
     month           text NOT NULL,
@@ -605,7 +611,7 @@ async def user_login(email: str, password: str) -> Optional[dict[str, Any]]:
 
 async def user_get(uid: str) -> Optional[dict[str, Any]]:
     rows = await _rows("SELECT id, email, name, is_admin, credits, created_at, disabled, plan, stripe_customer_id, "
-                       "stripe_subscription_id FROM users WHERE id = %s", (uid,))
+                       "stripe_subscription_id, billing_interval FROM users WHERE id = %s", (uid,))
     return rows[0] if rows else None
 
 
@@ -820,9 +826,10 @@ async def free_topup(uid: str, month: str, amount: int) -> int:
 
 
 async def user_set_billing(uid: str, *, plan: Optional[str] = None, customer: Optional[str] = None,
-                           subscription: Optional[str] = None) -> None:
+                           subscription: Optional[str] = None, interval: Optional[str] = None) -> None:
     sets, vals = [], []
-    for col, v in (("plan", plan), ("stripe_customer_id", customer), ("stripe_subscription_id", subscription)):
+    for col, v in (("plan", plan), ("stripe_customer_id", customer), ("stripe_subscription_id", subscription),
+                   ("billing_interval", interval)):
         if v is not None:
             sets.append(f"{col} = %s"); vals.append(v or None)
     if sets:

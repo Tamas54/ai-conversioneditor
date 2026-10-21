@@ -603,6 +603,8 @@ async def start() -> None:
     # már kiszámlázott eredmény nem ragadhat be)
     from app.tools import ai_video
     _tasks.append(asyncio.create_task(ai_video.resume_loop()))
+    from app import billing                     # éves előfizetők: a havi keret havonta
+    _tasks.append(asyncio.create_task(billing.yearly_loop()))
 
 
 async def stop() -> None:
