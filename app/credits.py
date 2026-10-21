@@ -130,7 +130,7 @@ async def _book(cur, uid: str, bal: int, e: dict[str, Any], out: list[dict[str, 
 # A külső AI-videó (kie / fal) csak FIZETETT kreditből (Kommandant 10-21: „semmilyen veszteség”): az ingyenes havi és a
 # kezdő/ajándék kredit mögött nincs bevétel. Fizetett = a Stripe-ból jött jóváírás (kreditcsomag, előfizetés havi
 # kreditje: idempotency_key „stripe:…”); ebből vonódik le minden eddigi PAID_ONLY_OPS-foglalás és -levonás.
-PAID_ONLY_OPS = ("ai_clip", "enhance")
+PAID_ONLY_OPS = ("ai_clip", "enhance", "avatar")
 
 
 class PaidCreditsOnly(InsufficientCredits):

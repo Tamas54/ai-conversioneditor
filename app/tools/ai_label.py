@@ -1,4 +1,5 @@
-"""Géppel olvasható AI-jelölés a kimeneteken (IPTC Digital Source Type, XMP) — újrakódolás nélkül.
+"""Géppel olvasható AI-jelölés a kimeneteken (IPTC Digital Source Type, XMP) — újrakódolás nélkül. 10-22 óta alapból KI
+(AI_LABEL=1 kapcsolja be): a feltüntetés a felhasználó dolga.
 
 A látható „AI生成” felirat eltávolítása helyett (amit a szolgáltató kötelezően tesz rá) a saját kimeneteinken
 szerényen, szabványosan jelöljük, ha AI generálta vagy szerkesztette őket (EU AI Act 50. cikk szellemében):
@@ -9,6 +10,7 @@ JPEG: APP1 XMP-szegmens a SOI után; PNG: iTXt „XML:com.adobe.xmp” darab az 
 """
 from __future__ import annotations
 
+import os
 import struct
 import zlib
 from pathlib import Path
@@ -31,8 +33,17 @@ def _xmp(kind: str, desc: str) -> bytes:
     return _XMP.format(kind=kind, tool=escape(settings.PRODUCT_NAME), desc=escape(desc[:300])).encode("utf-8")
 
 
+def enabled() -> bool:
+    """Alapból KI (Kommandant 10-22: „vedd ki az ai jelölést, MAJD a legvégén lehet, hogy betesszük” — a feltüntetés a
+    felhasználó dolga); AI_LABEL=1 visszakapcsolja."""
+    return os.getenv("AI_LABEL", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def label(path: Path, kind: str = EDITED, desc: str = "Edited with AI") -> bool:
-    """XMP beírása a fájlba (JPEG/PNG); más formátumnál nem csinál semmit. Vissza: sikerült-e."""
+    """XMP beírása a fájlba (JPEG/PNG), ha a jelölés be van kapcsolva (enabled); más formátumnál nem csinál semmit.
+    Vissza: sikerült-e."""
+    if not enabled():
+        return False
     try:
         data = path.read_bytes()
         xmp = _xmp(kind, desc)

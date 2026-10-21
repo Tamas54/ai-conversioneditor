@@ -899,6 +899,14 @@ POST["enhance"] = _post_enhance
 
 # a video eszköz action="schema" referenciája (a "video" sáv köti be: topic "enhance" / "ai_clip")
 AI_VIDEO_REFERENCE: dict[str, str] = {
+    "avatar": (
+        'video(action="avatar", ai={…}, file_id?=<project to put it in>) — a talking video from ONE photo (via kie.ai, Kling '
+        'AI Avatar, lip-synced): ai: image = file_id of a photo of the face, and audio = file_id of a recording (≤ 5 min; '
+        "a video's sound works too) OR text = what to say (read out by the built-in AI voice: voice female | male | a "
+        'Piper voice, language), quality 720p (default) | 1080p, prompt? = expression and camera, consent: true (REQUIRED '
+        "— the person in the photo agreed: their own face, or they said yes). Placement like ai_clip: at=seconds | "
+        'after_scene. Costs paid credits by the seconds of speech; action="estimate" with ai={"for": "avatar", …} gives '
+        "the price. Returns a job; the result is a video file with its sound."),
     "enhance": (
         'video(action="enhance", file_id=<video or project>, factor=1|2|4) — AI upscale on the AI service\'s GPUs (SeedVR2 '
         "or Topaz via fal.ai, or Topaz via kie.ai — the server picks): 1 = clean up at the same size, 2 / 4 = sharper and "
@@ -937,6 +945,13 @@ async def mcp(act: str, *, file_id: Optional[str] = None, factor: Any = None, ai
 
 
 async def _mcp(act: str, *, file_id, factor, ai: dict[str, Any], text, duration, draft) -> dict[str, Any]:
+    if act == "avatar":
+        if ai.get("task_id"):
+            return await get(str(ai["task_id"]))
+        return await start_avatar(ai, project=file_id)
+    if act == "estimate" and (ai.get("for") or ai.get("action")) == "avatar":
+        require_enabled()
+        return {**credits.public_estimate(await estimate_avatar(ai)), "balance": await credits.balance(tenancy.current_user_id())}
     if act == "estimate":
         if factor is not None or ai.get("factor") is not None or (ai.get("for") or ai.get("action")) == "enhance":
             require_enabled()
@@ -1113,21 +1128,30 @@ async def start_clip(opts: dict[str, Any], project: Optional[str] = None) -> dic
     return await _start_job("ai_video", est, work, op)
 
 
+async def _finish_ai_video(fid: str, info: dict[str, Any]) -> None:
+    """Egy AI által készített videó hangja a közös szintre (a Wan hangja ~13 dB-lel hangosabb volt a felvételnél). AI-jelölést
+    nem teszünk rá: a feltüntetés a felhasználó dolga (Kommandant 10-22)."""
+    from app.storage import output_path
+    if info["audio_stream"] is None:
+        return
+    from app.tools import loudness
+    src = output_path(fid)
+    tmp = src.with_suffix(".lvl.mp4")
+    try:
+        if (await loudness.level_file(src, tmp))["changed"]:
+            tmp.replace(src)
+    except Exception as e:
+        log.warning("AI-videó hangja nem lett kiegyenlítve (%s): %s", fid, e)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 async def _post_clip(rows: list[dict[str, Any]], files: list[list[str]]) -> dict[str, Any]:
     from app.storage import output_path, public_url, write_meta
     head = rows[0]
     fid = files[0][0]
     info = await _probe(output_path(fid))
-    if info["audio_stream"] is not None:          # a generált hang a közös szintre (a Wan hangja ~13 dB-lel hangosabb volt)
-        from app.tools import loudness
-        tmp = output_path(fid).with_suffix(".lvl.mp4")
-        try:
-            if (await loudness.level_file(output_path(fid), tmp))["changed"]:
-                tmp.replace(output_path(fid))
-        except Exception as e:
-            log.warning("AI-klip hangja nem lett kiegyenlítve (%s): %s", fid, e)
-        finally:
-            tmp.unlink(missing_ok=True)
+    await _finish_ai_video(fid, info)
     words = " ".join(str(head["meta"].get("prompt") or "AI clip").split()[:6])
     label = f"AI clip — {words}.mp4"
     write_meta(fid, label=label, operation="ai_clip",
@@ -1138,3 +1162,135 @@ async def _post_clip(rows: list[dict[str, Any]], files: list[list[str]]) -> dict
 
 
 POST["ai_clip"] = _post_clip
+
+
+# ---------- beszélő avatar (Kling AI Avatar via kie.ai, 10-22) ----------
+# Egy arcfotó + hang (a saját felvétel, vagy szövegből a beépített AI-hang) → szájszinkronos beszélő videó. Valós
+# személyt mond ki valamit: csak beleegyezéssel (consent=true).
+
+AVATAR_MODELS = {"720p": "kling/ai-avatar-standard", "1080p": "kling/ai-avatar-pro"}
+AVATAR_MAX_S = 300
+AVATAR_PROMPT = "The person speaks to the camera with natural expressions, small head movements and blinking; static camera."
+CONSENT_MSG = ("A talking avatar makes a real-looking person say things. Only with their consent: add \"consent\": true to "
+               "confirm the person in the photo agreed (your own face, or they said yes).")
+
+
+def avatar_options(o: dict[str, Any]) -> dict[str, Any]:
+    """Az avatar beállításai, ellenőrizve: image (arcfotó), audio (felvétel file_id) VAGY text (felolvassa egy AI-hang:
+    voice, language), quality 720p | 1080p, prompt (mimika, kamera), consent=true."""
+    o = dict(o or {})
+    if o.get("consent") is not True:
+        raise AIVideoError(CONSENT_MSG)
+    img = o.get("image") or o.get("photo") or o.get("first_frame")
+    if not img:
+        raise AIVideoError('ai.image = a photo of the face (a file_id) — e.g. ai={"image": "<file_id>", "text": "…", "consent": true}.')
+    audio, text = o.get("audio"), str(o.get("text") or o.get("say") or "").strip()
+    if bool(audio) == bool(text):
+        raise AIVideoError("Give ai.audio (a recording's file_id) OR ai.text (read out by an AI voice) — one of them.")
+    q = str(o.get("quality") or o.get("resolution") or "720p").lower().replace("p", "") + "p"
+    if q not in AVATAR_MODELS:
+        raise AIVideoError(f"quality: {' | '.join(AVATAR_MODELS)}")
+    return {"image": img, "audio": audio, "text": text[:5000], "voice": o.get("voice"), "language": o.get("language"),
+            "quality": q, "model": AVATAR_MODELS[q], "prompt": str(o.get("prompt") or AVATAR_PROMPT).strip()[:2000]}
+
+
+async def _avatar_audio(c: dict[str, Any], work) -> tuple[Any, float]:
+    """A beszéd hangja → (helyi WAV, hossz mp): a felvételé (legfeljebb 5 perc), vagy a szöveg felolvasva (Piper)."""
+    from app.tools import crafts, narration
+    dst = work / f"voice_{uuid.uuid4().hex[:8]}.wav"
+    if c["text"]:
+        key = narration.pick(c["language"] or narration.detect(c["text"]), c["voice"])
+        secs = await asyncio.to_thread(narration.synth, c["text"], key, dst)
+        if secs <= 0:
+            raise AIVideoError("There is nothing to say in ai.text.")
+    else:
+        try:
+            src = crafts.existing(str(c["audio"]))
+        except FileNotFoundError:
+            raise AIVideoError(f"No such recording in this workspace: {c['audio']}") from None
+        await _ffmpeg("-i", str(src), "-t", str(AVATAR_MAX_S), "-vn", "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", str(dst))
+        secs = await true_seconds(dst)
+    if secs > AVATAR_MAX_S + 0.5:
+        raise AIVideoError(f"The speech may be {AVATAR_MAX_S // 60} minutes at most ({secs:.0f} s).")
+    return dst, secs
+
+
+async def estimate_avatar(o: dict[str, Any]) -> dict[str, Any]:
+    """Az avatar ára: a beszéd másodpercei × a minőség ára (a szöveg ehhez felolvasva — helyben, ingyen)."""
+    import shutil
+    from app.storage import temp_path
+    c = avatar_options(o)
+    work = temp_path(f"avatar_{uuid.uuid4().hex[:10]}")
+    work.mkdir(parents=True)
+    try:
+        _, secs = await _avatar_audio(c, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    units = max(1, math.ceil(secs - 1e-6))
+    est = await credits.estimate("avatar", c["model"], c["quality"], units)
+    return {**est, "seconds": round(secs, 1), "what": f"talking avatar {c['quality']}, {secs:.0f} s of speech"}
+
+
+async def start_avatar(opts: dict[str, Any], project: Optional[str] = None) -> dict[str, Any]:
+    """Beszélő avatar → job (az eredmény egy videó; project + at / after_scene → a timeline-ra, mint az AI-klip)."""
+    import shutil
+    from app.storage import temp_path
+    require_enabled()
+    c = avatar_options(opts)
+    at, after = opts.get("at"), opts.get("after_scene", opts.get("scene"))
+    if (at is not None or after is not None) and not project:
+        raise AIVideoError("To put the avatar on a timeline, give file_id = the video project (or its video).")
+    work = temp_path(f"avatar_{uuid.uuid4().hex[:10]}")
+    work.mkdir(parents=True)
+    voice, secs = await _avatar_audio(c, work)              # a hossz pontosan → a foglalás pontosan
+    units = max(1, math.ceil(secs - 1e-6))
+    est = await credits.estimate("avatar", c["model"], c["quality"], units)
+    try:
+        op = await reserve("avatar", c["model"], hold=est["credits"],
+                           meta={"units": units, "tier": c["quality"], "seconds": round(secs, 2),
+                                 "said": (c["text"] or "")[:300], "prompt": c["prompt"][:300]})
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+
+    async def prepare() -> list[dict[str, Any]]:
+        prov = _provider()
+        try:
+            img = await _image_input(c["image"], project, work)
+            return [{"image": img if isinstance(img, str) else await prov.upload(img), "audio": await prov.upload(voice),
+                     "prompt": c["prompt"]}]
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    async def job(progress):
+        progress(0, 1, "preparing")
+        res = _job_result(await run_reserved(op, prepare, progress))
+        if project and (at is not None or after is not None):
+            progress(1, 1, "putting it on the timeline")
+            from app.tools import video
+            try:
+                res["timeline"] = await video.edit(project, timeline_changes(res["file_id"], res["duration"], at=at,
+                                                                             after_scene=after, audio=True), progress=progress)
+            except Exception as e:
+                log.warning("Az avatar a timeline-ra nem került (%s): %s", project, e)
+                res["timeline_error"] = f"The avatar video is ready, but it couldn't be put on the timeline ({str(e)[:200]})."
+        return res
+    return await _start_job("ai_video", {**est, "what": f"talking avatar {c['quality']}, {secs:.0f} s"}, job, op)
+
+
+async def _post_avatar(rows: list[dict[str, Any]], files: list[list[str]]) -> dict[str, Any]:
+    from app.storage import output_path, public_url, write_meta
+    head = rows[0]
+    fid = files[0][0]
+    info = await _probe(output_path(fid))
+    await _finish_ai_video(fid, info)
+    said = " ".join(str(head["meta"].get("said") or "").split()[:6])
+    label = f"AI avatar — {said or 'speech'}.mp4"
+    write_meta(fid, label=label, operation="avatar",
+               extra={"ai": {"provider": head["provider"], "model": head["model"], "kind": "talking avatar",
+                             "said": head["meta"].get("said"), "consent": True}})
+    return {"file_id": fid, "url": public_url(fid), "label": label, "width": info["width"], "height": info["height"],
+            "duration": info["duration"], "audio": info["audio_stream"] is not None}
+
+
+POST["avatar"] = _post_avatar
