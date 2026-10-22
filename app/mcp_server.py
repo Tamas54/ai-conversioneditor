@@ -2132,6 +2132,7 @@ async def video(
     render: bool = True,
     end_card: Optional[Any] = None,
     cut: Optional[Any] = None,
+    insert: Optional[Any] = None,
     transcript: Optional[dict] = None,
     scrim: Optional[float] = None,
     wait: Optional[float] = None,
@@ -2226,7 +2227,7 @@ async def video(
                                     "music_file_id": music_file_id, "camera": camera,
                                     "subtitles": subtitles, "caption_style": caption_style, "language": language,
                                     "render": render, "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
-                                    "cut": cut, "transcript": transcript, "draft": draft})
+                                    "cut": cut, "insert": insert, "transcript": transcript, "draft": draft})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,

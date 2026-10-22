@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-23 — Other clips in your video: put where the footage pauses, the join hard to notice
+
+The owner's ask: „a második kis videó 2 percesét vágjuk be a 16–19. perc közé értelemszerűen”, and „a harmadikat tedd
+valahova a végére, csak ne tűnjön fel nagyon, hogy vágás”.
+
+- **`insert=[{"file_id", "at": "16:30" | {"between": ["16:00", "19:00"]} | "end", "from"?, "to"?, "join"?}]`** at
+  overlay, `changes.insert` in an edit. The footage's recipe is now a timeline of parts from several videos; the
+  working copy, the full-size pieces and the fast render's final pass read each part from its own original, with its
+  own chain (upright, HDR to SDR), fitted to the video (a blurred fill for another shape) and to its frame rate.
+- **Where, from the material:** with a window, the longest pause at the end of a sentence (pauses by `silencedetect`,
+  sentence ends from the subtitles), else the longest pause, else the window's middle. `result.inserted` and the check
+  say where and why, with the other pauses to choose from. No AI decides it.
+- **The join** (`smooth`, the default): the clip's silent start and end trimmed, its loudness (EBU R128) and colours
+  (mean brightness, saturation) matched to the footage around the cut, and a 0.25 s sound crossfade; `dissolve` adds a
+  0.4 s picture dissolve; `cut` is a plain cut with the 15 ms fades.
+- **Layers, subtitles and the camera move with it**; a layer the insertion splits keeps its longer part. The check says
+  when the clip has no subtitles. `changes.cut` takes a clip out again, and the footage is one part again.
+
 ## 2026-10-22 — Your own footage: the editor gets a small copy, the video is made from your original
 
 Before, a phone video was re-encoded in full before the editing could start: turned upright and mapped from HDR to SDR
