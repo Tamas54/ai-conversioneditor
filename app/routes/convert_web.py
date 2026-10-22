@@ -273,9 +273,16 @@ def _chunk_dir(upload_id: str):
     return d, m
 
 
+def _chunk_len(m: dict[str, Any], index: int) -> int:
+    """Az index-edik darab pontos hossza (az utolsó a maradék)."""
+    return min(_CHUNK, m["size"] - index * _CHUNK)
+
+
 @router.post("/api/upload/chunks")
 async def chunks_start(body: dict[str, Any]) -> dict[str, Any]:
-    """Nagy fájl darabokban: start → PUT /api/upload/chunks/{id}/{n} (8 MB-os darabok) → complete."""
+    """Nagy fájl darabokban: start → PUT /api/upload/chunks/{id}/{n} (8 MB-os darabok) → complete. Megszakadás után
+    GET /api/upload/chunks/{id} mondja meg, mi érkezett meg — a többit kell újra küldeni (10-22: egy 235 MB-os
+    iPhone-videó mobilneten)."""
     import json
     import secrets
     from app.storage import temp_path
@@ -284,7 +291,7 @@ async def chunks_start(body: dict[str, Any]) -> dict[str, Any]:
     if not name or size <= 0:
         raise HTTPException(400, "filename and size are required")
     if size > _max_upload():
-        raise HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account." if tenancy.is_guest() else "."))
+        raise HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account — sign in or create a free one for bigger files." if tenancy.is_guest() else "."))
     uid = secrets.token_urlsafe(18)
     d = temp_path(f"chunks-{uid}")
     d.mkdir(parents=True)
@@ -292,18 +299,34 @@ async def chunks_start(body: dict[str, Any]) -> dict[str, Any]:
     return {"upload_id": uid, "chunk_size": _CHUNK, "chunks": -(-size // _CHUNK)}
 
 
+@router.get("/api/upload/chunks/{upload_id}")
+async def chunks_status(upload_id: str) -> dict[str, Any]:
+    """Mi érkezett meg eddig (folytatáshoz): {upload_id, filename, size, chunk_size, chunks, received: [index]}."""
+    d, m = _chunk_dir(upload_id)
+    got = sorted(int(p.stem) for p in d.glob("*.part") if p.stem.isdigit())
+    return {"upload_id": upload_id, "filename": m["name"], "size": m["size"], "chunk_size": _CHUNK,
+            "chunks": -(-m["size"] // _CHUNK), "received": got}
+
+
 @router.put("/api/upload/chunks/{upload_id}/{index}")
 async def chunks_put(upload_id: str, index: int, request: Request) -> dict[str, Any]:
     d, m = _chunk_dir(upload_id)
     if not 0 <= index < -(-m["size"] // _CHUNK):
         raise HTTPException(400, "chunk index out of range")
-    n = 0
-    with open(d / f"{index:06d}.part", "wb") as f:
-        async for block in request.stream():
-            n += len(block)
-            if n > _CHUNK:
-                raise HTTPException(413, f"a chunk is at most {_CHUNK} bytes")
-            f.write(block)
+    want, n = _chunk_len(m, index), 0
+    tmp = d / f"{index:06d}.tmp"                   # a félbeszakadt darab nem számít megérkezettnek
+    try:
+        with open(tmp, "wb") as f:
+            async for block in request.stream():
+                n += len(block)
+                if n > want:
+                    raise HTTPException(413, f"chunk {index} is {want} bytes")
+                f.write(block)
+        if n != want:
+            raise HTTPException(400, f"chunk {index} arrived with {n} of its {want} bytes — send it again")
+        tmp.replace(d / f"{index:06d}.part")
+    finally:
+        tmp.unlink(missing_ok=True)
     return {"index": index, "bytes": n}
 
 
@@ -316,10 +339,14 @@ async def chunks_complete(upload_id: str) -> dict[str, Any]:
     if len(parts) != total:
         raise HTTPException(400, f"{total - len(parts)} chunk(s) missing")
     out = d / "joined"
-    with open(out, "wb") as f:
-        for p in parts:
-            with open(p, "rb") as src:
-                shutil.copyfileobj(src, f, 1 << 20)
+
+    def join() -> None:
+        with open(out, "wb") as f:
+            for p in parts:
+                with open(p, "rb") as src:
+                    shutil.copyfileobj(src, f, 1 << 20)
+    import asyncio
+    await asyncio.to_thread(join)                 # 200+ MB másolása ne fogja meg a többi kérést
     if out.stat().st_size != m["size"]:
         shutil.rmtree(d, ignore_errors=True)
         raise HTTPException(400, "size mismatch — upload again")
