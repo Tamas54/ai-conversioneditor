@@ -47,7 +47,7 @@ _GUEST_OK = (
     ("POST", "/api/make/picture"),                                    # a képválasztó: AI-képnél a végpont maga kér fiókot
     ("POST", "/api/upload"), ("POST", "/api/editor/save"), ("POST", "/api/make/convert"), ("POST", "/api/make/pdf"),
     ("POST", "/api/make/photo"), ("POST", "/api/make/design"), ("POST", "/api/make/social"), ("POST", "/api/make/book"),
-    ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"),
+    ("POST", "/api/make/fill_form"), ("POST", "/api/make/document"), ("POST", "/api/make/clean_copy"),
     ("POST", "/api/convert/run"), ("POST", "/api/tools/run"), ("GET", "/api/presets"),   # bővítés: konverter, eszközök
     ("POST", "/api/import"), ("GET", "/api/import/config"), ("POST", "/api/export"),            # URL / felhős import (SSRF-védett, vendégnek 25 MB)
     ("POST", "/api/upload/chunks"), ("PUT", "/api/upload/chunks/"),     # darabolt feltöltés nagy fájlokhoz

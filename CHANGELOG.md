@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-10-22 — Fixes from the editorial trial (links, footnotes, clean copy, fact sources)
+
+From an MCP agent's report after a full trial on a long study: a fact check, then a tracked rewrite with WordCraft.
+- **WordCraft CLI 0.5.0 → 0.9.0.**
+  - Text typed at the end of a link no longer becomes part of the link. In one trial version, 100 of 118 paragraphs
+    pointed to the last source's website.
+  - Accept All no longer gives the heading after deleted paragraphs the deleted paragraph's style.
+  - The web editor stays on our own 0.5.0 build; the two share the .docx format.
+- **The validator finds text that leaked into a link.** It reports an error when three or more paragraphs, or a long
+  one, sit inside a link to a site the text doesn't name. `validate_document(fix=true)` proposes removing that link;
+  links whose text names the site keep it.
+- **Footnotes:**
+  - The clean copy (`address [{"final": true}]`) and accept/reject now also cover changes inside footnotes,
+    endnotes, headers and footers.
+  - Footnotes of deleted text are removed, and the remaining ones are stored in reference order. LibreOffice matches
+    footnotes by their order in the file, so a leftover note put the wrong text under a number.
+  - The validator reports orphan or out-of-order footnotes, and the fix proposal tidies them.
+  - Every WordCraft save tidies them too.
+- **Accepting a fully deleted paragraph** removes it, and the following paragraph keeps its own style. This applies to
+  both the engine and our own `final`.
+- **`review.compare {"text"}` is done by the Studio.**
+  - Footnotes, pictures, fields and comments stay in place, and the tracked changes carry the given `author`. The
+    engine's own compare dropped the footnote and signed its changes as "Compare".
+  - The text is compared line by line: a new line becomes a tracked paragraph, a missing line a tracked deletion.
+    Lines are matched by similarity, so a line added at the top doesn't shift the pairs.
+  - Table rows aren't added or removed this way; the result says so.
+- **`select.text` also finds text in footnotes, endnotes, headers and footers.** It is turned into `select.range` in
+  that note.
+- **Read-only runs** (`caret.*`, `select.*`, `document.selection`, `document.text`, `document.paragraph`) no longer
+  save a new version.
+- **New comment on a file without comments** no longer fails with `'NoneType' object has no attribute 'iter'`.
+- **Word counts follow the text as it reads after accepting** (tracked insertions and tables included). When tracked
+  changes exist, `words_before_tracked_changes` is shown too. A full tracked rewrite showed 4201 → 361 before.
+- **The validator no longer reports a short tracked heading as missing** when the layout shows the deleted text right
+  next to it.
+- **Fact check:**
+  - Every source has a weight:
+    - named: the publication the claim cites, e.g. ifr.org for "according to the IFR";
+    - official;
+    - secondary;
+    - weak: forums, Q&A sites and social posts.
+  - A weak source alone, or only a secondary site for a claim that names its source, gives "unverified" with
+    `weak_support`, never "supported".
+  - When search snippets don't contain the number, the top results are opened through the Echolot ENGINE, including
+    PDFs and pages that answer 403. The verdict then sees the passages around the number.
+  - The verdict must quote the source. If the quote isn't in the source, the verdict is "unverified"; this catches a
+    figure tied to another country.
+- **Web: More ▾ → "Accept all changes, remove comments"** makes a clean copy as a new version (`/api/make/clean_copy`,
+  no AI). A LibreOffice "accept all" save had left 289 changes and 22 comments in the file.
+
 ## 2026-10-22 — Layout fixes are the person's decision
 
 Owner's principle: editorial intelligence stays within limits. The system asks, and the person decides and takes

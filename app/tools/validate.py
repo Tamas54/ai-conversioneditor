@@ -49,6 +49,7 @@ _RED, _ORANGE = (220, 38, 38), (234, 140, 0)
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+_R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 
 
 # ---------- szöveg → szavak (ékezet, kis-nagybetű, írásjel nem számít) ----------
@@ -186,11 +187,8 @@ def align(units: list[tuple[Any, list[str]]], toks: list[Tok]) -> dict[Any, tupl
                 yield i
             k += 1
 
-    out, cur = {}, 0
-    for key, T in units:
+    def fit(T: list[str], cur: int) -> Optional[tuple[int, int]]:
         n = len(T)
-        if not n:
-            continue
         g = min(_G, n)
         hi = cur + (1500 if n >= _G else 120) + n
         start = None
@@ -200,7 +198,7 @@ def align(units: list[tuple[Any, list[str]]], toks: list[Tok]) -> dict[Any, tupl
                 start = max(0, p - o)
                 break
         if start is None:
-            continue
+            return None
         end = min(len(seq) - 1, start + n - 1)
         for o in range(0, min(n - g, 8) + 1):
             exp = start + n - g - o                 # ahol a záró hármasnak lennie kellene
@@ -208,8 +206,16 @@ def align(units: list[tuple[Any, list[str]]], toks: list[Tok]) -> dict[Any, tupl
             if near:
                 end = min(near, key=lambda p: abs(p - exp)) + g - 1 + o
                 break
-        out[key] = (start, max(start, min(end, len(seq) - 1)))
-        cur = out[key][1] + 1
+        return start, max(start, min(end, len(seq) - 1))
+
+    out, cur = {}, 0
+    for key, *alts in units:                    # több alak: a végleges szöveg, majd a jelölt nézet (törléssel együtt)
+        for T in alts:
+            got = fit(T, cur) if T else None
+            if got:
+                out[key] = got
+                cur = got[1] + 1
+                break
     return out
 
 
@@ -235,6 +241,8 @@ class Block:
     cant_split: list = field(default_factory=list)
     header_row: bool = False
     section: int = 0
+    markup: str = ""                             # a szöveg a törölt részekkel együtt (csak ha követett törlés van benne)
+    links: list = field(default_factory=list)    # külső hivatkozások: [(r:id, cél, a link szövege)]
 
     @property
     def empty(self) -> bool:
@@ -360,6 +368,11 @@ def read_docx(path: Path) -> tuple[list[Block], list[dict]]:
             num = (num_id, ilvl or 0) + numfmt.get(num_id, {}).get(ilvl or 0, ("decimal", 1))
         sect = ppr.find(_W + "sectPr") if ppr is not None else None
         own_keep = ppr.find(_W + "keepNext") if ppr is not None else None
+        links = []
+        for h in el.iter(_W + "hyperlink"):
+            rel = d.part.rels.get(h.get(_R + "id") or "")
+            if rel is not None and rel.is_external:
+                links.append((h.get(_R + "id"), rel.target_ref, _text(h)))
         blocks.append(Block(
             pos, pos, "paragraph", text=_text(el), style=name, heading=heading, caption=name == "caption", num=num,
             pictures=[float((inl.find(_WP + "extent").get("cx") or 0)) / 12700 for inl in el.iter(_WP + "inline")
@@ -368,7 +381,8 @@ def read_docx(path: Path) -> tuple[list[Block], list[dict]]:
             page_break=any(br.get(_W + "type") == "page" for br in el.iter(_W + "br"))
             or (sect is not None and _val(sect, "type") != "continuous"),
             break_before=brk_before, keep_next=bool(keep), section=len(sections),
-            keep_off=own_keep is not None and not _on(ppr, "keepNext")))
+            keep_off=own_keep is not None and not _on(ppr, "keepNext"), links=links,
+            markup="".join(t.text or "" for t in el.iter(_W + "t", _W + "delText")) if el.find(".//" + _W + "delText") is not None else ""))
         if sect is not None:
             sections.append({**_section(sect), "end": pos})
     final = d.element.body.find(_W + "sectPr")
@@ -424,8 +438,9 @@ def _goto(b: Block, then: str) -> str:
 class DocCheck:
     """Egy Word-dokumentum: szerkezet + egy vagy két tördelés → hibajegyzék."""
 
-    def __init__(self, blocks: list[Block], sections: list[dict], layouts: list[Layout]):
+    def __init__(self, blocks: list[Block], sections: list[dict], layouts: list[Layout], notes: Optional[dict] = None):
         self.blocks, self.sections, self.layouts = blocks, sections, layouts
+        self.notes = notes                       # láb-/végjegyzetek: {fajta: {orphans, out_of_order}} (review_ops.notes_report)
         self.issues: list[dict] = []
         self._label_x: dict[tuple, float] = {}
         for L in layouts:
@@ -438,7 +453,9 @@ class DocCheck:
             if b.kind == "table":
                 units += [(("c", b.pos, r, c), _toks(cell)) for r, row in enumerate(b.rows) for c, cell in enumerate(row)]
             else:
-                units.append((("p", b.pos), _toks(b.text)))
+                # követett változásnál a lap a törölt szöveget is mutatja (áthúzva, a beszúrás mellett): ha a végleges
+                # szöveg nem illeszkedik, a jelölt nézet (10-22: „A rossz forgatókönyv” + törölt mondat egybeírva)
+                units.append((("p", b.pos), _toks(b.text)) + ((_toks(b.markup),) if b.markup else ()))
         L.spans = align(units, L.toks)
         sec_of = lambda b: self.sections[min(b.section, len(self.sections) - 1)]
         # képek: a beágyazott kép az előző elhelyezett blokk vége UTÁNI első (fej-/láblécen kívüli) kép
@@ -540,8 +557,51 @@ class DocCheck:
         n0 = len(self.issues)
         self._structural()
         self._typed_numbers()
+        self._link_spill()
+        self._notes()
         for it in self.issues[n0:]:
             it["_structural"] = True
+
+    def _link_spill(self) -> None:
+        """Hivatkozásba szivárgott szöveg (10-22: a link végén gépelt szöveg a linkhez tapadt — a jegyzetelt változat 118
+        bekezdéséből 100 az aikaveszunet.hu-ra mutatott, a validátor nem szólt): egy külső hivatkozás egész bekezdésnyi
+        szöveget fed le, és a szövege nem a címét nevezi meg. Három ilyen bekezdés ugyanoda: hiba; egy hosszú: figyelmeztetés."""
+        groups: dict[str, list[Block]] = defaultdict(list)
+        for b in self.blocks:
+            body = b.text.strip()
+            for k, (_, target, ltxt) in enumerate(b.links if b.kind == "paragraph" and body else ()):
+                if spilled(target, ltxt, body, [x[2] for j, x in enumerate(b.links) if j != k]):
+                    groups[target].append(b)
+                    break
+        for target, bs in groups.items():
+            long = [b for b in bs if len(b.text.split()) >= 25]
+            if len(bs) < 3 and not long:
+                continue
+            host = _host(target)
+            where = (f"“{_short(bs[0].text, 40)}”" if len(bs) == 1 else
+                     f"{len(bs)} paragraphs, from “{_short(bs[0].text, 40)}” to “{_short(bs[-1].text, 40)}”")
+            it = _issue("link_spill", ERROR if len(bs) >= 3 else WARNING,
+                        f"{where} {'is' if len(bs) == 1 else 'are'} inside a link to {host} — text typed after a link "
+                        f"stuck to it; a reader clicking there lands on {host}.", None, None, bs[0],
+                        fix="validate_document(fix=true) proposes taking the link off this text (a link whose text names "
+                            "the site keeps it)")
+            it["_spill"], it["_target"] = [b.pos for b in bs], target
+            self.issues.append(it)
+
+    def _notes(self) -> None:
+        for kind, st in (self.notes or {}).items():
+            if st["orphans"]:
+                n = len(st["orphans"])
+                self.issues.append(_issue(
+                    "notes_orphan", ERROR,
+                    f"{n} {kind}{'s' if n > 1 else ''} without a reference in the text (left over from deleted text) — "
+                    f"LibreOffice and Google Docs match {kind}s by their order, so the text under the {kind} numbers after "
+                    "it is the wrong one.", fix=f"validate_document(fix=true) proposes removing the {kind}s nobody refers to"))
+            elif st["out_of_order"]:
+                self.issues.append(_issue(
+                    "notes_orphan", WARNING,
+                    f"The {kind}s are stored in a different order than they appear — LibreOffice and Google Docs may put "
+                    f"the wrong text under a {kind} number.", fix=f"validate_document(fix=true) proposes putting them in order"))
 
     def _structural(self) -> None:
         L = self.layouts[-1] if self.layouts else None          # a hely a „word” nézetből (ha van), különben a szerkesztőé
@@ -1618,8 +1678,34 @@ async def _layouts(src: Path, kind: str, want_file: bool = True) -> tuple[list[L
 def _analyze_doc(docx: Path, layouts: list[Layout]) -> tuple[list[dict], DocCheck]:
     blocks, sections = read_docx(docx)
     _wordcraft_index(docx, blocks)
-    dc = DocCheck(blocks, sections, layouts)
+    try:
+        from app.tools import review_loop, review_ops
+        notes = review_ops.notes_report(review_loop._Pkg(docx))
+    except Exception as e:
+        log.info("jegyzetek kimaradtak: %s", e)
+        notes = None
+    dc = DocCheck(blocks, sections, layouts, notes)
     return dc.run(), dc
+
+
+def _host(url: str) -> str:
+    from urllib.parse import urlparse
+    return (urlparse(url).hostname or url).removeprefix("www.")
+
+
+def spilled(target: str, link_text: str, para_text: str, other_links: Optional[list[str]] = None) -> bool:
+    """A link a bekezdés (majdnem) egész szövegét fedi — a bekezdés többi linkjét nem számítva (irodalomjegyzék-sor:
+    „Szerző: Cím, 2018. https://doi…”) —, és a szövege nem a címet nevezi meg (nem URL, nem a webhely neve): gépelt
+    szöveg tapadt hozzá, nem a forrás neve."""
+    lt = " ".join(link_text.split())
+    rest = para_text
+    for o in other_links or []:
+        rest = rest.replace(o, "", 1)
+    if not lt or len(lt) < 0.8 * len(" ".join(rest.split())):
+        return False
+    low, host = lt.lower(), _host(target).lower()
+    site = host.split(".")[0] if host else ""
+    return not ("http" in low or "www." in low or (site and site in low.replace(" ", "")) or (host and host in low))
 
 
 def missing_in_pdf(docx: Path, pdf: Path) -> list[dict[str, Any]]:

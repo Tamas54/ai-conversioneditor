@@ -125,8 +125,11 @@ RUN set -eux; cd /tmp; \
 # CLI → /opt/wordcraft/bin (headless parancsok, gyors konverzió);
 # WASM-szerkesztő → /opt/wordcraft-web (a dashboard ✏️ gombja). Verzióváltásnál a két
 # SHA256-ot a release SHA256SUMS.txt-jéből kell átírni.
-ARG WORDCRAFT_VERSION=0.5.0
-ARG WORDCRAFT_CLI_SHA256=994bb376479ef6d76735cf4029e5ef3c2d52a85a4c9acde2b37c33b19c570203
+# 0.9.0 (10-22): a link végén gépelt szöveg már nem tapad a linkhez (0.6.1), az „Accept All” nem olvasztja a törölt
+# bekezdés utáni címsort a törölt bekezdésbe (0.7.0), a review.compare a megadott szerző nevén ír. A webes szerkesztő
+# a saját 0.5.0-s buildünk marad (a .docx a közös nyelv).
+ARG WORDCRAFT_VERSION=0.9.0
+ARG WORDCRAFT_CLI_SHA256=8f507802e971b16afa1b6dc565317eb30885ffb2aec2e976d3a1ddaa47c529d4
 # A webes szerkesztő a SAJÁT buildünk (build/wordcraft-web: Caladea/Carlito befordítva, Discord-gomb
 # nélkül) — release: github.com/Tamas54/ai-conversioneditor/releases/tag/wordcraft-web-0.5.0-aice1
 ARG WORDCRAFT_WEB_TAG=wordcraft-web-0.5.0-aice1

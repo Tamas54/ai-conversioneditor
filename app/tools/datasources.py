@@ -194,3 +194,32 @@ async def web_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
     web = data.get("web") if isinstance(data, dict) else data
     return [{"title": (x.get("title") or "")[:200], "url": x.get("url"), "snippet": (x.get("description") or x.get("snippet") or "")[:500],
              "date": x.get("date")} for x in (web or [])[:limit] if x.get("url")]
+
+
+async def scrape(url: str, max_chars: int = 400_000) -> str:
+    """Egy oldal szövege (markdown) az ENGINE-en át — a PDF-et is szövegként adja, a 403-at adó oldalt a motor másik
+    kijárattal próbálja (proxy=auto). A tényellenőrzés ezzel olvassa el azt, amiből a keresés csak kivonatot mutat."""
+    if not search_enabled():
+        raise SourceError("web access isn't set up on this server")
+    body = {"url": url, "formats": ["markdown"], "onlyMainContent": True, "proxy": "auto", "timeout": 45000}
+    async with _SEARCH_SEM:
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=75) as c:
+                    r = await c.post(f"{settings.ECHOLOT_ENGINE_URL}/v2/scrape", json=body,
+                                     headers={"Authorization": f"Bearer {settings.ECHOLOT_ENGINE_KEY}"})
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                if attempt == 2:
+                    raise SourceError(f"the page didn't answer ({type(e).__name__})") from None
+                continue
+            if r.status_code != 429:
+                break
+            try:
+                wait = float((r.json() or {}).get("retry_after") or r.headers.get("retry-after") or 2)
+            except ValueError:
+                wait = 2.0
+            await asyncio.sleep(min(max(wait, 0.5), 15))
+    if r.status_code >= 400:
+        raise SourceError(f"reading the page answered HTTP {r.status_code}")
+    data = (r.json() or {}).get("data") or {}
+    return str(data.get("markdown") or "")[:max_chars]

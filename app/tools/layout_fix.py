@@ -18,7 +18,10 @@ Javaslatok (ugyanazok, amiket a validátor `fix`-e mond):
   • képaláírás külön lapon (caption_split): az előbb álló (aláírás vagy kép) „együtt a következővel”; ha már rajta
     van → oldaltörés;
   • táblázatsor két lapon (table_row_split): a sor ne törjön — ha már így van, a sor magasabb a lapnál: nem gépi döntés;
-  • táblázat fejléce nem ismétlődik (table_header_not_repeated): az első sor fejlécsor.
+  • táblázat fejléce nem ismétlődik (table_header_not_repeated): az első sor fejlécsor;
+  • linkbe szivárgott szöveg (link_spill, 10-22): a link le a gépelt szövegről (ahol a link szövege a webhelyet nevezi
+    meg, ott marad);
+  • árva / összekevert lábjegyzet (notes_orphan): a hivatkozás nélküli jegyzet ki, a többi a hivatkozások sorrendjébe.
 """
 from __future__ import annotations
 
@@ -31,12 +34,14 @@ from typing import Any, Callable, Optional
 
 log = logging.getLogger("aice.layout_fix")
 
-FIXABLE = ("orphan_heading", "caption_split", "table_row_split", "table_header_not_repeated")
+FIXABLE = ("orphan_heading", "caption_split", "table_row_split", "table_header_not_repeated", "link_spill", "notes_orphan")
 CHAIN_MAX = 40
 _HOW = {"keep": "keep it with the next paragraph (keep with next, keep lines together)",
         "break": "start it on a new page (page break before) — the views then agree",
         "row": "set the row not to break across pages",
-        "header": "make the first row a header row that repeats on every page"}
+        "header": "make the first row a header row that repeats on every page",
+        "unlink": "take the link off this text (text that names the site keeps its link)",
+        "notes": "remove the notes nothing refers to and store the rest in the order they appear"}
 
 
 # ---------- „így marad” döntések ----------
@@ -63,6 +68,10 @@ def _plan(issues: list[dict[str, Any]], blocks: dict[int, Any]) -> list[dict[str
     """A javaslatok: [{id, issue, kind, object, page, change, _it, _how}] — egy hiba két nézetben egyszer."""
     out, seen = [], set()
     for it in issues:
+        if it["kind"] == "notes_orphan" and not any(p["_how"] == "notes" for p in out):
+            out.append({"id": f"F{len(out) + 1}", "issue": it.get("id"), "kind": it["kind"], "object": None,
+                        "page": None, "change": _HOW["notes"], "_it": it, "_how": "notes", "_target": None})
+            continue
         if it["kind"] not in FIXABLE or it.get("_pos") is None or it.get("on_purpose"):
             continue
         b = blocks.get(it["_pos"])
@@ -77,6 +86,8 @@ def _plan(issues: list[dict[str, Any]], blocks: dict[int, Any]) -> list[dict[str
             if getattr(target, "break_before", False):
                 continue
             how = "break" if getattr(target, "keep_next", False) else "keep"
+        elif it["kind"] == "link_spill":
+            how = "unlink"
         elif it["kind"] == "table_row_split":
             r = (it.get("row") or 1) - 1
             if b is None or (r < len(b.cant_split) and b.cant_split[r]):
@@ -112,12 +123,19 @@ def _apply(src: Path, dst: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
         if trpr.find(qn(tag)) is None:
             trpr.append(OxmlElement(tag))
 
+    notes = [p for p in todo if p["_how"] == "notes"]
     for p in todo:
         pos = p["_target"]
         el = blocks[pos] if pos is not None and 0 <= pos < len(blocks) else None
         if el is None:
             continue
         how = p["_how"]
+        if how == "unlink":
+            n = _unlink(d, blocks, p["_it"])
+            if n:
+                done.append({"id": p["id"], "kind": p["kind"], "object": p["object"], "page": p["page"],
+                             "how": f"{p['change']} — {n} paragraph(s)"})
+            continue
         if how in ("keep", "break") and el.tag == _W + "p":
             pf = Paragraph(el, None).paragraph_format
             if how == "keep":
@@ -139,7 +157,45 @@ def _apply(src: Path, dst: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
             continue
         done.append({"id": p["id"], "kind": p["kind"], "object": p["object"], "page": p["page"], "how": p["change"]})
     d.save(str(dst))
+    if notes:
+        from app.tools import review_loop, review_ops
+        pkg = review_loop._Pkg(dst)
+        res = review_ops.tidy_notes(pkg)
+        pkg.save(dst)
+        if res["removed"] or res["reordered"]:
+            done.append({"id": notes[0]["id"], "kind": "notes_orphan", "object": None, "page": None,
+                         "how": f"{res['removed']} note(s) without a reference removed"
+                                + (", the rest put in order" if res["reordered"] else "")})
     return done
+
+
+def _unlink(d, blocks: list, it: dict[str, Any]) -> int:
+    """A szivárgott link le a bekezdésekről (a futások maradnak, a „Hyperlink” karakterstílus nélkül); ahol a link
+    szövege a webhelyet nevezi meg, ott marad. → hány bekezdésről vettük le."""
+    from docx.oxml.ns import qn
+    from app.tools.validate import _W, _text, spilled
+    target = it.get("_target")
+    rids = {rid for rid, rel in d.part.rels.items() if rel.is_external and rel.target_ref == target}
+    n = 0
+    for pos in it.get("_spill") or []:
+        el = blocks[pos] if 0 <= pos < len(blocks) else None
+        if el is None or el.tag != _W + "p":
+            continue
+        hit = False
+        hs = list(el.iter(_W + "hyperlink"))
+        for h in hs:
+            if h.get(qn("r:id")) not in rids or not spilled(target, _text(h), _text(el), [_text(o) for o in hs if o is not h]):
+                continue
+            for r in h.iter(_W + "r"):
+                st = r.find(f"{_W}rPr/{_W}rStyle")
+                if st is not None and st.get(_W + "val") in ("Hyperlink", "InternetLink"):
+                    st.getparent().remove(st)
+            for x in list(h):
+                h.addprevious(x)
+            h.getparent().remove(h)
+            hit = True
+        n += hit
+    return n
 
 
 async def analyze(path: Path, file_id: Optional[str]) -> dict[str, Any]:

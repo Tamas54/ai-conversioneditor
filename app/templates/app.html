@@ -2437,6 +2437,7 @@ function wireMore(f, altEds, openEditor) {
   const sec = (h, body) => body ? `<div class="menu-sec"><span class="menu-h">${h}</span>${body}</div>` : "";
   const draw = (targets = []) => {
     menu.innerHTML = sec("Edit", altEds.map(([app, label]) => `<button type="button" role="menuitem" data-act="edit" data-app="${app}">${esc(ALT_EDIT[app] || label)}</button>`).join(""))
+      + (f.ext === "docx" ? sec("Review", `<button type="button" role="menuitem" data-act="clean">Accept all changes, remove comments<small>A clean copy as a new version — this one stays as it is</small></button>`) : "")
       + sec("Use in", uses.map((u, i) => `<button type="button" role="menuitem" data-act="use" data-i="${i}">${esc(u[4])}</button>`).join(""))
       + sec("Convert to", targets.length ? `<div class="menu-chips">${targets.map(x => `<button type="button" role="menuitem" data-act="convert" data-fmt="${x.fmt}">${esc(x.label)}</button>`).join("")}</div>` : "")
       + (account?.sharing ? `<div class="menu-sec"><button type="button" role="menuitem" data-act="share">Share…<small>${f.shared ? `${esc(f.shared.owner_name)}'s file — see who has access` : "Let someone view it or keep editing it from their account"}</small></button></div>` : "")
@@ -2452,6 +2453,13 @@ function wireMore(f, altEds, openEditor) {
     if (act === "print") return printFile(cur.file_id);
     if (act === "delete") return deleteWithUndo(cur);
     if (act === "share") return openShare(cur);
+    if (act === "clean") {
+      toast("Making a clean copy…");
+      try { const r = await api("/api/make/clean_copy", { method: "POST", body: JSON.stringify({ file_id: cur.file_id }) });
+            toast(r.note); nav("/app/file/" + encodeURIComponent(r.file_id)); }
+      catch (err) { toast(err.message); }
+      return;
+    }
     if (act === "use") return useIn(uses[+b.dataset.i]);
     if (act === "convert") {
       toast("Converting…");

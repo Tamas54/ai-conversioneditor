@@ -273,13 +273,13 @@ def edit_comment(pkg: L._Pkg, c: dict[str, Any], text: str) -> None:
 
 # ---------- követett változások ----------
 
-def _changes(doc) -> list[dict[str, Any]]:
-    """Minden függő változás: {el, id, author, type, para (0-tól) | None}."""
+def _changes(doc, part: str = "word/document.xml") -> list[dict[str, Any]]:
+    """Minden függő változás: {el, id, author, type, para (0-tól, csak a törzsben) | None, part}."""
     body = doc.find(q("body"))
-    paras = L._paras(body)
-    index = {p: i for i, p in enumerate(paras)}
+    scope = body if body is not None else doc            # láb-/végjegyzet, élőfej, élőláb: az egész rész
+    index = {p: i for i, p in enumerate(L._paras(body))} if body is not None else {}
     out = []
-    for el in body.iter(*_TRACK_RUN, *_PR_CHANGES):
+    for el in scope.iter(*_TRACK_RUN, *_PR_CHANGES):
         par = el.getparent()
         if el.tag in (INS, DEL) and par is not None and par.tag == RPR and par.getparent() is not None \
                 and par.getparent().tag == PPR:
@@ -296,8 +296,14 @@ def _changes(doc) -> list[dict[str, Any]]:
         if owner is None and kind.startswith("row_"):
             owner = next(par.getparent().iter(P), None)
         out.append({"el": el, "id": el.get(q("id")), "author": el.get(q("author")) or "?", "type": kind,
-                    "para": index.get(owner)})
+                    "para": index.get(owner), "part": part})
     return out
+
+
+def _change_parts(pkg: L._Pkg) -> list[str]:
+    """A törzs + minden rész, amelyben követett változás lehet (lábjegyzet, végjegyzet, élőfej, élőláb) — a tiszta
+    példány a lábjegyzeten belüli változást is elfogadja (10-22: ott ins/del maradt)."""
+    return ["word/document.xml"] + [n for n in sorted(pkg.raw) if n.startswith(_STORY) and n.endswith(".xml")]
 
 
 def _matches(ch: dict[str, Any], spec: Any) -> bool:
@@ -337,12 +343,30 @@ def _drop(el) -> None:
         el.getparent().remove(el)
 
 
+_ANCHORS = (CRS, CRE, q("bookmarkStart"), q("bookmarkEnd"), q("proofErr"), q("permStart"), q("permEnd"))
+
+
+def _empty(p) -> bool:
+    """Nincs benne semmi látható (szöveg, kép, mező, jegyzetjel) — csak a tulajdonságai és horgonyok."""
+    return all(x.tag == PPR or x.tag in _ANCHORS or (x.tag == R and all(c.tag == RPR for c in x)) for x in p)
+
+
 def _merge_next(p) -> None:
-    """A bekezdésjel törlése elfogadva / beszúrása elutasítva: a következő bekezdés ebbe olvad."""
+    """A bekezdésjel törlése elfogadva / beszúrása elutasítva: a következő bekezdés ebbe olvad. Ha a bekezdés egészében
+    törölt volt (üresen maradt), ő tűnik el, és a következő a SAJÁT tulajdonságaival marad — ahogy Word fogadja el
+    (10-22: a törölt bekezdések utáni „4 Magyarország…” címsor a törölt bekezdés Normal stílusát kapta)."""
     nxt = p.getnext()
     while nxt is not None and nxt.tag != P:
         nxt = nxt.getnext() if nxt.tag in (CRS, CRE, q("bookmarkStart"), q("bookmarkEnd")) else None
     if nxt is None:
+        return
+    ppr = p.find(PPR)
+    if _empty(p) and (ppr is None or ppr.find(q("sectPr")) is None):      # szakaszhatárt hordozó bekezdés: a régi út
+        at = 1 if nxt.find(PPR) is not None else 0
+        for x in [x for x in p if x.tag != PPR]:                          # könyvjelző, megjegyzés-horgony átkerül
+            nxt.insert(at, x)
+            at += 1
+        p.getparent().remove(p)
         return
     for x in list(nxt):
         if x.tag != PPR:
@@ -400,29 +424,103 @@ def _decide(ch: dict[str, Any], accept: bool) -> None:
         _drop(el) if accept else _restore_props(el)
 
 
+def _pending(pkg: L._Pkg) -> list[dict[str, Any]]:
+    return [c for name in _change_parts(pkg) if pkg.xml(name) is not None for c in _changes(pkg.xml(name), name)]
+
+
 def decide(pkg: L._Pkg, spec: Any, accept: bool) -> dict[str, Any]:
-    doc = pkg.xml("word/document.xml")
-    chosen = [c for c in _changes(doc) if _matches(c, spec)]
+    chosen = [c for c in _pending(pkg) if _matches(c, spec)]
     if not chosen:
         raise _Fail("no tracked change matches — read=\"comments\" lists them (id, author, paragraph, type)")
     by_type: dict[str, int] = {}
     for ch in reversed(chosen):              # hátulról: a beágyazott (belső) változás előbb
         _decide(ch, accept)
         by_type[ch["type"]] = by_type.get(ch["type"], 0) + 1
-    if not any(True for _ in doc.iter(MOVE_FROM, MOVE_TO)):
-        for m in list(doc.iter(*_MOVE_MARKS)):
-            _drop(m)
-    pkg.put("word/document.xml", doc)
+    for name in sorted({c["part"] for c in chosen}):
+        root = pkg.xml(name)
+        if not any(True for _ in root.iter(MOVE_FROM, MOVE_TO)):
+            for m in list(root.iter(*_MOVE_MARKS)):
+                _drop(m)
+        pkg.put(name, root)
     authors = sorted({c["author"] for c in chosen})
-    return {"status": "accepted" if accept else "rejected", "changes": len(chosen), "by_type": by_type,
-            "authors": authors}
+    out = {"status": "accepted" if accept else "rejected", "changes": len(chosen), "by_type": by_type, "authors": authors}
+    in_notes = sum(1 for c in chosen if c["part"] != "word/document.xml")
+    if in_notes:
+        out["in_notes_headers_footers"] = in_notes
+    notes = tidy_notes(pkg)
+    if notes["removed"]:
+        out["notes_removed"] = notes["removed"]
+    return out
+
+
+# ---------- láb- és végjegyzetek rendben tartása ----------
+
+_NOTES = (("word/footnotes.xml", "footnote", "footnoteReference"), ("word/endnotes.xml", "endnote", "endnoteReference"))
+
+
+def tidy_notes(pkg: L._Pkg) -> dict[str, int]:
+    """Árva láb-/végjegyzet (a hivatkozása elfogadott törléssel eltűnt) ki, a többi a hivatkozások sorrendjébe. A
+    LibreOffice a jegyzeteket a fájlbeli SORRENDJÜK szerint rendeli a hivatkozásokhoz, nem azonosító szerint: egy bent
+    maradt árva jegyzet után a hivatkozás alá a szomszéd szövege kerül (10-22: az IFR-jegyzet helyén a régi
+    MI-rendeletes). Ami törölt (w:del) szövegben hivatkozott, az nem árva — elutasításkor kell."""
+    out = {"removed": 0, "reordered": 0}
+    for part, tag, notes, normal, order in _note_parts(pkg):
+        orphans = [n for n in normal if n.get(q("id")) not in order]
+        for n in orphans:
+            notes.remove(n)
+        kept = [n for n in normal if n.get(q("id")) in order]
+        want = sorted(kept, key=lambda n: order[n.get(q("id"))])
+        moved = want != kept
+        if moved:
+            for n in kept:
+                notes.remove(n)
+            for n in want:
+                notes.append(n)
+        if orphans or moved:
+            pkg.put(part, notes)
+        out["removed"] += len(orphans)
+        out["reordered"] += int(moved)
+    return out
+
+
+def _note_parts(pkg: L._Pkg):
+    """(rész, fajta, gyökér, a normál jegyzetek a fájl sorrendjében, hivatkozott id → első hivatkozás sorszáma)"""
+    for part, tag, ref in _NOTES:
+        notes = pkg.xml(part)
+        if notes is None:
+            continue
+        roots = [pkg.xml("word/document.xml")] + [pkg.xml(n) for n in sorted(pkg.raw)
+                                                  if n.startswith(_STORY) and n.endswith(".xml") and n != part]
+        order: dict[str, int] = {}
+        for root in roots + [notes]:
+            for el in root.iter(q(ref)) if root is not None else ():
+                order.setdefault(el.get(q("id")), len(order))
+        normal = [n for n in notes.findall(q(tag)) if (n.get(q("type")) or "normal") == "normal"]
+        yield part, tag, notes, normal, order
+
+
+def notes_report(pkg: L._Pkg) -> dict[str, dict[str, Any]]:
+    """{"footnote" | "endnote": {orphans: [id], out_of_order: bool}} — csak ahol baj van (a validátornak)."""
+    out = {}
+    for _, tag, _, normal, order in _note_parts(pkg):
+        orphans = [n.get(q("id")) for n in normal if n.get(q("id")) not in order]
+        kept = [order[n.get(q("id"))] for n in normal if n.get(q("id")) in order]
+        if orphans or kept != sorted(kept):
+            out[tag] = {"orphans": orphans, "out_of_order": kept != sorted(kept)}
+    return out
 
 
 def final(pkg: L._Pkg, comments: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    doc = pkg.xml("word/document.xml")
-    n_changes = 0
-    if _changes(doc):
-        n_changes = decide(pkg, "all", True)["changes"]
+    n_changes, notes = 0, {}
+    if _pending(pkg):
+        res = decide(pkg, "all", True)
+        n_changes, notes = res["changes"], res
+    else:
+        tidy_notes(pkg)
     roots = [k for k, v in comments.items() if v["root"] == k]
     n_comments = sum(delete_thread(pkg, comments, r) for r in roots)
-    return {"status": "final", "changes_accepted": n_changes, "comments_removed": n_comments}
+    out = {"status": "final", "changes_accepted": n_changes, "comments_removed": n_comments}
+    for k in ("in_notes_headers_footers", "notes_removed"):
+        if notes.get(k):
+            out[k] = notes[k]
+    return out
