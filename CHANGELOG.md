@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-22 — Big files: phone videos upload in pieces and resume; the agent never carries the bytes
+
+The owner's question: a 2-minute iPhone 17 Pro Max video was 235 MB. "How do we get it into the app, and how does an
+agent handle a file that big?"
+- **The app uploads a large file (over 16 MB) in 8 MB pieces**, three at a time, with progress: "Uploading IMG_4821.MOV —
+  37% (88 of 227 MB). Keep this page open."
+  - A piece that fails is retried, and the upload waits for the connection to come back.
+  - If it still stops, choosing the same file again carries on from where it stopped: the server lists what arrived
+    (`GET /api/upload/chunks/{id}`).
+  - Leaving the page while uploading asks first.
+  - Measured locally with a browser: a 238 MB video, with an 8-second network cut at 30%, finished. After a page
+    reload at 52%, the server already had 20 of 29 pieces and only the rest was sent. The file arrived byte for byte.
+- **The server writes uploads to disk, not to memory.**
+  - A 238 MB upload in one request raised the server's peak memory from 141 MB to 374 MB; now it stays at 142 MB.
+  - A piece that arrives short no longer counts as received.
+  - Pieces are joined in a background thread.
+- **The agent never carries the bytes.**
+  - `upload_from_url` downloads to disk, recognises a phone video (MOV/MP4) without a file name, and checks the file.
+  - The base64 tools (`upload_file`, `upload_chunk`) are for small files, up to 50 MB in all. For anything bigger they
+    tell the agent to ask the person to upload in the app or give a link, then find it with
+    `files(action="list", kind="video")`.
+  - From then on the agent works with the file_id: the server cuts, renders and transcribes, and the agent sees
+    frames, the transcript and the numbers.
+
 ## 2026-10-22 — Fixes from the editorial trial (links, footnotes, clean copy, fact sources)
 
 From an MCP agent's report after a full trial on a long study: a fact check, then a tracked rewrite with WordCraft.

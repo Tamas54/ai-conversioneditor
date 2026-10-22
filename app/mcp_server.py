@@ -306,6 +306,7 @@ def _arg_brief(k: dict) -> str:
 
 
 _CHUNK_BUFFERS: dict[str, dict[int, bytes]] = {}
+_CHUNKED_MAX = 50 * 1024 * 1024        # a base64-es darabok a memóriában gyűlnek: nagy fájl az appon / linken jön
 
 
 def _no_ai_pictures(*specs: Any) -> None:
@@ -323,8 +324,25 @@ def _no_ai_pictures(*specs: Any) -> None:
         raise ValueError(tenancy.CLIENT_IMAGE_MSG)
 
 
-def _sniff_ext(data: bytes) -> str:
-    """Kiterjesztés a tartalomból (PDF, képek, Office-zip), ha a névből nem derül ki."""
+def _sniff_ext(data: Union[bytes, Path]) -> str:
+    """Kiterjesztés a tartalomból (PDF, képek, videó, Office-zip), ha a névből nem derül ki. Fájlútvonalat is kap — a
+    nagy letöltés nem kerül a memóriába."""
+    if isinstance(data, Path):
+        with open(data, "rb") as f:
+            head12 = f.read(12)
+        if head12.startswith(b"PK"):
+            import zipfile
+            try:
+                names = zipfile.ZipFile(data).namelist()
+            except Exception:
+                return "zip"
+            for pre, e in (("ppt/", "pptx"), ("word/", "docx"), ("xl/", "xlsx")):
+                if any(n.startswith(pre) for n in names):
+                    return e
+            return "zip"
+        data = head12
+    if data[4:8] == b"ftyp":                       # MP4 / MOV (iPhone: „qt  ”)
+        return "mov" if data[8:10] == b"qt" else "mp4"
     head = data[:8]
     if head.startswith(b"%PDF"):
         return "pdf"
@@ -379,20 +397,23 @@ async def upload_from_url(url: Optional[str] = None, filename: Optional[str] = N
         filename = filename or file.name
     if not url:
         raise ValueError("Give url, or attach the file in the chat (file).")
-    try:                                  # a közös kimenő kliens: SSRF-védelem, leíró User-Agent, méretkorlát
-        got = await net.fetch(url, max_bytes=O.max_bytes(False), timeout=120)
-    except httpx.HTTPStatusError as e:
-        raise ValueError(f"The server of that URL answered HTTP {e.response.status_code} — check the link "
-                         "(or download it and upload_file it).") from None
-    data = got.content
-    if not filename:
-        filename = got.name if got.name != "download" else "downloaded.bin"
-    ext = Path(filename).suffix.lstrip(".").lower()
-    if not ext or ext == "bin":            # név kiterjesztés nélkül (csetfájl-link): a tartalomból
-        ext = _sniff_ext(data)
-        filename = f"{filename.rsplit('.', 1)[0] if filename.endswith('.bin') else filename}.{ext}"
-    fid = new_file_id(ext)
-    await save_bytes(input_path(fid), data)
+    from app.storage import temp_path
+    tmp = temp_path(f"url_{new_file_id('dl').rsplit('.', 1)[0]}")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    try:                                  # a közös kimenő kliens: SSRF-védelem, leíró User-Agent, méretkorlát — lemezre
+        try:                              # (egy telefonos videó több száz MB: nem a memóriába)
+            name, size, _ = await net.download(url, tmp, O.max_bytes(False), timeout=120)
+        except ValueError as e:
+            raise ValueError(f"{e} — check the link (or ask the person to upload it in the app).") from None
+        if not filename:
+            filename = name if name and name != "download" else "downloaded.bin"
+        ext = Path(filename).suffix.lstrip(".").lower()
+        if not ext or ext == "bin":        # név kiterjesztés nélkül (csetfájl-link): a tartalomból
+            ext = _sniff_ext(tmp)
+            filename = f"{filename.rsplit('.', 1)[0] if filename.endswith('.bin') else filename}.{ext}"
+        fid = O._save_named(tmp, filename)
+    finally:
+        tmp.unlink(missing_ok=True)
     write_meta(
         fid, original_filename=filename, label=filename,
         operation="upload_from_url", extra={"source_url": "chat attachment" if file is not None else url},   # az aláírt, ideiglenes link nem kell
@@ -400,7 +421,7 @@ async def upload_from_url(url: Optional[str] = None, filename: Optional[str] = N
     return {
         "file_id": fid,
         "url": public_url(fid),
-        "size_kb": len(data) // 1024,
+        "size_kb": size // 1024,
         "original_name": filename,
     }
 
@@ -635,8 +656,12 @@ async def upload_chunk(
     content_base64: str,
 ) -> dict:
     """
-    Upload a large file as multiple base64 chunks across separate tool
-    calls — bypasses the per-tool-call input size limit.
+    Upload a file as multiple base64 chunks across separate tool calls —
+    for files of a few MB that sit in YOUR sandbox (up to 50 MB in all).
+    A video from the person's phone or anything bigger: never base64 it —
+    ask them to upload it in the app (Upload: it goes in pieces, shows
+    progress and resumes after a dropped connection) or to give a link
+    (upload_from_url), then find it with files(action="list", kind="video").
 
     Workflow:
       1. Pick any upload_id (e.g. 'page28-' + uuid). Use the SAME id for
@@ -662,6 +687,11 @@ async def upload_chunk(
         raise ValueError(f"content_base64 is not valid base64: {e}")
 
     buf = _CHUNK_BUFFERS.setdefault(upload_id, {})
+    if sum(len(v) for v in buf.values()) + len(data) > _CHUNKED_MAX:
+        _CHUNK_BUFFERS.pop(upload_id, None)
+        raise ValueError(f"upload_chunk takes up to {_CHUNKED_MAX // (1024 * 1024)} MB — for a bigger file (a video), ask "
+                         "the person to upload it in the app (it goes in pieces and resumes), or give a link to "
+                         "upload_from_url; then files(action=\"list\") finds it.")
     buf[chunk_index] = data
 
     if len(buf) < total_chunks:
@@ -700,7 +730,9 @@ async def upload_file(filename: str, content_base64: str) -> dict:
     Upload a file to the editor and get back a `file_id`.
 
     Use this FIRST when you have a local file you want to process — without
-    a file_id, no other tool can act on your file. The returned file_id is
+    a file_id, no other tool can act on your file. Small files only: a
+    video or anything over a few MB comes from the person's app upload
+    (find it with files(action="list")) or a link (upload_from_url). The returned file_id is
     then passed to convert, find_replace, edit_with_instruction, etc.
 
     Args:
