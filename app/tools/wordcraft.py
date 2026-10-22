@@ -93,6 +93,32 @@ def _existing(file_id: str) -> Path:
     raise FileNotFoundError(f"file_id not found: {file_id}")
 
 
+def expand(commands: Optional[list[Command]]) -> list[Command]:
+    """A kliens parancsai a motor nyelvére (10-22, ügynök-jelentés):
+    - text.paragraphs {"text": "a\\nb"} | {"paragraphs": ["a", "b"]}: minden sor / elem saját bekezdés (a motor a \\r-nél
+      kezd új bekezdést; a \\n a bekezdésen belüli sortörés — a többsoros text.insert eddig EGY bekezdés lett);
+    - text.insert-ben a \\r\\n egy bekezdéshatár (a motor ezt bekezdés + a következő elején egy sortörésre bontotta)."""
+    out: list[Command] = []
+    for c in commands or []:
+        if not isinstance(c, dict):
+            out.append(c)
+            continue
+        cmd, params = c.get("command") or c.get("id"), c.get("params") or {}
+        if cmd == "text.paragraphs":
+            items = params.get("paragraphs")
+            if not isinstance(items, list):
+                items = [x for x in re.split(r"\r\n|\r|\n|\u2029", str(params.get("text") or "")) if x.strip()]
+            items = [str(x).replace("\r", " ").replace("\n", " ") for x in items]
+            if not items:
+                raise ValueError('text.paragraphs: {"text": "first\\nsecond"} or {"paragraphs": ["first", "second"]} — nothing to insert.')
+            out.append({"command": "text.insert", "params": {"text": "\r".join(items)}})
+            continue
+        if cmd == "text.insert" and isinstance(params.get("text"), str) and "\r\n" in params["text"]:
+            c = {**c, "params": {**params, "text": params["text"].replace("\r\n", "\r")}}
+        out.append(c)
+    return out
+
+
 def _cmd_arg(c: Command) -> str:
     """{"command": "select.text", "params": {...}} vagy a CLI saját 'id={json}' alakja."""
     if isinstance(c, str):
@@ -131,7 +157,7 @@ async def run(
         args += ["--template", tpl]
     if author:
         args += ["--author", author]
-    cmd_args = [_cmd_arg(c) for c in (commands or [])]
+    cmd_args = [_cmd_arg(c) for c in expand(commands)]
     for a in cmd_args:
         args += ["--cmd", a]
     args.append("--print")                      # parancsonként „id: eredmény” — a jelentésbe (és az olvasás válasza)

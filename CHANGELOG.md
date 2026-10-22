@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-10-22 — Document editor: background edits, real change detection, layout fixing
+
+From an MCP agent's test report on a long study.
+- **`edit_with_instruction` runs in the background.**
+  - The answer comes within ~40 s. A longer edit returns `{status: "running", job_id, stage}`, and you ask again with
+    `edit_with_instruction(job_id=…, wait=30)`.
+  - The new version is named and checked even if the client stops asking.
+  - Failures say what happened and that nothing was changed: the AI plan was too long (cut off), the planner didn't
+    answer in 6 minutes, or the service failed. Each one suggests splitting the instruction or using wordcraft.
+  - The plan may be up to 12,000 tokens (it was 4,096). A cut-off answer (`finish_reason = length`) is now a clear
+    error instead of a broken JSON followed by a silent second model call. Failed operations are listed.
+- **"Nothing changed" — and lost editor saves — fixed.**
+  - The DOCX fingerprint now also sees: footnotes and endnotes, comments, tracked insertions and deletions, page and
+    line breaks, fields, the pagination and spacing settings of paragraphs (keep with next, page break before…),
+    numbering, headers and footers, section settings, and the visible properties of the styles in use.
+  - Before this, a real footnote or a keep-with-next change was reported as "Nothing changed". Worse, the browser
+    editor treated such a save as unchanged and **discarded it**.
+  - A plain re-save (python-docx, WordCraft) is still "the same".
+- **Leftover markers:** `[[N7]]`-style double-bracket markers count as placeholders. Every edit's check names new
+  placeholders anywhere in the document, including footnotes, endnotes, headers and footers.
+- **Paragraphs vs line breaks in wordcraft:**
+  - `text.paragraphs {"text": "a\nb"}` (or `{"paragraphs": [...]}`) inserts real paragraphs.
+  - In `text.insert`, `\n` is a line break inside the paragraph, as documented now; `\r\n` no longer leaves a stray
+    line break.
+  - `select.range` offsets are documented as UTF-8 bytes (á, ő = 2), with `select.text` recommended.
+- **`validate_document(fix=true)`: layout fixing with re-checking.**
+  - It lays the document out in both views, fixes what is safe, and lays it out again, for up to 3 rounds.
+  - Fixed problems: headings at a page bottom (keep with next; a page break if a view still leaves them, so the
+    editor and Word agree), captions apart from their picture or table, table rows breaking across pages, and table
+    header rows not repeating.
+  - The result is a new version, with `fixed` and the pictures and issues of what is left. The after-edit check points
+    to it.
+
 ## 2026-10-22 — Background removal for video (green / blue screen), see-through avatars
 
 - **`video(action="cutout")`** (also `POST /api/video/cutout`): a video filmed in front of a green or blue screen,

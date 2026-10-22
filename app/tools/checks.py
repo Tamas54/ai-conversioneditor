@@ -413,6 +413,16 @@ def check_docx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) 
         if content_digest.same_content(src, out):
             return make("failed", ["Nothing changed in the document — the edit had no visible effect."], verified)
         verified.append("The content changed.")
+    try:                                       # a szerkesztés hagyott-e helyőrzőt (10-22: „[[N7]]” maradt, a check nem szólt)
+        from collections import Counter
+        from app.tools.content_check import placeholder_quotes
+        new = Counter(placeholder_quotes(out)) - Counter(placeholder_quotes(src) if src is not None and _ext(src) == "docx" else [])
+        if new:
+            shown = ", ".join(f"“{q}” ({w})" for (w, q) in list(new)[:6])
+            findings.append(f"Leftover placeholder{'s' if sum(new.values()) > 1 else ''} in the document: {shown} — replace "
+                            "with the real text or remove.")
+    except Exception as e:
+        log.info("helyőrző-keresés kimaradt: %s", e)
     changes, comments, authors = _docx_review_counts(out)
     cmds = " ".join(str((c or {}).get("command") if isinstance(c, dict) else c) for c in (args.get("commands") or []))
     if changes:
@@ -461,7 +471,12 @@ async def with_layout(check: dict[str, Any], out: Path) -> dict[str, Any]:
     more = f" (+{len(found) - 6} more)" if len(found) > 6 else ""
     return make("failed" if check["status"] == "failed" else "needs_check",
                 check["findings"] + [f"Layout: {validate.counts(found)}{more} — call validate_document(file_id) to see them "
-                                     "marked on the pages, fix the errors, then validate again."] + lines, check["verified"])
+                                     "marked on the pages, fix the errors, then validate again"
+                                     + ("; validate_document(file_id, fix=true) fixes headings left at a page bottom, "
+                                        "captions apart from their picture and table rows / headers by itself"
+                                        if any(i["kind"] in ("orphan_heading", "caption_split", "table_row_split",
+                                                             "table_header_not_repeated") for i in found) else "") + "."]
+                + lines, check["verified"])
 
 
 # ---------- képek ----------
