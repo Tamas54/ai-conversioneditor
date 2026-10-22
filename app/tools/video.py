@@ -1891,16 +1891,17 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
 # itt számoljuk (mint a chart_elements), a builder csak lerakja (overlayLayers). Az ábra, a szám és az idézet a forrással
 # ellenőrizve — forrás nélkül a réteg a saját szövegével megy át (NEM ellenőrizve; a check ezt ki is mondja).
 
-LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split")
+LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform")
 _LAYER_DUR = {"lower_third": 5.0, "title": 4.0, "chapter": 3.5, "source": 5.0, "stat": 5.0, "quote": 6.0, "chart": 6.0,
-              "fullscreen": 6.0, "split": 8.0}
+              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0}
 _LAYER_ANIM = {"lower_third": ("slide", "fade"), "title": ("fade", "fade"), "chapter": ("slide", "fade"), "source": ("fade", "fade"),
                "stat": ("pop", "fade"), "quote": ("fade", "fade"), "chart": ("pop", "fade"), "fullscreen": ("fade", "fade"),
-               "split": ("fade", "fade")}
+               "split": ("fade", "fade"), "waveform": ("fade", "fade")}
 _LAYER_ANIMS = ("fade", "slide", "pop", "none")
 _LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
 # z-sorrend: a teljes képes és az osztott alul, a névsáv és a forrásfelirat legfelül (egy fajtán belül az idő szerint)
-_LAYER_Z = {"fullscreen": 0, "split": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4, "source": 5}
+_LAYER_Z = {"fullscreen": 0, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
+            "source": 5}
 _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
                 "splitscreen": "split", "credit": "source"}
 # a rövidített réteg ({"type": "race", …}) ezeket viszi át az ábrába — a saját alakú ábrák mezői is (10-17: a „series”,
@@ -2067,6 +2068,17 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
             raise ValueError(f"{what} ({typ}): give text (and subtitle?).")
         ly["subtitle"] = _clean(r.get("subtitle"), 110, "Subtitle")
         ly["kicker"] = _clean(r.get("kicker"), 30, "Kicker")
+    elif typ == "waveform":                               # hullámforma: a hang hangereje sávokban (10-22)
+        st = str(r.get("style") or "bars").lower()
+        if st not in WAVE_STYLES:
+            raise ValueError(f"{what} (waveform): style {' | '.join(WAVE_STYLES)}")
+        ly["style"] = st
+        try:
+            ly["bars"] = int(max(8, min(64, float(r.get("bars") or 28))))
+        except (TypeError, ValueError):
+            raise ValueError(f"{what} (waveform): bars = 8–64") from None
+        if r.get("color"):
+            ly["color"] = str(r["color"])[:24]
     elif typ == "source":
         ly["text"] = _clean(r.get("text"), 140, "Source caption")
         if not ly["text"]:
@@ -2200,6 +2212,8 @@ def _layer_text(ly: dict[str, Any]) -> str:
     t, ch = ly["type"], ly.get("chart") or {}
     if t == "lower_third":
         return ly["name"] + (f" — {ly['role']}" if ly.get("role") else "")
+    if t == "waveform":
+        return f"waveform ({ly.get('style', 'bars')})"
     if t == "stat":
         return f"{ly['value']} {ly.get('label') or ''}".strip()
     if ch.get("type") == "quote":
@@ -2269,6 +2283,42 @@ def _shift(els: list[dict[str, Any]], dx: float, dy: float) -> list[dict[str, An
 
 def _even(v: float) -> int:
     return max(4, int(round(v / 2)) * 2)
+
+
+WAVE_STYLES = ("bars", "rise")
+WAVE_STEP = 1 / 15                       # a hangerő-burkoló lépése (s): ennyinként egy kulcskocka
+
+
+async def wave_levels(src: Path, at: float, dur: float) -> list[float]:
+    """A hang hangereje [at, at + dur] alatt WAVE_STEP lépésenként, 0–100 (−50…−8 dBFS-ből, gyors felfutás, lassabb
+    lecsengés) — a hullámforma sávjai ezt követik. Hang nélkül: üres."""
+    import numpy as np
+    from app.convert.engines import run
+    try:
+        raw, _ = await run("ffmpeg", "-v", "error", "-ss", f"{max(0.0, at):.3f}", "-t", f"{dur:.3f}", "-i", str(src), "-vn", "-ac", "1",
+                           "-ar", "16000", "-f", "s16le", "-", timeout=600)
+    except Exception as e:
+        log.info("hullámforma: a hang nem olvasható (%s): %s", src.name, str(e)[:120])
+        return []
+    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    hop = int(16000 * WAVE_STEP)
+    if x.size < hop:
+        return []
+    n = x.size // hop
+    rms = np.sqrt(np.mean(x[: n * hop].reshape(n, hop) ** 2, axis=1) + 1e-12)
+    lvl = np.clip((20 * np.log10(rms) + 50) / 42 * 100, 0, 100)
+    out, cur = [], 0.0
+    for v in lvl:                                  # gyors fel, lassabb le — ne villogjon
+        cur = v if v > cur else cur * 0.65 + v * 0.35
+        out.append(round(float(cur), 1))
+    return out
+
+
+def _wave_shape(n: int, seed: str) -> list[float]:
+    """A sávok saját magassága (0,35–1): középen magasabb, kicsit szabálytalan — mint egy hangszer-kijelző."""
+    import random
+    rnd = random.Random(seed)
+    return [round(0.35 + 0.65 * (0.55 * (1 - abs((i + 0.5) / n - 0.5) * 2) ** 0.8 + 0.45 * rnd.random()), 3) for i in range(n)]
 
 
 def _layer_box(ly: dict[str, Any], W: int, H: int, safe: float, acc: list[float]) -> dict[str, Any]:
@@ -2396,6 +2446,11 @@ def _layer_box(ly: dict[str, Any], W: int, H: int, safe: float, acc: list[float]
                     "opacity": int(round(100 * (ly["chart"].get("backdrop") if ly["chart"].get("backdrop") is not None else 0.86))),
                     "round": round(m * 0.014, 1)}]
         slide = [0, 0]
+    elif t == "waveform":                                      # sáv a képkocka szélességében: alul (alap), középen, felül
+        w, h = _even(W - 2 * mg), _even(H * (0.1 if vert else 0.16))
+        cx = W / 2
+        cy = (H / 2 if pos == "center" else mg + h / 2 if pos == "top" else safe - h / 2 - m * 0.02)
+        slide = [0, 0]
     elif t == "fullscreen":
         w, h, cx, cy, slide = W, H, W / 2, H / 2, [0, 0]
         if ly.get("kind") != "image":                 # zárókártya: a kimerevített utolsó kocka halványan átlátszik
@@ -2424,7 +2479,7 @@ def _layer_box(ly: dict[str, Any], W: int, H: int, safe: float, acc: list[float]
                 "round": round(m * 0.014, 1)}]
     if custom and t not in ("lower_third", "source", "fullscreen", "split"):
         cx, cy = custom[0] * W, custom[1] * H
-        if t in ("chart", "quote"):
+        if t in ("chart", "quote", "waveform"):
             w, h = _even(custom[2] * W), _even(custom[3] * H)
             if els:
                 els[0].update(size=[w, h], pos=[w / 2, h / 2])
@@ -2596,6 +2651,10 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             item["split"] = b["split"]
         if (ly.get("chart") or {}).get("type") == "script":
             item["code"] = ly["chart"]["code"]
+        if ly["type"] == "waveform":
+            item["wave"] = {"levels": (ly.get("_levels") or [])[:int(dur / WAVE_STEP) + 2], "step": round(WAVE_STEP, 5),
+                            "bars": ly.get("bars", 28), "style": ly.get("style", "bars"),
+                            "shape": _wave_shape(ly.get("bars", 28), ly["id"]), "color": _rgb(ly.get("color")) if ly.get("color") else acc}
         if (ly.get("chart") or {}).get("type") == "graphic":
             _probe_texts(item["elements"], ly["id"])
         out.append(item)
@@ -3925,6 +3984,78 @@ async def _assemble(story: dict[str, Any], specs: list[Any], opts: dict[str, Any
 FOOTAGE_EXTS = {"mp4", "mov", "webm", "m4v"}
 
 
+async def audiogram(body: dict[str, Any], progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """Hangból videó (podcast, interjú, felolvasás — 10-22): file_id = hang (vagy videó, a hangja), image? = borító
+    (file_id | URL | {"stock": szavak}; nélküle a márkaszín sötét háttere), format (alap: vertical), title?, style? =
+    a hullámforma (bars | rise), captions? (alap: igen — automatikus, szavankénti, caption_style alap: bold). A borítóból
+    állókép-videó lesz a hanggal, arra az overlay: hullámforma középen / alul, cím felül, felirat — szerkeszthető projekt."""
+    from PIL import Image, ImageFilter
+    from app.convert.engines import run
+    from app.storage import display_label, input_path, new_file_id, temp_path, write_meta
+    from app.storage.naming import root_name
+    from app.tools import images as imgs
+    step = progress or (lambda *a, **k: None)
+    fid = str(body.get("file_id") or "")
+    try:
+        src = crafts.existing(fid)
+    except FileNotFoundError:
+        raise ValueError("audiogram: file_id = a sound (mp3, wav, m4a…) or a video whose sound to use.") from None
+    from app.tools import mediaprobe
+    mi = await mediaprobe.info(src)
+    if not mi.get("has_audio"):
+        raise ValueError("audiogram: that file has no sound.")
+    fmt = str(body.get("format") or "vertical").lower()
+    if fmt not in FORMATS:
+        raise ValueError(f"format: {' | '.join(FORMATS)}")
+    W, H = FORMATS[fmt]
+    secs = min(float(mi.get("duration") or 0), 1800.0)
+    if secs < 1:
+        raise ValueError("audiogram: the sound is shorter than a second.")
+    work = temp_path(f"audiogram_{os.urandom(5).hex()}")
+    work.mkdir(parents=True)
+    try:
+        step(0, 4, "the cover")
+        cover, credit = work / "cover.png", None
+        spec = _img_spec(body.get("image")) if body.get("image") not in (None, "", "none") else None
+        if spec:
+            r = await imgs.resolve(spec, aspect=None, max_px=2400)
+            credit = r.attribution
+            with Image.open(r.path) as im:
+                im = im.convert("RGB")
+                bg = im.copy()
+                k = max(W / bg.width, H / bg.height)
+                bg = bg.resize((round(bg.width * k), round(bg.height * k))).filter(ImageFilter.GaussianBlur(40))
+                bg = bg.crop(((bg.width - W) // 2, (bg.height - H) // 2, (bg.width - W) // 2 + W, (bg.height - H) // 2 + H))
+                k2 = min(W / im.width, H * 0.62 / im.height)
+                fg = im.resize((round(im.width * k2), round(im.height * k2)))
+                bg.paste(fg, ((W - fg.width) // 2, round(H * 0.42 - fg.height / 2)))
+                bg.save(cover)
+        else:
+            acc = _rgb(body.get("accent"))
+            Image.new("RGB", (W, H), tuple(int(18 + c * 40) for c in acc)).save(cover)
+        base = new_file_id("mp4")
+        await run("ffmpeg", "-v", "error", "-y", "-loop", "1", "-framerate", "30", "-i", str(cover), "-i", str(src),
+                  "-map", "0:v", "-map", f"1:a:{mi.get('audio_stream') or 0}", "-t", f"{secs:.3f}", "-c:v", "libx264", "-tune", "stillimage",
+                  "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-b:a", "192k", "-shortest", str(input_path(base)),
+                  timeout=settings.VIDEO_TIMEOUT_S)
+        stem = root_name(display_label(fid), "Audio")
+        write_meta(base, original_filename=f"{stem} (audiogram base).mp4", operation="audiogram base", source_file_id=fid)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    wave = {"at": 0, "dur": round(secs, 3), "type": "waveform", "style": body.get("style") or "bars",
+            "position": "center" if spec is None else "bottom"}
+    title = _clean(body.get("title") or stem, 80, "Title")
+    layers = [wave] + ([{"at": 0, "dur": round(secs, 3), "type": "title", "text": title, "position": "top", "anim": "fade"}]
+                       if title else [])
+    if credit:
+        layers.append({"at": 0.5, "dur": min(6.0, max(1.0, secs - 0.6)), "type": "source", "text": credit[:140]})
+    captions = body.get("captions", True) is not False
+    return await overlay({"file_id": base, "layers": layers, "title": title or stem, "accent": body.get("accent"),
+                          "subtitles": "auto" if captions else None, "language": body.get("language"),
+                          "caption_style": body.get("caption_style") or ("bold" if captions else None),
+                          "render": body.get("render", True), "transcript": body.get("transcript")}, progress)
+
+
 def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
     """Az overlay-kérés gyors ellenőrzése a munka ELŐTT (a végpont is ezt hívja, hogy a hiba azonnal jöjjön, ne a jobból):
     a fájl (videó, nem projekt), az alpha és a rétegek. → (file_id, kiterjesztés)"""
@@ -4516,7 +4647,13 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                     "at": float(base["plain"]["duration"]), "dur": card["dur"], "text": card["title"],
                                     "subtitle": card.get("subtitle") or "", "kicker": card.get("kicker") or "",
                                     **({"credits": on_screen} if on_screen else {})}]
+        waves = [ly for ly in layers if ly["type"] == "waveform"]
+        for ly in waves:                                      # a hullámforma a felvétel hangjából, a réteg idejére
+            ly["_levels"] = await wave_levels(work / base["asset"], float(ly["at"]), float(ly["dur"])) if base.get("audio") else []
         D["layers"], rows, problems = layer_comps(all_layers, W, H, total, lang, acc, safe)
+        for ly in waves:
+            if not ly.pop("_levels", None):
+                problems.append(f"Layer {ly['id']} (waveform): the footage has no sound there — the bars stay flat.")
         cuts = _clip_sounds(layers)                           # bevágott felvételek hangja (teljes képen a felvételé helyett)
         if cuts:
             await _level_cuts(cuts, work, work / base["asset"] if base.get("audio") else None)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-22 — Waveform and audiogram
+
+From the look at vanta: audio visualisation for podcasts and interviews.
+- **`waveform` layer:** `{"type": "waveform", "style": "bars" | "rise", "bars"?: 8–64, "color"?, "position"?}`.
+  - The footage's sound as moving bars: the loudness is measured every 1/15 s (fast attack, slower release) and put on
+    a slider; each bar follows it through an expression, with its own height and a little life.
+  - A part without sound leaves the bars flat, and the check says so.
+- **`video(action="audiogram")`:** a podcast / interview / voice note as a video.
+  - Input: a sound, or a video's sound, ≤ 30 min.
+  - The cover is fitted over its own blurred copy; without one, a dark accent background.
+  - It gets a waveform, the title and automatic word-by-word captions (`bold` by default).
+  - The result is an editable overlay project, so the layers can be changed with `edit`. Also `POST /api/video/audiogram`.
+
 ## 2026-10-22 — Talking avatar
 
 From the look at vanta: a talking video from one photo.
