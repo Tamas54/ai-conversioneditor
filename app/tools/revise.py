@@ -40,6 +40,8 @@ def _version_step(op: str) -> Optional[str]:
         return "change"
     if op == "manual edit":
         return "edited by hand"
+    if op == "upload version":              # files(action="upload_link", file_id=…): máshol szerkesztve, visszatöltve
+        return "new version uploaded"
     if op == "check":
         return "checks added"
     if op == "live data":

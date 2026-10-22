@@ -243,6 +243,7 @@ class Block:
     section: int = 0
     markup: str = ""                             # a szöveg a törölt részekkel együtt (csak ha követett törlés van benne)
     links: list = field(default_factory=list)    # külső hivatkozások: [(r:id, cél, a link szövege)]
+    orig: Optional[str] = None                   # a szöveg a változások ELŐTT (None: nincs benne követett változás)
 
     @property
     def empty(self) -> bool:
@@ -282,6 +283,77 @@ def _body(el):
 
 def _text(el) -> str:
     return "".join(t.text or "" for t in el.iter(_W + "t"))
+
+
+def _orig(el) -> Optional[str]:
+    """A bekezdés a változások előtt (a törölt szöveggel, a beszúrt nélkül) — None, ha nincs benne követett változás
+    („” = az egész bekezdés beszúrt)."""
+    if el.find(".//" + _W + "ins") is None and el.find(".//" + _W + "del") is None and el.find(".//" + _W + "moveTo") is None:
+        return None
+    return "".join(t.text or "" for t in el.iter(_W + "t", _W + "delText")
+                   if not any(a.tag in (_W + "ins", _W + "moveTo") for a in t.iterancestors()))
+
+
+# ---------- ábra- és táblázatszámok (10-22, robot-tanulmány v5: 5 új ábra után a régieket és a „lásd a 6. ábrát”
+# hivatkozást kézzel kellett átszámozni) ----------
+
+_SERIES = {"ábra": "figure", "figure": "figure", "fig.": "figure", "táblázat": "table", "table": "table",
+           "diagram": "chart", "chart": "chart", "térkép": "map", "map": "map", "exhibit": "exhibit", "kép": "picture"}
+# a felirat eleje: „6. ábra.” „3.2. táblázat:” „Figure 6 –” — utána írásjel vagy vége (a „3. táblázat szerint …” mondat nem felirat)
+_CAP_HU = re.compile(r"\s*((?:[1-9]\d{0,2}\.)+)\s*(ábra|táblázat|diagram|térkép|kép)(?=\s*(?:[.:–—-]|$))", re.I)
+_CAP_EN = re.compile(r"\s*(figure|fig\.|table|chart|exhibit|map)\s+([1-9]\d{0,2}(?:\.[1-9]\d{0,2})*)(?=\s*(?:[.:–—-]|$))", re.I)
+_CAP_HU_LOOSE = re.compile(r"\s*((?:[1-9]\d{0,2}\.)+)\s*(ábra|táblázat|diagram|térkép|kép)\b", re.I)   # Caption stílusú bekezdés
+_CAP_EN_LOOSE = re.compile(r"\s*(figure|fig\.|table|chart|exhibit|map)\s+([1-9]\d{0,2}(?:\.[1-9]\d{0,2})*)", re.I)
+# hivatkozás a szövegben: „a 9. ábrát”, „a 3–5. ábrákon”, „(1. táblázat)”, „Figure 6”, „Tables 2–3”
+_REF_HU = re.compile(r"(?<![\d.])(?:([1-9]\d{0,2})\s*[–-]\s*)?((?:[1-9]\d{0,2}\.)+)\s*(ábr[aá]|táblázat|diagram|térkép)\w*", re.I)
+_REF_EN = re.compile(r"\b(figures?|figs?\.|tables?|charts?|exhibits?|maps?)\s+([1-9]\d{0,2}(?:\.[1-9]\d{0,2})*)\b(?:\s*[–-]\s*([1-9]\d{0,2}))?",
+                     re.I)
+_SOURCE = re.compile(r"\b(forrás\w*|sources?)\s*:", re.I)      # a „Forrás: OECD …, 13–14. ábra” más mű ábrája
+
+
+def _series_of(noun: str) -> str:
+    n = noun.lower()
+    if n.startswith("ábr"):
+        return "figure"
+    return _SERIES.get(n, _SERIES.get(n.rstrip("s"), _SERIES.get(n.rstrip("s.") + ".", n)))
+
+
+def caption_label(text: str, loose: bool = False) -> Optional[tuple[str, tuple[int, ...], str]]:
+    """Felirat → (sorozat, szám-tuple, a címke ahogy írva van), pl. „6. ábra. Az ipar…” → ("figure", (6,), "6. ábra").
+    A sorozat nyelvjeles („figure:hu”): a magyar szövegben a „Figure 03” robotnév nem a saját ábrára mutat.
+    loose: Caption stílusú bekezdés — a címke után nem kell írásjel („1. ábra Az ipar…”)."""
+    m = (_CAP_HU_LOOSE if loose else _CAP_HU).match(text or "")
+    if m:
+        return _series_of(m.group(2)) + ":hu", tuple(int(x) for x in m.group(1).strip(".").split(".")), m.group(0).strip()
+    m = (_CAP_EN_LOOSE if loose else _CAP_EN).match(text or "")
+    if m:
+        return _series_of(m.group(1)) + ":en", tuple(int(x) for x in m.group(2).split(".")), m.group(0).strip()
+    return None
+
+
+def caption_refs(text: str) -> list[tuple[str, tuple[int, ...], str]]:
+    """A szöveg hivatkozásai ábrára / táblázatra: [(sorozat, szám-tuple, az idézett rész)] — a tartomány minden száma.
+    A „Forrás:” / „Source:” utáni rész más mű ábráira mutat: kimarad."""
+    text = _SOURCE.split(text or "", maxsplit=1)[0]
+    out: list[tuple[str, tuple[int, ...], str]] = []
+    for m in _REF_HU.finditer(text):
+        parts = tuple(int(x) for x in m.group(2).strip(".").split("."))
+        lo = int(m.group(1)) if m.group(1) else parts[-1]
+        for n in range(lo, parts[-1] + 1) if lo <= parts[-1] and parts[-1] - lo < 20 else [parts[-1]]:
+            out.append((_series_of(m.group(3)) + ":hu", parts[:-1] + (n,), m.group(0)))
+    for m in _REF_EN.finditer(text):
+        parts = tuple(int(x) for x in m.group(2).split("."))
+        hi = int(m.group(3)) if m.group(3) else parts[-1]
+        for n in range(parts[-1], hi + 1) if hi >= parts[-1] and hi - parts[-1] < 20 else [parts[-1]]:
+            out.append((_series_of(m.group(1)) + ":en", parts[:-1] + (n,), m.group(0)))
+    return out
+
+
+def _label_text(t: tuple[int, ...], like: str) -> str:
+    """A szám-tuple a felirat saját írásmódjában („6. ábra” / „Figure 6”)."""
+    if _CAP_HU.match(like):
+        return re.sub(r"^\s*(?:\d{1,3}\.)+", ".".join(map(str, t)) + ".", like, count=1)
+    return re.sub(r"\d{1,3}(?:\.\d{1,3})*", ".".join(map(str, t)), like, count=1)
 
 
 def _section(sp) -> dict[str, float]:
@@ -382,7 +454,8 @@ def read_docx(path: Path) -> tuple[list[Block], list[dict]]:
             or (sect is not None and _val(sect, "type") != "continuous"),
             break_before=brk_before, keep_next=bool(keep), section=len(sections),
             keep_off=own_keep is not None and not _on(ppr, "keepNext"), links=links,
-            markup="".join(t.text or "" for t in el.iter(_W + "t", _W + "delText")) if el.find(".//" + _W + "delText") is not None else ""))
+            markup="".join(t.text or "" for t in el.iter(_W + "t", _W + "delText")) if el.find(".//" + _W + "delText") is not None else "",
+            orig=_orig(el)))
         if sect is not None:
             sections.append({**_section(sect), "end": pos})
     final = d.element.body.find(_W + "sectPr")
@@ -438,10 +511,12 @@ def _goto(b: Block, then: str) -> str:
 class DocCheck:
     """Egy Word-dokumentum: szerkezet + egy vagy két tördelés → hibajegyzék."""
 
-    def __init__(self, blocks: list[Block], sections: list[dict], layouts: list[Layout], notes: Optional[dict] = None):
+    def __init__(self, blocks: list[Block], sections: list[dict], layouts: list[Layout], notes: Optional[dict] = None,
+                 extra: Optional[list[dict]] = None, rules: Optional[list[dict]] = None):
         self.blocks, self.sections, self.layouts = blocks, sections, layouts
         self.notes = notes                       # láb-/végjegyzetek: {fajta: {orphans, out_of_order}} (review_ops.notes_report)
-        self.issues: list[dict] = []
+        self.rules = rules or []                 # a felhasználó házi szabályai (house_rules)
+        self.issues: list[dict] = list(extra or [])  # kívülről mért szerkezeti tételek (pl. a javaslat épsége)
         self._label_x: dict[tuple, float] = {}
         for L in layouts:
             self._place(L)
@@ -557,8 +632,12 @@ class DocCheck:
         n0 = len(self.issues)
         self._structural()
         self._typed_numbers()
+        self._captions()
         self._link_spill()
         self._notes()
+        if self.rules:
+            from app.tools import house_rules
+            self.issues += house_rules.check(self.blocks, self.rules)
         for it in self.issues[n0:]:
             it["_structural"] = True
 
@@ -646,6 +725,64 @@ class DocCheck:
                         f"margin{' and off the page' if w > tw + self.sections[b.section]['mR'] else ''}.",
                         block=b, fix=_goto(b, f'select the picture and picture.size {{"width": {int(tw)}, "lockAspect": true}}')))
 
+    def _captions(self) -> None:
+        """Ábra- / táblázatfeliratok számozása sorozatonként (fejezetszámos alaknál fejezetenként) és a szöveg
+        hivatkozásai: a k-adik felirat száma k; a hivatkozott szám létezik; az átszámozott felirat régi számára mutató
+        hivatkozás gyanús (követett átszámozás után a „lásd a 6. ábrát” a régi 6. ábrát jelentette)."""
+        caps: dict[tuple, list[tuple[Block, tuple, str]]] = defaultdict(list)
+        renumbered: dict[tuple[str, tuple], str] = {}
+        for b in self.blocks:
+            if b.kind != "paragraph" or b.heading is not None:
+                continue
+            lab = caption_label(b.text, loose=b.caption)
+            if not lab:
+                continue
+            series, t, shown = lab
+            caps[(series, t[:-1])].append((b, t, shown))
+            old = caption_label(b.orig, loose=b.caption) if b.orig else None
+            if old and old[0] == series and old[1] != t:
+                renumbered[(series, old[1])] = shown
+        have: dict[str, set] = defaultdict(set)
+        for (series, _), items in caps.items():
+            have[series] |= {t for _, t, _ in items}
+            dup = len({t for _, t, _ in items}) < len(items)
+            for k, (b, t, shown) in enumerate(items, 1):
+                if t[-1] == k:
+                    continue
+                want = _label_text(t[:-1] + (k,), shown)
+                self.issues.append(_issue(
+                    "caption_numbering", ERROR if dup else WARNING,
+                    f"“{shown}” is caption {k} of its kind{' in its chapter' if t[:-1] else ''} — it should be “{want}”"
+                    + (" (the same number is used twice)" if dup else " (a number is skipped)") + ".",
+                    None, None, b, fix=_goto(b, f"change “{shown}” to “{want}” — and the text's references to it")))
+        if not caps:
+            return
+        for b in self.blocks:                       # egy bekezdés minden gyanús hivatkozása EGY tételben
+            own = caption_label(b.text, loose=b.caption) if b.kind == "paragraph" else None
+            texts = ([b.text.split(own[2], 1)[-1]] if own else [b.text]) if b.kind == "paragraph" \
+                else [c for row in b.rows for c in row]     # a felirat saját címkéje nem hivatkozás
+            seen: set = set()
+            bad: list[str] = []
+            fixes: list[str] = []
+            for text in texts:
+                for series, t, quote in caption_refs(text):
+                    if series not in have or (series, t) in seen or quote in seen:
+                        continue
+                    seen |= {(series, t), quote}
+                    if t not in have[series]:
+                        bad.append(f"“{quote}” — no caption has that number (if it means a picture of another work, "
+                                   "ignore this)")
+                        fixes.append(f"correct “{quote}”")
+                    elif (series, t) in renumbered and (b.orig is None or quote in b.orig):
+                        now = renumbered[(series, t)]
+                        bad.append(f"“{quote}” — that caption was renumbered in this version (now “{now}”); check which "
+                                   "picture it means")
+                        fixes.append(f"if it means the renumbered one, change “{quote}” to point at “{now}”")
+            if bad:
+                self.issues.append(_issue(
+                    "caption_reference", WARNING, "The text refers to " + "; and to ".join(bad) + ".",
+                    None, None, b, fix=_goto(b, "; ".join(fixes))))
+
     def _text_width(self, b: Block) -> float:
         s = self.sections[min(b.section, len(self.sections) - 1)]
         return s["pageW"] - s["mL"] - s["mR"]
@@ -668,6 +805,9 @@ class DocCheck:
             if b.kind != "paragraph" or b.empty:
                 continue
             m = re.match(r"\s*(\d{1,3})[.)]\s+\S", b.text)
+            if m and caption_label(b.text, loose=b.caption):     # „6. ábra.” felirat, nem gépelt listaszám
+                run, prev_auto = [], None
+                continue
             if b.heading is not None:
                 hm = re.match(r"\s*((?:\d+\.)*\d+)\.?\s+\S", b.text)
                 run = []
@@ -1675,7 +1815,8 @@ async def _layouts(src: Path, kind: str, want_file: bool = True) -> tuple[list[L
     return out, notes
 
 
-def _analyze_doc(docx: Path, layouts: list[Layout]) -> tuple[list[dict], DocCheck]:
+def _analyze_doc(docx: Path, layouts: list[Layout], extra: Optional[list[dict]] = None,
+                 rules: Optional[list[dict]] = None) -> tuple[list[dict], DocCheck]:
     blocks, sections = read_docx(docx)
     _wordcraft_index(docx, blocks)
     try:
@@ -1684,7 +1825,7 @@ def _analyze_doc(docx: Path, layouts: list[Layout]) -> tuple[list[dict], DocChec
     except Exception as e:
         log.info("jegyzetek kimaradtak: %s", e)
         notes = None
-    dc = DocCheck(blocks, sections, layouts, notes)
+    dc = DocCheck(blocks, sections, layouts, notes, extra, rules)
     return dc.run(), dc
 
 
@@ -1813,7 +1954,9 @@ CHECKED = {
                  "headings left as the last line of a page, captions apart from their picture/table",
                  "text, tables and pictures off the page or into the margins", "empty pages",
                  "the built-in editor's layout against Word's (LibreOffice) — page count, numbering, where problems appear",
-                 "content: every paragraph and table cell is in both layouts (a column cut off at the page edge is an error)"],
+                 "content: every paragraph and table cell is in both layouts (a column cut off at the page edge is an error)",
+                 "caption numbers (“6. ábra”, “Table 3”) in order, and the text's references to them",
+                 "a tracked proposal: rejecting every change gives back the version it was made from"],
     "deck": ["text overflowing its box (in the actual rendered slide)", "text drawn over other text", "things off the slide", "empty placeholders",
              "scatter charts without axis titles",
              "empty slides", "the editor's slides against PowerPoint's (LibreOffice)"],
@@ -1822,21 +1965,34 @@ CHECKED = {
 
 
 async def validate(file_id: str, pages: Optional[list[int]] = None, view: str = "word",
-                   max_crops: int = 6) -> tuple[dict[str, Any], list[tuple[str, bytes]]]:
-    """→ (összegzés, [(képaláírás, JPEG)]). A képek: áttekintő lap, hibánként kivágás, a kért (vagy hibás) oldalak."""
+                   max_crops: int = 6, base_file_id: Optional[str] = None) -> tuple[dict[str, Any], list[tuple[str, bytes]]]:
+    """→ (összegzés, [(képaláírás, JPEG)]). A képek: áttekintő lap, hibánként kivágás, a kért (vagy hibás) oldalak.
+    base_file_id: a követett javaslat kiinduló változata (alapból a változatláncból)."""
     from app.storage import display_label
     from app.tools.crafts import existing
     src = existing(file_id)
     ext = src.suffix.lstrip(".").lower()
     notes: list[str] = []
     kept: list[dict] = []
+    more_verified: list[str] = []
+    rules: list[dict] = []
     if ext in WORDISH:
         kind = "document"
         docx = await _as_docx(src)
         layouts, notes = await _layouts(docx, kind)
         if not layouts:
             raise RuntimeError("The document could not be laid out in either engine. " + " ".join(notes))
-        issues, dc = await asyncio.to_thread(_analyze_doc, docx, layouts)
+        extra: list[dict] = []
+        if ext in ("docx", "docm", "dotx"):
+            from app.tools import proposal_check
+            extra, line = await asyncio.to_thread(proposal_check.issues, file_id, src, base_file_id)
+            more_verified += [line] if line else []
+        from app.tools import house_rules
+        try:
+            rules = await house_rules.load()
+        except Exception as e:
+            log.info("házi szabályok nem olvashatók: %s", e)
+        issues, dc = await asyncio.to_thread(_analyze_doc, docx, layouts, extra, rules)
         from app.tools import layout_fix
         issues, kept = split_kept(issues, dc.blocks, layout_fix.keeps_for(file_id))
     elif ext in ("pptx", "deckcraft", "ppt", "odp"):
@@ -1854,12 +2010,25 @@ async def validate(file_id: str, pages: Optional[list[int]] = None, view: str = 
     else:
         raise ValueError(f"validate_document checks Word documents, PowerPoint decks and PDFs — for a .{ext} file look at "
                          "files(action=\"preview\").")
+    if rules:
+        checked = [r for r in rules if "note" not in r]
+        more_verified.append(f"House rules: {len(checked)} rule(s) checked by machine"
+                             + (f" ({', '.join(r['id'] for r in checked)})" if checked else "")
+                             + (f"; {len(rules) - len(checked)} written rule(s) for you to apply (house_rules.notes)"
+                                if len(rules) > len(checked) else "") + ".")
     try:
-        return await asyncio.to_thread(_assemble, file_id, display_label(file_id), kind, layouts, issues, dc, notes,
-                                       pages, view, max_crops, kept)
+        out, images = await asyncio.to_thread(_assemble, file_id, display_label(file_id), kind, layouts, issues, dc, notes,
+                                              pages, view, max_crops, kept)
     finally:
         for L in layouts:
             L.close()
+    out["check"]["verified"] += more_verified
+    if rules:
+        from app.tools import house_rules
+        out["house_rules"] = {"rules": [{"id": r["id"], "rule": house_rules.describe(r), **({"why": r["why"]} if r.get("why") else {})}
+                                        for r in rules],
+                              "notes": [f"{r['id']}: {r['note']}" for r in rules if "note" in r]}
+    return out, images
 
 
 def _assemble(file_id: str, name: str, kind: str, layouts: list[Layout], issues: list[dict], dc: Optional[DocCheck],

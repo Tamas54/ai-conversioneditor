@@ -232,6 +232,19 @@ CREATE TABLE IF NOT EXISTS sheet_templates (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS sheet_templates_owner_idx ON sheet_templates (owner_id, created_at DESC);
+-- egyszer használatos feltöltési linkek (10-22, app/upload_links.py): a link aláírt, itt csak az „egyszer”
+CREATE TABLE IF NOT EXISTS upload_links_used (
+    nonce           text PRIMARY KEY,
+    owner_id        text NOT NULL,
+    file_id         text,
+    used_at         timestamptz NOT NULL DEFAULT now()
+);
+-- házi stílusszabályok (10-22): a FELHASZNÁLÓHOZ kötve, minden validate_document-ben (app/tools/house_rules.py)
+CREATE TABLE IF NOT EXISTS house_rules (
+    owner_id        text PRIMARY KEY,
+    rules           jsonb NOT NULL,
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS user_profiles (
     owner_id        text PRIMARY KEY,
     nonce           bytea NOT NULL,

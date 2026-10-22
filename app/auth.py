@@ -37,6 +37,7 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
                     "/robots.txt", "/llms.txt", "/sitemap.xml",
                     "/.well-known/", "/oauth/",
                     "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
+                    "/upload-link/",                     # egyszer használatos, aláírt feltöltési link (app/upload_links.py)
                     "/api/units/", "/api/timezones/", "/indexnow-", "/api/catalog")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
