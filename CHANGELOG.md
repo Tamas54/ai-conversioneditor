@@ -50,6 +50,46 @@ From an MCP agent's report after a full trial on a long study: a fact check, the
 - **Web: More ▾ → "Accept all changes, remove comments"** makes a clean copy as a new version (`/api/make/clean_copy`,
   no AI). A LibreOffice "accept all" save had left 289 changes and 22 comments in the file.
 
+## 2026-10-22 — Editing modes with limits: ask first, propose as tracked changes; over MCP the agent writes
+
+Owner's principle: over MCP the agent directs and thinks on its own tokens. The server gives the data, does the
+deterministic work and the machine checks, and writes the file. The Studio's own AI runs over MCP only for the
+exceptions: reading large books / scans, AI video, and AI pictures for clients that can't make them.
+- **Editing modes over MCP:**
+  1. Questions.
+  2. With `brief`: a work package of numbered paragraphs plus the rules (`offset` pages long texts).
+  3. With `changes=[{n, new, why, kind}]`: the server's guards, then tracked changes with the agent's reasons.
+
+  No Studio AI step in any of these. The Studio's model writes the proposals only where there is no agent (web).
+- **Social posts over MCP:**
+  - `video(action="social")` returns the material: what the video says, chapters, keywords, people, credits, and each
+    platform's limits and style.
+  - The agent writes the posts and sends them back with `ai={"posts": {…}}`. The server checks the lengths and the
+    numbers against the video, and adds chapters, credits and the .md.
+
+The first piece of editorial intelligence, under the owner's principle: within limits, the system asks what the
+author wants, and the person decides.
+- **`edit_with_instruction(file_id, mode=…)`** with `proofread` (language only), `edit` (substantive: clearer, less
+  repetition; content and position stay), `expand`, `shorten` or `rewrite`.
+- **Without `brief`: the questions, and nothing changes.** No AI and no cost. Each question comes with a suggested
+  default:
+  - what the text is for and who reads it;
+  - the limit (e.g. at most 10% shorter);
+  - whether tables, numbers and quotations, and the author's position must stay;
+  - words and names that must not change (detected candidates);
+  - whether new thoughts are allowed;
+  - which part to work on, and whose name goes on the changes.
+- **With `brief={…}`: proposals, run in the background like any edit.**
+  - The AI works paragraph by paragraph, one Studio AI step per ~6,000 characters, cached.
+  - Machine guards: numbers and the named words must stay; proofreading may only change a little; a new thought is
+    allowed only with permission; the whole-text length limit holds.
+  - Whatever doesn't pass is listed in `held_back` with the reason.
+  - Every change is a **tracked change** under the chosen name, with a comment saying why, in the document's
+    language. A new thought is marked "do you stand behind it?".
+  - Nothing is accepted. A preservation report gives the words before and after, tables, numbers, terms, what was
+    held back, and what wasn't touched (headings, kept tables, paragraphs with notes, fields, pictures or pending
+    changes).
+
 ## 2026-10-22 — Layout fixes are the person's decision
 
 Owner's principle: editorial intelligence stays within limits. The system asks, and the person decides and takes

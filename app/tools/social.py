@@ -259,9 +259,44 @@ def _plain(mat: dict[str, Any], plats: list[str], tags: list[str]) -> dict[str, 
     return out
 
 
+_STYLES = {"youtube": "a searchable title (the main subject early) and a 2–4 sentence description",
+           "tiktok": "one punchy line (about 150 characters show)", "instagram": "a hook line, then 2–3 short lines",
+           "facebook": "2–3 friendly sentences", "linkedin": "3–5 sentences, professional, the takeaway first",
+           "x": "one line"}
+
+
+async def pack(file_id: str, *, platforms: Any = None, language: Optional[str] = None, notes: str = "",
+               progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """MCP (Kommandant 10-22: „az agent irányít”): az ügynök írja a posztokat a saját modelljével — innen az adat
+    (amit a videó mond, fejezetek, kulcsszavak, kik vannak benne, forrássor) és a platformok korlátai. AI-lépés nincs."""
+    from app.tools import narration
+    step = progress or (lambda *a, **k: None)
+    plats = platforms_of(platforms)
+    mat = await material(file_id, language, step)
+    lang = narration.lang_code(language) or narration.detect(f"{mat['title']} {mat['text']}") or "en"
+    chaps, no_chap = chapters(mat["marks"], mat["duration"])
+    kws = keywords(mat["text"], mat["title"], lang)
+    return {"language": lang, "video": {"title": mat["title"], "duration": round(mat["duration"]), "people": mat["people"],
+                                        "says": mat["text"][:12000], "credits": mat["credits"] or None},
+            "chapters": chaps, **({"no_chapters": no_chap} if no_chap else {}), "keywords": kws,
+            "suggested_hashtags": _tags(kws, 8),
+            "platforms": {p: {**({"title_max": PLATFORMS[p][0]} if PLATFORMS[p][0] else {}), "text_max": PLATFORMS[p][1],
+                              "hashtags": PLATFORMS[p][2], "style": _STYLES[p]} for p in plats},
+            "rules": ["only facts from the video — no numbers, names, claims or promises that aren't in it",
+                      "hashtags specific to the topic (people, places, the subject), no #fyp #viral #trending",
+                      "each platform its own text in its own style, in the video's language"]
+                     + ([f"work in the person's notes: {' '.join(notes.split())[:1000]}"] if notes and notes.strip() else []),
+            "how": ('NOTHING WRITTEN YET. You write the posts with your own model, then call video(action="social", '
+                    'file_id=…, ai={"posts": {"<platform>": {"title"? (youtube), "text", "hashtags": [...]}, …}}): the '
+                    "server checks the limits and the numbers against the video, adds the YouTube chapters and the "
+                    "picture / footage credits, and saves a .md to copy from.")}
+
+
 async def posts(file_id: str, *, platforms: Any = None, language: Optional[str] = None, notes: str = "",
-                force: bool = False, progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
-    """A videó közösségi szövegei platformonként + a fejezetek, a kulcsszavak és egy .md fájl (másoláshoz)."""
+                force: bool = False, progress: Optional[Callable[..., None]] = None,
+                written: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """A videó közösségi szövegei platformonként + a fejezetek, a kulcsszavak és egy .md fájl (másoláshoz).
+    written: az ügynök saját szövegei (MCP) — csak ellenőrizzük és rendezzük; nélküle (webes felület) a Studio AI írja."""
     from app import billing
     from app.storage import new_file_id, output_path, public_url, write_meta
     from app.storage.naming import result_stem
@@ -280,11 +315,19 @@ async def posts(file_id: str, *, platforms: Any = None, language: Optional[str] 
     verified: list[str] = []
     used = [0, 0]
     step(1, 3, "writing the posts")
+    if isinstance(written, dict) and written:
+        written = {_ALIASES.get(str(k).lower(), str(k).lower()): v for k, v in written.items()}
+        plats = [p for p in plats if p in written] or [k for k in written if k in PLATFORMS]
+        if not plats:
+            raise ValueError(f"posts: one key per platform — {' | '.join(PLATFORMS)}.")
     outer = billing._steps.get()
     with billing.count_steps() as used:
         try:
-            data = await _ai_posts(mat, plats, lang, notes, force)
-            by = "ai"
+            if isinstance(written, dict) and written:
+                data, by = written, "agent"
+            else:
+                data = await _ai_posts(mat, plats, lang, notes, force)
+                by = "ai"
         except billing.AIStepsExhausted as e:
             data, by = _plain(mat, plats, tags), "plain"
             findings.append(f"The AI writing didn't run: {e} — these are plain drafts from the title and the first sentences.")
@@ -319,7 +362,8 @@ async def posts(file_id: str, *, platforms: Any = None, language: Optional[str] 
             findings.append(f"{p}: the text has numbers that aren't in the video ({', '.join(new_nums[:5])}) — check them.")
         out[p] = {**({"title": title} if t_lim else {}), "text": text.strip(), "hashtags": htags, "length": len(text.strip())}
     verified.append(f"Posts for {', '.join(plats)} in {lang}, " + ("written by the Studio AI from what the video says"
-                                                                  if by == "ai" else "plain drafts") + ".")
+                                                                  if by == "ai" else "yours, checked against the video and "
+                                                                  "the platforms' limits" if by == "agent" else "plain drafts") + ".")
     if chaps:
         verified.append(f"{len(chaps)} YouTube chapters from the video's " + ("scenes." if mat["kind"] == "made" else "chapter layers."))
     elif no_chap and "youtube" in plats:
