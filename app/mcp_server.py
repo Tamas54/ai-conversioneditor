@@ -1934,7 +1934,7 @@ async def video(
     """Short videos with an EDITABLE timeline (edit_url: an After Effects-like editor): made from a text, or
     graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
     FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit |
-    transcript | audiogram | variants | adjust | ai_clip | avatar | enhance. Read "layers" before a first overlay,
+    transcript | audiogram | variants | social | adjust | ai_clip | avatar | enhance. Read "layers" before a first overlay,
     "graphic" before your own.
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
       scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
@@ -1947,7 +1947,7 @@ async def video(
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again; scene="s3" | "L2": just that scene / layer.
     Also: transcript (what is said, timed) · audiogram (sound → podcast video) · variants (A/B versions of a
-    video) · stock (free real footage) · lottie (animations) · info (scene / layer ids) · to_pptx.
+    video) · social (titles, posts, hashtags, chapters) · stock (free real footage) · lottie · info (ids) · to_pptx.
     AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
     render=false (make / overlay / edit): save the project only (the layout check still runs); draft=true: fast.
@@ -1987,6 +1987,10 @@ async def video(
         return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
                                        "vocabulary": vocabulary, "model": model, "force": force, "correct": correct,
                                        "script": text or (transcript or {}).get("script")})
+    if act in ("social", "posts", "metadata"):       # közösségi szövegek: cím, leírás, hashtagek, fejezetek
+        from app.routes.video import social_video
+        return await social_video({"file_id": file_id or "", "platforms": (ai or {}).get("platforms"), "language": language,
+                                   "notes": text, "force": force or bool((ai or {}).get("fresh"))})
     if act in ("variants", "ab", "a/b"):             # A/B változatok egy projektből (MoneyPrinterTurbo-ötlet)
         from app.routes.video import variants_video
         return await variants_video({"file_id": file_id or "", "changes": changes or {}, "draft": draft})
@@ -2023,8 +2027,8 @@ async def video(
         return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
         raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | '
-                         '"lottie" | "stock" | "audiogram" | "variants" | "schema" (the full reference: video(action="schema", '
-                         'topic="layers"))')
+                         '"lottie" | "stock" | "audiogram" | "variants" | "social" | "schema" (the full reference: '
+                         'video(action="schema", topic="layers"))')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,

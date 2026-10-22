@@ -112,6 +112,31 @@ async def overlay_video(body: dict[str, Any]) -> dict[str, Any]:
     return jobs.start("video", work)
 
 
+@router.post("/api/video/social")
+async def social_video(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: videó | projekt | hang, platforms?, language?, notes? (link, felhívás), force?} → job (a posztok
+    platformonként, fejezetek, kulcsszavak, .md)."""
+    from app import jobs
+    from app.tools import social
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    fid = body.get("file_id") or ""
+    try:
+        crafts.existing(fid)
+        social.platforms_of(body.get("platforms"))
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(400, str(e) if isinstance(e, ValueError) else "That file isn't in the workspace.")
+
+    async def work(progress):
+        try:
+            return await social.posts(fid, platforms=body.get("platforms"), language=body.get("language"),
+                                      notes=body.get("notes") or "", force=bool(body.get("force")), progress=progress)
+        except Exception as e:
+            raise _fail(e)
+    return jobs.start("video", work)
+
+
 @router.post("/api/video/variants")
 async def variants_video(body: dict[str, Any]) -> dict[str, Any]:
     """{file_id: <projekt vagy a renderje>, changes: {variants: [changes…]} | {count: 1–3}, draft?} → job (A/B változatok)."""
