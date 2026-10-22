@@ -120,8 +120,10 @@ def test_proxy_skips_undecodable_audio(monkeypatch, tmp_path):
     monkeypatch.setattr(mediaprobe, "info", fake_info)
     monkeypatch.setattr(engines, "run", fake_run)
     b, _ = asyncio.run(footage.make_proxy({"file_id": "x.mov", "width": 1080, "height": 1920}, tmp_path / "x.mov"))
-    args = list(calls[0])
-    assert "0:a?" not in args and args[args.index("0:v:0") + 2] == "0:a:0" and args[args.index("0:a:0") + 2] == "copy"
+    mux = [list(c) for c in calls if "-c:a" in c]                       # a kép külön készül, a hang az összerakáskor jön
+    assert len(mux) == 1 and not any("0:a?" in list(c) or "-map 0:a" in " ".join(c) for c in calls)
+    args = mux[0]
+    assert args[args.index("-map") + 1] == "1:a:0" and args[args.index("-c:a") + 1] == "copy"
     assert b["proxy"] == {"w": 540, "h": 960} and b["rotated"] == 90 and output_path(b["media_id"]).exists()
 
 
