@@ -194,7 +194,7 @@ async def auth_middleware(request: Request, call_next):
                 return JSONResponse({"detail": "Slow down a little — or create a free account for higher limits."}, status_code=429)
             _guest_posts[ip].append(time.time())
             if path == "/api/upload" and int(request.headers.get("content-length") or 0) > GUEST_MAX_UPLOAD_MB * 1024 * 1024:
-                return JSONResponse({"detail": f"Files up to {GUEST_MAX_UPLOAD_MB} MB without an account."}, status_code=413)
+                return JSONResponse({"detail": f"Files up to {GUEST_MAX_UPLOAD_MB} MB without an account — sign in or create a free one for bigger files."}, status_code=413)
     if uid is None:
         if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
             nxt = path + (f"?{request.url.query}" if request.url.query else "")

@@ -41,6 +41,16 @@ def test_app_upload_streams_to_disk_and_leaves_nothing_half_written(client, tmp_
     assert not list(input_path(fid).parent.glob(".*.part"))
 
 
+def test_guest_over_the_limit_is_told_to_sign_in(client, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "DASHBOARD_PASSWORD", "pw")         # jelszó be → belépés nélkül vendég
+    r = client.post("/api/upload/chunks", json={"filename": "IMG_0003.MOV", "size": 30 * 1024 * 1024})
+    assert r.status_code == 413 and "sign in" in r.json()["detail"]
+    r = client.post("/api/upload", files={"file": ("IMG_0003.MOV", b"x" * (26 * 1024 * 1024), "video/quicktime")})
+    assert r.status_code == 413 and "sign in" in r.json()["detail"]
+    assert client.post("/api/upload/chunks", json={"filename": "IMG_0004.MOV", "size": 20 * 1024 * 1024}).status_code == 200
+
+
 def test_chunked_upload_resumes_and_rejects_a_short_chunk(client, tmp_path):
     from app.storage import input_path
     src = _video(tmp_path / "IMG_0002.MOV", 2 * CH + 1234)

@@ -291,7 +291,7 @@ async def chunks_start(body: dict[str, Any]) -> dict[str, Any]:
     if not name or size <= 0:
         raise HTTPException(400, "filename and size are required")
     if size > _max_upload():
-        raise HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account." if tenancy.is_guest() else "."))
+        raise HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account — sign in or create a free one for bigger files." if tenancy.is_guest() else "."))
     uid = secrets.token_urlsafe(18)
     d = temp_path(f"chunks-{uid}")
     d.mkdir(parents=True)

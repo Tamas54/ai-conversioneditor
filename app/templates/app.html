@@ -316,11 +316,11 @@ const MODES = {   // eszköz → [mód-mező, {érték: link-szó}]
 };
 const makeLink = (kind, mode, src, slot) => `/app/make/${SLUGS[kind]}` + (mode && MODES[kind]?.[1][mode] ? `/${MODES[kind][1][mode]}` : "")
   + (src ? `?src=${encodeURIComponent(src)}` + (slot ? `&slot=${encodeURIComponent(slot)}` : "") : "");       // a Presentationnek van AI nélküli módja (New / Open a file)
-function accountCta(title, alt = "") {     // alt: fiók nélküli következő lépés (pl. Scan → üres dokumentum)
+function accountCta(title, alt = "", why = "") {     // alt: fiók nélküli következő lépés (pl. Scan → üres dokumentum); why: ha nem az AI miatt kell fiók
   const form = $("#make-form");
   delete form.dataset.kind; delete form.dataset.initial;     // ez nem készítő-űrlap: bezáráskor nincs piszkozat
   form.innerHTML = `<h2 id="drawer-title">${esc(title)}</h2>
-    <p class="muted" style="margin:0 0 18px">This tool uses AI, so it needs an account. Creating one takes a minute; anything you made as a guest comes with you.</p>${alt}
+    <p class="muted" style="margin:0 0 18px">${esc(why || "This tool uses AI, so it needs an account.")} Creating one takes a minute; anything you made as a guest comes with you.</p>${alt}
     <div class="actions"><button class="btn ghost" value="cancel" formnovalidate>Not now</button><a class="btn" href="/login?next=${encodeURIComponent(here())}">Sign in</a><a class="btn primary" href="/signup?next=${encodeURIComponent(here())}">Create free account</a></div>`;
   form.onsubmit = null; if (!$("#drawer").open) $("#drawer").showModal();
 }
@@ -612,7 +612,7 @@ const views = {
     mount("t-files");
     $("#upload").addEventListener("change", async e => {
       const f = e.target.files[0]; if (!f) return;
-      try { await uploadFile(f); toast(`Uploaded ${f.name}`); await views.files(); } catch (err) { toast(err.message); }
+      try { await uploadFile(f); toast(`Uploaded ${f.name}`); await views.files(); } catch (err) { uploadFailed(err); }
     });
     await loadFiles();
     // keresés (ékezet és _/- nélkül, minden szó számít) + típus-szűrő; a választás a fülön marad (sessionStorage)
@@ -913,6 +913,10 @@ function putChunk(url, blob, onBytes) {           // XHR: a darabon belüli hala
 }
 const online = () => navigator.onLine ? Promise.resolve() : new Promise(r => window.addEventListener("online", r, { once: true }));
 async function uploadFile(file, onProgress) {
+  if (account?.guest && file.size > account.guest_max_upload_mb * 1048576) {     // vendég: előbb a fiók-ajánlat, nem 413 a végén
+    const why = `${file.name} is ${MB(file.size)} MB — without an account uploads go up to ${account.guest_max_upload_mb} MB.`;
+    throw Object.assign(new Error(`${why} Sign in, then choose it again.`), { cta: true, why });
+  }
   if (file.size <= CHUNKED_FROM) {
     const fd = new FormData(); fd.append("file", file);
     return api("/api/upload", { method: "POST", body: fd });
@@ -958,12 +962,16 @@ async function uploadFile(file, onProgress) {
     return r;
   } finally { uploading--; }
 }
+function uploadFailed(err) {      // a belépés-ajánlat gombbal jön; a vendég fájljai a fiókba kerülnek
+  if (err.cta) toastAction(err.message, "Sign in", () => { location.href = "/login?next=" + encodeURIComponent(here()); }, 15000);
+  else toast(err.message);
+}
 function pickAndOpen() {        // fájlválasztó → feltöltés → a fájl megnyílik
   const inp = Object.assign(document.createElement("input"), { type: "file" });
   inp.addEventListener("change", async () => {
     const f = inp.files[0]; if (!f) return;
     try { const r = await uploadFile(f); toast(`Uploaded ${f.name}`); nav("/app/file/" + encodeURIComponent(r.file_id)); }
-    catch (e) { toast(e.message); }
+    catch (e) { uploadFailed(e); }
   });
   inp.click();
 }
@@ -1129,7 +1137,7 @@ async function pickPicture(fileId) {
         resolve({ file_id: r.file_id, label: r.label, msg: `New picture on ${r.where.split(" · ")[0].toLowerCase()} — ${r.label}` });
       } catch (err) {
         go.disabled = false;
-        if (err.cta) return accountCta("Generate a picture with AI");
+        if (err.cta) return accountCta("Generate a picture with AI", "", err.why);
         st.textContent = err.message;
       }
     };
@@ -1526,7 +1534,7 @@ function wireQuick(f) {
       nav(`/app/file/${encodeURIComponent(r.file_id)}` + (r.view === "preview" ? "/preview" : "/edit"));      // az eredmény a szerkesztőben (Word-be alakítás: a Word-szerkesztőben; videó-render: lejátszóban)
     } catch (e) {
       lock(false);
-      if (e.cta) { say(""); return accountCta(it.label); }
+      if (e.cta) { say(""); return accountCta(it.label, "", e.why); }
       say(e.quiet ? "" : e.message);
       if (e.slot && fm) {                                          // hiányzó fájl: a választó nyitva — kiválasztás után magától folytatja
         const s = slotEl(fm, e.slot);
@@ -3156,7 +3164,7 @@ function openMaker(kind, opts = {}) {
       nav("/app/file/" + encodeURIComponent(r.file_id) + (edit && ed ? "/edit" : ""));
     } catch (err) {
       go.disabled = false; if (alt) alt.disabled = false; label();      // a gomb felirata a mostani állapothoz
-      if (err.cta) return accountCta(m.title);                 // vendég AI-n: a fiók-ajánlat (nem zsákutca)
+      if (err.cta) return accountCta(m.title, "", err.why);                 // vendég AI-n: a fiók-ajánlat (nem zsákutca)
       $("#make-status").textContent = err.message;
       if (/see Plans\.?$/.test(err.message))                   // a keret elfogyott: a csomagokhoz vigyen (nem zsákutca)
         $("#make-status").innerHTML = esc(err.message.replace(/see Plans\.?$/, "")) + `<a href="/app/plans">see Plans</a>.`;

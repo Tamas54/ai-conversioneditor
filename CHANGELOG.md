@@ -10,6 +10,8 @@ agent handle a file that big?"
   - If it still stops, choosing the same file again carries on from where it stopped: the server lists what arrived
     (`GET /api/upload/chunks/{id}`).
   - Leaving the page while uploading asks first.
+  - A guest's file over the 25 MB guest limit is no longer sent at all, only to be refused at the end. The app says
+    so at once and offers "Sign in" (files made as a guest come along). First seen on the owner's iPhone.
   - Measured locally with a browser: a 238 MB video, with an 8-second network cut at 30%, finished. After a page
     reload at 52%, the server already had 20 of 29 pieces and only the rest was sent. The file arrived byte for byte.
 - **The server writes uploads to disk, not to memory.**

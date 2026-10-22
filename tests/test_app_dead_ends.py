@@ -121,3 +121,22 @@ def test_guest_finds_convert_first_and_converts_without_an_account(guest_page, l
     page.locator("#make-go").click()
     page.wait_for_url(re.compile(r"/app/file/[0-9a-f]+\.jpg(/|$)"))         # a kész fájl a fotószerkesztőben nyílik
     assert page.locator("#drawer[open]").count() == 0
+
+
+def test_guest_big_upload_offers_sign_in_before_sending(guest_page, live_url, tmp_path):
+    """10-22: az iPhone-ról vendégként választott 227 MB-os videó percekig „töltött”, aztán 413 — gomb nélkül."""
+    page = guest_page
+    big = tmp_path / "IMG_4821.MOV"
+    with open(big, "wb") as f:
+        f.truncate(26 * 1024 * 1024)
+    sent = []
+    page.on("request", lambda r: sent.append(r.url) if "/api/upload" in r.url else None)
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(big))
+    toast = page.locator("#toast.show.act")
+    toast.wait_for()
+    assert "26 MB" in toast.inner_text() and "up to 25 MB" in toast.inner_text()
+    assert not sent                                                      # nem küld el semmit, amit úgyis visszadobna
+    toast.locator("button", has_text="Sign in").click()
+    page.wait_for_url("**/login?*")
+    assert _next(page.url) == "/app/files"
