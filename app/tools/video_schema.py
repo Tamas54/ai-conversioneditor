@@ -229,13 +229,13 @@ see-through. A room or street behind the person (no screen) can't be removed yet
 see-through directly: video(action="avatar", ai={…, "background": "transparent" | colour | picture})."""
 
 TOPICS["social"] = """\
-action="social" — the posts that go with a video: file_id = the video (project or MP4), or a sound file →
-per platform {title (YouTube), text, hashtags}, YouTube chapters (from the scenes / chapter layers: from 00:00, at least
-3, each ≥ 10 s), keywords, and a .md file to copy from. ai={"platforms": ["youtube", "tiktok", "instagram"] (default) |
-"facebook" | "linkedin" | "x" | "all", "fresh": true = write them again}; text = your notes to work in (a link, a call
-to action); language (default: the video's). Written by the Studio AI (one AI step) ONLY from what the video says —
-numbers that aren't in it come back in the check; the picture / footage credits are added to the longer texts. Returns
-a job."""
+action="social" — the posts that go with a video, WRITTEN BY YOU: file_id = the video (project or MP4), or a sound
+file → the material: what the video says, who is in it, YouTube chapters (from the scenes / chapter layers: from 00:00,
+at least 3, each ≥ 10 s), keywords, suggested hashtags, the picture / footage credits, and per platform the limits and
+the style (ai={"platforms": ["youtube", "tiktok", "instagram"] (default) | "facebook" | "linkedin" | "x" | "all"}); text
+= the person's notes to work in (a link, a call to action). Write the posts from it, then call again with
+ai={"posts": {"youtube": {"title", "text", "hashtags": […]}, "tiktok": {"text", "hashtags"}, …}} → checked (lengths,
+numbers that aren't in the video come back in the check), the chapters and credits added, a .md file to copy from."""
 
 TOPICS["audiogram"] = """\
 action="audiogram" — a podcast / interview / voice note as a video: file_id = the sound (mp3, wav, m4a…) or a video
