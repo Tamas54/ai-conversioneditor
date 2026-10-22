@@ -1,18 +1,24 @@
-"""Tördelési hibák gépi javítása visszaellenőrzéssel (10-22, ügynök-jelentés): cím a lap alján, képaláírás külön lapon,
-két lapra törő táblázatsor, nem ismétlődő fejléc → javítás a DOCX-ben, újratördelés, legfeljebb 3 kör."""
+"""Tördelési javítás az ember döntésével (10-22). Kommandant: „TELJESEN AUTOMATIKUS rendszer nem képzelhető el” és
+„néha van »főnöki kérés«, amikor az ember a logikus tördelés HELYETT utasításra cselekszik — a rendszernek ezt
+intelligensen el kell fogadnia”. Javaslat (semmi nem változik) → jóváhagyott javaslatok végrehajtása, újratördelve
+→ az erősebb lépés újra csak javaslat; „így marad” döntés, amit a későbbi változatok is tudnak; a fájlban kifejezetten
+kikapcsolt beállítás szándék."""
 from __future__ import annotations
 
-import asyncio
 import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
 
 
-def _doc(path: Path) -> Path:
+def _doc(path: Path, heading_keep_off: bool = False) -> Path:
     from docx import Document
     d = Document()
-    d.add_heading("1. Bevezetés", 1)                          # 0
+    d.styles["Heading 1"].paragraph_format.keep_with_next = False   # egyedi sablon: a címstílus nem tart a szöveggel
+    h = d.add_heading("1. Bevezetés", 1)                      # 0
+    if heading_keep_off:
+        h.paragraph_format.keep_with_next = False             # kifejezetten kikapcsolva (w:keepNext w:val="0")
     d.add_paragraph("Szöveg.")                               # 1
     d.add_paragraph("")                                      # 2 (üres)
     d.add_paragraph("1. ábra: a kép aláírása")                # 3
@@ -24,6 +30,11 @@ def _doc(path: Path) -> Path:
     return path
 
 
+def _blocks(path: Path) -> dict:
+    from app.tools import validate as v
+    return {b.pos: b for b in v.read_docx(path)[0]}
+
+
 def _ppr(path: Path, pos: int) -> set[str]:
     from docx import Document
     from app.tools.validate import _W, _body
@@ -32,40 +43,69 @@ def _ppr(path: Path, pos: int) -> set[str]:
     return {c.tag.rsplit("}", 1)[1] for c in ppr} if ppr is not None else set()
 
 
-def test_fixes_go_into_the_document(tmp_path):
+ISSUES = [{"id": "E1", "kind": "orphan_heading", "_pos": 0, "message": "Heading … is the last line", "page": 1, "object": "heading"},
+          {"id": "E1", "kind": "orphan_heading", "_pos": 0, "message": "same in the other view", "view": "word"},
+          {"id": "W1", "kind": "caption_split", "_pos": 3, "message": "The picture is on page 1, its caption on page 2."},
+          {"id": "E2", "kind": "table_row_split", "_pos": 4, "row": 2, "message": "Row 2 splits."},
+          {"id": "W2", "kind": "table_header_not_repeated", "_pos": 4, "row": 1, "message": "no header"},
+          {"id": "W3", "kind": "blank_page", "_pos": None, "message": "Page 3 is empty."}]
+
+
+def test_proposals_change_nothing_and_only_approved_ones_are_applied(tmp_path):
     from docx import Document
     from app.tools import layout_fix
     from app.tools.validate import _W, _body
     src = _doc(tmp_path / "a.docx")
-    issues = [{"kind": "orphan_heading", "_pos": 0, "message": "Heading … is the last line", "page": 1, "object": "heading"},
-              {"kind": "orphan_heading", "_pos": 0, "message": "same in the other view", "view": "word"},
-              {"kind": "caption_split", "_pos": 3, "message": "The picture is on page 1, its caption on page 2."},
-              {"kind": "table_row_split", "_pos": 4, "row": 2, "message": "Row 2 splits."},
-              {"kind": "table_header_not_repeated", "_pos": 4, "row": 1, "message": "no header"},
-              {"kind": "blank_page", "_pos": None, "message": "Page 3 is empty."}]
-    todo = layout_fix._plan(issues, {})
-    assert [(i["kind"], how) for i, how in todo] == [("orphan_heading", "keep"), ("caption_split", "keep"),
-                                                     ("table_row_split", "row"), ("table_header_not_repeated", "header")]
+    plan = layout_fix._plan(ISSUES, _blocks(src))
+    assert [(p["id"], p["issue"], p["_how"]) for p in plan] == [("F1", "E1", "keep"), ("F2", "W1", "keep"),
+                                                                  ("F3", "E2", "row"), ("F4", "W2", "header")]
+    assert plan[1]["_target"] == 1                            # a kép UTÁNI aláírás: az előtte álló tartalmat tartjuk vele
+    assert set(layout_fix.public(plan[0])) == {"id", "issue", "kind", "object", "page", "change"}
     out = tmp_path / "b.docx"
-    done = layout_fix._apply(src, out, todo)
-    assert len(done) == 4 and {"keepNext", "keepLines"} <= _ppr(out, 0)
-    assert "keepNext" in _ppr(out, 1)                        # a kép UTÁNI aláírás: az előtte álló tartalom tart vele
+    done = layout_fix._apply(src, out, [p for p in plan if p["id"] in ("F1", "F4")])     # csak a jóváhagyottak
+    assert [d["id"] for d in done] == ["F1", "F4"] and {"keepNext", "keepLines"} <= _ppr(out, 0)
+    assert "keepNext" not in _ppr(out, 1)
     tbl = list(_body(Document(str(out)).element.body))[4]
     rows = tbl.findall(_W + "tr")
-    assert rows[1].find(_W + "trPr").find(_W + "cantSplit") is not None
     assert rows[0].find(_W + "trPr").find(_W + "tblHeader") is not None
-    # ismétlésnél erősebb javítás; a csak a szerkesztőben elhagyott cím (már keepNext) rögtön oldaltörést kap
-    tried = {layout_fix._key(i): 1 for i, _ in todo}
-    again = layout_fix._plan(issues, tried)
-    assert [(i["kind"], how) for i, how in again] == [("orphan_heading", "break"), ("caption_split", "break")]
-    editor_only = layout_fix._plan([{"kind": "orphan_heading", "_pos": 0, "message": "The heading is already set to keep "
-                                     "with its text, so Word keeps them together"}], {})
-    assert editor_only[0][1] == "break"
+    assert rows[1].find(_W + "trPr") is None or rows[1].find(_W + "trPr").find(_W + "cantSplit") is None
+    # ha már rajta van az „együtt a következővel”, és mégis szétesik: az erősebb lépés — de az is javaslat
+    again = layout_fix._plan(ISSUES[:1], _blocks(out))
+    assert again[0]["_how"] == "break" and "page break" in again[0]["change"]
+    tall = [{"id": "E3", "kind": "table_row_split", "_pos": 4, "row": 2, "message": "x"}]
     out2 = tmp_path / "c.docx"
-    layout_fix._apply(out, out2, again)
-    assert "pageBreakBefore" in _ppr(out2, 0)
-    tall = [{"kind": "table_row_split", "_pos": 4, "row": 2, "message": "splits although it is set not to break — …"}]
-    assert layout_fix._plan(tall, {}) == []                  # a lapnál magasabb sor: nem gépi döntés
+    layout_fix._apply(out, out2, [p for p in layout_fix._plan(tall, _blocks(out))])
+    assert layout_fix._plan(tall, _blocks(out2)) == []        # a sor már nem törhet — a lapnál magasabb: az emberé
+
+
+def test_what_is_set_on_purpose_and_what_was_asked_is_accepted(tmp_path):
+    from app.tools import validate as v
+    src = _doc(tmp_path / "off.docx", heading_keep_off=True)
+    b = _blocks(src)
+    assert b[0].keep_off and not _blocks(_doc(tmp_path / "on.docx"))[0].keep_off
+    it = {"id": "W9", "kind": "orphan_heading", "_pos": 0, "on_purpose": "keep with next switched off on this heading"}
+    active, kept = v.split_kept([it, ISSUES[3]], list(b.values()), [])
+    assert active == [ISSUES[3]] and kept[0]["kept"].startswith("keep with next switched off")
+    asked = v.asked_kinds({"commands": [{"command": "edit.goto", "params": {"paragraph": 3}},
+                                        {"command": "para.set", "params": {"props": {"keepNext": False}}}]})
+    assert asked == {"orphan_heading", "caption_split"}
+    assert v.asked_kinds({"commands": ['table.properties={"allowBreak": true}']}) == {"table_row_split"}
+
+
+def test_a_kept_decision_is_remembered_across_versions(tmp_path, put_file):
+    from app.storage import write_meta
+    from app.tools import layout_fix
+    from app.tools import validate as v
+    src = _doc(tmp_path / "k.docx")
+    parent = put_file(src)
+    child = put_file(src)
+    write_meta(child, source_file_id=parent)
+    blocks = _blocks(src)
+    sig = v.issue_sig(ISSUES[0], blocks)
+    write_meta(parent, extra={"layout_keep": [{"sig": sig, "kind": "orphan_heading", "reason": "a főnök így kérte"}]})
+    assert layout_fix.keeps_for(child)[0]["reason"] == "a főnök így kérte"                 # a későbbi változat is tudja
+    active, kept = v.split_kept(ISSUES[:3], list(blocks.values()), layout_fix.keeps_for(child))
+    assert [i["kind"] for i in active] == ["caption_split"] and {k["kept"] for k in kept} == {"a főnök így kérte"}
 
 
 def _engines_ok() -> bool:
@@ -74,7 +114,8 @@ def _engines_ok() -> bool:
 
 
 def _orphan_doc(path: Path) -> Path:
-    """Mért elrendezés (10-22): 50 rövid sor után a cím a Word-nézet (LibreOffice) 2. oldalának alján marad."""
+    """Mért elrendezés (10-22): 50 rövid sor után a cím a Word-nézet (LibreOffice) 2. oldalának alján marad; a 45 soros
+    táblázat fejléce nem ismétlődik."""
     from docx import Document
     d = Document()
     d.styles["Heading 1"].paragraph_format.keep_with_next = False
@@ -92,13 +133,19 @@ def _orphan_doc(path: Path) -> Path:
 
 @pytest.mark.engines
 @pytest.mark.skipif(not _engines_ok(), reason="WordCraft and LibreOffice needed")
-async def test_validate_document_fixes_and_shows_what_is_left(tmp_path, put_file):
+async def test_propose_ask_apply_keep(tmp_path, put_file):
     from app.mcp_server import validate_document
     from app.storage import read_meta
     fid = put_file(_orphan_doc(tmp_path / "tanulmany.docx"))
-    res = await validate_document(file_id=fid, fix=True)
-    info = res.structuredContent
-    kinds = {f["kind"] for f in info["fixed"]}
-    assert "table_header_not_repeated" in kinds and info["file_id"] != fid and info["source_file_id"] == fid
-    assert read_meta(info["file_id"])["operation"] == "layout fix"
-    assert not [i for i in info.get("issues") or [] if i["kind"] in ("orphan_heading", "table_header_not_repeated")]
+    first = (await validate_document(file_id=fid, fix=True)).structuredContent
+    props = {p["kind"]: p for p in first["proposals"]}
+    assert {"orphan_heading", "table_header_not_repeated"} <= set(props) and first["file_id"] == fid
+    assert "Nothing changed yet" in first["fix_note"] and "ASK the person" in first["fix_note"]
+    head = props["table_header_not_repeated"]["id"]
+    second = (await validate_document(file_id=fid, fix=[head])).structuredContent      # csak a fejlécet hagyta jóvá
+    new = second["file_id"]
+    assert new != fid and second["source_file_id"] == fid and [f["kind"] for f in second["fixed"]] == ["table_header_not_repeated"]
+    orphan = next(i for i in second["issues"] if i["kind"] == "orphan_heading")              # a cím-javaslatot nem kérte
+    third = (await validate_document(file_id=new, keep=[orphan["id"]], reason="a főnök így kérte")).structuredContent
+    assert not [i for i in third["issues"] if i["kind"] == "orphan_heading"]
+    assert third["kept_as_is"][0]["kept"] == "a főnök így kérte" and read_meta(new)["layout_keep"][0]["kind"] == "orphan_heading"

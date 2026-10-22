@@ -228,6 +228,7 @@ class Block:
     pictures: list = field(default_factory=list)  # beágyazott képek szélessége (pt)
     floating: int = 0
     keep_next: bool = False                      # „együtt a következővel” (közvetlenül vagy a stílusból)
+    keep_off: bool = False                       # a bekezdésen KIFEJEZETTEN kikapcsolva (szándékos — nem „javítjuk” vissza)
     page_break: bool = False                     # kézi oldaltörés / szakaszhatár a bekezdésben
     break_before: bool = False
     rows: list = field(default_factory=list)     # táblázat: [[cellaszöveg]]
@@ -358,6 +359,7 @@ def read_docx(path: Path) -> tuple[list[Block], list[dict]]:
         if num_id not in (None, "", "0"):
             num = (num_id, ilvl or 0) + numfmt.get(num_id, {}).get(ilvl or 0, ("decimal", 1))
         sect = ppr.find(_W + "sectPr") if ppr is not None else None
+        own_keep = ppr.find(_W + "keepNext") if ppr is not None else None
         blocks.append(Block(
             pos, pos, "paragraph", text=_text(el), style=name, heading=heading, caption=name == "caption", num=num,
             pictures=[float((inl.find(_WP + "extent").get("cx") or 0)) / 12700 for inl in el.iter(_WP + "inline")
@@ -365,7 +367,8 @@ def read_docx(path: Path) -> tuple[list[Block], list[dict]]:
             floating=sum(1 for _ in el.iter(_WP + "anchor")),
             page_break=any(br.get(_W + "type") == "page" for br in el.iter(_W + "br"))
             or (sect is not None and _val(sect, "type") != "continuous"),
-            break_before=brk_before, keep_next=bool(keep), section=len(sections)))
+            break_before=brk_before, keep_next=bool(keep), section=len(sections),
+            keep_off=own_keep is not None and not _on(ppr, "keepNext")))
         if sect is not None:
             sections.append({**_section(sect), "end": pos})
     final = d.element.body.find(_W + "sectPr")
@@ -681,7 +684,15 @@ class DocCheck:
             regions = [self.strip(L, hp, hb[hp][1] - 70, self.text_area(L, hp)[3] + 12),
                        self.strip(L, np_, self.text_area(L, np_)[1] - 12, nbx[np_][3] + 50)]
             marks = [(hp, hb[hp]), (np_, nbx[np_])]
-            if b.heading is not None and L.view == "editor" and b.keep_next:
+            if b.heading is not None and b.keep_off:
+                it = _issue(                        # valaki szándékosan kikapcsolta ezen a címen — tudomásul vesszük
+                    "orphan_heading", WARNING,
+                    f"Heading “{_short(b.text, 50)}” is the last line on page {hp}; its text starts on page {np_}. Keep with "
+                    "next was switched off on this heading on purpose, so it is left as it is.",
+                    L.view, hp, b, fix=None, regions=regions, marks=marks)
+                it["on_purpose"] = "keep with next switched off on this heading"
+                self.issues.append(it)
+            elif b.heading is not None and L.view == "editor" and b.keep_next:
                 self.issues.append(_issue(          # a fájl rendben: Word együtt tartja, csak a WordCraft-motor nem
                     "orphan_heading", WARNING,
                     f"Heading “{_short(b.text, 50)}” is the last line on page {hp}, its text starts on page {np_}. The "
@@ -1644,14 +1655,64 @@ def describe_missing(gone: list[dict[str, Any]], limit: int = 4) -> list[str]:
     return out
 
 
-async def quick_layout(path: Path) -> Optional[dict[str, Any]]:
-    """Mentés utáni gyors tördelés-ellenőrzés (csak a szerkesztő motorja, kép nélkül) — a `check` mezőhöz."""
+# ---------- szándékos tördelés (Kommandant 10-22: „néha van »főnöki kérés«, amikor az ember a logikus tördelés
+# HELYETT utasításra cselekszik — a rendszernek ezt intelligensen el kell fogadnia”) ----------
+
+def issue_sig(it: dict[str, Any], blocks: dict[int, Block]) -> Optional[str]:
+    """Egy tördelési hiba azonosítója változatokon át: fajta + az elem szövege (táblánál az első sora) + a sor."""
+    b = blocks.get(it.get("_pos")) if it.get("_pos") is not None else None
+    if b is None:
+        return None
+    text = " | ".join(b.rows[0]) if b.kind == "table" and b.rows else b.text
+    return f"{it['kind']}|{''.join(_toks(text))[:60]}|{it.get('row') or ''}"
+
+
+def split_kept(issues: list[dict], blocks: list[Block], keeps: list[dict]) -> tuple[list[dict], list[dict]]:
+    """→ (a még kezelendő hibák, az ember által „így marad”-nak jelöltek a döntés okával)."""
+    by_pos = {b.pos: b for b in blocks}
+    want = {k["sig"]: k for k in keeps or [] if k.get("sig")}
+    active, kept = [], []
+    for it in issues:
+        k = want.get(issue_sig(it, by_pos) or "") if want else None
+        if it.get("on_purpose"):                 # a fájlban kifejezetten így állították be
+            kept.append({**it, "kept": it["on_purpose"]})
+        elif k:
+            kept.append({**it, "kept": k.get("reason") or "kept as it is on purpose"})
+        else:
+            active.append(it)
+    return active, kept
+
+
+# a kifejezett utasítás: ami ezt a fajta „hibát” okozza, azt kérték — nem hiba, hanem kérés
+ASKED = {"orphan_heading": ('"keepNext": false', '"pageBreakBefore": false'),
+         "caption_split": ('"keepNext": false',),
+         "table_row_split": ('"allowBreak": true',),
+         "table_header_not_repeated": ('"headerRow": false',)}
+
+
+def asked_kinds(args: Optional[dict[str, Any]]) -> set[str]:
+    import json as _json
+    cmds = (args or {}).get("commands") or []
+    text = " ".join(_json.dumps(c, ensure_ascii=False) if not isinstance(c, str) else c for c in cmds).replace(" ", "")
+    return {k for k, needles in ASKED.items() if any(n.replace(" ", "") in text for n in needles)}
+
+
+async def quick_layout(path: Path, file_id: Optional[str] = None, args: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """Mentés utáni gyors tördelés-ellenőrzés (csak a szerkesztő motorja, kép nélkül) — a `check` mezőhöz. Az ember
+    „így marad” döntései (a változatláncon át) és a most kifejezetten kért beállítás következménye nem hiba."""
     layouts, _ = await _layouts(path, "document", want_file=False)
     if not layouts:
         return None
-    issues, _ = await asyncio.to_thread(_analyze_doc, path, layouts)
+    issues, dc = await asyncio.to_thread(_analyze_doc, path, layouts)
+    kept: list[dict] = []
+    if file_id:
+        from app.tools import layout_fix
+        issues, kept = split_kept(issues, dc.blocks, layout_fix.keeps_for(file_id))
+    asked = asked_kinds(args)
+    as_asked = [i for i in issues if i["kind"] in asked]
+    issues = [i for i in issues if i["kind"] not in asked]
     return {"errors": [i for i in issues if i["severity"] == ERROR], "warnings": [i for i in issues if i["severity"] == WARNING],
-            "pages": layouts[0].pages}
+            "pages": layouts[0].pages, "kept": kept, "as_asked": as_asked}
 
 
 def counts(issues: list[dict]) -> str:
@@ -1682,6 +1743,7 @@ async def validate(file_id: str, pages: Optional[list[int]] = None, view: str = 
     src = existing(file_id)
     ext = src.suffix.lstrip(".").lower()
     notes: list[str] = []
+    kept: list[dict] = []
     if ext in WORDISH:
         kind = "document"
         docx = await _as_docx(src)
@@ -1689,6 +1751,8 @@ async def validate(file_id: str, pages: Optional[list[int]] = None, view: str = 
         if not layouts:
             raise RuntimeError("The document could not be laid out in either engine. " + " ".join(notes))
         issues, dc = await asyncio.to_thread(_analyze_doc, docx, layouts)
+        from app.tools import layout_fix
+        issues, kept = split_kept(issues, dc.blocks, layout_fix.keeps_for(file_id))
     elif ext in ("pptx", "deckcraft", "ppt", "odp"):
         kind = "deck"
         if ext != "pptx":
@@ -1706,14 +1770,15 @@ async def validate(file_id: str, pages: Optional[list[int]] = None, view: str = 
                          "files(action=\"preview\").")
     try:
         return await asyncio.to_thread(_assemble, file_id, display_label(file_id), kind, layouts, issues, dc, notes,
-                                       pages, view, max_crops)
+                                       pages, view, max_crops, kept)
     finally:
         for L in layouts:
             L.close()
 
 
 def _assemble(file_id: str, name: str, kind: str, layouts: list[Layout], issues: list[dict], dc: Optional[DocCheck],
-              notes: list[str], pages: Optional[list[int]], view: str, max_crops: int) -> tuple[dict, list[tuple[str, bytes]]]:
+              notes: list[str], pages: Optional[list[int]], view: str, max_crops: int,
+              kept: Optional[list[dict]] = None) -> tuple[dict, list[tuple[str, bytes]]]:
     by_view = {L.view: L for L in layouts}
     v = (view or "word").lower()
     v = {"file": "word", "export": "word", "downloaded": "word", "office": "word"}.get(v, v)
@@ -1771,12 +1836,15 @@ def _assemble(file_id: str, name: str, kind: str, layouts: list[Layout], issues:
                 + "; ".join(f"{view_name(L)} — {L.pages} {L.unit}{'s' if L.pages != 1 else ''}" for L in layouts) + "."]
     if not issues:
         verified.append("No problems found: " + "; ".join(CHECKED[kind]) + ".")
+    if kept:
+        verified.append(f"{len(kept)} layout point(s) kept as they are by decision (kept_as_is) — not counted as problems.")
     out = {
         "file_id": file_id, "name": name, "status": status, "summary": summary, "errors": ne, "warnings": nw,
         "pages": {L.view: L.pages for L in layouts},
         "views": {L.view: view_name(L) for L in layouts},
         **({"page_breaks": agree} if agree else {}),
         "issues": [public(i) for i in issues],
+        **({"kept_as_is": [{k: i.get(k) for k in ("kind", "object", "page", "message", "kept")} for i in kept]} if kept else {}),
         **({"pictures": pic_rows} if pic_rows else {}),
         "checked": CHECKED[kind] + (["pictures: all shown on one sheet for YOU to judge — not judged by the machine"]
                                     if pic_rows else []),

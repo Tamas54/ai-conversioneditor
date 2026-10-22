@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-10-22 — Layout fixes are the person's decision
+
+Owner's principle: editorial intelligence stays within limits. The system asks, and the person decides and takes
+responsibility, so nothing is fully automatic. Sometimes the person follows an instruction ("the boss wants it this
+way") instead of the logical layout, and the system accepts that.
+- **`validate_document(fix=true)` only proposes:** `proposals` [{id F1…, issue, object, page, change}], and nothing
+  changes.
+- **`fix=["F1", …] | "all"`** applies only those, giving a new version that is laid out again. If something still
+  needs a stronger step (a page break), that comes back as a proposal and is never taken without asking.
+- **`keep=["E2", …]` + `reason`:** the problem stays as it is on purpose.
+  - The decision is stored on the file, and later versions inherit it through the source chain.
+  - It is listed under `kept_as_is` and never "fixed" back: not by the validator, the after-edit check or the fixer.
+- **Settings made on purpose:**
+  - A heading whose keep-with-next was switched off in the file is treated as intended.
+  - When an edit explicitly sets `keepNext: false`, `pageBreakBefore: false`, `allowBreak: true` or
+    `headerRow: false`, the after-edit check reports the result "as asked", not as a problem.
+
 ## 2026-10-22 — Document editor: background edits, real change detection, layout fixing
 
 From an MCP agent's test report on a long study.

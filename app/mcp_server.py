@@ -1697,7 +1697,8 @@ async def facts(
 @mcp.tool()
 @linked
 async def validate_document(file_id: str, pages: Optional[list[int]] = None, view: str = "word",
-                            content: bool = False, fix: bool = False) -> dict:
+                            content: bool = False, fix: Union[bool, str, list, None] = None,
+                            keep: Optional[list] = None, reason: Optional[str] = None) -> dict:
     """CHECK a Word document, a deck or a PDF before telling the person it's done. The page pictures come back IN this
     result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
 
@@ -1724,29 +1725,43 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
         the same thing named or spelled two ways (`content.findings`: kind, places [{paragraph, quote}], note, fix
         {quote, replacement} or null). Each quote is exact text of the document — put a finding in with
         wordcraft (select.text + review.newComment, or a tracked change). For facts against sources use facts(action="check").
-      fix: true (Word documents) → FIRST fix what can be fixed safely, re-laying out after each round (≤ 3 rounds):
-        headings at a page bottom (keep with next; a page break if one view still leaves it), captions apart from their
-        picture / table, table rows breaking across pages, table header rows not repeating. → a NEW version (file_id),
-        `fixed` [{kind, object, page, how}], and the issues / pictures of the fixed version (what is left, with fixes).
+      LAYOUT FIXES ARE THE PERSON'S DECISION (Word documents) — propose, ask, then apply:
+      fix: true → `proposals` [{id F1…, issue, object, page, change}] — nothing changes. Show them to the person.
+        fix: ["F1", "F3"] | "all" → only those are applied → a NEW version, re-laid out; `fixed`, and `proposals` again
+        if something still needs a stronger step (e.g. a page break) — never taken without asking.
+      keep: ["E2", …] + reason ("the boss wants it this way") → that problem stays as it is ON PURPOSE: remembered on the
+        file and its later versions, listed under kept_as_is, never "fixed" back. A heading whose keep-with-next was
+        switched off in the file is treated the same way.
     """
     import json
     from mcp.types import CallToolResult, ImageContent, TextContent
     from app.tools import validate as v
-    fixed = None
-    if fix:
-        from app.tools import layout_fix
-        orig = file_id
-        fixed = await layout_fix.fix(file_id)
-        file_id = fixed["file_id"]
+    from app.tools import layout_fix
+    orig, kept_now, applied, proposals = file_id, None, None, None
+    if keep:
+        kept_now = await layout_fix.keep(file_id, keep, reason)
+    if fix not in (None, False, "", [], "false", "no"):
+        if fix is True or str(fix).lower() in ("true", "propose", "yes"):
+            proposals = (await layout_fix.propose(file_id))["proposals"]
+        else:
+            applied = await layout_fix.apply(file_id, fix)
+            file_id = applied["file_id"]
+            proposals = applied["proposals"]
     info, images = await v.validate(file_id, pages=pages, view=view)
-    if fixed is not None:
-        info["fixed"] = fixed["fixed"]
-        info["fix_rounds"] = fixed["rounds"]
-        if fixed["changed"]:
+    if kept_now is not None:
+        info["kept_now"] = [{k: x[k] for k in ("kind", "object", "reason")} for x in kept_now]
+    if applied is not None:
+        info["fixed"] = applied["fixed"]
+        if applied["changed"]:
             info["source_file_id"] = orig
-        info["fix_note"] = (f"{len(fixed['fixed'])} layout fix(es) in {fixed['rounds']} round(s) → a new version; the issues "
-                            "below are what is left in it." if fixed["changed"] else "Nothing needed (or could safely be) "
-                            "fixed automatically; the issues below say what to do.")
+        if applied.get("not_applied"):
+            info["not_applied"] = applied["not_applied"]
+    if proposals is not None:
+        info["proposals"] = proposals
+        info["fix_note"] = (("Applied the approved fixes → a new version; the issues below are what is left in it. " if applied
+                             and applied["changed"] else "Nothing changed yet. ")
+                            + ("ASK the person: apply some or all with fix=[\"F1\", …] | \"all\", or keep a problem as it is with "
+                               "keep=[\"E2\", …] and their reason." if proposals else "No (further) fixes to propose."))
     if content and file_id.lower().endswith(".docx"):
         from app.tools import content_check as cc
         from app.tools.crafts import existing
