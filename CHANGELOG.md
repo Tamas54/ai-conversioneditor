@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-23 — A quick preview for every change; the final video renders in the background, with the time it takes
+
+The owner's goal: "I want to see the result QUICKLY — the quality doesn't matter here … the perfect result may take long,
+but tell me roughly how long." Before, every change to a 30-minute video rendered the whole video again before
+answering: half an hour per change.
+
+Now, when the final render is estimated over about 2 minutes (`VIDEO_INLINE_RENDER_S`), overlay and edit don't wait for
+it:
+- **Quick preview of just what changed:** new, changed or removed layers (±2 s), cut points (±3 s), new subtitles, the
+  end card, and samples for a colour or music change. It is drawn from the editor's small copy in draft quality, at most
+  60 s long (`VIDEO_PREVIEW_MAX_S`), each part labelled with its time; changes that don't fit are counted.
+- **The final render** from the original, in full quality, runs as a background job at a lower CPU priority
+  (`nice 10`), so the previews and the web pages don't wait for it. The result gives its job id, `eta`
+  ("about 35 min") and `ready_at`; `video(action="status")` shows the stage and the time left, or says when it is taking
+  longer than estimated.
+- **Previews don't queue behind a final render:** building a project and `render scene=…` no longer share the final
+  render's one-at-a-time gate.
+- **The estimate** comes from measured throughput per stage (working copy, graphics, final encode with or without the
+  HDR mapping), scaled by pixels per second. Defaults come from the 30-minute HDR iPhone run: copy 360 s, graphics
+  117 s for 124.5 s of graphics, final encode 1655 s for 1821 s. Every finished job updates it (Postgres
+  `render_rates`, a moving average; outliers such as a reused copy are ignored).
+- `final="wait"` renders now, the old way (the web page's subtitle tool uses it). `final="background"` always previews.
+- `draft=true` on a render is now a quick whole-video preview: the small copy and a fast encoder setting (veryfast,
+  CRF 26).
+
 ## 2026-10-22 — Your own footage: the editor gets a small copy, the video is made from your original
 
 Before, a phone video was re-encoded in full before the editing could start: turned upright and mapped from HDR to SDR

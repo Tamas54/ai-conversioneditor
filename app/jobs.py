@@ -30,12 +30,19 @@ class Progress:
     def __call__(self, done: int, total: int, stage: str = "") -> None:
         self._job.update(done=done, total=total, stage=stage)
 
+    def eta(self, seconds: float) -> None:
+        """Becsült hátralévő idő mostantól (a status ebből számolja a remaining_s-t és a ready_at-et)."""
+        self._job.update(eta_s=round(float(seconds)), eta_from=time.time())
 
-def start(kind: str, work: Callable[[Progress], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+
+def start(kind: str, work: Callable[[Progress], Awaitable[dict[str, Any]]], eta_s: float | None = None,
+          **extra: Any) -> dict[str, Any]:
     _gc()
     jid = uuid.uuid4().hex[:16]
     job = {"id": jid, "kind": kind, "owner": tenancy.current_user_id(), "status": "running",
-           "done": 0, "total": 0, "stage": "starting", "result": None, "error": None, "started": time.time()}
+           "done": 0, "total": 0, "stage": "starting", "result": None, "error": None, "started": time.time(), **extra}
+    if eta_s is not None:
+        job.update(eta_s=round(float(eta_s)), eta_from=job["started"])
     _JOBS[jid] = job
 
     async def run() -> None:
@@ -56,7 +63,27 @@ def start(kind: str, work: Callable[[Progress], Awaitable[dict[str, Any]]]) -> d
 
 
 def _public(job: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in job.items() if k != "owner" and not k.startswith("_")}
+    out = {k: v for k, v in job.items() if k not in ("owner", "eta_from") and not k.startswith("_")}
+    if job.get("eta_s") is not None and job["status"] == "running":       # hátralévő idő a becslésből
+        from app.tools import render_eta
+        left = job["eta_from"] + job["eta_s"] - time.time()
+        if left > 0:
+            out.update(remaining_s=round(left), remaining=render_eta.text(left), ready_at=render_eta.ready_at(left))
+        else:
+            out.update(remaining_s=None, remaining="taking longer than estimated — still working")
+    return out
+
+
+def running(kind: str, **match: Any) -> list[dict[str, Any]]:
+    """Ennek a folyamatnak a futó munkái (a sorban várók becsléséhez)."""
+    return [j for j in _JOBS.values() if j["kind"] == kind and j["status"] == "running"
+            and all(j.get(k) == v for k, v in match.items())]
+
+
+def remaining_s(job: dict[str, Any]) -> float:
+    if job.get("eta_s") is None:
+        return 0.0
+    return max(0.0, job["eta_from"] + job["eta_s"] - time.time())
 
 
 def _gc() -> None:

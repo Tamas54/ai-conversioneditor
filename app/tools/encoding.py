@@ -53,7 +53,10 @@ def final_encoder() -> str:
 
 
 def x264(stage: str = "intermediate") -> list[str]:
-    """H.264 4:2:0 a profil szerint; stage = intermediate | final."""
+    """H.264 4:2:0 a profil szerint; stage = intermediate | final | preview (a gyors vázlat: veryfast, CRF 26 — 10-23,
+    „az eredményt GYORSAN akarom látni, itt a minőség mellékes”; a végleges sose ez)."""
+    if stage == "preview":
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p"]
     crf = final_crf() if stage == "final" else intermediate_crf()
     return ["-c:v", "libx264", "-preset", preset(), "-crf", str(crf), "-pix_fmt", "yuv420p"]
 

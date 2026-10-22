@@ -1805,7 +1805,7 @@ async function subtitleSubmit(fd, form) {
   const cues = subCues(form);
   if (!cues.length) throw new Error("No subtitle lines are left — choose the video again to listen to it again.");
   if (fd.get("vsubburn")) {
-    const job = await api("/api/video/overlay", { method: "POST", body: JSON.stringify({ file_id: vid, layers: [], subtitles: cues, language }) });
+    const job = await api("/api/video/overlay", { method: "POST", body: JSON.stringify({ file_id: vid, layers: [], subtitles: cues, language, final: "wait" }) });
     const r = await pollJob(job, j => ({ "rendering the video": "Putting the subtitles on — it takes about as long as the video…" })[j.stage] || "Working on it…");
     return { file_id: r.video?.file_id || r.file_id, n: (r.files || []).length, edit: false,
       msg: "Subtitled — the MP4, the .srt and an editable project (timeline editor) are in your workspace" };

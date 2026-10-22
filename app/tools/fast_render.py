@@ -590,7 +590,7 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
             ins += ["-i", "fr-audio.wav"]
             audio_map = ["-map", f"{ins.count('-i') - 1}:a:0", *encoding.aac()]
         await _ffmpeg(*ins, "-filter_complex", graph, "-map", "[vout]", *audio_map, "-t", f"{dur:.4f}",
-                      *encoding.x264("final"), *encoding.bt709_tags(), *encoding.faststart("mp4"), str(out.resolve()), cwd=work)
+                      *encoding.x264("preview" if draft else "final"), *encoding.bt709_tags(), *encoding.faststart("mp4"), str(out.resolve()), cwd=work)
     else:
         threads = str(max(2, (os.cpu_count() or 4) // len(cuts)))
 
@@ -598,7 +598,7 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
             ins, graph = window_graph(base_in, cs, ce, items, ass, (ow, oh) if draft else None, chunked=True, pre=pre, keep=keep)
             name = f"fr-piece-{k:03d}.mp4"
             await _ffmpeg(*ins, "-filter_complex", graph, "-map", "[vout]", "-an", "-t", f"{ce - cs:.4f}",
-                          *encoding.x264("final"), "-threads", threads, *encoding.bt709_tags(), name, cwd=work)
+                          *encoding.x264("preview" if draft else "final"), "-threads", threads, *encoding.bt709_tags(), name, cwd=work)
             return name
         names = await asyncio.gather(*(piece(k, a, b) for k, (a, b) in enumerate(cuts)))
         (work / "fr-pieces.txt").write_text("".join(f"file '{n}'\n" for n in names), "utf-8")

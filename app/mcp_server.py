@@ -2072,6 +2072,7 @@ async def video(
     render: bool = True,
     end_card: Optional[Any] = None,
     cut: Optional[Any] = None,
+    final: Optional[str] = None,
     transcript: Optional[dict] = None,
     scrim: Optional[float] = None,
     wait: Optional[float] = None,
@@ -2101,6 +2102,10 @@ async def video(
     AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
     render=false: save the project only (the layout check still runs); draft=true: fast.
+    A LONG video (the final render estimated over ~2 min): overlay / edit come back in about a minute with
+    result.preview (a quick MP4 of just what changed, from the editor's small copy) and result.final = {job_id, eta,
+    ready_at} — the final full-quality render runs in the background; status(job_id) shows the time left. Tell the
+    person both. final="wait" renders it now instead; final="background" always in the background.
     Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs
@@ -2131,7 +2136,7 @@ async def video(
     if act == "edit":
         from app.routes.video import edit_video
         return await edit_video({"file_id": file_id or "", "changes": changes or {}, "source": text or "", "alpha": alpha,
-                                 "render": render, "draft": draft})
+                                 "render": render, "draft": draft, "final": final})
     if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
         from app.routes.video import transcript_video
         return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
@@ -2166,7 +2171,7 @@ async def video(
                                     "music_file_id": music_file_id, "camera": camera,
                                     "subtitles": subtitles, "caption_style": caption_style, "language": language,
                                     "render": render, "end_card": end_card, "end_title": end_title, "end_subtitle": end_subtitle,
-                                    "cut": cut, "transcript": transcript, "draft": draft})
+                                    "cut": cut, "transcript": transcript, "draft": draft, "final": final})
     if act in ("to_pptx", "pptx", "slide"):
         from app.routes.video import video_to_pptx
         return await video_to_pptx({"file_id": file_id or "", "deck_file_id": deck_file_id, "after_slide": after_slide,
