@@ -82,7 +82,7 @@ mcp = FastMCP(
         "query=\"words from the name\") — search by name, don't page through everything. Start empty with "
         "files(action=\"new\", kind=document|presentation|design|photo|book|pdf|video) and hand the person its edit_url. PICTURES: this server does NOT "
         "generate AI pictures for you — make them with your own image tool and pass the image URL (image_url / "
-        "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id); free stock photos: {\"stock\": \"words\"} or "
+        "{\"url\": …}) or upload it (upload_from_url / upload_file → file_id; a file on YOUR machine: files(action=\"upload_link\") + curl, no base64); free stock photos: {\"stock\": \"words\"} or "
         "generate_image(stock_search=…) to show the person candidates. "
         "CHECK YOUR WORK: a Word document, deck or PDF → validate_document(file_id): the pages come back as pictures "
         "with a machine-checked list of problems (\"3 errors, 2 warnings\", page, object, a cut-out of each) — fix every "
@@ -525,7 +525,15 @@ async def files(
     action="share": file_id + email + role (viewer|editor|owner|none) — share a file or video project (none = remove);
       without email: who has access and who changed what. action="share_link" (role) — a link for signed-in people.
       action="choose": after a version conflict, make file_id the current version. list also returns shared_with_me.
+    action="upload_link": a ONE-TIME link to send a file from YOUR OWN machine (Claude Code, a terminal, a sandbox
+      with network) — no base64: run `curl -sS -T '<local path>' '<url>'`; the reply is JSON {file_id, edit_url, …}.
+      title = the file's name with its extension (e.g. "report v5.docx"); file_id = an existing file this upload is a
+      NEW VERSION of (edited elsewhere, e.g. in Word) — it then sits in that file's version history, and
+      files(action="compare") / history(action="branches") link the two. The link works once, for 30 minutes, into
+      this person's workspace — don't show it to anyone else.
     """
+    if action == "upload_link":
+        return await _upload_link(title, file_id)
     if action in ("list", "find", "search"):
         import datetime
         from app.routes.dashboard import api_files
@@ -573,7 +581,7 @@ async def files(
             raise ValueError("Give other_file_id — this file wasn't made from another one.")
         return await cmp.compare(other, file_id) if not other_file_id else await cmp.compare(file_id, other_file_id)
     if action != "new":
-        raise ValueError('action: "list", "new", "preview", "compare", "share", "share_link" or "choose"')
+        raise ValueError('action: "list", "new", "preview", "compare", "share", "share_link", "choose" or "upload_link"')
     k = (kind or "").lower()
     if k in ("document", "doc", "word"):
         from app.routes.make import make_document
@@ -595,6 +603,36 @@ async def files(
             write_meta(res["file_id"], label=label)
             res["label"] = res["name"] = label
     return res
+
+
+async def _upload_link(filename: Optional[str], version_of: Optional[str]) -> dict:
+    """files(action="upload_link"): egyszer használatos, aláírt PUT-link a hívó munkaterületére (app/upload_links.py)."""
+    import time
+    from app import tenancy, upload_links
+    from app.api_v1 import operations as O
+    from app.storage import display_label
+    from app.tools.crafts import existing
+    if filename is not None:
+        filename = Path(str(filename)).name.strip()
+        if not filename or len(filename) > 200:
+            raise ValueError("title: the file's name with its extension, e.g. \"report v5.docx\" (up to 200 characters).")
+    if version_of:
+        sh = tenancy.shared()
+        if sh is not None and sh.owner != sh.actor:
+            raise ValueError("A new version of a file shared with you goes in through its owner's editor — upload_link "
+                             "saves into your own workspace.")
+        try:
+            existing(version_of)
+        except FileNotFoundError:
+            raise ValueError(f"file_id {version_of} is not one of this person's files — files(action=\"list\") finds it.") from None
+    token, exp = upload_links.make(tenancy.current_user_id(), filename, version_of)
+    url = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/upload-link/{token}"
+    return {"url": url, "method": "PUT", "expires_in_s": exp - int(time.time()), "max_mb": O.max_bytes(False) // (1024 * 1024),
+            "how": f"curl -sS -T '<local path>' '{url}'" + ("" if filename else
+                                                            "  — add ?name=<file name with extension> to name the file"),
+            "reply": "JSON {file_id, name, size_kb, url, edit_url" + (", version_of}" if version_of else "}"),
+            **({"version_of": version_of, "version_of_name": display_label(version_of)} if version_of else {}),
+            "note": "Works once, for 30 minutes. Then give the person the edit_url from the reply."}
 
 
 async def _preview_content(file_id: Optional[str], page: int, scene: Optional[str] = None, at: Any = None,
@@ -658,6 +696,8 @@ async def upload_chunk(
     """
     Upload a file as multiple base64 chunks across separate tool calls —
     for files of a few MB that sit in YOUR sandbox (up to 50 MB in all).
+    If you can run a command with network access (Claude Code, a terminal), don't base64 at all:
+    files(action="upload_link") gives a one-time link → `curl -T <path> '<link>'`.
     A video from the person's phone or anything bigger: never base64 it —
     ask them to upload it in the app (Upload: it goes in pieces, shows
     progress and resumes after a dropped connection) or to give a link
@@ -1768,7 +1808,8 @@ async def facts(
 @linked
 async def validate_document(file_id: str, pages: Optional[list[int]] = None, view: str = "word",
                             content: bool = False, fix: Union[bool, str, list, None] = None,
-                            keep: Optional[list] = None, reason: Optional[str] = None) -> dict:
+                            keep: Optional[list] = None, reason: Optional[str] = None,
+                            base_file_id: Optional[str] = None, house_rules: Union[list, str, None] = None) -> dict:
     """CHECK a Word document, a deck or a PDF before telling the person it's done. The page pictures come back IN this
     result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
 
@@ -1778,8 +1819,12 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
     the built-in editor and the way the downloaded file looks in Word — and the two are compared.
     It finds: empty list items; odd numbering (repeated, skipped, restarting, continuing under a new heading, typed
     numbers, heading numbers); table rows split across pages and tables continuing without their header row; headings
-    left as the last line of a page; captions apart from their picture; text, tables or pictures off the page or into
-    the margin; empty pages. Decks: text overflowing its box (as rendered), text drawn over other text, things off the slide, empty placeholders.
+    left as the last line of a page; captions apart from their picture; caption numbers out of order (“6. ábra” after
+    “3. ábra”, the same number twice) and references in the text to a caption that doesn't exist or was renumbered in
+    this version; text, tables or pictures off the page or into the margin; empty pages. A TRACKED PROPOSAL (Word file
+    with tracked changes): rejecting every change must give back the version it was made from — any paragraph or
+    note changed WITHOUT tracking is an error (untracked_change), so the person never accepts something they didn't
+    see. Decks: text overflowing its box (as rendered), text drawn over other text, things off the slide, empty placeholders.
     block = the paragraph number in wordcraft(read="inspect"); edit.goto {"paragraph": block + 1} puts the caret there,
     and each issue's `fix` says what to do. Decks: shape_id is the shape's id on that slide, and `fix` is a ready
     office(app="deck") call that changes just that shape (text.set / format.size / shape.setBounds with "on_slide") —
@@ -1802,12 +1847,24 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
       keep: ["E2", …] + reason ("the boss wants it this way") → that problem stays as it is ON PURPOSE: remembered on the
         file and its later versions, listed under kept_as_is, never "fixed" back. A heading whose keep-with-next was
         switched off in the file is treated the same way.
+      base_file_id: the version a tracked proposal was made from (default: the nearest earlier version without
+        tracked changes in this file's history).
+      house_rules: the PERSON'S OWN style rules — saved for them (not for this file) and checked in every later
+        validate_document of theirs; [] clears them. Each rule: {"preset": "hu_modal"} (no -hat/-het hedging or hedge
+        words like „valószínűleg”; fine inside an explicit „ha …” condition and in quotes) | {"avoid": ["words", …]} |
+        {"prefer": "korábbi vitairatunk", "instead_of": ["a 2025-ös vitairat"]} | {"note": "a rule in words"}, each
+        with an optional "why". Hits come back as house_rule warnings per paragraph; `note` rules are not checked by
+        machine — they come back in house_rules.notes for YOU to apply. The result's house_rules lists the saved rules.
     """
     import json
     from mcp.types import CallToolResult, ImageContent, TextContent
     from app.tools import validate as v
     from app.tools import layout_fix
     orig, kept_now, applied, proposals = file_id, None, None, None
+    saved_rules = None
+    if house_rules is not None:
+        from app.tools import house_rules as hr
+        saved_rules = await hr.save(house_rules)
     if keep:
         kept_now = await layout_fix.keep(file_id, keep, reason)
     if fix not in (None, False, "", [], "false", "no"):
@@ -1817,7 +1874,10 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
             applied = await layout_fix.apply(file_id, fix)
             file_id = applied["file_id"]
             proposals = applied["proposals"]
-    info, images = await v.validate(file_id, pages=pages, view=view)
+    info, images = await v.validate(file_id, pages=pages, view=view, base_file_id=base_file_id)
+    if saved_rules is not None:
+        info.setdefault("house_rules", {"rules": [], "notes": []})["saved"] = (
+            f"{len(saved_rules)} house rule(s) saved for this person" if saved_rules else "house rules cleared")
     if kept_now is not None:
         info["kept_now"] = [{k: x[k] for k in ("kind", "object", "reason")} for x in kept_now]
     if applied is not None:
