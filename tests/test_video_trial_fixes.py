@@ -115,25 +115,19 @@ def test_auto_keeps_warm_skin_warm(tmp_path):
     assert abs(h1 - h0) * 360 < 3 and abs(l1 - l0) < 0.05 and s1 > s0 - 0.06, (auto, (h0, l0, s0), (h1, l1, s1))
 
 
-def test_end_card_footage_name_follows_its_source():
-    """A meghosszabbított felvétel neve a forrásét is viszi: a szerkesztés nem veheti át a szülő azonos nevű assetjét."""
+def test_end_card_makes_no_file_and_keeps_the_footage_name():
+    """10-22: a zárókártya alatti kimerevítés a projektben időtérkép — nincs meghosszabbított fájl (egy 30 perces felvételen
+    10 perc újrakódolás volt), és a név a felvételé marad (a régi „footage-end-…” név a szülő assetjét vette át)."""
     from app.tools import video
-
-    async def fake_extend(src, dur):
-        return f"ext-{Path(src).name}"
-    orig = video._extend
-    video._extend = fake_extend
-    try:
-        crafts_existing = video.crafts.existing
-        video.crafts.existing = lambda fid: Path("/x") / fid
-        a = asyncio.run(video._with_end_card({"file_id": "aaaa1111.mp4", "asset": "footage.mp4", "duration": 3.0},
-                                             {"title": "Vége", "dur": 2.0}))
-        b = asyncio.run(video._with_end_card({"file_id": "aaaa1111.mp4", "asset": "footage-fx-bbbb.mp4",
-                                              "media_id": "bbbb2222.mp4", "duration": 3.0}, {"title": "Vége", "dur": 2.0}))
-    finally:
-        video._extend = orig
-        video.crafts.existing = crafts_existing
-    assert a["asset"] != b["asset"] and a["asset"].startswith("footage-end-2s-") and b["media_id"] == "ext-bbbb2222.mp4"
+    a = video._with_end_card({"file_id": "aaaa1111.mp4", "asset": "footage.mp4", "duration": 3.0}, {"title": "Vége", "dur": 2.0})
+    assert a["asset"] == "footage.mp4" and "media_id" not in a and a["duration"] == 5.0 and a["plain"]["duration"] == 3.0
+    old = {"file_id": "aaaa1111.mp4", "asset": "footage-end-2s-bbbb2222.mp4", "media_id": "ext.mp4", "duration": 5.0,
+           "end_card": {"title": "Vége", "dur": 2.0},
+           "plain": {"asset": "footage-bbbb2222.mp4", "media_id": "bbbb2222.mp4", "duration": 3.0}}
+    b = video._with_end_card(old, {"title": "Vége", "dur": 4.0})            # régi projekt: vissza a felvételre, időtérképpel
+    assert b["asset"] == "footage-bbbb2222.mp4" and b["media_id"] == "bbbb2222.mp4" and b["duration"] == 7.0
+    c = video._with_end_card(b, None)
+    assert "end_card" not in c and "plain" not in c and c["duration"] == 3.0 and c["media_id"] == "bbbb2222.mp4"
 
 
 def _engine_ok() -> bool:

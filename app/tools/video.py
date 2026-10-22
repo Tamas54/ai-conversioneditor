@@ -45,7 +45,7 @@ from typing import Any, Callable, Optional
 from app.config import settings
 from app.storage import display_label, output_path, public_url, read_meta, temp_path, write_meta
 from app.storage.files import new_file_id
-from app.tools import crafts
+from app.tools import crafts, footage
 
 log = logging.getLogger("aice.video")
 
@@ -4152,7 +4152,7 @@ def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
     crafts.existing(fid)
     alpha_kinds(body.get("alpha"))
     card = end_card_of(body)                                                   # a zárókártya alakja is most derüljön ki
-    if not body.get("layers") and not body.get("subtitles") and not card:
+    if not body.get("layers") and not body.get("subtitles") and not card and not body.get("cut"):
         raise ValueError("overlay needs layers=[…] and/or subtitles=[…] (or \"auto\"), e.g. [{\"at\": \"00:02\", \"type\": "
                          "\"lower_third\", \"name\": \"Anna Kovács\", \"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, "
                          "\"type\": \"chart\", \"chart\": {…}}].")
@@ -4188,29 +4188,30 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         subs = await _auto_subtitles(fid, body.get("language"), step, topts, notes) if body.get("subtitles") == "auto" \
             else subtitle_cues(body.get("subtitles"))
         card = end_card_of(body)
-        if not layers and not subs and not card:
+        ranges = cut_ranges(body.get("cut"), float(info["duration"]))
+        if not layers and not subs and not card and not ranges:
             raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
                              "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}]"
                              + (" — every layer given was left out: " + "; ".join(n[2:] for n in notes if n.startswith("⚠ ")) if notes else "") + ".")
         from app.storage.naming import result_stem, root_name
         base = {"asset": f"footage.{ext}", "file_id": fid, **{k: info[k] for k in ("width", "height", "fps", "duration", "audio")}}
-        if (info.get("rotation") and int(info["rotation"]) % 360) or info.get("hdr"):
-            # telefonos felvétel elforgatás-jelöléssel: a motor a tárolt (oldalra fektetett) képet olvasná — egyszer
-            # felállítjuk (ffmpeg autorotate), és ez lesz az alapsáv; a HDR (HLG/PQ) ugyanitt SDR-re képezve (OMLETT 3.3)
-            step(0, 4, "turning the footage upright" if info.get("rotation") else "mapping the HDR footage to SDR")
-            base["media_id"], base["asset"] = await _upright(crafts.existing(fid)), "footage.mp4"
-            if info.get("rotation") and int(info["rotation"]) % 360:
-                base["rotated"] = int(info["rotation"])
-            if info.get("hdr"):
-                base["hdr"] = info["hdr"]
-        if card:                                              # zárókártya: a felvétel vége kimerevítve, a hang csenddel
-            step(0, 4, "holding the last frame for the end card")
-        base = await _with_end_card(base, card)
+        camera = _footage_camera(body.get("camera"))
+        if ranges:                                            # vágás: a megtartott részek (a felvétel eredeti idejében)
+            keep = footage.cut(None, float(info["duration"]), ranges, float(info["fps"] or FPS))
+            layers, subs, camera = _recut(layers, subs, camera, None, keep, notes)
+            notes.append(_cut_note(None, keep, float(info["duration"])))
+            base.update(keep=keep, duration=footage.length(keep, float(info["duration"])))
+        if footage.needed(info, None, crafts.existing(fid).stat().st_size, base.get("keep")):
+            # telefonos felvétel elforgatás-jelöléssel (a motor a tárolt, oldalra fektetett képet olvasná), HDR (HLG/PQ):
+            # a szerkesztő kis munkamásolatot kap, felállítva, SDR-re képezve; a végső kép az eredetiből készül
+            step(0, 4, "making a small working copy for the editor")
+            base, _ = await footage.make_proxy(base, crafts.existing(fid))
+        base = _with_end_card(base, card)                     # zárókártya: a felvétel utolsó kockája áll alatta
         mc = music_choice(body.get("music"), body.get("music_file_id"))
         opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": mc["mood"],
                 "music_file_id": mc["file_id"], "music_start": mc["start"], "music_level": mc["level"],
                 "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
-                "camera": _footage_camera(body.get("camera")), "subtitles": subs, **({"transcript": topts} if topts else {}),
+                "camera": camera, "subtitles": subs, **({"transcript": topts} if topts else {}),
                 "caption_style": cstyle}
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
@@ -4459,27 +4460,93 @@ def end_card_of(body: dict[str, Any]) -> Optional[dict[str, Any]]:
             "kicker": _clean(raw.get("kicker"), 30, "Kicker"), "dur": round(dur, 2)}
 
 
-async def _extend(src: Path, secs: float) -> str:
-    """A felvétel vége kimerevítve secs másodpercre (tpad: az utolsó kocka marad), a hang csenddel kitöltve (apad) —
-    a zárókártya alá (az overlay hossza különben mindig a felvételé). → a meghosszabbított munkafájl file_id-ja."""
-    from app.convert.engines import run
-    fid = new_file_id("mp4")
-    k = (await probe_movie(src)).get("audio_stream")
-    aud = ["-map", f"0:a:{k}", "-af", f"apad=pad_dur={secs:.3f}", "-c:a", "aac", "-b:a", "192k"] if k is not None else []
-    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud,
-              "-vf", f"tpad=stop_mode=clone:stop_duration={secs:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17",
-              "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output_path(fid)), timeout=settings.VIDEO_TIMEOUT_S)
-    write_meta(fid, operation="footage held for the end card", source_file_id=None, extra={"ephemeral": True})
-    return fid
+CUT_HELP = ('cut: [{"from": "05:00", "to": "07:30"}, …] — the parts of the footage to remove, in the video\'s time as it is '
+            'now ("from" left out = from the start, "to" left out = to the end), or "none" to bring the whole footage back.')
 
 
-async def _with_end_card(base: dict[str, Any], card: Optional[dict[str, Any]]) -> dict[str, Any]:
-    """Az overlay alapsávja a zárókártyához: a kártya hosszával meghosszabbított felvétel (új asset-névvel, hogy a
-    szerkesztés ne a régi hosszút vegye át), vagy — ha a kártya kikerült — újra az eredeti. base["plain"] = a
-    meghosszabbítás előtti felvétel (asset, media_id, duration)."""
+def cut_ranges(raw: Any, total: float) -> Optional[list[tuple[float, float]]]:
+    """cut → [(from, to)] a MOSTANI videó idejében; "none" → [] (az egész felvétel vissza); nincs → None."""
+    if raw is None:
+        return None
+    if raw in ("", "none", "off", False, []):
+        return []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError(CUT_HELP)
+    out = []
+    for c in raw[:500]:
+        if isinstance(c, (list, tuple)) and len(c) == 2:
+            f, t = c
+        elif isinstance(c, dict):
+            f, t = c.get("from", c.get("start")), c.get("to", c.get("end"))
+        else:
+            raise ValueError(CUT_HELP)
+        f = timecode(f, "cut from") if f not in (None, "", "start") else 0.0
+        t = total if t in (None, "", "end") else timecode(t, "cut to")
+        if f >= total - 0.01:
+            raise ValueError(f"cut: {_tc(f)} is past the end of the footage ({_tc(total)}).")
+        if t <= f:
+            raise ValueError(f"cut: “to” must be after “from” ({_tc(f)} → {_tc(t)}). {CUT_HELP}")
+        out.append((f, min(t, total)))
+    return out
+
+
+def _recut(layers: list[dict[str, Any]], subs: list[dict[str, Any]], camera: Any, old: Any, new: Any,
+           notes: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Any]:
+    """Vágás után a rétegek, a feliratok és a kamera az új időben: ami a megmaradt részre esik, odacsúszik (a kivágott rész
+    a közepéből kiesik); ami teljesen kiesett, kimarad — a rétegeknél ezt a check megnevezi."""
+    out_layers = []
+    for ly in layers:
+        span = footage.remap_span(float(ly["at"]), float(ly["at"]) + float(ly["dur"]), old, new)
+        if span is None:
+            notes.append(f"⚠ Layer {ly['id']} ({ly['type']}, {_tc(float(ly['at']))}) was in a part that was cut out — "
+                         "it is left out.")
+            continue
+        out_layers.append({**ly, "at": round(span[0], 3), "dur": round(max(0.3, span[1] - span[0]), 3)})
+    out_subs, gone = [], 0
+    for c in subs or []:
+        span = footage.remap_span(float(c["start"]), float(c["end"]), old, new)
+        if span is None:
+            gone += 1
+            continue
+        cue = {**c, "start": round(span[0], 3), "end": round(max(span[1], span[0] + 0.4), 3)}
+        if c.get("words"):
+            ws = [footage.remap(float(w), old, new) for w in c["words"]]
+            if all(w is not None for w in ws):
+                cue["words"] = [round(min(max(w, cue["start"]), cue["end"]), 3) for w in ws]
+            else:
+                cue.pop("words", None)                       # a darab közepéből vágtunk: a szavak ideje nem tartható
+        out_subs.append(cue)
+    if gone:
+        notes.append(f"{gone} subtitle(s) were in the parts that were cut out — left out.")
+    if isinstance(camera, list):
+        moved = []
+        for mv in camera:
+            at = footage.remap(float(mv.get("at", 0)), old, new)
+            if at is not None:
+                moved.append({**mv, "at": round(at, 3)})
+        camera = moved or None
+    return out_layers, out_subs, camera
+
+
+def _cut_note(old: Any, new: Any, src_dur: float) -> str:
+    before, after = footage.length(old, src_dur), footage.length(new, src_dur)
+    if not new:
+        return f"Cut: the whole footage is back ({_tc(after)})."
+    gaps = len(new) - 1 + (new[0][0] > 0.01) + (new[-1][1] < src_dur - 0.05)
+    return (f"Cut: {_tc(before)} → {_tc(after)} — the footage plays in {len(new)} part(s), {gaps} removed; layers and "
+            "subtitles moved with it. The original stays whole: cut=\"none\" brings it back.")
+
+
+def _with_end_card(base: dict[str, Any], card: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Az overlay alapsávja a zárókártyához: a hossz a kártyáéval nő, a felvétel a projektben az utolsó kockáján áll
+    (időtérkép, D.base.hold) — nincs meghosszabbított fájl (10-22: egy 30 perces felvételnél 10 perc újrakódolás volt).
+    Ha a kártya kikerül, újra a felvétel hossza. base["plain"] = a kártya előtti felvétel (asset, media_id, duration);
+    a régi projektek meghosszabbított fájlja (footage-end-…) helyett is ez kerül vissza."""
     b = dict(base)
     plain = b.pop("plain", None) or {k: b.get(k) for k in ("asset", "media_id", "duration")}
-    old = b.pop("end_card", None)
+    b.pop("end_card", None)
     b.update(asset=plain["asset"], duration=plain["duration"])
     if plain.get("media_id"):
         b["media_id"] = plain["media_id"]
@@ -4487,15 +4554,7 @@ async def _with_end_card(base: dict[str, Any], card: Optional[dict[str, Any]]) -
         b.pop("media_id", None)
     if not card:
         return b
-    # a név a forrásét is viszi: a szerkesztés a szülőprojekt azonos nevű assetjét venné (10-22: a színkorrekció így
-    # elveszett — a check „Auto: gamma…”-t írt, a kép a régi maradt)
-    tag = re.sub(r"\W", "", str(plain.get("media_id") or b["file_id"]).split(".")[0])[:8]
-    name = f"footage-end-{card['dur']:g}s-{tag}.mp4"
-    if old and old.get("dur") == card["dur"] and base.get("asset") == name and base.get("media_id"):
-        b["media_id"] = base["media_id"]                                # ugyanolyan hosszú kártya: a meglévő marad
-    else:
-        b["media_id"] = await _extend(crafts.existing(plain.get("media_id") or b["file_id"]), card["dur"])
-    b.update(asset=name, duration=round(float(plain["duration"]) + card["dur"], 3), end_card=card, plain=plain)
+    b.update(duration=round(float(plain["duration"]) + card["dur"], 3), end_card=card, plain=plain)
     return b
 
 
@@ -4515,22 +4574,6 @@ def _credit_line(credit_list: list[str], story: dict[str, Any]) -> tuple[str, st
         ("Footage: " if len(footage) == len(credit_list) else "Pictures and footage: ") if footage else "Pictures: "
     short = [re.sub(r"\s+—\s+https?://\S+", "", re.sub(r"^(Photo|Video):\s*", "", c)).strip() for c in credit_list]
     return label + " · ".join(credit_list), (label + " · ".join(dict.fromkeys(x for x in short if x)))[:300]
-
-
-async def _upright(src: Path) -> str:
-    """Az elforgatás-jelöléssel tárolt felvétel álló/fekvő helyzetbe újrakódolva (rejtett munkafájl) → file_id."""
-    from app.convert.engines import run
-    from app.tools import encoding, mediaprobe, videonorm
-    fid = new_file_id("mp4")
-    info = await probe_movie(src)
-    k = info.get("audio_stream")
-    aud = ["-map", f"0:a:{k}"] if k is not None else []      # csak az első dekódolható hangsáv (térhang nélkül)
-    vf = ["-vf", ",".join(videonorm.head_filters(await mediaprobe.info(src)))] if info.get("hdr") else []   # HLG/PQ → SDR
-    await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", *aud, *vf, "-c:v", "libx264", "-preset", "veryfast",
-              "-crf", str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p", *encoding.aac(), "-movflags", "+faststart", str(output_path(fid)),
-              timeout=settings.VIDEO_TIMEOUT_S)
-    write_meta(fid, operation="footage set upright", source_file_id=None, extra={"ephemeral": True})
-    return fid
 
 
 # ---------- feliratok a saját felvételen (10-17, Kommandant: „webes feliratozó, szövegjavítással és a saját stílusunkkal”) ----------
@@ -4745,6 +4788,10 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         acc = _rgb(opts.get("accent"))
         D: dict[str, Any] = {"W": W, "H": H, "fps": fps, "total": total, "accent": acc, "dark": [0.055, 0.06, 0.08], "font": FONT,
                              "base": {"file": base["asset"], "label": "Footage"}, "scenes": [], "captions": [], "audio": {}}
+        if base.get("proxy"):                                 # a munkamásolat a kompozíció méretére nagyítva (app/tools/footage.py)
+            D["base"]["scale"] = round(W / int(base["proxy"]["w"]), 6)
+        if base.get("end_card"):                              # a zárókártya alatt a felvétel utolsó kockája áll (időtérkép)
+            D["base"]["hold"] = float(base["plain"]["duration"])
         if opts.get("camera"):
             D["camera"] = _camera_keys(opts["camera"], total, W, H)
         if subs:                                              # a make-videó feliratsávja: ugyanaz a builder-kód rajzolja
@@ -4817,7 +4864,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         group = _new_group()
         credits = _credit_line(credit_list, story)[0]
         spec = {"kind": "overlay", "story": _without_runtime(story),
-                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "rotated", "hdr", "adjust", "clean_media_id", "width",
+                "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "proxy", "rotated", "hdr", "adjust", "auto", "keep", "width",
                                                   "height", "fps", "duration", "audio", "end_card", "plain")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
@@ -4868,9 +4915,11 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         fitted, trunc = _FIT.get() or [], _TRUNC.get() or []
         chk["verified"] = m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}"
                            + (", with its own sound." if base.get("audio") else " (it has no sound track).")
-                           + (f" It was stored turned by {base['rotated']}°, so it was set upright first." if base.get("rotated") else "")
-                           + (f" It is HDR ({base['hdr'].upper()}): mapped to SDR (BT.709) first, so the colours aren't washed out."
-                              if base.get("hdr") else "")] \
+                           + (f" It was stored turned by {base['rotated']}°, so it is set upright." if base.get("rotated") else "")
+                           + (f" It is HDR ({base['hdr'].upper()}): mapped to SDR (BT.709), so the colours aren't washed out."
+                              if base.get("hdr") else "")
+                           + (f" The editor works on a small copy ({base['proxy']['w']}×{base['proxy']['h']}); the video is made "
+                              "from your original." if base.get("proxy") else "")] \
             + ([f"End card “{card['title']}”: the footage's last frame is held for {card['dur']:g} s under it"
                  + (", the sound padded with silence" if base.get("audio") else "")
                  + f" — {_tc(base['plain']['duration'])} → {_tc(total)}."] if card else []) \
@@ -4979,6 +5028,7 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
     out = project_path.parent / f"render.{ext}"
     # OMLETT 1.2: a végső MP4 = a renderelő ProRes LT köztes fájlja → x264 CRF (app/tools/encoding.py)
     master = project_path.parent / "render-master.mov" if ext == "mp4" and not draft and encoding.final_encoder() == "x264" else None
+    spec = (read_meta(project_id) or {}).get("spec") or {}
     args = ["render", "--project", project_path.name, "--comp", _main_comp(project_path), "--out", (master or out).name,
             "--format", "prores" if master else {"mp4": "h264", "webm": "webm", "gif": "gif"}[ext], "--json"]
     if master:
@@ -4993,8 +5043,7 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
         from app.tools import fast_render
         if ext == "mp4" and fast_render.enabled():       # saját felvétel + grafika: a felvétel egy ffmpeg-menetben (10-22)
             try:
-                fast = await fast_render.render(project_path, out, spec=(read_meta(project_id) or {}).get("spec") or {},
-                                                draft=draft)
+                fast = await fast_render.render(project_path, out, spec=spec, draft=draft)
             except Exception as e:                       # elakadt: a régi út fut, és a check megmondja, miért
                 log.warning("gyors render elakadt (%s): %s — a teljes úton", project_id, e)
                 fast_note = f"The fast render stopped ({str(e)[:160]}), so the video was rendered the full way."
@@ -5006,6 +5055,10 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
                     fast_note = f"Rendered the full way (slower): {why}."
             if fast is None:
                 out.unlink(missing_ok=True)              # a félbemaradt gyors kimenet ne maradjon
+        gone = None
+        if fast is None and not draft:                   # a munkamásolat helyén a teljes méretű felvétel (footage.py)
+            project_path, gone = await _full_size_project(project_path, spec)
+            args[2] = project_path.name
         pieces = _master_pieces(project_path) if fast is None and master is not None else []
         if pieces:                                       # hosszú videó: a köztes fájl darabokban (2 GiB a zárka korlátja)
             master, _ = await _render_pieces(project_path, pieces)
@@ -5051,10 +5104,13 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
             f"{fast['graphics_parts']} part(s), then one pass put footage, graphics"
             + (", subtitles" if fast.get("subtitles") else "") + f" and sound together ({fast['seconds']:g} s in all).")
         chk["verified"] += fast.get("notes") or []
+        chk.setdefault("findings", []).extend(fast.get("findings") or [])
     elif fast_note and fast_note.startswith("Rendered the full way"):
         chk.setdefault("verified", []).append(fast_note)
     elif fast_note:
         chk.setdefault("findings", []).append(fast_note)
+    if gone:                                             # lejárt eredeti: a kis másolatból készült
+        chk.setdefault("findings", []).append(gone)
     return {**_file_entry(vid), "render_seconds": round(time.time() - t0, 1), "check": chk,
             "duration": {"requested": requested, "actual": actual, "mode": mode},
             **({"render_path": {k: fast[k] for k in ("graphics_parts", "graphics_seconds_of_video", "graphics_render_s", "encode_s")}}
@@ -5080,6 +5136,21 @@ def _master_pieces(project_path: Path) -> list[tuple[float, float]]:
     W, H, fps, dur = _main_spec(project_path)
     most = fast_render.part_seconds(W, H, fps) if W and H else 60.0
     return fast_render.split([(0.0, dur)], most, fps) if dur > most else []
+
+
+async def _full_size_project(project_path: Path, spec: dict[str, Any]) -> tuple[Path, Optional[str]]:
+    """A teljes (régi) renderhez: ha a projektben a felvétel munkamásolata áll, egy változat a teljes méretű felvétellel
+    (az eredetiből, ugyanazzal a lánccal) — a végső kép a kis másolatból csak akkor készül, ha az eredeti már lejárt, és
+    azt a check megmondja (→ a projekt, a megjegyzés)."""
+    base = spec.get("base") or {}
+    if not base.get("proxy"):
+        return project_path, None
+    src = footage.original(base)
+    if src is None:
+        return project_path, footage.gone_note(base)
+    full = await footage.full(base, src, project_path.parent)
+    name = await footage.swap(project_path, _main_comp(project_path), base["asset"], full.name, "render-full")
+    return project_path.parent / name, None
 
 
 async def _render_pieces(project_path: Path, pieces: list[tuple[float, float]]) -> tuple[Path, Path]:
@@ -5784,13 +5855,13 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
     allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "music_file_id", "camera", "subtitles", "end_card",
-               "end_title", "end_subtitle", "transcript", "adjust", "caption_style"}
+               "end_title", "end_subtitle", "transcript", "adjust", "caption_style", "cut"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
-                         f"changes.add_layers), accent, title, subtitles, caption_style, an end card (changes.end_card) or the footage's colour and light "
-                         f"(changes.adjust, e.g. {{\"auto\": true}}) — not {', '.join(other)}. To recut the footage itself, use "
-                         "file_tools (trim-video…) and run overlay again.")
+                         f"changes.add_layers), accent, title, subtitles, caption_style, an end card (changes.end_card), the footage's colour and light "
+                         f"(changes.adjust, e.g. {{\"auto\": true}}) or its cuts (changes.cut = [{{\"from\": \"05:00\", \"to\": \"07:30\"}}]) — not "
+                         f"{', '.join(other)}.")
     opts = dict(spec.get("opts") or {})
     if "camera" in changes:
         opts["camera"] = _footage_camera(changes["camera"])
@@ -5822,10 +5893,10 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     source = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
     notes: list[str] = []
     if _says(changes.get("layers")) or _says(changes.get("add_layers")):        # „amikor elhangzik…” a szerkesztésben is
-        footage = crafts.existing(assets_of(pid).get(spec["base"]["asset"]) or spec["base"].get("media_id") or spec["base"]["file_id"])
+        heard = crafts.existing(assets_of(pid).get(spec["base"]["asset"]) or spec["base"].get("media_id") or spec["base"]["file_id"])
         topts = transcript_opts(changes.get("transcript") or opts.get("transcript"))
-        changes = {**changes, "layers": await said_to_times(changes.get("layers"), footage, notes, step, topts=topts),
-                   "add_layers": await said_to_times(changes.get("add_layers"), footage, notes, step, topts=topts)}
+        changes = {**changes, "layers": await said_to_times(changes.get("layers"), heard, notes, step, topts=topts),
+                   "add_layers": await said_to_times(changes.get("add_layers"), heard, notes, step, topts=topts)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
     base = dict(spec["base"])
     card = base.get("end_card")
@@ -5837,24 +5908,44 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             merged = {**(card or {}), **(ec if isinstance(ec, dict) else {})}
             merged.update({k_: changes[f"end_{k_}"] for k_ in ("title", "subtitle") if changes.get(f"end_{k_}")})
         card = end_card_of({"end_card": merged})
-    if not layers and not opts["subtitles"] and not card:
+    if not layers and not opts["subtitles"] and not card and not (spec["base"].get("keep") or cut_ranges(changes.get("cut"), 1e9)):
         raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
-    if "adjust" in changes:                     # OMLETT 3.2: a felvétel korrekciója (app/tools/video_fx.py), mindig az eredetiből
-        from app.tools import video_fx
-        base = await _with_end_card(base, None)    # a korrekció a kimerevített vég nélküli felvételre; a kártya utána újra rá
-        adj = video_fx.normalize(changes["adjust"])
-        clean = base.get("clean_media_id") if base.get("adjust") else base.get("media_id")
-        for k in ("adjust", "clean_media_id", "media_id"):
+    if "adjust" in changes or "cut" in changes:  # a felvétel receptje (korrekció, vágás) — mindig az eredetiből
+        from app.tools import mediaprobe, video_fx
+        base = _with_end_card(base, None)
+        src = footage.original(base)
+        if src is None:
+            raise ValueError("Your original video is no longer stored (uploads are kept for a limited time) — upload it again "
+                             "to change its colours, light or cuts.")
+        m = await mediaprobe.info(src)
+        src_dur = float(m["duration"] or base["duration"])
+        if "adjust" in changes:                 # OMLETT 3.2 (app/tools/video_fx.py)
+            adj = video_fx.normalize(changes["adjust"])
+            base.pop("adjust", None)
+            if adj:
+                base["adjust"] = adj
+        if "cut" in changes:                    # a mostani idő szerint; a rétegek, feliratok, kamera vele csúsznak
+            old = base.get("keep")
+            ranges = cut_ranges(changes["cut"], float(base["duration"]))
+            new = footage.cut(old, src_dur, ranges, float(base.get("fps") or FPS)) if ranges else None
+            if new and len(new) == 1 and new[0][0] <= 1e-3 and new[0][1] >= src_dur - 1e-3:
+                new = None
+            layers, opts["subtitles"], opts["camera"] = _recut(layers, opts["subtitles"], opts.get("camera"), old, new, notes)
+            notes.append(_cut_note(old, new, src_dur))
+            base.pop("keep", None)
+            if new:
+                base["keep"] = new
+            base["duration"] = footage.length(new, src_dur)
+        for k in ("auto", "clean_media_id", "media_id", "proxy", "rotated", "hdr"):
             base.pop(k, None)
-        base["asset"] = "footage.mp4" if clean else f"footage.{str(base['file_id']).rsplit('.', 1)[-1].lower()}"
-        if clean:
-            base["media_id"] = clean
-        if adj:
-            step(0, 4, "adjusting the footage")
-            fx, info = await video_fx.render_file(crafts.existing(clean or base["file_id"]), adj)
-            base.update(media_id=fx, asset=f"footage-fx-{fx[:8]}.mp4", adjust=adj, clean_media_id=clean)
-            notes.append("Your footage — " + " ".join(info["applied"]))
-    base = await _with_end_card(base, card)                    # új / más hosszú kártya: a felvétel újra meghosszabbítva
+        if footage.needed(m, base.get("adjust"), src.stat().st_size, base.get("keep")):   # új munkamásolat az eredetiből
+            step(0, 4, "making the editor's copy of your footage")
+            base, applied = await footage.make_proxy(base, src)
+            if applied and "adjust" in changes:
+                notes.append("Your footage — " + " ".join(applied))
+        else:                                                   # korrekció és vágás nélkül, kis álló SDR-felvétel: az eredeti
+            base["asset"] = f"footage.{str(base['file_id']).rsplit('.', 1)[-1].lower()}"
+    base = _with_end_card(base, card)                          # a kártya (új / más hosszú / nincs) a felvétel hosszára
     return await _assemble_overlay(base, layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
                                    label_stem=label_stem or result_stem(pid, "edited"), operation="video edit", parent=pid, render=render,

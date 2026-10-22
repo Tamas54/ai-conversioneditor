@@ -63,6 +63,8 @@ for (var j = 1; j <= c.numLayers; j++) {
   try { o.blend = String(L.blendingMode); o.normal = L.blendingMode == BlendingMode.NORMAL; } catch (e) { o.normal = true; }
   try { o.matte = !!L.trackMatteType && L.trackMatteType != TrackMatteType.NO_TRACK_MATTE; } catch (e) { o.matte = false; }
   try { if (L.source && L.source.file) o.file = L.source.file.name; } catch (e) {}
+  try { o.st = L.startTime; if (L.timeRemapEnabled) { var R = L.property("ADBE Time Remapping"); o.tr = [];
+        for (var q = 1; q <= R.numKeys; q++) o.tr.push([R.keyTime(q), R.keyValue(q)]); } } catch (e) {}
   try { var tp = L.property("ADBE Text Properties"); if (tp) o.text = tp.property("ADBE Text Document").value.text; } catch (e) {}
   try { var fxp = L.property("ADBE Effect Parade"); o.fx = fxp ? fxp.numProperties : 0; } catch (e) {}
   try {
@@ -136,6 +138,8 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "why": "something lies under the footage"}
     if f["fx"]:
         return {"ok": False, "why": "the footage has an effect on it in the project"}
+    if retimed(f, float(info["dur"]), float(info["fps"])):
+        return {"ok": False, "why": "the footage was cut or moved in time in the editor"}
     caps = [x for x in vis if _CAPTION.match(x["name"])]
     gfx = [x for x in vis if x is not f and x not in caps]
     for x in gfx + caps:
@@ -151,6 +155,16 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)]   # a felvétel el van mozdítva
     return {"ok": True, "why": "", "footage": f, "captions": caps, "gfx": gfx, "persistent": pers, "short": short,
             "opaque": opaque}
+
+
+def retimed(f: dict[str, Any], dur: float, fps: float) -> bool:
+    """A felvétel-réteg ideje a projektben nem a felvételé (a szerkesztőben megvágva, eltolva, lassítva): a gyors út az
+    eredeti idővonalat tenné a grafika alá. Ami szabályos: 0-tól indul, a végéig tart, és az időtérkép (ha van) azonos
+    leképezés — a zárókártya kimerevítése (az utolsó kulcs után áll) is ilyen."""
+    eps = 1.5 / max(fps, 1)
+    if abs(float(f.get("st") or 0)) > eps or float(f["a"]) > eps or float(f["b"]) < dur - eps:
+        return True
+    return any(abs(float(t) - float(v[0] if isinstance(v, list) else v)) > eps for t, v in (f.get("tr") or []))
 
 
 def moved(f: dict[str, Any], dur: float) -> list[tuple[float, float]]:
@@ -418,7 +432,7 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
                  step: Optional[Callable[[str], None]] = None) -> Optional[dict[str, Any]]:
     """A projekt (a munkamappában, stage után) → out MP4 a gyors úton. None: ez a projekt a régi úton renderelendő
     (a why a naplóban); kivétel: a gyors út elakadt (a hívó a régi útra vált, és megmondja)."""
-    from app.tools import encoding, video
+    from app.tools import encoding, footage, mediaprobe, video
     t_start = time.time()
     work = project.parent
     info = await inspect(project)
@@ -455,6 +469,33 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
     jobs += [(opaque_proj, a, b, f"full-{k:03d}.mov", False) for k, (a, b) in enumerate(split(merged_opaque, most, fps))]
     parts = sorted(clear + merged_opaque)                       # itt a szakasz-render a végig látható rétegeket is viszi
     gate = asyncio.Semaphore(_workers())
+    base = spec.get("base") or {}
+    findings: list[str] = []
+    proxy = bool(base.get("proxy")) and not draft               # a projektben munkamásolat: a végső kép az eredetiből
+    src = footage.original(base) if proxy else None
+    if proxy and src is None:                                   # lejárt az eredeti: a munkamásolatból, és ezt megmondjuk
+        proxy = False
+        findings.append(footage.gone_note(base))
+    plain = float((base.get("plain") or {}).get("duration") or base.get("duration") or dur)
+    if proxy and opaque_proj:                                   # ahol a motor rajzolja a felvételt: teljes méretű darab
+        say("full-size footage for the moved parts")
+        whole = await footage.full(base, src, work) if footage.stabilized(base) else None
+
+        async def own(k: int, a: float, b: float) -> str:
+            if whole is not None:
+                return await footage.swap(work / opaque_proj, info["comp"], foot["file"], whole.name, "fr-opaque-full")
+            name = f"fr-foot-{k:03d}.mp4"
+            async with gate:
+                await footage.clip(base, src, work / name, a, b, plain, work)
+            return await footage.swap(work / opaque_proj, info["comp"], foot["file"], name, f"fr-opaque-{k:03d}", start=a)
+        ops = [j for j in jobs if not j[4]]
+        if whole is not None:
+            p_full = await own(0, 0.0, dur)
+            jobs = [j if j[4] else (p_full, *j[1:]) for j in jobs]
+        else:
+            projs = await asyncio.gather(*(own(k, j[1], j[2]) for k, j in enumerate(ops)))
+            it = iter(projs)
+            jobs = [j if j[4] else (next(it), *j[1:]) for j in jobs]
 
     async def one(proj: str, a: float, b: float, name: str, alpha: bool) -> None:
         args = ["render", "--project", proj, "--comp", info["comp"], "--out", name, "--start", f"{a:.4f}", "--end", f"{b:.4f}",
@@ -526,11 +567,24 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
     say("putting it together")
     items = pers_inputs + [{"name": name, "a": a, "b": b, "enable": f"between(t,{a:.4f},{b - 1e-4:.4f})", "loop": False}
                            for _, a, b, name, _ in sorted(jobs, key=lambda j: j[1])]
-    cuts = chunks(dur, fps)
-    pre = await base_filters(work / foot["file"])
+    base_in, pre = foot["file"], []
+    if proxy and footage.stabilized(base):                      # stabilizálva: az egész felvétel teljes méretben (egyszer)
+        base_in = (await footage.full(base, src, work)).name
+    elif proxy:                                                 # az eredeti, ugyanazzal a lánccal, mint a munkamásolat
+        base_in, pre = str(src), footage.chain(base, await mediaprobe.info(src), work)
+    keep = base.get("keep") if proxy and not footage.stabilized(base) else None   # vágás: csak az eredetiből olvasva
+    path_in = work / base_in                                    # (abszolút útnál maga az út)
+    m_in = await mediaprobe.info(path_in)
+    pre += await base_filters(path_in)
+    if not draft and (m_in["display_width"], m_in["display_height"]) != (W, H):
+        pre.append(f"scale={W}:{H}")                            # (lejárt eredetinél a munkamásolat, teljes méretre)
+    media = footage.length(keep, float(m_in["duration"] or dur))
+    if dur - media > 0.5 / fps:                                 # zárókártya: a felvétel utolsó kockája áll alatta
+        pre.append(f"tpad=stop_mode=clone:stop_duration={dur - media + 1:.3f}")
+    cuts = chunks(dur, fps, media=media)
     t_e = time.time()
     if len(cuts) == 1:
-        ins, graph = window_graph(foot["file"], 0.0, dur, items, ass, (ow, oh) if draft else None, chunked=False, pre=pre)
+        ins, graph = window_graph(base_in, 0.0, dur, items, ass, (ow, oh) if draft else None, chunked=False, pre=pre, keep=keep)
         audio_map: list[str] = []
         if has_audio:
             ins += ["-i", "fr-audio.wav"]
@@ -541,7 +595,7 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
         threads = str(max(2, (os.cpu_count() or 4) // len(cuts)))
 
         async def piece(k: int, cs: float, ce: float) -> str:
-            ins, graph = window_graph(foot["file"], cs, ce, items, ass, (ow, oh) if draft else None, chunked=True, pre=pre)
+            ins, graph = window_graph(base_in, cs, ce, items, ass, (ow, oh) if draft else None, chunked=True, pre=pre, keep=keep)
             name = f"fr-piece-{k:03d}.mp4"
             await _ffmpeg(*ins, "-filter_complex", graph, "-map", "[vout]", "-an", "-t", f"{ce - cs:.4f}",
                           *encoding.x264("final"), "-threads", threads, *encoding.bt709_tags(), name, cwd=work)
@@ -557,32 +611,43 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
     e_secs = round(time.time() - t_e, 1)
     for p in work.glob("span-*.mov"):
         p.unlink(missing_ok=True)
-    for p in list(work.glob("full-*.mov")) + list(work.glob("persist-*.mov")):
+    for p in list(work.glob("full-*.mov")) + list(work.glob("persist-*.mov")) + list(work.glob("fr-foot*.mp4")):
         p.unlink(missing_ok=True)
     g_len = sum(b - a for _, a, b, _, _ in jobs)
     return {"path": "fast", "seconds": round(time.time() - t_start, 1), "graphics_parts": len(jobs),
             "graphics_seconds_of_video": round(g_len, 1), "graphics_render_s": g_secs, "encode_s": e_secs,
-            "notes": notes, "subtitles": "libass" if ass else None, "scale": scale}
+            "notes": notes, "findings": findings, "subtitles": "libass" if ass else None, "scale": scale}
 
 
 CHUNK_MIN_S = 120.0          # ennél rövidebb videó egy menetben; hosszabb: időszeletekben, párhuzamosan
 
 
-def chunks(dur: float, fps: float, n: Optional[int] = None) -> list[tuple[float, float]]:
-    """A végső menet időszeletei, kockahatáron: rövid videónál egy; hosszúnál magonként négyenként egy (2–8)."""
+def chunks(dur: float, fps: float, n: Optional[int] = None, media: Optional[float] = None) -> list[tuple[float, float]]:
+    """A végső menet időszeletei, kockahatáron: rövid videónál egy; hosszúnál magonként négyenként egy (2–8). media: a
+    felvétel hossza, ha a videó hosszabb (zárókártya) — a vágások a felvételen belül esnek, az utolsó szelet viszi a
+    kimerevített véget (a felvétel vége utáni szeletnek nem volna bemenete)."""
     if n is None:
         n = 1 if dur < CHUNK_MIN_S else max(2, min(8, (os.cpu_count() or 4) // 4))
-    cuts = [round(math.floor(dur * k / n * fps + 1e-6) / fps, 4) for k in range(n)] + [dur]
+    span = min(dur, media) if media else dur
+    cuts = [round(math.floor(span * k / n * fps + 1e-6) / fps, 4) for k in range(n)] + [dur]
     return [(a, b) for a, b in zip(cuts, cuts[1:]) if b - a > 1e-3]
 
 
 def window_graph(base: str, cs: float, ce: float, items: list[dict[str, Any]], ass: Optional[Path],
-                 size: Optional[tuple[int, int]], chunked: bool, pre: Optional[list[str]] = None) -> tuple[list[str], str]:
+                 size: Optional[tuple[int, int]], chunked: bool, pre: Optional[list[str]] = None,
+                 keep: Optional[list[list[float]]] = None) -> tuple[list[str], str]:
     """Egy időablak [cs, ce) ffmpeg-bemenetei és szűrőgráfja. A felvétel időbélyegei abszolútak maradnak (setpts +cs), így
     a rétegek enable-kifejezése és a felirat ugyanaz, mint egy menetben; az ablak előtt induló réteg a saját közepéből
     kezd (-ss), az ismétlődő kör a fázisából; a végén a szelet 0-ról indul (setpts −cs), hogy összefűzhető legyen."""
-    ins = (["-ss", f"{cs:.4f}", "-t", f"{ce - cs:.4f}"] if chunked else []) + ["-i", base]
-    chain, cur, k = [], "[0:v]", 1
+    chain: list[str] = []
+    if keep:                                                    # vágott felvétel: az ablakba eső megtartott szakaszok
+        from app.tools import footage
+        ins, cat, cur = footage.inputs(Path(base), footage.windows(keep, cs, ce))
+        if cat:
+            chain.append(cat.rstrip(";"))
+    else:
+        ins, cur = (["-ss", f"{cs:.4f}", "-t", f"{ce - cs:.4f}"] if chunked else []) + ["-i", base], "[0:v]"
+    k = ins.count("-i")
     if pre:
         chain.append(f"{cur}{','.join(pre)}[c0]")
         cur = "[c0]"

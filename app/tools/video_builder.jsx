@@ -187,11 +187,11 @@ function blurred(L, amount) {
   var b = L.property("ADBE Effect Parade").addProperty("Gaussian Blur");
   b.property("Blurriness").setValue(amount); b.property("Repeat Edge Pixels").setValue(1);
 }
-function camera(L, keys, t0) {   // a jelenet (vagy a saját felvétel) virtuális kamerája: [[t, nagyítás, x, y]]
-  var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position");
+function camera(L, keys, t0, f) {   // a jelenet (vagy a saját felvétel) virtuális kamerája: [[t, nagyítás, x, y]]; f: a réteg
+  var S = tp(L).property("ADBE Scale"), P = tp(L).property("ADBE Position"), q = (f || 1) * 100;   // alapnagyítása
   for (var i = 0; i < keys.length; i++) {
     var k = keys[i];
-    S.setValueAtTime(t0 + k[0], [k[1] * 100, k[1] * 100]); P.setValueAtTime(t0 + k[0], [k[2], k[3]]);
+    S.setValueAtTime(t0 + k[0], [k[1] * q, k[1] * q]); P.setValueAtTime(t0 + k[0], [k[2], k[3]]);
   }
   ease(S); ease(P);
 }
@@ -502,7 +502,7 @@ function endScene(sc) {
 // osztott képnél az alapsáv (felvétel vagy jelenetek) a fél képre zsugorodik, a végén vissza
 function splitBase(Lb, ly) {
   var T = tp(Lb), S = T.property("ADBE Scale"), P = T.property("ADBE Position"), s = ly.split;
-  var a = ly.at, b = ly.at + ly.dur, d = Math.min(0.5, ly.dur / 4), k = s.scale * 100, p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
+  var a = ly.at, b = ly.at + ly.dur, d = Math.min(0.5, ly.dur / 4), k = s.scale * 100 * BASE_K, p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
   S.setValueAtTime(a, s0); S.setValueAtTime(a + d, [k, k]); S.setValueAtTime(b - d, [k, k]); S.setValueAtTime(b, s0);
   P.setValueAtTime(a, p0); P.setValueAtTime(a + d, s.to); P.setValueAtTime(b - d, s.to); P.setValueAtTime(b, p0);
   ease(S); ease(P);
@@ -554,12 +554,23 @@ function overlayLayers(main, base) {
 
 var main = app.project.items.addComp("Video", D.W, D.H, 1, D.total, D.fps);
 main.bgColor = D.dark;
-var baseLayers = [];
+var baseLayers = [], BASE_K = 1;
 if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja) az alapsáv
   if (!D.alpha) {
     var fb = main.layers.add(app.project.importFile(new ImportOptions(new File(D.base.file))));
     fb.name = D.base.label || "Footage"; baseLayers.push(fb);
-    if (D.camera) camera(fb, D.camera, 0);      // ráközelítés a felvételre (punch-in), abszolút időben
+    if (D.base.scale && D.base.scale !== 1) {   // a munkamásolat (kicsi) a kompozíció méretére: a rétegek a teljes méretben
+      BASE_K = D.base.scale;
+      tp(fb).property("ADBE Scale").setValue([BASE_K * 100, BASE_K * 100]);
+    }
+    if (D.base.hold) {   // zárókártya: a felvétel az utolsó kockáján áll (időtérkép; a hang ott csend) — nincs meghosszabbított fájl
+      fb.timeRemapEnabled = true;
+      var TR = fb.property("ADBE Time Remapping"), last = Math.max(0, D.base.hold - 1 / D.fps);
+      while (TR.numKeys > 0) TR.removeKey(1);
+      TR.setValueAtTime(0, 0); TR.setValueAtTime(last, last);
+      fb.outPoint = D.total;
+    }
+    if (D.camera) camera(fb, D.camera, 0, BASE_K);      // ráközelítés a felvételre (punch-in), abszolút időben
   }
 } else {
   var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;

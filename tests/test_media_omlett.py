@@ -234,7 +234,7 @@ def _zscale() -> bool:
 async def test_hlg_footage_is_tone_mapped_to_bt709_not_washed_out(tmp_path, put_file):
     """Elfogadás (3.3): 10 bites HLG-klip → resize / merge / az overlay alapsávja BT.709, és nem fakó: a fényerő és a
     telítettség az SDR-eredeti közelében (leképezés nélkül a telítettség az eredeti ~40%-a volt)."""
-    from app.tools import mediaprobe, video
+    from app.tools import footage, mediaprobe
     sdr, hlg = _hlg_clip(tmp_path / "hlg.mp4")
     m = await mediaprobe.info(hlg)
     assert m["hdr"] == "hlg" and m["bit_depth"] == 10
@@ -244,7 +244,8 @@ async def test_hlg_footage_is_tone_mapped_to_bt709_not_washed_out(tmp_path, put_
     outs = [_out(r["file_id"])]
     r = await _run("merge-files", [fid, put_file(sdr)])
     outs.append(_out(r["file_id"]))
-    outs.append(_out(await video._upright(hlg)))                          # az overlay alapsávja (renderelő bemenete)
+    b, _ = await footage.make_proxy({"file_id": fid, "width": 320, "height": 180}, hlg)
+    outs.append(_out(b["media_id"]))                                      # az overlay munkamásolata (a szerkesztő képe)
     for out in outs:
         v = next(s for s in _probe(out)["streams"] if s["codec_type"] == "video")
         assert v.get("color_transfer") == "bt709" and v["pix_fmt"] == "yuv420p", (out.name, v.get("color_transfer"))

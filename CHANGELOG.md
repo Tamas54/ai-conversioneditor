@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-10-22 — Your own footage: the editor gets a small copy, the video is made from your original
+
+Before, a phone video was re-encoded in full before the editing could start: turned upright and mapped from HDR to SDR
+(25.5 min for a 30-minute iPhone video), then once more for an end card (10.3 min), and once more for a colour
+correction. The final video was then encoded from that intermediate copy, and the browser editor had to load all of it
+(about 2 GB for 30 minutes).
+
+Now:
+- **The editor gets a small working copy** (at most 960 px on the long side): made from the original in one pass,
+  in time slices at once, turned upright, HDR mapped to SDR, with the colour correction. Its bitrate is capped by its
+  length (400 MB at most: the browser editor loads the whole file), with a keyframe every second for scrubbing. Large
+  footage gets one too, not only phone footage. A second video from the same upload, with the same correction, reuses it.
+- **The video is made from your original**, with the same chain at full size, in the fast render's one pass. Where the
+  engine draws the footage itself (a punch-in, a split screen), a full-size piece of just that stretch takes the small
+  copy's place in the project; the full render gets the whole footage at full size. The engine's own check: the swapped
+  project draws the same pixels as one made with the full-size footage.
+- **The end card needs no file:** the footage holds its last frame under it in the project (time remap), the sound is
+  silent there.
+- **Cutting the footage** (asked for on the 30-minute test video): `cut=[{"from": "05:00", "to": "07:30"}, …]` at
+  overlay, `changes.cut` in an edit. It is part of the footage's recipe: the working copy and the final video are made
+  from the kept parts of the original, frame-accurate, the sound fading over 15 ms at each cut. Layers, subtitles and
+  the camera move with it; a layer wholly in a removed part is named in the check. Nothing is lost: `cut="none"`
+  brings the whole footage back, with the layers in their old places.
+- **Footage cut or moved by hand in the editor** goes the full render's way: the fast one would have put the uncut
+  footage under the graphics.
+- **If your original has expired** (uploads are kept for a limited time), the video is made from the small copy, and
+  the check says so; changing the colours then asks for the original again.
+
+Measured on a 5-minute stretch of the 30-minute HDR iPhone video (prod-like image, ffmpeg 4.4, 4 slices at once):
+before, the upright + HDR copy took 252 s; now the working copy takes 61 s. The final pass from the original takes
+306 s (with the HDR mapping at full size), the old one from the intermediate 167 s: the HDR mapping now runs once,
+in the final pass, instead of before the editing.
+
 ## 2026-10-22 — Videos on your own footage render fast: the engine draws only where there are graphics
 
 The owner asked how long an hour-long video would take to edit. On the 2-minute Tamás TV test (16 layers and

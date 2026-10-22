@@ -86,6 +86,11 @@ END CARD: end_card={"title", "subtitle"?, "kicker"?, "dur"? (seconds, 1.5–20, 
 — adds a closing card AFTER the footage: the last frame is held (frozen) under it and the sound padded with silence, so
 the video gets that much longer; the credits of pictures and animations go on it. An overlay with only an end card is
 fine. In an edit: changes.end_card = {…} (only the fields that change) | "none" (removes it).
+CUT: cut=[{"from": "05:00", "to": "07:30"}, …] removes those parts of the footage ("from" left out = from the start,
+"to" left out = to the end); times are the footage's own at overlay, the video's as it is now in an edit
+(changes.cut — the times of the same edit's layers are the video's before the cut too). Layers, subtitles and the
+camera move with it; a layer wholly in a removed part is left out (said in the check). Nothing is lost: the original
+stays whole, changes.cut = "none" brings it all back. The sound fades over 15 ms at each cut.
 The result's duration is the footage's (mode "footage"; + the end card — result.end_card says where it starts).
 render=false saves the project only (the layout check still comes back).
 Example: video(action="overlay", file_id="ab12.mov", text="…", layers=[{"at": "00:02", "type": "lower_third", "name":
@@ -283,7 +288,7 @@ true}], "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption",
 "narration_voice"?, "duration_mode"?, "layers"?: [{"id": "L2", …} | {"id": "L2", "remove": true}], "add_layers"?: […]}.
 Untouched layers stay as they are; the AI narration is recorded again from the changed captions. Numbers in a new chart
 or stat must be in the video's source or in `text`. An overlay project takes layers, add_layers, accent, title, music,
-camera, subtitles and end_card. alpha=… renders the transparent version again.
+camera, subtitles, end_card, adjust and cut. alpha=… renders the transparent version again.
 Faster turns (an edit re-renders the whole video, ~1–2 minutes): render=false saves the new version without rendering
 (the layout check still comes back; render it later with action="render"); draft=true (make, overlay, edit) renders it
 half size and fast — previews use the draft until a full render; action="render" with scene="s3" (a scene) or
