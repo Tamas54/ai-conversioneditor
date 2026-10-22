@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import functools
+import json
 
 import logging
 from typing import Any, Optional
@@ -304,8 +305,10 @@ async def chunks_status(upload_id: str) -> dict[str, Any]:
     """Mi érkezett meg eddig (folytatáshoz): {upload_id, filename, size, chunk_size, chunks, received: [index]}."""
     d, m = _chunk_dir(upload_id)
     got = sorted(int(p.stem) for p in d.glob("*.part") if p.stem.isdigit())
+    done = d / "done.json"                        # már összeállt (a kliens a választ nem kapta meg): a kész fájl
     return {"upload_id": upload_id, "filename": m["name"], "size": m["size"], "chunk_size": _CHUNK,
-            "chunks": -(-m["size"] // _CHUNK), "received": got}
+            "chunks": -(-m["size"] // _CHUNK), "received": got,
+            **({"done": json.loads(done.read_text("utf-8"))} if done.exists() else {})}
 
 
 @router.put("/api/upload/chunks/{upload_id}/{index}")
@@ -332,8 +335,26 @@ async def chunks_put(upload_id: str, index: int, request: Request) -> dict[str, 
 
 @router.post("/api/upload/chunks/{upload_id}/complete")
 async def chunks_complete(upload_id: str) -> dict[str, Any]:
+    """Ismételhető: ha a válasz elveszett (10-22, iPhone akadozó Wi-Fin), az újabb hívás ugyanazt a fájlt adja, nem újat."""
+    import asyncio
+    lock = _joining.setdefault(upload_id, asyncio.Lock())
+    try:
+        async with lock:
+            return await _complete(upload_id)
+    finally:
+        if not lock.locked():
+            _joining.pop(upload_id, None)
+
+
+_joining: dict[str, Any] = {}                     # upload_id → asyncio.Lock: két egyidejű „complete” ne rakja össze kétszer
+
+
+async def _complete(upload_id: str) -> dict[str, Any]:
     import shutil
     d, m = _chunk_dir(upload_id)
+    done = d / "done.json"
+    if done.exists():
+        return json.loads(done.read_text("utf-8"))
     parts = sorted(d.glob("*.part"))
     total = -(-m["size"] // _CHUNK)
     if len(parts) != total:
@@ -351,9 +372,15 @@ async def chunks_complete(upload_id: str) -> dict[str, Any]:
         shutil.rmtree(d, ignore_errors=True)
         raise HTTPException(400, "size mismatch — upload again")
     try:
-        return _store(out, m["name"], "upload")
-    finally:
+        r = _store(out, m["name"], "upload")
+    except Exception:
         shutil.rmtree(d, ignore_errors=True)
+        raise
+    for p in d.iterdir():                         # a darabok mennek; a meta + az eredmény marad (a temp-takarítás viszi, ≤1 nap)
+        if p.name != "meta.json":
+            p.unlink(missing_ok=True)
+    done.write_text(json.dumps(r), "utf-8")
+    return r
 
 
 @router.get("/api/import/config")

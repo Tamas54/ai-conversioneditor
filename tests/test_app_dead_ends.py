@@ -140,3 +140,87 @@ def test_guest_big_upload_offers_sign_in_before_sending(guest_page, live_url, tm
     toast.locator("button", has_text="Sign in").click()
     page.wait_for_url("**/login?*")
     assert _next(page.url) == "/app/files"
+
+
+def test_stalled_piece_is_sent_again_and_says_so(guest_page, live_url, tmp_path):
+    """10-22, iPhone akadozó Wi-Fin: 3 darab után semmi sem ment át, a kijelzés percekig állt. Most a beragadt darab
+    pár másodperc csend után újraindul, és a sor megmondja, mi történik."""
+    page = guest_page
+    page.add_init_script("window.UPLOAD_STALL_MS = 1500")
+    vid = tmp_path / "IMG_9302.MOV"
+    vid.write_bytes(os.urandom(20 * 1024 * 1024))                    # 3 darab, vendégként is belefér
+    hung = []
+    page.route("**/api/upload/chunks/*/1", lambda r: hung.append(r) if not hung else r.continue_())   # az első próba elnyelődik
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(vid))
+    page.locator("#toast", has_text="trying again (1 of 8)").wait_for(timeout=20000)
+    page.locator("#toast", has_text="Uploaded IMG_9302.MOV").wait_for(timeout=30000)
+    assert len(hung) == 1
+
+
+def test_choosing_the_same_video_again_resumes_even_with_a_new_date(guest_page, live_url, tmp_path):
+    """iPhone: a Fotókból újra kiválasztott videónak más lehet a dátuma — a folytatás a név, a méret és a tartalom alapján megy."""
+    page = guest_page
+    page.add_init_script("window.UPLOAD_STALL_MS = 60000")
+    vid = tmp_path / "IMG_9303.MOV"
+    vid.write_bytes(os.urandom(20 * 1024 * 1024))
+    gate = {"open": False}
+    page.route("**/api/upload/chunks/*/2", lambda r: r.continue_() if gate["open"] else None)
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(vid))
+    key = None
+    for _ in range(100):
+        key = page.evaluate("Object.keys(localStorage).find(k => k.startsWith('upload:IMG_9303'))")
+        if key and len(page.evaluate(f"fetch('/api/upload/chunks/' + localStorage.getItem({key!r})).then(r => r.json())")["received"]) == 2:
+            break
+        time.sleep(0.1)
+    page.reload()
+    gate["open"] = True
+    t = time.time() + 3600
+    os.utime(vid, (t, t))                                             # új „dátum”, ugyanaz a tartalom
+    puts = []
+    page.on("request", lambda r: puts.append(r.url.rsplit("/", 1)[1]) if r.method == "PUT" else None)
+    page.set_input_files("#upload", str(vid))
+    page.locator("#toast", has_text="Uploaded IMG_9303.MOV").wait_for(timeout=30000)
+    assert puts == ["2"]
+
+
+def test_lost_answers_are_asked_again_without_a_second_copy(guest_page, live_url, tmp_path):
+    """Az indító kérés nem jut át („Load failed”), a „kész” válasza elveszik: az app újrakérdez, és a fájl egyszer lesz meg."""
+    page = guest_page
+    vid = tmp_path / "IMG_9304.MOV"
+    vid.write_bytes(os.urandom(20 * 1024 * 1024))
+    tries = {"start": 0, "complete": 0}
+
+    def start(route):
+        tries["start"] += 1
+        route.abort() if tries["start"] == 1 else route.continue_()
+
+    def complete(route):
+        tries["complete"] += 1
+        if tries["complete"] == 1:
+            route.fetch()                                                # a szerver összerakja…
+            route.abort()                                                # …de a válasz nem ér vissza
+        else:
+            route.continue_()
+    page.route("**/api/upload/chunks", start)
+    page.route("**/api/upload/chunks/*/complete", complete)
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(vid))
+    page.locator("#toast", has_text="trying again (1 of 8)").wait_for(timeout=10000)
+    page.locator("#toast", has_text="Uploaded IMG_9304.MOV").wait_for(timeout=30000)
+    assert tries == {"start": 2, "complete": 2}
+    names = page.evaluate("fetch('/api/files').then(r => r.json()).then(d => d.inputs.map(f => f.original_filename))")
+    assert names.count("IMG_9304.MOV") == 1
+
+
+def test_unreachable_server_gets_a_human_message(guest_page, live_url, tmp_path):
+    page = guest_page
+    small = tmp_path / "jegyzet.md"
+    small.write_text("# Jegyzet\n")
+    page.route("**/api/upload", lambda r: r.abort())
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(small))
+    toast = page.locator("#toast.show")
+    toast.wait_for()
+    assert "Couldn't reach the server" in toast.inner_text() and "Failed to fetch" not in toast.inner_text()

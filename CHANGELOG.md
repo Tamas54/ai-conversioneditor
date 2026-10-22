@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-10-22 — Uploads: a stalled piece is sent again after 30 s, and the progress line says so
+
+The owner's first real test, from an iPhone over the home Wi-Fi to the local Studio: the server got the first three
+pieces and answered, but the answers never reached the phone. The progress stood at "24 of 226 MB" for three minutes,
+until the request timed out.
+- **A piece with no progress, and no answer, for 30 s is sent again.** The progress line then says "The connection is
+  slow — trying again (1 of 8)", or "Waiting for the connection" when the device is offline.
+- **Choosing the same video again resumes it** by name, size and content (the first and last 64 KB). A video picked
+  from Photos can get a new date each time, so the date is no longer part of the key.
+- **The first and last requests are retried too.** Before, if the request that starts an upload didn't get through,
+  the app showed Safari's bare "Load failed". Now it tries again the same way (up to 8 times), and if the server
+  still can't be reached it says "Couldn't reach the server — check the connection, then choose the file again (it
+  carries on from where it stopped)". Only network errors are retried, never a refusal such as the guest limit.
+- **"Complete" can be asked twice.** If its answer is lost, asking again returns the same file instead of a second
+  copy, and the status of a finished upload says it's done. Choosing the file again then just opens it.
+- Browser tests:
+  - a swallowed piece is sent again and the line says so;
+  - the same video with a new date resumes and sends only the missing piece;
+  - a lost start request and a lost "complete" answer still give exactly one file;
+  - an unreachable server gets the plain message, not "Failed to fetch".
+
 ## 2026-10-22 — Big files: phone videos upload in pieces and resume; the agent never carries the bytes
 
 The owner's question: a 2-minute iPhone 17 Pro Max video was 235 MB. "How do we get it into the app, and how does an
