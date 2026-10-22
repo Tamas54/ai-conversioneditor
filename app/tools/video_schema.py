@@ -117,7 +117,7 @@ Types:
   waveform {style: bars (default, around a centre line) | rise (growing from the bottom), bars?: 8–64 (28),
     color?: "#hex" (default the accent), position?: bottom (default) | center | top | [x, y, w, h]}: the footage's
     sound as moving bars — e.g. over a podcast or interview; dur = how long (whole video: "until" its end).
-  pip {image (a video or picture), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
+  pip {image (a video or picture — a see-through video, e.g. from action="cutout", shows without the frame), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
     of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
     off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a
     framed window in a corner.
@@ -217,6 +217,16 @@ caption_style, end_title… e.g. [{"title": "The 3 mistakes everyone makes"}, {"
 "dramatic"}]; or changes={"count": 1–3} — the look varies without AI or cost (transition / caption style, accent, the
 library music's mood). The pictures and sound are reused (no new AI pictures unless a variant asks for one). Each
 variant is its own project + MP4 named "… – variant B"; returns a job with variants [{name, what, project, video}]."""
+
+TOPICS["cutout"] = """\
+action="cutout" — a video filmed in front of a green or blue screen without its background (no AI, no cost):
+file_id = the video; ai={"background"?: "#RRGGBB" | a picture (file_id | URL | {"stock": "words"}) | a video (file_id |
+{"stock_video": "words"}) — the person on it, as an MP4; left out = only the see-through video, "key"?: "auto" (default:
+the screen is found from the frame edges) | "green" | "blue" | "#RRGGBB"}; alpha = "webm" (default without a
+background) | "mov" (ProRes 4444, ≤ 2 min) | "both" — the transparent file for any editor, and for a frameless pip layer
+here (topic "layers": a transparent video in a pip shows without its frame). The check says how much of a frame became
+see-through. A room or street behind the person (no screen) can't be removed yet. A talking avatar can be made
+see-through directly: video(action="avatar", ai={…, "background": "transparent" | colour | picture})."""
 
 TOPICS["social"] = """\
 action="social" — the posts that go with a video: file_id = the video (project or MP4), or a sound file →

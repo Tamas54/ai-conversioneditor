@@ -16,6 +16,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from app import credits, db, tenancy
@@ -903,7 +904,9 @@ AI_VIDEO_REFERENCE: dict[str, str] = {
         'video(action="avatar", ai={…}, file_id?=<project to put it in>) — a talking video from ONE photo (via kie.ai, Kling '
         'AI Avatar, lip-synced): ai: image = file_id of a photo of the face, and audio = file_id of a recording (≤ 5 min; '
         "a video's sound works too) OR text = what to say (read out by the built-in AI voice: voice female | male | a "
-        'Piper voice, language; [pause: 1s] = a pause), quality 720p (default) | 1080p, prompt? = expression and camera, consent: true (REQUIRED '
+        'Piper voice, language; [pause: 1s] = a pause), background? = "transparent" (a see-through .webm — put it on '
+        'footage as a frameless pip layer) | "#RRGGBB" | a picture / video / {"stock": …} (the photo\'s background is '
+        'removed here, no extra cost; default: keep it; drop? = ["the lamp"] — things to take off with it), quality 720p (default) | 1080p, prompt? = expression and camera, consent: true (REQUIRED '
         "— the person in the photo agreed: their own face, or they said yes). Placement like ai_clip: at=seconds | "
         'after_scene. Costs paid credits by the seconds of speech; action="estimate" with ai={"for": "avatar", …} gives '
         "the price. Returns a job; the result is a video file with its sound."),
@@ -1191,7 +1194,24 @@ def avatar_options(o: dict[str, Any]) -> dict[str, Any]:
     if q not in AVATAR_MODELS:
         raise AIVideoError(f"quality: {' | '.join(AVATAR_MODELS)}")
     return {"image": img, "audio": audio, "text": text[:5000], "voice": o.get("voice"), "language": o.get("language"),
-            "quality": q, "model": AVATAR_MODELS[q], "prompt": str(o.get("prompt") or AVATAR_PROMPT).strip()[:2000]}
+            "quality": q, "model": AVATAR_MODELS[q], "prompt": str(o.get("prompt") or AVATAR_PROMPT).strip()[:2000],
+            "background": avatar_background(o.get("background")),
+            "drop": [str(w)[:60] for w in (o.get("drop") if isinstance(o.get("drop"), list) else [o["drop"]] if o.get("drop") else [])][:6]}
+
+
+def avatar_background(raw: Any) -> Any:
+    """background: keep (alap: a fotó háttere) | "transparent" (átlátszó videó) | "#RRGGBB" | kép / videó (file_id, URL,
+    {"stock": …}, {"stock_video": …}). A fotóról a háttér helyben lekerül (kivágás), a személy chroma-zöld elé kerül, a
+    kész videóból a zöld kikulcsolva (app/tools/video_key.py) — új modell és költség nélkül."""
+    if raw in (None, "", "keep", "original", False):
+        return None
+    if str(raw).lower() in ("transparent", "remove", "none", "cutout", "alpha"):
+        return "transparent"
+    from app.tools import video_key
+    try:
+        return video_key.background_of(raw) and raw
+    except ValueError as e:
+        raise AIVideoError(f"background: keep | transparent | \"#RRGGBB\" | a picture or video — {e}") from None
 
 
 async def _avatar_audio(c: dict[str, Any], work) -> tuple[Any, float]:
@@ -1240,6 +1260,13 @@ async def start_avatar(opts: dict[str, Any], project: Optional[str] = None) -> d
     at, after = opts.get("at"), opts.get("after_scene", opts.get("scene"))
     if (at is not None or after is not None) and not project:
         raise AIVideoError("To put the avatar on a timeline, give file_id = the video project (or its video).")
+    if c["background"] == "transparent" and (at is not None or after is not None):
+        raise AIVideoError('A transparent avatar goes over other footage: make it, then put it on with video(action="overlay", '
+                           'layers=[{"type": "pip", "image": <its .webm>, …}]) — or give background = a colour or picture.')
+    if c["background"]:
+        from app.tools import cutout
+        if not cutout.available():
+            raise AIVideoError("Background removal isn't available on this server — leave background out (the photo's own).")
     work = temp_path(f"avatar_{uuid.uuid4().hex[:10]}")
     work.mkdir(parents=True)
     voice, secs = await _avatar_audio(c, work)              # a hossz pontosan → a foglalás pontosan
@@ -1249,7 +1276,8 @@ async def start_avatar(opts: dict[str, Any], project: Optional[str] = None) -> d
         op = await reserve("avatar", c["model"], hold=est["credits"],
                            meta={"units": units, "tier": c["quality"], "seconds": round(secs, 2),
                                  "said": (c["text"] or "")[:300], "prompt": c["prompt"][:300],
-                                 **({"script": c["text"]} if c["text"] else {})})
+                                 **({"script": c["text"]} if c["text"] else {}),
+                                 **({"background": c["background"]} if c["background"] else {})})
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
@@ -1258,6 +1286,8 @@ async def start_avatar(opts: dict[str, Any], project: Optional[str] = None) -> d
         prov = _provider()
         try:
             img = await _image_input(c["image"], project, work)
+            if c["background"]:
+                img = await _on_green(img, work, c["drop"])
             return [{"image": img if isinstance(img, str) else await prov.upload(img), "audio": await prov.upload(voice),
                      "prompt": c["prompt"]}]
         finally:
@@ -1279,6 +1309,31 @@ async def start_avatar(opts: dict[str, Any], project: Optional[str] = None) -> d
     return await _start_job("ai_video", {**est, "what": f"talking avatar {c['quality']}, {secs:.0f} s"}, job, op)
 
 
+GREEN = (0, 177, 64)          # chroma-zöld (#00B140) — a kivágott személy mögé, a kész videóból kikulcsoljuk
+
+
+async def _on_green(img: Any, work, drop: Optional[list[str]] = None) -> Any:
+    """A fotóról a háttér le (helyi kivágás: BiRefNet + emberek), a személy chroma-zöld elé → helyi JPEG. drop: ami még
+    lekerüljön (a kivágó a vékony tárgyat — lámpa, állvány — az alanyhoz számolhatja)."""
+    from PIL import Image
+    from app import billing
+    from app.tools import cutout
+    if isinstance(img, str):                                   # nyilvános URL: előbb le
+        from app.tools import images as imgs
+        img = (await imgs.resolve({"url": img}, max_px=4096)).path
+    png = work / f"cut_{uuid.uuid4().hex[:8]}.png"
+    with billing.prepaid():                                    # az avatar kreditje fedezi (nem külön AI-lépés)
+        chk = await cutout.remove_background(Path(img), png, drop=drop or None)
+    log.info("avatar: a fotó háttere le (%s)", (chk or {}).get("status"))
+    dst = work / f"green_{uuid.uuid4().hex[:8]}.jpg"
+    with Image.open(png) as im:
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, GREEN + (255,))
+        bg.alpha_composite(im)
+        bg.convert("RGB").save(dst, quality=95)
+    return dst
+
+
 async def _post_avatar(rows: list[dict[str, Any]], files: list[list[str]]) -> dict[str, Any]:
     from app.storage import output_path, public_url, write_meta
     head = rows[0]
@@ -1291,8 +1346,25 @@ async def _post_avatar(rows: list[dict[str, Any]], files: list[list[str]]) -> di
     write_meta(fid, label=label, operation="avatar",
                extra={"ai": {"provider": head["provider"], "model": head["model"], "kind": "talking avatar",
                              "said": head["meta"].get("said"), "consent": True}, **({"script": script} if script else {})})
-    return {"file_id": fid, "url": public_url(fid), "label": label, "width": info["width"], "height": info["height"],
-            "duration": info["duration"], "audio": info["audio_stream"] is not None}
+    out = {"file_id": fid, "url": public_url(fid), "label": label, "width": info["width"], "height": info["height"],
+           "duration": info["duration"], "audio": info["audio_stream"] is not None}
+    bg = head["meta"].get("background")
+    if bg:                                     # a zöld háttér ki: átlátszó videó, vagy az új háttér
+        from app.tools import video_key
+        try:
+            cut = await video_key.cutout({"file_id": fid, "key": "green", "background": None if bg == "transparent" else bg,
+                                          "alpha": "webm" if bg == "transparent" else None})
+            for f in cut["files"]:
+                write_meta(f["file_id"], extra={"script": script} if script else None)
+            main = cut["files"][0]
+            out.update({"green_screen": {"file_id": fid, "url": out["url"], "label": label}, "file_id": main["file_id"],
+                        "url": main["url"], "label": main["label"], "background": "transparent" if bg == "transparent" else "replaced",
+                        "cutout_check": cut["check"], "files": [fid] + [f["file_id"] for f in cut["files"]]})   # mind marad (_cleanup)
+        except Exception as e:
+            log.warning("avatar: a háttér nem lett kicserélve (%s): %s", fid, e)
+            out["cutout_error"] = (f"The avatar is ready on a green background, but keying it out failed ({str(e)[:200]}) — "
+                                   'run video(action="cutout", file_id=…) on it.')
+    return out
 
 
 POST["avatar"] = _post_avatar

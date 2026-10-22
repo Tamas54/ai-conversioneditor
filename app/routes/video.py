@@ -112,6 +112,34 @@ async def overlay_video(body: dict[str, Any]) -> dict[str, Any]:
     return jobs.start("video", work)
 
 
+@router.post("/api/video/cutout")
+async def cutout_video(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: zöld / kék háttér előtt felvett videó, background?, key?, alpha?} → job (új hátterű MP4 és/vagy átlátszó
+    videó) — app/tools/video_key.py."""
+    from app import jobs
+    from app.tools import video, video_key
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    try:
+        crafts.existing(body.get("file_id") or "")
+        video_key.key_of(body.get("key"))
+        video_key.background_of(body.get("background"))
+        if body.get("alpha") not in (None, ""):
+            video.alpha_kinds(body.get("alpha"))
+    except FileNotFoundError:
+        raise HTTPException(400, "That file isn't in the workspace — upload the video first.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    async def work(progress):
+        try:
+            return await video_key.cutout(body, progress)
+        except Exception as e:
+            raise _fail(e)
+    return jobs.start("video", work)
+
+
 @router.post("/api/video/social")
 async def social_video(body: dict[str, Any]) -> dict[str, Any]:
     """{file_id: videó | projekt | hang, platforms?, language?, notes? (link, felhívás), force?} → job (a posztok
