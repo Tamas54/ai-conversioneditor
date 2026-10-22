@@ -1972,6 +1972,8 @@ def _pip_geometry(ly: dict[str, Any], W: int, H: int) -> None:
     y = my + h / 2 if p["corner"].startswith("top") else 1 - my - h / 2
     els[0].update(x=round(x, 4), y=round(y, 4), w=round(w + 2 * bx, 4), h=round(h + 2 * bx * W / H, 4))
     els[1].update(x=round(x, 4), y=round(y, 4), w=round(w, 4), h=round(h, 4))
+    if els[1].get("alpha"):                     # átlátszó videó (kivágott ember): keret nélkül
+        els[0]["_skip"] = True
 
 
 def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
@@ -3375,10 +3377,15 @@ async def _materialize_gfx(story: dict[str, Any], work: Path, parent: Optional[s
                     if e.get("credit"):                                    # újraépítés: a kredit marad
                         credits.append(str(e["credit"])[:200])
                 elif e["shape"] == "image" and _movie_src(e.get("src")):
-                    name = f"gfx-{n:02d}-{sc.get('id') or si}.mp4"
                     src_p = crafts.existing(_movie_src(e["src"]))
+                    alpha = await has_alpha(src_p)                 # átlátszó videó (kivágott ember): az alfa marad
+                    name = f"gfx-{n:02d}-{sc.get('id') or si}.{'webm' if alpha else 'mp4'}"
                     span = _clip_span(e.get("clip"), sc.get("dur") if sc in (story.get("layers") or []) else None)
-                    await _cut_clip(src_p, span, work / name)
+                    await _cut_clip(src_p, span, work / name, alpha=alpha)
+                    if alpha:                                      # kivágott alak: az egésze látszik (nem vágjuk körbe)
+                        e["alpha"], e["fit"] = True, "contain"
+                        if sc.get("pip") and ei == 1:
+                            ch["elements"][0]["_skip"] = True      # kép a képben: keret nélkül
                     e["clip_len"] = span[1]
                     e.pop("sound_file", None)
                     if (e.get("sound") or "off") != "off" and sc in (story.get("layers") or []):    # a hangja: a réteg idejére
@@ -3508,12 +3515,29 @@ def _el_t0(e: dict[str, Any], i: int) -> float:
     return max(0.0, float(e["at"])) if e.get("at") is not None else (0.0 if movie else 0.3 + 0.25 * i)
 
 
-async def _cut_clip(src: Path, span: tuple[float, float], dst: Path) -> Path:
+async def has_alpha(path: Path) -> bool:
+    """Átlátszó-e a videó (ProRes 4444, WebM VP9 alfával — pl. a cutout / az átlátszó avatar kimenete)."""
+    try:
+        info = await probe_movie(path)
+    except Exception:
+        return False
+    return bool(re.search(r"yuva|rgba|argb|bgra|abgr|gbrap", info.get("pix_fmt") or "") or info.get("alpha_mode"))
+
+
+async def _cut_clip(src: Path, span: tuple[float, float], dst: Path, alpha: bool = False) -> Path:
     """Egy másik felvétel része a grafikába (bevágás): span = (kezdet, hossz) mp; a kép NÉMÁN (a hangja külön sáv:
-    _cut_sound), az elforgatás szerint egyenesen, a hosszabb oldal legfeljebb 1920 px."""
+    _cut_sound), az elforgatás szerint egyenesen, a hosszabb oldal legfeljebb 1920 px. alpha: átlátszó forrás → WebM
+    VP9 alfával (a motor ezt átlátszóként keveri; a ProRes 4444 is menne, de projekt-elemnek túl nagy)."""
     from app.convert.engines import run
     from app.tools import encoding, mediaprobe, videonorm
     a, n = span
+    if alpha:
+        dec = ["-c:v", "libvpx-vp9"] if src.suffix.lower() == ".webm" else []      # a beépített VP9-dekóder eldobja az alfát
+        await run("ffmpeg", "-v", "error", "-y", *dec, "-ss", f"{a:.3f}", "-i", str(src), "-t", f"{n:.3f}", "-map", "0:v:0", "-an",
+                  "-vf", "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))',format=yuva420p",
+                  "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "30", "-deadline", "realtime",
+                  "-cpu-used", "8", "-row-mt", "1", "-auto-alt-ref", "0", str(dst), timeout=settings.VIDEO_TIMEOUT_S)
+        return dst
     hdr = videonorm.tonemap_filters(await mediaprobe.info(src))          # HLG/PQ → SDR BT.709 (OMLETT 3.3)
     await run("ffmpeg", "-v", "error", "-y", "-ss", f"{a:.3f}", "-i", str(src), "-t", f"{n:.3f}", "-map", "0:v:0", "-an",
               "-vf", ",".join(hdr + ["scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'"]), "-c:v", "libx264",

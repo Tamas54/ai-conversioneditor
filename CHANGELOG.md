@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-22 — Background removal for video (green / blue screen), see-through avatars
+
+- **`video(action="cutout")`** (also `POST /api/video/cutout`): a video filmed in front of a green or blue screen,
+  without its background. No AI, no download, no cost: ffmpeg chromakey + despill.
+  - The screen is found from the frame edges (or `key: green | blue | #RRGGBB`). How strong the keying is comes from
+    measuring the edge pixels' UV distance from the screen colour.
+  - `ai.background`: a colour, a picture (file_id, URL, `{"stock"}`) or a video (file_id, `{"stock_video"}`) gives an
+    MP4. Left out, you get a see-through WebM VP9 (`alpha: "mov"` = ProRes 4444 ≤ 2 min, `"both"`).
+  - The check says how much of a frame became see-through. Without a screen it says that removing a room behind
+    someone needs AI matting, which isn't switched on.
+- **Transparent cut-ins:** a see-through video used in a graphic or a `pip` keeps its alpha (cut to WebM VP9 alpha
+  instead of H.264), and the pip shows it without its frame and uncropped. A cut-out presenter can stand in a corner
+  of the footage.
+- **Talking avatar without its background:** `ai.background = "transparent" | "#RRGGBB" | a picture / video`.
+  - The photo's background is removed here (BiRefNet), the person goes in front of chroma green, and Kling animates
+    that.
+  - The result is keyed: a see-through .webm, or the avatar on the new background. The green-screen MP4 is kept too.
+  - `ai.drop = ["floor lamp"]` takes thin things the cut-out counted as the subject.
+  - A transparent avatar can't go straight onto a timeline; use a pip layer.
+
 ## 2026-10-22 — Social posts for a video
 
 From the look at MoneyPrinterTurbo.

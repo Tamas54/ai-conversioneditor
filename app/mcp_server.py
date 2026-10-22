@@ -1934,8 +1934,8 @@ async def video(
     """Short videos with an EDITABLE timeline (edit_url: an After Effects-like editor): made from a text, or
     graphics on the person's OWN footage. Long work returns a job: video(action="status", job_id, wait=30).
     FULL REFERENCE: video(action="schema", topic=…) — make | overlay | layers | graphic | chart | subtitles | edit |
-    transcript | audiogram | variants | social | adjust | ai_clip | avatar | enhance. Read "layers" before a first overlay,
-    "graphic" before your own.
+    transcript | audiogram | variants | social | cutout | adjust | ai_clip | avatar | enhance. Read "layers" before
+    a first overlay, "graphic" before your own.
     action="make": text / url / source_file_id (keep_wording=true = their own sentences as captions) or your own
       scenes=[{headline, caption, image?, image_query?, chart?, duration?}] → title card, scenes, captions, end card,
       MP4. format vertical|landscape|square; duration (s) + duration_mode fixed|narration.
@@ -1947,10 +1947,11 @@ async def video(
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again; scene="s3" | "L2": just that scene / layer.
     Also: transcript (what is said, timed) · audiogram (sound → podcast video) · variants (A/B versions of a
-    video) · social (titles, posts, hashtags, chapters) · stock (free real footage) · lottie · info (ids) · to_pptx.
+    video) · social (posts, hashtags, chapters) · cutout (green screen out) · stock (free footage) · lottie ·
+    info (ids) · to_pptx.
     AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
-    render=false (make / overlay / edit): save the project only (the layout check still runs); draft=true: fast.
+    render=false: save the project only (the layout check still runs); draft=true: fast.
     Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs
@@ -1987,6 +1988,10 @@ async def video(
         return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
                                        "vocabulary": vocabulary, "model": model, "force": force, "correct": correct,
                                        "script": text or (transcript or {}).get("script")})
+    if act in ("cutout", "key", "green_screen", "remove_background"):    # zöld / kék háttér ki (app/tools/video_key.py)
+        from app.routes.video import cutout_video
+        return await cutout_video({"file_id": file_id or "", "background": (ai or {}).get("background"),
+                                   "key": (ai or {}).get("key"), "alpha": alpha})
     if act in ("social", "posts", "metadata"):       # közösségi szövegek: cím, leírás, hashtagek, fejezetek
         from app.routes.video import social_video
         return await social_video({"file_id": file_id or "", "platforms": (ai or {}).get("platforms"), "language": language,
@@ -2027,8 +2032,8 @@ async def video(
         return await ai_video.mcp(act, file_id=file_id, factor=factor, ai=ai, text=text, duration=duration, draft=draft)
     if act != "make":
         raise ValueError('action: "make" | "overlay" | "transcript" | "edit" | "to_pptx" | "render" | "info" | "status" | '
-                         '"lottie" | "stock" | "audiogram" | "variants" | "social" | "schema" (the full reference: '
-                         'video(action="schema", topic="layers"))')
+                         '"lottie" | "stock" | "audiogram" | "variants" | "social" | "cutout" | "schema" (the full '
+                         'reference: video(action="schema", topic="layers"))')
     from app.routes.video import make_video
     body = {"mode": "text" if keep_wording else "article", "text": text, "url": url, "source_file_id": source_file_id,
             "format": format, "duration": duration, "images": images or [], "pictures": pictures,
