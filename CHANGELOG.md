@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-22 — Social posts for a video
+
+From the look at MoneyPrinterTurbo.
+- **`video(action="social")`** (also `POST /api/video/social`): the posts that go with a video.
+  - Input: a video, its project, or a sound file.
+  - Output per platform: a title (YouTube), the text and hashtags, in each platform's own style and limits — YouTube,
+    TikTok and Instagram by default; Facebook, LinkedIn, X or "all" on request.
+  - It also gives YouTube chapters, keywords and a .md file to copy from.
+  - Data first: the project's script and timeline, an overlay's subtitles and chapter / name layers, or a recording's
+    transcript.
+  - Then deterministic: chapters follow YouTube's rules (from 00:00, at least 3, each ≥ 10 s, a short title card
+    gives way to the first scene); keywords by frequency without filler words; picture / footage credits go into the
+    longer texts.
+  - Then one Studio AI step writes the texts in the video's language from its facts only. Numbers that aren't in the
+    video come back in the check, and the same material is answered from the cache.
+  - Without the AI: plain drafts (title, first sentences, keyword hashtags), and the check says so.
+  - `text` = notes to work in (a link, a call to action); `ai.fresh` writes them again.
+
 ## 2026-10-22 — A/B variants
 
 From the look at MoneyPrinterTurbo.

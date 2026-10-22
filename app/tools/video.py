@@ -5068,13 +5068,8 @@ async def thumb(src: Path, raw: Path) -> None:
 
 # ---------- utólagos szerkesztés (az ügynök és az „Ask for a change”) ----------
 
-async def transcribe_file(file_id: str, language: Optional[str] = None, step: Callable[..., None] = lambda *a, **k: None,
-                          **opts: Any) -> dict[str, Any]:
-    """Egy felvétel (videó vagy hang; overlay-projektnél az alapsáv) időbélyeges átirata + SRT-feliratfájl. Ebből köthető
-    réteg egy mondathoz (at: {"say": …}), és ebből javasolhat az ügynök grafikát (melyik mondatnál mi segítene).
-    opts: prompt, vocabulary, model, force, correct (app/tools/transcript.py: transcribe)."""
-    from app.storage.naming import result_stem
-    from app.tools import transcript
+def sound_source(file_id: str) -> Path:
+    """A meghallgatandó fájl: a felvétel / hangfájl maga, overlay-projektnél az alapsávja."""
     p = crafts.existing(file_id)
     ext = p.suffix.lstrip(".").lower()
     if ext == "ecproj":
@@ -5083,9 +5078,20 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
         if not base:
             raise ValueError("This video was made from text — its words are its captions (video action=info). A transcript "
                              "is for your own footage or a sound file.")
-        p = crafts.existing(assets_of(file_id).get(base["asset"]) or base.get("media_id") or base["file_id"])
-    elif ext not in MOVIE_EXTS | AUDIO_EXTS:
+        return crafts.existing(assets_of(file_id).get(base["asset"]) or base.get("media_id") or base["file_id"])
+    if ext not in MOVIE_EXTS | AUDIO_EXTS:
         raise ValueError(f"A transcript needs a video or a sound file, not .{ext}.")
+    return p
+
+
+async def transcribe_file(file_id: str, language: Optional[str] = None, step: Callable[..., None] = lambda *a, **k: None,
+                          **opts: Any) -> dict[str, Any]:
+    """Egy felvétel (videó vagy hang; overlay-projektnél az alapsáv) időbélyeges átirata + SRT-feliratfájl. Ebből köthető
+    réteg egy mondathoz (at: {"say": …}), és ebből javasolhat az ügynök grafikát (melyik mondatnál mi segítene).
+    opts: prompt, vocabulary, model, force, correct (app/tools/transcript.py: transcribe)."""
+    from app.storage.naming import result_stem
+    from app.tools import transcript
+    p = sound_source(file_id)
     step(0, 2, "listening (transcript)")
     if not opts.get("script"):
         opts = with_script(file_id, opts)

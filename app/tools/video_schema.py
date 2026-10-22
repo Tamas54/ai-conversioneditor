@@ -218,6 +218,15 @@ caption_style, end_title… e.g. [{"title": "The 3 mistakes everyone makes"}, {"
 library music's mood). The pictures and sound are reused (no new AI pictures unless a variant asks for one). Each
 variant is its own project + MP4 named "… – variant B"; returns a job with variants [{name, what, project, video}]."""
 
+TOPICS["social"] = """\
+action="social" — the posts that go with a video: file_id = the video (project or MP4), or a sound file →
+per platform {title (YouTube), text, hashtags}, YouTube chapters (from the scenes / chapter layers: from 00:00, at least
+3, each ≥ 10 s), keywords, and a .md file to copy from. ai={"platforms": ["youtube", "tiktok", "instagram"] (default) |
+"facebook" | "linkedin" | "x" | "all", "fresh": true = write them again}; text = your notes to work in (a link, a call
+to action); language (default: the video's). Written by the Studio AI (one AI step) ONLY from what the video says —
+numbers that aren't in it come back in the check; the picture / footage credits are added to the longer texts. Returns
+a job."""
+
 TOPICS["audiogram"] = """\
 action="audiogram" — a podcast / interview / voice note as a video: file_id = the sound (mp3, wav, m4a…) or a video
 whose sound to use (≤ 30 min); title_image? = the cover (file_id | URL | {"stock": "words"}; without it a dark accent
