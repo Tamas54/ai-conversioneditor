@@ -209,6 +209,15 @@ script — your own EffectCraft code (After Effects-style JavaScript): {"type": 
 "…"}; gets comp, W, H, dur, accent ([r, g, b] 0–1) and D (D.font.bold|semibold|regular); sandboxed (no files outside the
 project, no network, 20 000 characters at most). Errors and numbers not in the source come back in the check."""
 
+TOPICS["variants"] = """\
+action="variants" — A/B versions of a finished video for testing on social media: file_id = the video (project or
+MP4); the original is variant A. changes={"variants": [{…}, {…}]} — 1–3 sets of changes, one per variant, anything
+action="edit" takes: a different opening (title, the first scene's headline / caption), music, transition, accent,
+caption_style, end_title… e.g. [{"title": "The 3 mistakes everyone makes"}, {"title": "Stop doing this", "music":
+"dramatic"}]; or changes={"count": 1–3} — the look varies without AI or cost (transition / caption style, accent, the
+library music's mood). The pictures and sound are reused (no new AI pictures unless a variant asks for one). Each
+variant is its own project + MP4 named "… – variant B"; returns a job with variants [{name, what, project, video}]."""
+
 TOPICS["audiogram"] = """\
 action="audiogram" — a podcast / interview / voice note as a video: file_id = the sound (mp3, wav, m4a…) or a video
 whose sound to use (≤ 30 min); title_image? = the cover (file_id | URL | {"stock": "words"}; without it a dark accent

@@ -112,6 +112,29 @@ async def overlay_video(body: dict[str, Any]) -> dict[str, Any]:
     return jobs.start("video", work)
 
 
+@router.post("/api/video/variants")
+async def variants_video(body: dict[str, Any]) -> dict[str, Any]:
+    """{file_id: <projekt vagy a renderje>, changes: {variants: [changes…]} | {count: 1–3}, draft?} → job (A/B változatok)."""
+    from app import jobs
+    from app.tools import video
+    if tenancy.is_guest():
+        from app.auth import ACCOUNT_NEEDED
+        raise HTTPException(401, ACCOUNT_NEEDED)
+    fid = body.get("file_id") or ""
+    try:
+        pid = video.project_of(fid)
+        video.variant_plan((video.read_meta(pid) or {}).get("spec") or {}, body.get("changes"))   # a hibás kérés most derüljön ki
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    async def work(progress):
+        try:
+            return await video.variants(fid, body.get("changes"), progress, draft=bool(body.get("draft")))
+        except Exception as e:
+            raise _fail(e)
+    return jobs.start("video", work)
+
+
 @router.post("/api/video/audiogram")
 async def audiogram_video(body: dict[str, Any]) -> dict[str, Any]:
     """{file_id: hang vagy videó, image?, format?, title?, style?, captions?, caption_style?, language?} → job (podcast-videó:
