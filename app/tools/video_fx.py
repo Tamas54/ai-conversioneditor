@@ -406,20 +406,3 @@ async def preview(src: Path, adj: dict[str, Any], work: Path, frames: int = 4, w
         return p
     p = await asyncio.to_thread(sheet)
     return p, {"settings": adj, "auto": auto, "measured": measured, "applied": describe(adj, auto)}
-
-
-async def render_file(src: Path, adj: dict[str, Any], label: str = "footage adjusted") -> tuple[str, dict[str, Any]]:
-    """A beállított felvétel rejtett munkafájlként (a videó szerkesztésének alapklipje) → (file_id, mit csinált)."""
-    import tempfile
-    from app.storage import output_path, temp_path, write_meta
-    from app.storage.files import new_file_id
-    fid = new_file_id("mp4")
-    work = Path(tempfile.mkdtemp(prefix="fx-", dir=str(temp_path("").parent)))
-    try:
-        tmp = work / "adjusted.mp4"
-        info = await apply(src, tmp, adj, work)
-        shutil.move(str(tmp), output_path(fid))
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-    write_meta(fid, operation=label, source_file_id=None, extra={"ephemeral": True, "adjust": adj})
-    return fid, info

@@ -100,26 +100,29 @@ def test_frames_grid_several_moments(tmp_path, put_file):
     assert jpg[:2] == b"\xff\xd8" and [s["at"] for s in shots] == [0.5, 1.5, 2.5]      # a videón túli pillanat kimarad
 
 
-def test_upright_skips_undecodable_audio(monkeypatch, tmp_path):
+def test_proxy_skips_undecodable_audio(monkeypatch, tmp_path):
     """10-18, IMG_9271.MOV: az elforgatott iPhone-felvétel újrakódolása „-map 0:a”-val a térhang-sávot (APAC) is vitte →
-    „Decoder (codec none) not found”. Csak az első dekódolható hangsáv mehet."""
+    „Decoder (codec none) not found”. A szerkesztő munkamásolatába is csak az első dekódolható hangsáv mehet."""
     import asyncio
+    from pathlib import Path
     from app.convert import engines
-    from app.tools import video as V
+    from app.storage import output_path
+    from app.tools import footage, mediaprobe
     calls = []
 
-    async def fake_probe(_p):
-        return {"audio_stream": 0}
+    async def fake_info(_p):
+        return {"audio_stream": 0, "acodec": "aac", "display_width": 1080, "display_height": 1920, "rotation": 90, "hdr": None}
 
     async def fake_run(*a, **k):
         calls.append(a)
+        Path(a[-1]).write_bytes(b"x")
         return b"", b""
-    monkeypatch.setattr(V, "probe_movie", fake_probe)
+    monkeypatch.setattr(mediaprobe, "info", fake_info)
     monkeypatch.setattr(engines, "run", fake_run)
-    monkeypatch.setattr(V, "write_meta", lambda *a, **k: None)
-    asyncio.run(V._upright(tmp_path / "x.mov"))
+    b, _ = asyncio.run(footage.make_proxy({"file_id": "x.mov", "width": 1080, "height": 1920}, tmp_path / "x.mov"))
     args = list(calls[0])
-    assert "0:a?" not in args and args[args.index("0:v:0") + 2] == "0:a:0"
+    assert "0:a?" not in args and args[args.index("0:v:0") + 2] == "0:a:0" and args[args.index("0:a:0") + 2] == "copy"
+    assert b["proxy"] == {"w": 540, "h": 960} and b["rotated"] == 90 and output_path(b["media_id"]).exists()
 
 
 def test_graphic_opacity_outline_draw_and_bar_grow():

@@ -87,7 +87,8 @@ def test_end_card_and_adjust_together(tmp_path, put_file):
     eid = ed.get("file_id") or ed["project"]["file_id"]
     b = read_meta(eid)["spec"]["base"]
     assert b["adjust"] == {"lut": "black_white"} and b["end_card"]["dur"] == 2
-    assert b["plain"]["asset"].startswith("footage-fx-") and b["duration"] == pytest.approx(4.0, abs=0.15)
+    assert b["proxy"] and b["plain"]["asset"] == b["asset"] and b["asset"].startswith("footage-")
+    assert b["duration"] == pytest.approx(4.0, abs=0.15)
 
     def sat_at(media_id: str, t: float) -> float:
         png = tmp_path / f"s{t}.png"
@@ -95,9 +96,9 @@ def test_end_card_and_adjust_together(tmp_path, put_file):
                         str(png)], check=True)
         return float(np.asarray(Image.open(png).convert("HSV"))[..., 1].mean())
 
-    assert sat_at(b["media_id"], 3.2) < 10                               # a kártya alatti kimerevített kocka is fekete-fehér
+    assert sat_at(b["media_id"], 1.8) < 10                    # a munkamásolat fekete-fehér (a kártya alatt az utolsó kockája áll)
     ed2 = asyncio.run(video.edit(eid, {"end_card": "none", "add_layers": [{"at": 0.5, "type": "source", "text": "Forrás: teszt"}]},
                                  render=False))
     b2 = read_meta(ed2.get("file_id") or ed2["project"]["file_id"])["spec"]["base"]
-    assert "end_card" not in b2 and b2["adjust"] == {"lut": "black_white"} and b2["asset"].startswith("footage-fx-")
+    assert "end_card" not in b2 and b2["adjust"] == {"lut": "black_white"} and b2["media_id"] == b["media_id"]
     assert b2["duration"] == pytest.approx(2.0, abs=0.15)
