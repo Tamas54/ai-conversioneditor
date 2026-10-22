@@ -72,6 +72,10 @@ def test_classify_sorts_layers_and_refuses_what_it_cant_match():
     assert not fr.classify(_info(**{"3": {"adj": True}}), spec)["ok"]
     assert not fr.classify(_info(**{"5": {"fx": 1}}), spec)["ok"]
     assert fr.classify(_info(), {"kind": "make"})["why"] == fr.NOT_OVERLAY
+    # a szerkesztőben megvágott / eltolt / lassított felvétel: a gyors út a vágatlant tenné alá — a teljes út fut
+    for cut in ({"a": 5}, {"b": 40}, {"st": -5, "a": 0}, {"tr": [[0, 0], [10, 20]]}):
+        assert "cut or moved in time" in fr.classify(_info(**{"5": cut}), spec)["why"], cut
+    assert fr.classify(_info(**{"5": {"tr": [[0, 0], [54.96, [54.96]]]}}), spec)["ok"]     # a zárókártya kimerevítése
     rows = [{"t0": 0.5, "t1": 2.0, "text": "Hello there"}]
     assert fr.captions_match(k["captions"], rows)
     assert not fr.captions_match(k["captions"], [{**rows[0], "text": "Hello, there"}])    # kézzel átírt felirat

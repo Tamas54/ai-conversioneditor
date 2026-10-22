@@ -63,6 +63,8 @@ for (var j = 1; j <= c.numLayers; j++) {
   try { o.blend = String(L.blendingMode); o.normal = L.blendingMode == BlendingMode.NORMAL; } catch (e) { o.normal = true; }
   try { o.matte = !!L.trackMatteType && L.trackMatteType != TrackMatteType.NO_TRACK_MATTE; } catch (e) { o.matte = false; }
   try { if (L.source && L.source.file) o.file = L.source.file.name; } catch (e) {}
+  try { o.st = L.startTime; if (L.timeRemapEnabled) { var R = L.property("ADBE Time Remapping"); o.tr = [];
+        for (var q = 1; q <= R.numKeys; q++) o.tr.push([R.keyTime(q), R.keyValue(q)]); } } catch (e) {}
   try { var tp = L.property("ADBE Text Properties"); if (tp) o.text = tp.property("ADBE Text Document").value.text; } catch (e) {}
   try { var fxp = L.property("ADBE Effect Parade"); o.fx = fxp ? fxp.numProperties : 0; } catch (e) {}
   try {
@@ -136,6 +138,8 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "why": "something lies under the footage"}
     if f["fx"]:
         return {"ok": False, "why": "the footage has an effect on it in the project"}
+    if retimed(f, float(info["dur"]), float(info["fps"])):
+        return {"ok": False, "why": "the footage was cut or moved in time in the editor"}
     caps = [x for x in vis if _CAPTION.match(x["name"])]
     gfx = [x for x in vis if x is not f and x not in caps]
     for x in gfx + caps:
@@ -151,6 +155,16 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)]   # a felvétel el van mozdítva
     return {"ok": True, "why": "", "footage": f, "captions": caps, "gfx": gfx, "persistent": pers, "short": short,
             "opaque": opaque}
+
+
+def retimed(f: dict[str, Any], dur: float, fps: float) -> bool:
+    """A felvétel-réteg ideje a projektben nem a felvételé (a szerkesztőben megvágva, eltolva, lassítva): a gyors út az
+    eredeti idővonalat tenné a grafika alá. Ami szabályos: 0-tól indul, a végéig tart, és az időtérkép (ha van) azonos
+    leképezés — a zárókártya kimerevítése (az utolsó kulcs után áll) is ilyen."""
+    eps = 1.5 / max(fps, 1)
+    if abs(float(f.get("st") or 0)) > eps or float(f["a"]) > eps or float(f["b"]) < dur - eps:
+        return True
+    return any(abs(float(t) - float(v[0] if isinstance(v, list) else v)) > eps for t, v in (f.get("tr") or []))
 
 
 def moved(f: dict[str, Any], dur: float) -> list[tuple[float, float]]:
