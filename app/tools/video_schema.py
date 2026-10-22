@@ -52,6 +52,8 @@ pictures: stock (free stock photos fill the scenes without one) | mine | none (|
 AI NARRATION IS ON BY DEFAULT: narration="ai" — a natural AI voice (offline Piper voices, 58 languages, picked from the
 text or `language`) reads the title and every caption aloud. narration="none" turns it off (captions only).
 narration_voice: "female" | "male" | a Piper voice id (e.g. "hu_HU-imre-medium", "en_US-ryan-medium").
+PAUSES in the narration: put [pause: 1.5s] (or [pause: 500ms], ≤ 10 s) in a caption — the voice stops there; the mark
+isn't shown on screen. Works in an avatar's ai.text too.
 MUSIC (none by default): the person's OWN music — music_file_id (or music={"file_id"}) = their uploaded mp3 | m4a | wav…;
 ask them for it. Under speech the music drops and comes back in the pauses; "none" = no music. (music = a mood works
 only where the built-in library is switched on.) voice_file_id: the person's own voice-over (replaces the AI
@@ -212,8 +214,9 @@ action="audiogram" — a podcast / interview / voice note as a video: file_id = 
 whose sound to use (≤ 30 min); title_image? = the cover (file_id | URL | {"stock": "words"}; without it a dark accent
 background), format vertical (default) | square | landscape, title? (default: the file's name), accent?,
 ai={"style": "bars" | "rise", "captions": false?} — the waveform's look; captions are automatic (Whisper) and word by
-word, caption_style bold by default (topic "subtitles"). The result is an editable overlay project (topic "layers":
-change or add layers with action="edit"). Returns a job."""
+word, caption_style bold by default (topic "subtitles"); text = what is said (the script), when known — the captions'
+words then come from it. The result is an editable overlay project (topic "layers": change or add layers with
+action="edit"). Returns a job."""
 
 TOPICS["subtitles"] = """\
 SUBTITLES on the person's own footage (overlay), in the Studio caption style (the dark caption bar of made videos):
@@ -228,8 +231,12 @@ times come from the transcript with subtitles="auto"; for your own subtitles the
 action="transcript": what is said in a video or sound file (or an overlay project's footage), with times → sentences
 [{at, until, text}] + an .srt (file_id), as a job. Offline speech recognition (Whisper large-v3-turbo; `language`
 helps, else detected). Tie a layer to what is said: {"at": {"say": "words from a sentence"}, …}.
-Overlay transcript={"prompt"?, "vocabulary"?, "model"?} passes hints to the speech recognition used by
-subtitles="auto" and {"say": …} (topic "transcript", when present, lists them)."""
+Overlay transcript={"prompt"?, "vocabulary"?, "model"?, "script"?} passes hints to the speech recognition used by
+subtitles="auto" and {"say": …} (topic "transcript", when present, lists them).
+SCRIPT: when the words are known (what was read out, the script), transcript={"script": "…"} (action="transcript":
+text="…") — the captions' WORDS come from it, only the times from the listening: misheard words are corrected, names
+are spelt as written; a part of the script that isn't said is left out, longer unscripted speech is kept. A talking
+avatar made from ai.text remembers its text, so its captions follow it without asking."""
 
 TOPICS["edit"] = """\
 action="edit": change a finished video (file_id = its project or its MP4) → a NEW version (project + MP4), as a job.

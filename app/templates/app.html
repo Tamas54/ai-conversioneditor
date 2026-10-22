@@ -1679,8 +1679,9 @@ async function subtitleSubmit(fd, form) {
   }
   // jobb felismerés (Omlett 3.5): várható szavak, téma, modell, AI-javítás, újrahallgatás — a kulcsuk része a „már hallott”-nak
   const hear = { vocabulary: (fd.get("vsubvocab") || "").trim() || null, prompt: (fd.get("vsubprompt") || "").trim() || null,
-    model: fd.get("vsubmodel") || null, correct: fd.get("vsubfix") ? true : null, force: !!fd.get("vsubforce") };
-  const heardKey = JSON.stringify([vid, language, hear.vocabulary, hear.prompt, hear.model, hear.correct]);
+    model: fd.get("vsubmodel") || null, correct: fd.get("vsubfix") ? true : null, force: !!fd.get("vsubforce"),
+    script: (fd.get("vsubscript") || "").trim() || null };     // a kimondott szöveg: a feliratok szavai abból (10-22)
+  const heardKey = JSON.stringify([vid, language, hear.vocabulary, hear.prompt, hear.model, hear.correct, hear.script]);
   if (form.dataset.subsFor !== vid || form.dataset.subsKey !== heardKey || hear.force) {
     const job = await api("/api/video/transcript", { method: "POST", body: JSON.stringify({ file_id: vid, language, ...hear }) });
     const t = await pollJob(job, () => "Listening to the video — about a minute for every few minutes of speech…");
@@ -1690,7 +1691,7 @@ async function subtitleSubmit(fd, form) {
     const force = form.querySelector("[name=vsubforce]"); if (force) force.checked = false;
     form.dispatchEvent(new Event("change"));
     const fixed = (t.corrections || []).length;
-    throw new Error(`${lines.length} line${lines.length > 1 ? "s" : ""} heard` + (fixed ? `, ${fixed} misheard word${fixed > 1 ? "s" : ""} fixed (${(t.corrections || []).slice(0, 3).map(c => `“${c.heard}” → “${c.fixed}”`).join(", ")}${fixed > 3 ? "…" : ""})` : "")
+    throw new Error(`${lines.length} line${lines.length > 1 ? "s" : ""} heard` + (fixed ? `, ${fixed} misheard word${fixed > 1 ? "s" : ""} fixed (${(t.corrections || []).slice(0, 3).map(c => `“${c.heard}” → ${c.fixed ? `“${c.fixed}”` : "left out"}`).join(", ")}${fixed > 3 ? "…" : ""})` : "")
       + ` — check them below, then press “Add the subtitles”.`);
   }
   const cues = subCues(form);
@@ -1898,6 +1899,7 @@ const MAKERS = {
         <details class="more-fields"><summary>Better recognition — names, dishes, foreign words</summary>
           <label>Words to expect<input type="text" name="vsubvocab" maxlength="1500" placeholder="e.g. sonkával, fakanállal, Voilà, Jöhet a tálalás"></label>
           <label>What is it about?<input type="text" name="vsubprompt" maxlength="600" placeholder="e.g. A cooking show: an omelette with ham, stirred with a wooden spoon"></label>
+          <label>The script — what is said, if you have it<textarea name="vsubscript" maxlength="20000" rows="3" placeholder="Paste the text that was read out: the subtitles take its words (names spelt right), only the timing comes from listening."></textarea></label>
           <label>Accuracy<select name="vsubmodel"><option value="">Fast (large-v3-turbo)</option><option value="large-v3">Most accurate, slower (large-v3)</option></select></label>
           <div class="checks"><label><input type="checkbox" name="vsubfix"> Proofread with AI <em class="ai-badge">AI</em></label>
             <label><input type="checkbox" name="vsubforce"> Listen again from scratch</label></div>

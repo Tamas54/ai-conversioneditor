@@ -903,7 +903,7 @@ AI_VIDEO_REFERENCE: dict[str, str] = {
         'video(action="avatar", ai={…}, file_id?=<project to put it in>) — a talking video from ONE photo (via kie.ai, Kling '
         'AI Avatar, lip-synced): ai: image = file_id of a photo of the face, and audio = file_id of a recording (≤ 5 min; '
         "a video's sound works too) OR text = what to say (read out by the built-in AI voice: voice female | male | a "
-        'Piper voice, language), quality 720p (default) | 1080p, prompt? = expression and camera, consent: true (REQUIRED '
+        'Piper voice, language; [pause: 1s] = a pause), quality 720p (default) | 1080p, prompt? = expression and camera, consent: true (REQUIRED '
         "— the person in the photo agreed: their own face, or they said yes). Placement like ai_clip: at=seconds | "
         'after_scene. Costs paid credits by the seconds of speech; action="estimate" with ai={"for": "avatar", …} gives '
         "the price. Returns a job; the result is a video file with its sound."),
@@ -1248,7 +1248,8 @@ async def start_avatar(opts: dict[str, Any], project: Optional[str] = None) -> d
     try:
         op = await reserve("avatar", c["model"], hold=est["credits"],
                            meta={"units": units, "tier": c["quality"], "seconds": round(secs, 2),
-                                 "said": (c["text"] or "")[:300], "prompt": c["prompt"][:300]})
+                                 "said": (c["text"] or "")[:300], "prompt": c["prompt"][:300],
+                                 **({"script": c["text"]} if c["text"] else {})})
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
@@ -1286,9 +1287,10 @@ async def _post_avatar(rows: list[dict[str, Any]], files: list[list[str]]) -> di
     await _finish_ai_video(fid, info)
     said = " ".join(str(head["meta"].get("said") or "").split()[:6])
     label = f"AI avatar — {said or 'speech'}.mp4"
+    script = head["meta"].get("script")          # a felolvasott szöveg: a feliratai ebből (video.with_script)
     write_meta(fid, label=label, operation="avatar",
                extra={"ai": {"provider": head["provider"], "model": head["model"], "kind": "talking avatar",
-                             "said": head["meta"].get("said"), "consent": True}})
+                             "said": head["meta"].get("said"), "consent": True}, **({"script": script} if script else {})})
     return {"file_id": fid, "url": public_url(fid), "label": label, "width": info["width"], "height": info["height"],
             "duration": info["duration"], "audio": info["audio_stream"] is not None}
 

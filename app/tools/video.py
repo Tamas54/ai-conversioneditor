@@ -402,7 +402,8 @@ Rules:
 
 _KEEP = """
 The user wrote this text as the video's SCRIPT: keep their wording for the captions (fix only typos), one scene per
-paragraph or idea, in their order; write the headlines and image queries yourself."""
+paragraph or idea, in their order; write the headlines and image queries yourself. Keep pause marks such as
+[pause: 1s] exactly where they are in the captions (the narrator stops there)."""
 
 
 _NUM_IN_TEXT = re.compile(r"(?<![\d.,])-?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?(?![\d])|-?\d+(?:[.,]\d+)?")
@@ -800,6 +801,11 @@ def charts_from_table(file_id: str, limit: int = 2) -> list[dict[str, Any]]:
 
 # egy gyártás / szerkesztés alatt: mely szövegek rövidültek (a check jelzi — 10-12: „millió” → „milli…” észrevétlenül)
 _TRUNC: "contextvars.ContextVar[Optional[list[str]]]" = contextvars.ContextVar("video_trunc", default=None)
+
+
+def _unpaused(s: str) -> str:
+    from app.tools.narration import strip_pauses
+    return strip_pauses(s)
 
 
 def _clean(s: Any, n: int, what: Optional[str] = None) -> str:
@@ -1778,7 +1784,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     if voice_s:
         total = max(8.0, voice_s + 1.0)
     Tt, Te = _cards(total)
-    weights = [max(len(s.get("caption") or s.get("headline") or ""), 45) for s in scenes]
+    weights = [max(len(_unpaused(s.get("caption") or "") or s.get("headline") or ""), 45) for s in scenes]
     # a jelenetterv (scenes) adhat fix hosszt jelenetenként; a többi a maradékon osztozik a felirat hossza szerint
     fixed = [_scene_seconds(s) for s in scenes]
     if total is None:                        # saját szöveg, hossz nélkül: olvasási tempó (~14 karakter/s)
@@ -1810,7 +1816,7 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
     motions = _motions(len(scenes), ken_burns)
     lang = _lang_of(" ".join([story.get("title") or ""] + [x.get("caption") or "" for x in scenes]))
     for i, (s, d) in enumerate(zip(scenes, durs)):
-        cap = s.get("caption") or ""
+        cap = _unpaused(s.get("caption") or "")          # a [pause: 1s] a narrációé, a képernyőn nem látszik
         parts = _chunks(cap, max_chunk) if cap else []
         a, b = t + X + 0.15, t + d - X - 0.05
         tot = sum(len(p) for p in parts) or 1
@@ -4039,7 +4045,9 @@ async def audiogram(body: dict[str, Any], progress: Optional[Callable[..., None]
                   "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-b:a", "192k", "-shortest", str(input_path(base)),
                   timeout=settings.VIDEO_TIMEOUT_S)
         stem = root_name(display_label(fid), "Audio")
-        write_meta(base, original_filename=f"{stem} (audiogram base).mp4", operation="audiogram base", source_file_id=fid)
+        said = str(body.get("script") or "").strip() or (read_meta(fid) or {}).get("script")
+        write_meta(base, original_filename=f"{stem} (audiogram base).mp4", operation="audiogram base", source_file_id=fid,
+                   extra={"script": said[:20_000]} if said else None)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     wave = {"at": 0, "dur": round(secs, 3), "type": "waveform", "style": body.get("style") or "bars",
@@ -4098,12 +4106,12 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
         notes: list[str] = []
-        topts = transcript_opts(body.get("transcript"))       # a kliens súgása a felismerőnek (prompt, vocabulary, model)
+        topts = with_script(fid, transcript_opts(body.get("transcript")))   # a kliens súgása a felismerőnek (prompt, szókincs, szöveg)
         cstyle = caption_style(body.get("caption_style"))     # a hibás stílus a hosszú munka (átirat) ELŐTT derüljön ki
         raw = await said_to_times(body.get("layers"), crafts.existing(fid), notes, step, body.get("language"), new_ids=True,
                                   topts=topts)
         layers = layers_from(raw, body.get("text") or "", notes)
-        subs = await _auto_subtitles(fid, body.get("language"), step, topts) if body.get("subtitles") == "auto" \
+        subs = await _auto_subtitles(fid, body.get("language"), step, topts, notes) if body.get("subtitles") == "auto" \
             else subtitle_cues(body.get("subtitles"))
         card = end_card_of(body)
         if not layers and not subs and not card:
@@ -4171,17 +4179,30 @@ def _says(raw: Any) -> bool:
 
 
 def transcript_opts(raw: Any) -> dict[str, Any]:
-    """overlay transcript={prompt, vocabulary, model, force?, correct?} → a beszédfelismerő (transcript.transcribe)
-    paraméterei — csak azok, amelyeket az ismer (a magyar átirat bővítése előtt a régi aláírás mellett nem hibázik)."""
+    """overlay transcript={prompt, vocabulary, model, force?, correct?, script?} → a beszédfelismerő (transcript.transcribe)
+    paraméterei — csak azok, amelyeket az ismer (a magyar átirat bővítése előtt a régi aláírás mellett nem hibázik).
+    script = a kimondott szöveg: a feliratok szavai abból, az idők a hallásból."""
     if not isinstance(raw, dict) or not raw:
         return {}
     import inspect
     from app.tools import transcript
     known = set(inspect.signature(transcript.transcribe).parameters)
-    out = {k: raw[k] for k in ("prompt", "vocabulary", "model", "force", "correct") if raw.get(k) not in (None, "") and k in known}
+    out = {k: raw[k] for k in ("prompt", "vocabulary", "model", "force", "correct", "script")
+           if raw.get(k) not in (None, "") and k in known}
+    if "script" in out:
+        out["script"] = str(out["script"])[:20_000]
     if len(out) < len([k for k in raw if raw.get(k) not in (None, "")]):
         log.info("overlay transcript: a felismerő nem ismeri: %s", sorted(set(raw) - set(out)))
     return out
+
+
+def with_script(fid: str, topts: dict[str, Any]) -> dict[str, Any]:
+    """A felvétel ismert szövege (a szövegből felolvasott avatar, egy audiogram alapja): ha a kliens nem adott mást, a
+    feliratok szavai abból jönnek (a meta „script”-je)."""
+    if topts.get("script"):
+        return topts
+    known = (read_meta(fid) or {}).get("script")
+    return {**topts, "script": known} if isinstance(known, str) and known.strip() else topts
 
 
 async def said_to_times(raw: Any, footage: Path, notes: list[str], step: Callable[..., None] = lambda *a, **k: None,
@@ -4555,12 +4576,26 @@ def _srt_text(cues: list[dict[str, Any]]) -> str:
 
 
 async def _auto_subtitles(fid: str, language: Optional[str], step: Callable[..., None],
-                          topts: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+                          topts: Optional[dict[str, Any]] = None, notes: Optional[list[str]] = None) -> list[dict[str, Any]]:
     """subtitles="auto": a felvétel átirata, javítás nélkül (a webes feliratozó előbb megmutatja és javíttatja)."""
     from app.tools import transcript
     step(1, 4, "listening (transcript)")
     tr = await transcript.transcribe(crafts.existing(fid), transcript_lang(language), **(topts or {}))
+    if notes is not None:
+        notes += script_notes(tr)
     return subtitle_cues(transcript.cues(tr))
+
+
+def script_notes(tr: dict[str, Any]) -> list[str]:
+    """A forgatókönyv-illesztés eredménye egy mondatban (verified), illetve ha nem illett: ⚠ jegyzet (findings)."""
+    st = tr.get("script")
+    out = [f"⚠ {n}" for n in tr.get("correction_notes") or []]
+    if st:
+        out.append(f"The captions follow the script: {st['heard_as_written']} of its {st['words']} words heard as written, "
+                   f"{st['corrected']} corrected from it" + (f", {st['added']} put in where unheard" if st["added"] else "")
+                   + (f"; {st['not_said']} at its start/end weren't said and are left out" if st["not_said"] else "")
+                   + (f"; {st['kept_heard']} heard word(s) not in the script kept" if st["kept_heard"] else "") + ".")
+    return out
 
 
 def _has_3d(D: dict[str, Any]) -> bool:
@@ -4798,7 +4833,7 @@ def _words(t: str) -> list[str]:
 def _video_text(story: dict[str, Any]) -> str:
     parts = [story.get("title") or "", (story.get("end") or {}).get("title") or "", (story.get("end") or {}).get("subtitle") or ""]
     for sc in story.get("scenes") or []:
-        parts += [sc.get("headline") or "", sc.get("caption") or ""]
+        parts += [sc.get("headline") or "", _unpaused(sc.get("caption") or "")]
         if sc.get("stat"):
             parts += [sc["stat"].get("value") or "", sc["stat"].get("label") or ""]
         ch = sc.get("chart") or {}
@@ -5050,6 +5085,8 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
     elif ext not in MOVIE_EXTS | AUDIO_EXTS:
         raise ValueError(f"A transcript needs a video or a sound file, not .{ext}.")
     step(0, 2, "listening (transcript)")
+    if not opts.get("script"):
+        opts = with_script(file_id, opts)
     tr = await transcript.transcribe(p, transcript_lang(language), **opts)
     step(1, 2, "writing the subtitles")
     subs = transcript.cues(tr)               # feliratméretű sorok a szóidőkből (a mondat a rétegkötéshez marad)
@@ -5062,7 +5099,9 @@ async def transcribe_file(file_id: str, language: Optional[str] = None, step: Ca
                                                            f"their times, from {_tc(tr['duration'])} of sound (model {tr['model']})."]}
              if n else {"status": "needs_check", "findings": ["No speech was heard in this file."], "verified": []})
     fixes = tr.get("corrections")
-    if fixes:
+    if tr.get("script"):
+        check["verified"] += script_notes({"script": tr["script"]})
+    elif fixes:
         by = {k: sum(c["by"] == k for c in fixes) for k in ("vocabulary", "ai")}
         check["verified"].append(f"{len(fixes)} misheard word(s) corrected — {by['vocabulary']} from your vocabulary, "
                                  f"{by['ai']} by the Studio AI; each is in corrections (heard → fixed, at).")
