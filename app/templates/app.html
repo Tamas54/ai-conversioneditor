@@ -899,17 +899,28 @@ let uploading = 0;
 const MB = n => (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0);
 function toastHold(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("act"); t.classList.add("show"); clearTimeout(t._h); }
 window.addEventListener("beforeunload", e => { if (uploading) { e.preventDefault(); e.returnValue = ""; } });
-function putChunk(url, blob, onBytes) {           // XHR: a darabon belüli haladás is látszik
-  return new Promise((ok, bad) => {
-    const x = new XMLHttpRequest();
+function putChunk(url, blob, onBytes) {           // XHR: a darabon belüli haladás is látszik; ha egy ideig semmi sem megy át, elölről
+  return new Promise((ok, bad) => {               // (10-22, iPhone akadozó Wi-Fin: a darab 3 percig állt, a kijelzés is)
+    const x = new XMLHttpRequest(), stall = window.UPLOAD_STALL_MS || 30000;
+    let last = Date.now();
+    const dog = setInterval(() => { if (Date.now() - last > stall) { clearInterval(dog); x.abort(); bad(new Error("stalled")); } }, 1000);
+    const fin = f => (...a) => { clearInterval(dog); f(...a); };
     x.open("PUT", url);
     x.setRequestHeader("Content-Type", "application/octet-stream");
-    x.upload.onprogress = e => onBytes(e.loaded);
-    x.onload = () => x.status >= 200 && x.status < 300 ? ok() : bad(Object.assign(new Error(`HTTP ${x.status}`), { status: x.status }));
-    x.onerror = x.ontimeout = () => bad(new Error("network"));
+    x.upload.onprogress = e => { last = Date.now(); onBytes(e.loaded); };
+    x.upload.onload = () => { last = Date.now(); };
+    x.onload = fin(() => x.status >= 200 && x.status < 300 ? ok() : bad(Object.assign(new Error(`HTTP ${x.status}`), { status: x.status })));
+    x.onerror = x.ontimeout = fin(() => bad(new Error("network")));
     x.timeout = 180000;
     x.send(blob);
   });
+}
+async function fingerprint(file) {      // a folytatás kulcsa: név + méret + az eleje és a vége (a Fotókból választott fájl ideje minden választáskor más lehet)
+  const bytes = async (a, b) => new Uint8Array(await file.slice(a, b).arrayBuffer());
+  let h = 2166136261;
+  for (const part of [await bytes(0, 65536), await bytes(Math.max(0, file.size - 65536), file.size)])
+    for (const v of part) h = Math.imul(h ^ v, 16777619) >>> 0;
+  return h.toString(36);
 }
 const online = () => navigator.onLine ? Promise.resolve() : new Promise(r => window.addEventListener("online", r, { once: true }));
 async function uploadFile(file, onProgress) {
@@ -921,8 +932,8 @@ async function uploadFile(file, onProgress) {
     const fd = new FormData(); fd.append("file", file);
     return api("/api/upload", { method: "POST", body: fd });
   }
-  const say = onProgress || ((p, done, total) => toastHold(`Uploading ${file.name} — ${p}% (${MB(done)} of ${MB(total)} MB). Keep this page open.`));
-  const key = `upload:${file.name}:${file.size}:${file.lastModified}`;
+  const say = onProgress || ((p, done, total, note) => toastHold(`Uploading ${file.name} — ${p}% (${MB(done)} of ${MB(total)} MB). ${note ? note + ". " : ""}Keep this page open.`));
+  const key = `upload:${file.name}:${file.size}:${await fingerprint(file)}`;
   let st = null, have = [];
   try { const id = localStorage.getItem(key); if (id) { st = await api(`/api/upload/chunks/${id}`); have = st.size === file.size ? st.received : (st = null, []); } } catch { st = null; have = []; }
   if (!st) {
@@ -932,8 +943,9 @@ async function uploadFile(file, onProgress) {
   const todo = [...Array(st.chunks).keys()].filter(i => !have.includes(i));
   const size = i => Math.min(st.chunk_size, file.size - i * st.chunk_size);
   let done = have.reduce((a, i) => a + size(i), 0);
-  const flying = new Map();
-  const tell = () => { const now = done + [...flying.values()].reduce((a, b) => a + b, 0); say(Math.min(99, Math.floor(100 * now / file.size)), now, file.size); };
+  const flying = new Map(), trouble = new Map();          // trouble: darab → hányadik újrapróbálás (a kijelzés ne álljon némán)
+  const tell = () => { const now = done + [...flying.values()].reduce((a, b) => a + b, 0), k = Math.max(0, ...trouble.values());
+    say(Math.min(99, Math.floor(100 * now / file.size)), now, file.size, !navigator.onLine ? "Waiting for the connection" : k ? `The connection is slow — trying again (${k} of 8)` : ""); };
   tell();
   uploading++;
   try {
@@ -945,9 +957,9 @@ async function uploadFile(file, onProgress) {
           await online();
           try {
             await putChunk(`/api/upload/chunks/${st.upload_id}/${i}`, part, b => { flying.set(i, b); tell(); });
-            flying.delete(i); done += size(i); tell(); break;
+            flying.delete(i); trouble.delete(i); done += size(i); tell(); break;
           } catch (err) {
-            flying.delete(i); tell();
+            flying.delete(i); trouble.set(i, k + 1); tell();
             if (err.status === 404) { stop = true; try { localStorage.removeItem(key); } catch {} throw new Error("The upload expired — choose the file again."); }
             if (k >= 7 || stop) { stop = true; throw new Error(`The upload stopped at ${Math.floor(100 * done / file.size)}% — choose the same file again and it carries on from there.`); }
             await sleep(Math.min(15000, 1000 * 2 ** k));
@@ -1223,7 +1235,7 @@ async function readSlot(form, name, need = "") {    // → file_id-k: a kiválas
   for (const [i, f] of up.entries()) {
     const head = up.length > 1 ? `Uploading ${i + 1} of ${up.length}` : "Uploading";
     if (st) { st.hidden = false; st.textContent = `${head}…`; }
-    ids.push((await uploadFile(f, st ? (p, done, total) => { st.textContent = `${head} — ${p}% (${MB(done)} of ${MB(total)} MB). Keep this page open.`; } : undefined)).file_id);
+    ids.push((await uploadFile(f, st ? (p, done, total, note) => { st.textContent = `${head} — ${p}% (${MB(done)} of ${MB(total)} MB). ${note ? note + ". " : ""}Keep this page open.`; } : undefined)).file_id);
   }
   if (!ids.length && need) {   // nincs fájl: a választó nyílik (saját fájlok listája, ha van illő; különben a gép fájlválasztója)
     s.classList.add("needs"); s.scrollIntoView({ block: "center", behavior: "smooth" });
