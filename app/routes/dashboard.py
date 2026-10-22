@@ -87,8 +87,8 @@ def _list_dir(d: Path, kind: str, include_ephemeral: bool = False, only: Optiona
     for p in d.iterdir():
         if only is not None and p.name not in only:
             continue                  # megosztott munkaterület: csak a megosztott család (app/sharing.py)
-        if not p.is_file():
-            continue
+        if not p.is_file() or p.name.startswith("."):
+            continue                  # rejtett: egy épp futó mentés ideiglenes fájlja (WordCraft 0.9: .wordcraft-save-*.tmp)
         if is_meta_path(p.name):
             continue  # sidecar metadata; not a user-visible file
         try:

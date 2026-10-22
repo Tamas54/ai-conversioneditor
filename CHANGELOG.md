@@ -47,6 +47,9 @@ From an MCP agent's report after a full trial on a long study: a fact check, the
     PDFs and pages that answer 403. The verdict then sees the passages around the number.
   - The verdict must quote the source. If the quote isn't in the source, the verdict is "unverified"; this catches a
     figure tied to another country.
+- **The file list no longer fails while a save is running.** WordCraft 0.9 keeps a hidden temporary file
+  (`.wordcraft-save-*.tmp`) in the folder during a save; listing then failed with "Invalid file_id". Hidden files are
+  now skipped there and in sharing.
 - **Web: More ▾ → "Accept all changes, remove comments"** makes a clean copy as a new version (`/api/make/clean_copy`,
   no AI). A LibreOffice "accept all" save had left 289 changes and 22 comments in the file.
 

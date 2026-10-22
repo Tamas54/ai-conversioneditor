@@ -474,3 +474,24 @@ def test_only_reads_covers_caret_and_selection():
     from app.tools.run_report import only_reads
     assert only_reads([("caret.set", {}), ("select.paragraph", {}), ("document.selection", {})])
     assert not only_reads([("caret.set", {}), ("text.insert", {"text": "x"})])
+
+
+def test_a_save_in_progress_does_not_break_the_file_list(client, tmp_path, put_file):
+    """A WordCraft 0.9 mentés közben ideiglenes fájlt tart a kimeneti mappában (.wordcraft-save-<pid>-0.tmp): ha épp
+    akkor listáz valaki, a lista nem dőlhet el („Invalid file_id”)."""
+    from app.storage import output_path
+    from docx import Document
+    d = Document()
+    d.add_paragraph("x")
+    d.save(tmp_path / "x.docx")
+    fid = put_file(tmp_path / "x.docx")
+    tmp = output_path("probe.docx").with_name(".wordcraft-save-101-0.tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(b"PK")
+    try:
+        r = client.get("/api/files")
+        assert r.status_code == 200, r.text
+        names = [f["file_id"] for k in ("inputs", "outputs") for f in r.json().get(k, [])]
+        assert fid in names and not any(n.startswith(".") for n in names)
+    finally:
+        tmp.unlink(missing_ok=True)

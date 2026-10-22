@@ -509,8 +509,8 @@ async def index_workspace(owner: str) -> int:
         if not d.is_dir():
             continue
         for p in d.iterdir():
-            if not p.is_file() or p.name.endswith(".meta.json"):
-                continue
+            if not p.is_file() or p.name.endswith(".meta.json") or p.name.startswith("."):
+                continue                  # rejtett: futó mentés ideiglenes fájlja
             m = p.with_name(p.name + ".meta.json")
             try:
                 meta = json.loads(m.read_text("utf-8")) if m.exists() else {}
