@@ -1574,9 +1574,20 @@ async def edit_with_instruction(
     return_format: Optional[str] = None,
     job_id: Optional[str] = None,
     wait: Optional[float] = None,
+    mode: Optional[str] = None,
+    brief: Optional[dict] = None,
 ) -> dict:
     """
     Edit a document using a natural-language instruction.
+
+    EDITING MODES (Word documents) — the person decides, nothing is accepted automatically:
+    mode = proofread (language only) | edit (substantive: clearer, less repetition; content and position stay) |
+    expand | shorten | rewrite. Without `brief` → the QUESTIONS to ask the person (goal, the limit e.g. "at most 10%
+    shorter", tables / numbers / position / terms that must stay, new thoughts allowed?, which part), each with a
+    suggested default — nothing changes. Then call again with brief={id: answer, …} → a NEW version where every
+    change is a TRACKED CHANGE with a comment saying why (a new thought: "do you stand behind it?"), checked by machine
+    against the limits (what didn't fit is listed in held_back), plus a preservation report. Accept / reject per
+    change in Word, the editor or wordcraft(address=[{"accept"|"reject": …}]).
 
     Runs in the background: the answer comes within ~40 s; a longer edit returns {status: "running", job_id, stage} —
     call edit_with_instruction(job_id=…, wait=30) until it is done (the result) or failed (the reason, nothing
@@ -1596,6 +1607,17 @@ async def edit_with_instruction(
     from app import jobs
     if job_id:
         return await _edit_job_result(job_id, wait)
+    if mode:                                         # szerkesztési mód: előbb kérdez, aztán követett változásként javasol
+        from app.tools import edit_modes
+        if not file_id:
+            raise ValueError("A mode needs file_id (a Word document).")
+        if brief is None:
+            return await edit_modes.brief(file_id, mode, instruction or "")
+        edit_modes.mode_of(mode)
+
+        async def mode_work(progress):
+            return await edit_modes.propose(file_id, mode, brief, instruction or "", progress=progress)
+        return await _edit_job_result(jobs.start("edit", mode_work)["id"], EDIT_INLINE_WAIT_S)
     if not file_id or not (instruction or "").strip():
         raise ValueError("edit_with_instruction needs file_id and instruction (or job_id to ask about a running edit).")
     args = {"file_id": file_id, "instruction": instruction}

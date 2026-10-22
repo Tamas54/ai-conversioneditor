@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-22 — Editing modes with limits: ask first, propose as tracked changes
+
+The first piece of editorial intelligence, under the owner's principle: within limits, the system asks what the
+author wants, and the person decides.
+- **`edit_with_instruction(file_id, mode=…)`** with `proofread` (language only), `edit` (substantive: clearer, less
+  repetition; content and position stay), `expand`, `shorten` or `rewrite`.
+- **Without `brief`: the questions, and nothing changes.** No AI and no cost. Each question comes with a suggested
+  default:
+  - what the text is for and who reads it;
+  - the limit (e.g. at most 10% shorter);
+  - whether tables, numbers and quotations, and the author's position must stay;
+  - words and names that must not change (detected candidates);
+  - whether new thoughts are allowed;
+  - which part to work on, and whose name goes on the changes.
+- **With `brief={…}`: proposals, run in the background like any edit.**
+  - The AI works paragraph by paragraph, one Studio AI step per ~6,000 characters, cached.
+  - Machine guards: numbers and the named words must stay; proofreading may only change a little; a new thought is
+    allowed only with permission; the whole-text length limit holds.
+  - Whatever doesn't pass is listed in `held_back` with the reason.
+  - Every change is a **tracked change** under the chosen name, with a comment saying why, in the document's
+    language. A new thought is marked "do you stand behind it?".
+  - Nothing is accepted. A preservation report gives the words before and after, tables, numbers, terms, what was
+    held back, and what wasn't touched (headings, kept tables, paragraphs with notes, fields, pictures or pending
+    changes).
+
 ## 2026-10-22 — Layout fixes are the person's decision
 
 Owner's principle: editorial intelligence stays within limits. The system asks, and the person decides and takes
