@@ -1915,6 +1915,18 @@ _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full
 _CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "series", "x_title",
                "y_title", "forecast_from", "total_label", "flows", "nodes", "edges", "root", "branches", "steps", "lanes",
                "actors", "reveal", "pace", "direction", "center", "focus", "columns", "rows")
+# a réteg mezői fajtánként — ami más, nem kerül a rétegbe, és a check megnevezi (10-22, Tamás TV-próba: a szerkesztésben a
+# grafika „elements”-e és a hálózati ábra „direction”-je némán elveszett)
+_IMAGE_KEYS = ("image", "image_prompt", "generate", "ai_image", "ai_picture", "image_query", "clip", "sound")
+_LAYER_COMMON = ("id", "at", "dur", "until", "type", "position", "anim", "remove")
+_LAYER_FIELDS = {"lower_third": ("name", "text", "role", "subtitle", "side"), "title": ("text", "title", "subtitle", "kicker"),
+                 "chapter": ("text", "title", "subtitle", "kicker"), "source": ("text",), "stat": ("stat", "value", "label"),
+                 "quote": ("text", "label", "author", "who"), "waveform": ("style", "bars", "color"),
+                 "chart": ("chart", "panel") + _CHART_KEYS,
+                 # teljes kép / osztott: a tartalma szerint (ábra | kép | szöveg)
+                 "fullscreen:chart": ("chart",) + _CHART_KEYS, "fullscreen:image": _IMAGE_KEYS,
+                 "fullscreen:text": ("text", "subtitle", "kicker")}
+_PIP_FIELDS = ("image", "file_id", "corner", "size", "aspect", "sound", "clip", "panel")
 _PANEL = [0.035, 0.04, 0.055]
 # a hibaüzenetek minimális példája (10-19: a csonkolt leírás után a „type None” hiba nem mondta meg, mi a jó alak)
 _LAYER_EXAMPLE = '{"at": "00:02", "dur": 5, "type": "lower_third", "name": "Anna Kovács", "role": "Mayor"}'
@@ -1941,21 +1953,32 @@ def _pip_layer(r: dict[str, Any], what: str) -> tuple[dict[str, Any], dict[str, 
         raise ValueError(f"{what} (pip): image = a video or a picture (file_id or URL) — it plays in a framed window over the "
                          "footage, e.g. {\"at\": 4, \"dur\": 6, \"type\": \"pip\", \"image\": \"<video file_id>\", \"corner\": "
                          "\"top-right\"}.")
-    corner = str(r.get("corner") or "top-right").lower().replace("_", "-").replace(" ", "-")
-    if corner not in _PIP_CORNERS:
-        raise ValueError(f"{what} (pip): corner {r.get('corner')!r} — {' | '.join(_PIP_CORNERS)}.")
-    try:
-        size = max(0.2, min(0.7, float(r.get("size") or 0.45)))
-        a, b = (float(v) for v in str(r.get("aspect") or "16:9").split(":"))
-        aspect = max(0.3, min(3.0, a / b))
-    except (TypeError, ValueError):
-        raise ValueError(f"{what} (pip): size = 0.2–0.7 of the frame's width, aspect = \"16:9\" | \"9:16\" | \"1:1\"…") from None
+    p = _pip_opts(r, what)
+    corner, size, aspect = p["corner"], p["size"], p["aspect"]
     sound = r.get("sound") if r.get("sound") in ("replace", "mix", "off") else "off"
     box = {"x": 0.5, "y": 0.5, "w": size, "h": 0.25, "anim": "pop", "at": 0, "dur": 0.3}
     chart = {"type": "graphic", "backdrop": 0, "elements": [
         {"shape": "rect", **box, "fill": "white", "radius": 10},
         {"shape": "image", **box, "image": img, "fit": "cover", "sound": sound, **({"clip": r["clip"]} if r.get("clip") else {})}]}
     return {**r, "chart": chart, "panel": False}, {"corner": corner, "size": size, "aspect": aspect}
+
+
+def _pip_opts(r: dict[str, Any], what: str, old: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """A kép a képben ablak sarka, mérete, aránya (old: a szerkesztett réteg eddigi értékei — ami nincs megadva, marad)."""
+    old = old or {"corner": "top-right", "size": 0.45, "aspect": 16 / 9}
+    corner = str(r.get("corner") or old["corner"]).lower().replace("_", "-").replace(" ", "-")
+    if corner not in _PIP_CORNERS:
+        raise ValueError(f"{what} (pip): corner {r.get('corner')!r} — {' | '.join(_PIP_CORNERS)}.")
+    try:
+        size = max(0.2, min(0.7, float(r.get("size") or old["size"])))
+        if r.get("aspect"):
+            a, b = (float(v) for v in str(r["aspect"]).split(":"))
+            aspect = max(0.3, min(3.0, a / b))
+        else:
+            aspect = old["aspect"]
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} (pip): size = 0.2–0.7 of the frame's width, aspect = \"16:9\" | \"9:16\" | \"1:1\"…") from None
+    return {"corner": corner, "size": size, "aspect": aspect}
 
 
 def _pip_geometry(ly: dict[str, Any], W: int, H: int) -> None:
@@ -1981,6 +2004,7 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     szám / idézet a forrás számaival (ami nincs benne, kimarad — None, a ⚠ megjegyzés a check-be kerül)."""
     if not isinstance(raw, dict):
         raise ValueError("layers[]: each layer is an object {at, dur | until, type, …}")
+    asked = [k for k in raw if raw[k] is not None]           # a kért mezők (a végén: ami nem került a rétegbe, finding)
     if not raw.get("image"):                    # rokon kulcsok a réteg képére (10-18: a tervező a jelenetek „image_query”-jét adta)
         q = next((raw[k] for k in ("image_prompt", "generate", "ai_image", "ai_picture") if isinstance(raw.get(k), str) and raw[k].strip()), None)
         if q:
@@ -1997,6 +2021,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     typ = _LAYER_ALIAS.get(str(r.get("type") or "").strip().lower().replace(" ", "_"),
                            str(r.get("type") or "").strip().lower().replace(" ", "_"))
     pip = (base or {}).get("pip") if typ == "chart" else None             # szerkesztés: a kép a képben marad
+    if pip and any(k in raw for k in ("corner", "size", "aspect")):        # … a sarka / mérete / aránya változhat
+        pip = _pip_opts(raw, what, pip)
+    asked_type = typ
     if typ in ("pip", "picture_in_picture", "inset"):
         r, pip = _pip_layer(r, what)
         raw, typ = {**raw, "chart": r["chart"]}, "chart"
@@ -2005,6 +2032,12 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         r = {**r, "chart": {**((base or {}).get("chart") or {}), "type": typ, **{k: raw[k] for k in _CHART_KEYS if k in raw}}}
         raw = {**raw, "chart": r["chart"]}
         typ = "chart"
+    elif typ in ("chart", "fullscreen", "split") and any(k in raw for k in _CHART_KEYS) and \
+            (typ == "chart" or isinstance(raw.get("chart"), dict) or (base or {}).get("kind") == "chart"):
+        # az ábra / grafika mezői a réteg tetején (a létrehozás is így fogadja: {"type": "graphic", "elements": …}) —
+        # szerkesztésnél a tárolt ábrára mennek; a "chart" belsejében megadott érték az erősebb
+        inner = raw.get("chart") if isinstance(raw.get("chart"), dict) else {}
+        raw = {**raw, "chart": {**{k: raw[k] for k in _CHART_KEYS if k in raw}, **inner}}
     if typ not in LAYER_TYPES:
         raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} | pip (or a chart type such as \"column\"), "
                          f"e.g. {_LAYER_EXAMPLE} — the full list: video(action=\"schema\", topic=\"layers\").")
@@ -2046,7 +2079,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
 
     def chart_of(cc: Any, quiet: bool = False) -> Optional[dict[str, Any]]:
         if isinstance(cc, dict) and not cc.get("type") and (base or {}).get("chart"):
-            cc = {**base["chart"], **cc}          # részleges javítás: csak a megadott mezők változnak (pl. a cím)
+            from app.tools import diagrams        # részleges javítás: csak a megadott mezők változnak (pl. a cím);
+            cc = diagrams.merge(base["chart"], cc) if base["chart"].get("type") in diagrams.TYPES else {**base["chart"], **cc}
+            # a magyarázó ábránál a csúcsok id, az élek from+to szerint (mint a jelenetek ábráján)
         if not isinstance(cc, dict):
             raise ValueError(f"{what}: chart = {{type, title, unit, items}} — any scene chart type (graphic, map, lottie and script "
                              "too), e.g. {\"at\": 9, \"chart\": {\"type\": \"column\", \"title\": \"Budget\", \"unit\": \"bn Ft\", "
@@ -2146,6 +2181,17 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         if typ == "split" and str(r.get("side") or "").lower() in ("left", "right", "top", "bottom"):
             ly["side"] = str(r["side"]).lower()
     notes += [f"⚠ {what}: {n_[2:]}" if n_.startswith("⚠ ") else f"{what}: {n_}" for n_ in cnotes]
+    fields = (_LAYER_FIELDS[f"fullscreen:{ly['kind']}"] + (("side",) if typ == "split" else ()) if typ in ("fullscreen", "split")
+              else _LAYER_FIELDS[typ]) + _LAYER_COMMON + (_PIP_FIELDS if pip or asked_type in ("pip", "picture_in_picture", "inset") else ())
+    if typ == "chart" and asked_type in _CHART_TYPES:
+        fields += ("type",)
+    unused = [k for k in asked if k not in fields]
+    if unused:
+        kind = "picture-in-picture" if pip else (ly.get("chart") or {}).get("type") or typ if typ == "chart" else typ
+        own = [k for k in fields if k not in _LAYER_COMMON and k not in _IMAGE_KEYS[1:6] and k not in _CHART_KEYS]
+        notes.append(f"⚠ {what}: {', '.join(unused)} — not a field of a {kind} layer, so it was not applied. Its fields: "
+                     + ", ".join(own) + (" and the chart's own (title, items, elements, nodes…)" if "chart" in fields else "")
+                     + ' — video(action="schema", topic="layers").')
     return ly
 
 
@@ -3217,7 +3263,11 @@ async def _lottie_report(D: dict[str, Any], work: Path, out: str, project: str =
                 findings.append(f"{who} ({title}): it sits on " + ", ".join(f"element {t['n']}" + ("" if t["h"] == hi else f" of {t['who']}")
                                 + f" (text “{str(t['e'].get('str') or '')[:30]}”)" for t in hits[:3])
                                 + f" — move it (x, y), make it smaller (w, h), or choose another one {other}.")
-            if min(covs) <= 0.85 and not hits:
+            if max(covs) < 0.003:                       # 10-22: a „sparkles” mindhárom mintán üres volt, a check mégis „ok”
+                findings.append(f"{who} ({title}): nothing of it shows at the 3 sampled moments (it draws on {pct} of its box) "
+                                f"— it may be too thin or faint for its size, or appear later. Choose another one {other}, or "
+                                "make its box bigger.")
+            elif min(covs) <= 0.85 and not hits:
                 verified.append(f"{who} ({title}): sampled at 3 moments — it draws on {pct} of its canvas"
                                 + (", clear of the texts." if texts else "."))
     return verified, findings
@@ -4437,7 +4487,10 @@ async def _with_end_card(base: dict[str, Any], card: Optional[dict[str, Any]]) -
         b.pop("media_id", None)
     if not card:
         return b
-    name = f"footage-end-{card['dur']:g}s.mp4"
+    # a név a forrásét is viszi: a szerkesztés a szülőprojekt azonos nevű assetjét venné (10-22: a színkorrekció így
+    # elveszett — a check „Auto: gamma…”-t írt, a kép a régi maradt)
+    tag = re.sub(r"\W", "", str(plain.get("media_id") or b["file_id"]).split(".")[0])[:8]
+    name = f"footage-end-{card['dur']:g}s-{tag}.mp4"
     if old and old.get("dur") == card["dur"] and base.get("asset") == name and base.get("media_id"):
         b["media_id"] = base["media_id"]                                # ugyanolyan hosszú kártya: a meglévő marad
     else:
