@@ -4988,13 +4988,36 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
     if draft:
         args += ["--resolution", "half", "--quality", "draft"]
     t0 = time.time()
+    fast, fast_note = None, None
     async with _render_gate():
-        await _run(*args, cwd=project_path.parent)
+        from app.tools import fast_render
+        if ext == "mp4" and fast_render.enabled():       # saját felvétel + grafika: a felvétel egy ffmpeg-menetben (10-22)
+            try:
+                fast = await fast_render.render(project_path, out, spec=(read_meta(project_id) or {}).get("spec") or {},
+                                                draft=draft)
+            except Exception as e:                       # elakadt: a régi út fut, és a check megmondja, miért
+                log.warning("gyors render elakadt (%s): %s — a teljes úton", project_id, e)
+                fast_note = f"The fast render stopped ({str(e)[:160]}), so the video was rendered the full way."
+                fast = None
+            if fast and fast.get("skipped"):            # nem ilyen projekt, vagy kézzel átírt felirat: a régi út
+                why = fast["skipped"]
+                fast = None
+                if why != fast_render.NOT_OVERLAY:
+                    fast_note = f"Rendered the full way (slower): {why}."
+            if fast is None:
+                out.unlink(missing_ok=True)              # a félbemaradt gyors kimenet ne maradjon
+        pieces = _master_pieces(project_path) if fast is None and master is not None else []
+        if pieces:                                       # hosszú videó: a köztes fájl darabokban (2 GiB a zárka korlátja)
+            master, _ = await _render_pieces(project_path, pieces)
+        elif fast is None:
+            await _run(*args, cwd=project_path.parent)
     if master is not None and master.exists():
         try:
-            await encoding.final_from_master(master, out, timeout=settings.VIDEO_TIMEOUT_S)
+            await encoding.final_from_master(master, out, timeout=settings.VIDEO_TIMEOUT_S,
+                                             audio=project_path.parent / "render-master-audio.wav" if pieces else None)
         finally:
-            master.unlink(missing_ok=True)
+            for p in [master] + (list(project_path.parent.glob("render-master-*")) if pieces else []):
+                p.unlink(missing_ok=True)
     if not out.exists():
         raise RuntimeError("The render produced no file")
     from app.tools import ios_safe
@@ -5022,8 +5045,57 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
         actual = round((await probe_movie(output_path(vid)))["duration"], 2)
     except Exception:
         actual = want_s
+    if fast:
+        chk.setdefault("verified", []).append(
+            f"Fast render: the graphics were drawn for {fast['graphics_seconds_of_video']:g} s of the video in "
+            f"{fast['graphics_parts']} part(s), then one pass put footage, graphics"
+            + (", subtitles" if fast.get("subtitles") else "") + f" and sound together ({fast['seconds']:g} s in all).")
+        chk["verified"] += fast.get("notes") or []
+    elif fast_note and fast_note.startswith("Rendered the full way"):
+        chk.setdefault("verified", []).append(fast_note)
+    elif fast_note:
+        chk.setdefault("findings", []).append(fast_note)
     return {**_file_entry(vid), "render_seconds": round(time.time() - t0, 1), "check": chk,
-            "duration": {"requested": requested, "actual": actual, "mode": mode}}
+            "duration": {"requested": requested, "actual": actual, "mode": mode},
+            **({"render_path": {k: fast[k] for k in ("graphics_parts", "graphics_seconds_of_video", "graphics_render_s", "encode_s")}}
+               if fast else {})}
+
+
+def _main_spec(project_path: Path) -> tuple[int, int, float, float]:
+    """A fő kompozíció szélessége, magassága, kocka/s-e és hossza (s) a projektfájlból."""
+    name = _main_comp(project_path)
+    for item in (json.loads(project_path.read_text("utf-8")).get("items") or {}).values():
+        k = item.get("kind") or {}
+        if k.get("type") == "Comp" and item.get("name") == name:
+            fr = k.get("frame_rate") or {}
+            return int(k.get("width") or 0), int(k.get("height") or 0), (fr.get("num") or 30) / (fr.get("den") or 1), \
+                (k.get("duration") or 0) / TICKS_PER_S
+    return 0, 0, 30.0, 0.0
+
+
+def _master_pieces(project_path: Path) -> list[tuple[float, float]]:
+    """Ha a teljes köztes ProRes LT túllépné a renderelő 2 GiB-os fájlkorlátját (jail.py), a darabjai; különben []. 10-22:
+    a 30 perces próbán „File too large” — a régi út ~2,5 percnél hosszabb 1080p-s videót nem tudott elkészíteni."""
+    from app.tools import fast_render
+    W, H, fps, dur = _main_spec(project_path)
+    most = fast_render.part_seconds(W, H, fps) if W and H else 60.0
+    return fast_render.split([(0.0, dur)], most, fps) if dur > most else []
+
+
+async def _render_pieces(project_path: Path, pieces: list[tuple[float, float]]) -> tuple[Path, Path]:
+    """A fő kompozíció darabonként ProRes LT-be (hang nélkül), a hang egyben WAV-ba (a darabhatáron se kattanjon) →
+    (az ffmpeg concat-listája, a hang)."""
+    comp, work, names = _main_comp(project_path), project_path.parent, []
+    for k, (a, b) in enumerate(pieces):
+        name = f"render-master-{k:03d}.mov"
+        await _run("render", "--project", project_path.name, "--comp", comp, "--out", name, "--start", f"{a:.4f}",
+                   "--end", f"{b:.4f}", "--format", "prores", "--prores", "lt", "--audio", "off", "--json", cwd=work)
+        names.append(name)
+    await _run("render", "--project", project_path.name, "--comp", comp, "--out", "render-master-audio.wav", "--format", "wav",
+               "--json", cwd=work)
+    lst = work / "render-master-list.txt"
+    lst.write_text("".join(f"file '{n}'\n" for n in names), "utf-8")
+    return lst, work / "render-master-audio.wav"
 
 
 async def render(file_id: str, fmt: str = "mp4", draft: bool = False) -> dict[str, Any]:
