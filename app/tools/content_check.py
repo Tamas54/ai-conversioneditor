@@ -144,9 +144,30 @@ Candidates:
 
 # kitöltetlen helyőrző: [a könyvtár neve], {{name}}, TBD/TODO/XXX, Lorem ipsum — determinisztikus, modell nélkül
 # (UI-próba 10-18: a briefből írt meghívóban három [..] maradt, a Check „nothing found”-ot mondott). A „[1]”-féle
-# hivatkozás, a „[…]” kihagyás és a „[sic]” nem az.
-_PLACEHOLDER = re.compile(r"\[(?!sic\])[^\[\]\n]*[^\W\d_][^\[\]\n]*[^\W\d_][^\[\]\n]*\]|\{\{[^{}\n]{1,60}\}\}"
-                          r"|\b(?:TBD|TODO|XXX+)\b|\b[Ll]orem ipsum\b")
+# hivatkozás, a „[…]” kihagyás és a „[sic]” nem az. A dupla szögletes zárójel ([[N7]] — egy szerkesztő ügynök saját
+# horgonya, 10-22) szövegben sosem szándékos: bármi benne helyőrző.
+_PLACEHOLDER = re.compile(r"\[\[[^\[\]\n]{1,60}\]\]|\[(?!sic\])[^\[\]\n]*[^\W\d_][^\[\]\n]*[^\W\d_][^\[\]\n]*\]"
+                          r"|\{\{[^{}\n]{1,60}\}\}|\b(?:TBD|TODO|XXX+)\b|\b[Ll]orem ipsum\b")
+
+
+def placeholder_quotes(path: Path) -> list[tuple[str, str]]:
+    """Helyőrzők a DOCX MINDEN szövegrészében (törzs, lábjegyzet, végjegyzet, élőfej / -láb): [(hol, idézet)]."""
+    import zipfile
+    from lxml import etree
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    out: list[tuple[str, str]] = []
+    with zipfile.ZipFile(path) as z:
+        for name in z.namelist():
+            m = re.match(r"word/(document|footnotes|endnotes|header\d*|footer\d*)\.xml$", name)
+            if not m:
+                continue
+            where = {"document": "the text", "footnotes": "a footnote", "endnotes": "an endnote"}.get(
+                m.group(1), "a header" if m.group(1).startswith("header") else "a footer")
+            root = etree.fromstring(z.read(name))
+            for p in root.iter(W + "p"):
+                t = "".join(e.text or "" for e in p.iter(W + "t"))
+                out += [(where, q.group()) for q in _PLACEHOLDER.finditer(t) if len(q.group()) <= 82]
+    return out
 
 
 def placeholders(d: Docx) -> Optional[dict[str, Any]]:

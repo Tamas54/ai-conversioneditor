@@ -13,12 +13,13 @@ Pipeline:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from app.llm.siliconflow import plan_edits
+from app.llm.siliconflow import LLMTruncated, plan_edits
 from app.storage import (
     input_path,
     new_file_id,
@@ -32,6 +33,11 @@ from app.tools.formats import detect_from_path
 log = logging.getLogger("aice.edit_ai")
 
 CONFIDENCE_THRESHOLD = 0.7
+PLAN_DEADLINE_S = 360          # a tervezés felső határa (a modell és a tartaléka, újrapróbálással) — utána érthető hiba
+
+
+class EditError(ValueError):
+    """A szerkesztés nem sikerült — a felhasználónak szóló szöveggel (mi történt, mi maradt változatlan, mit tegyen)."""
 
 # Map plan op-types to deterministic functions
 OP_HANDLERS = {
@@ -58,8 +64,10 @@ async def edit_with_instruction(
     instruction: str,
     require_confidence: bool = True,
     return_format: Optional[str] = None,
+    progress: Optional[Callable[..., None]] = None,
 ) -> dict:
     t0 = time.time()
+    step = progress or (lambda *a, **k: None)
     src = input_path(file_id)
     if not src.exists():
         src = output_path(file_id)
@@ -85,11 +93,28 @@ async def edit_with_instruction(
         )
 
     # Extract document text for LLM context
+    step(0, 3, "reading the document")
     extracted = await edit_ops.extract(working_fid, mode="text")
     doc_text = extracted["text"]
 
     # Plan edits via LLM (give it the format so it picks format-appropriate ops)
-    plan, model_used = await plan_edits(doc_text, instruction, format_hint=working_fmt)
+    step(1, 3, "planning the edit (Studio AI)")
+    try:
+        plan, model_used = await asyncio.wait_for(plan_edits(doc_text, instruction, format_hint=working_fmt), PLAN_DEADLINE_S)
+    except asyncio.TimeoutError:
+        raise EditError(f"The AI planner didn't answer within {PLAN_DEADLINE_S // 60} minutes — nothing was changed. Split the "
+                        "instruction (one section or one kind of change at a time), or make the change with wordcraft "
+                        "commands (select.text + text.insert).") from None
+    except LLMTruncated:
+        raise EditError("The instruction asks for more rewritten text than the AI can return in one answer — nothing was "
+                        "changed. Ask for it section by section, or write the new text yourself and apply it with "
+                        "wordcraft (select.text + text.insert).") from None
+    except Exception as e:
+        from app import billing
+        if isinstance(e, billing.AIStepsExhausted):
+            raise
+        raise EditError(f"The AI planner failed ({str(e)[:200]}) — nothing was changed. Try again, split the instruction, "
+                        "or use wordcraft commands.") from None
     confidence = float(plan.get("confidence", 0.0))
     operations = plan.get("operations", [])
     warnings = list(plan.get("warnings", []))
@@ -112,11 +137,14 @@ async def edit_with_instruction(
     # we chain them so the next op edits the previous result.
     current_fid = working_fid
     executed_ops = []
-    for op in operations:
+    failed_ops = []
+    for i, op in enumerate(operations, 1):
         op_type = op.get("type")
+        step(2, 3, f"applying change {i} of {len(operations)} ({op_type})")
         handler = OP_HANDLERS.get(op_type)
         if not handler:
             warnings.append(f"unknown op type skipped: {op_type}")
+            failed_ops.append({"n": i, "op": op_type, "error": "unknown operation"})
             continue
         try:
             res = await handler(current_fid, op)
@@ -125,6 +153,7 @@ async def edit_with_instruction(
         except Exception as e:
             log.exception("op failed: %s", op_type)
             warnings.append(f"op {op_type} failed: {e}")
+            failed_ops.append({"n": i, "op": op_type, "error": str(e)[:300]})
 
     # Convert back to original format (or requested format)
     final_fmt = return_format or src_fmt
@@ -140,6 +169,7 @@ async def edit_with_instruction(
         "warnings": warnings,
         "operations_executed": len(executed_ops),
         "operations": executed_ops,
+        **({"operations_failed": failed_ops} if failed_ops else {}),
         "model": model_used,
         "ms_elapsed": int((time.time() - t0) * 1000),
     }

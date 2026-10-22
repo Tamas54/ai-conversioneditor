@@ -903,6 +903,11 @@ async def wordcraft(
     Files in params: pass "file_id" instead of a path, e.g.
       {"command": "insert.picture", "params": {"file_id": <image>, "width": 430}}.
     Jump to the n-th paragraph (1-based) with edit.goto {"paragraph": n}.
+    text.insert: "\\n" is a line break INSIDE the paragraph (Shift+Enter). Several paragraphs at once:
+      text.paragraphs {"text": "first\\nsecond"} or {"paragraphs": ["first", "second"]} — each its own paragraph.
+    Select by text: select.text {"text": exact words, "occurrence"?: n} (reliable). select.range {anchor, focus}
+      takes Pos = {"block": n (0-based), "off": n} where off is a UTF-8 BYTE offset — á, é, ő… count 2, a
+      footnote or field mark 3 — so prefer select.text.
     After insert.picture the picture stays SELECTED: run caret.end before
       text.newParagraph, or Enter replaces (deletes) it.
     para.alignCenter/Left/Right TOGGLE like Word's buttons; to set an
@@ -1563,13 +1568,19 @@ async def extract(file_id: str, mode: str = "text") -> dict:
 @mcp.tool()
 @linked
 async def edit_with_instruction(
-    file_id: str,
-    instruction: str,
+    file_id: Optional[str] = None,
+    instruction: Optional[str] = None,
     require_confidence: bool = True,
     return_format: Optional[str] = None,
+    job_id: Optional[str] = None,
+    wait: Optional[float] = None,
 ) -> dict:
     """
     Edit a document using a natural-language instruction.
+
+    Runs in the background: the answer comes within ~40 s; a longer edit returns {status: "running", job_id, stage} —
+    call edit_with_instruction(job_id=…, wait=30) until it is done (the result) or failed (the reason, nothing
+    half-done). The new version is saved even if you stop asking.
 
     Pipeline: load → extract text → the AI plans operations →
     deterministic execution → render back to original format. The planning
@@ -1582,13 +1593,47 @@ async def edit_with_instruction(
     below 0.7, returns the plan WITHOUT executing — letting you review.
     Set `require_confidence=False` to always execute.
     """
-    return await t_edit_ai(
-        _pool(),
-        file_id=file_id,
-        instruction=instruction,
-        require_confidence=require_confidence,
-        return_format=return_format,
-    )
+    from app import jobs
+    if job_id:
+        return await _edit_job_result(job_id, wait)
+    if not file_id or not (instruction or "").strip():
+        raise ValueError("edit_with_instruction needs file_id and instruction (or job_id to ask about a running edit).")
+    args = {"file_id": file_id, "instruction": instruction}
+    pool = _pool()
+
+    async def work(progress):
+        res = await t_edit_ai(pool, file_id=file_id, instruction=instruction, require_confidence=require_confidence,
+                              return_format=return_format, progress=progress)
+        # a kliens nélkül is kész legyen: a változat neve és forrása, és az ellenőrzés (a hívó ezt kapja vissza)
+        try:
+            _name_unlabeled("edit_with_instruction", args, res)
+        except Exception as e:
+            log.info("elnevezés kimaradt (edit_with_instruction): %s", e)
+        if res.get("executed") and res.get("file_id"):
+            from app.tools import checks
+            check, _ = await checks.run("edit_with_instruction", args, res)
+            if check is not None:
+                res["check"] = check
+        return res
+    job = jobs.start("edit", work)
+    return await _edit_job_result(job["id"], EDIT_INLINE_WAIT_S)
+
+
+EDIT_INLINE_WAIT_S = 40
+
+
+async def _edit_job_result(job_id: str, wait: Optional[float]) -> dict:
+    """Kész → az eredmény (mintha azonnal jött volna); hiba → a hiba szövege; fut → a job + a szakasza + teendő."""
+    from app import jobs
+    j = await jobs.wait_status(job_id, wait if wait is not None else 30)
+    if j["status"] == "done":
+        return j["result"]
+    if j["status"] == "failed":
+        raise ValueError(j.get("error") or "the edit failed — nothing was changed")
+    if j["status"] == "cancelled":
+        raise ValueError("The edit was cancelled — nothing was changed.")
+    return {**j, "job_id": job_id, "hint": f"Still working ({j.get('stage') or 'running'}) — call edit_with_instruction("
+                                          f"job_id=\"{job_id}\", wait=30) again."}
 
 
 # ============================================================
@@ -1652,7 +1697,7 @@ async def facts(
 @mcp.tool()
 @linked
 async def validate_document(file_id: str, pages: Optional[list[int]] = None, view: str = "word",
-                            content: bool = False) -> dict:
+                            content: bool = False, fix: bool = False) -> dict:
     """CHECK a Word document, a deck or a PDF before telling the person it's done. The page pictures come back IN this
     result, together with a machine-checked list of problems — measured on the laid-out pages, not an AI's description.
 
@@ -1679,11 +1724,29 @@ async def validate_document(file_id: str, pages: Optional[list[int]] = None, vie
         the same thing named or spelled two ways (`content.findings`: kind, places [{paragraph, quote}], note, fix
         {quote, replacement} or null). Each quote is exact text of the document — put a finding in with
         wordcraft (select.text + review.newComment, or a tracked change). For facts against sources use facts(action="check").
+      fix: true (Word documents) → FIRST fix what can be fixed safely, re-laying out after each round (≤ 3 rounds):
+        headings at a page bottom (keep with next; a page break if one view still leaves it), captions apart from their
+        picture / table, table rows breaking across pages, table header rows not repeating. → a NEW version (file_id),
+        `fixed` [{kind, object, page, how}], and the issues / pictures of the fixed version (what is left, with fixes).
     """
     import json
     from mcp.types import CallToolResult, ImageContent, TextContent
     from app.tools import validate as v
+    fixed = None
+    if fix:
+        from app.tools import layout_fix
+        orig = file_id
+        fixed = await layout_fix.fix(file_id)
+        file_id = fixed["file_id"]
     info, images = await v.validate(file_id, pages=pages, view=view)
+    if fixed is not None:
+        info["fixed"] = fixed["fixed"]
+        info["fix_rounds"] = fixed["rounds"]
+        if fixed["changed"]:
+            info["source_file_id"] = orig
+        info["fix_note"] = (f"{len(fixed['fixed'])} layout fix(es) in {fixed['rounds']} round(s) → a new version; the issues "
+                            "below are what is left in it." if fixed["changed"] else "Nothing needed (or could safely be) "
+                            "fixed automatically; the issues below say what to do.")
     if content and file_id.lower().endswith(".docx"):
         from app.tools import content_check as cc
         from app.tools.crafts import existing

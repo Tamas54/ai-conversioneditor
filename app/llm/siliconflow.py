@@ -89,13 +89,25 @@ class LLMServiceError(RuntimeError):
         super().__init__(msg)
 
 
+class LLMTruncated(RuntimeError):
+    """A válasz a max_tokens-nél elvágódott (finish_reason = length): ugyanarra a kérdésre újra is elvágódna — a hívó
+    érthetően mondja meg, mit tegyen (kisebb darabokban kérje)."""
+
+    def __init__(self, model: str, max_tokens: int):
+        self.model, self.max_tokens = model, max_tokens
+        super().__init__(f"the AI's answer was cut off at {max_tokens} tokens — the task is too big for one answer")
+
+
 def _retryable(e: BaseException) -> bool:
+    if isinstance(e, LLMTruncated):
+        return False
     # 4xx (a 429 kivételével) újrapróbálva is ugyanaz — ne várakoztasson
     return not (isinstance(e, LLMServiceError) and 400 <= e.status < 500 and e.status != 429)
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4), retry=retry_if_exception(_retryable), reraise=True)
-async def _call_model(model: str, messages: list[dict], thinking: bool = True, json_mode: bool = True) -> str:
+async def _call_model(model: str, messages: list[dict], thinking: bool = True, json_mode: bool = True,
+                      max_tokens: int = 4096) -> str:
     if not settings.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY not set")
     from app import billing
@@ -113,7 +125,7 @@ async def _call_model(model: str, messages: list[dict], thinking: bool = True, j
                 "messages": messages,
                 **({"response_format": {"type": "json_object"}} if json_mode else {}),   # szabad szöveghez (levél) ki
                 "temperature": 0.2,
-                "max_tokens": 4096,
+                "max_tokens": max_tokens,
                 # gondolkodás nélkül ~2,5× gyorsabb (pakli-vázlat GLM-5.3-Flash: 30,8 s → 12,1 s, 10-11)
                 **({} if thinking else {"enable_thinking": False}),
             },
@@ -122,7 +134,14 @@ async def _call_model(model: str, messages: list[dict], thinking: bool = True, j
             log.warning("SiliconFlow %s → HTTP %s: %s", model, r.status_code, r.text[:300])
             raise LLMServiceError(r.status_code, model)
         data = r.json()
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        if json_mode and choice.get("finish_reason") == "length":   # elvágott JSON: ne a json.loads mondja „hibás”-nak
+            log.warning("SiliconFlow %s: a válasz elvágódott (%s token)", model, max_tokens)
+            raise LLMTruncated(model, max_tokens)
+        return choice["message"]["content"]
+
+
+PLAN_MAX_TOKENS = 12_000
 
 
 async def plan_edits(
@@ -149,15 +168,18 @@ async def plan_edits(
         },
     ]
 
-    # Primary: Kimi K2.6
+    # a terv a módosított szöveget is hordozza (find_replace): egy nagyobb átírás 4096 tokenben elvágódott, a hibás JSON
+    # után a tartalék modell ugyanígy (10-22, ügynök-jelentés: „időtúllépés, eredmény nélkül”) — több hely, és az
+    # elvágás érthető hibát ad, nem csendes második kört
     try:
-        raw = await _call_model(settings.LLM_MODEL_PRIMARY, messages)
+        raw = await _call_model(settings.LLM_MODEL_PRIMARY, messages, max_tokens=PLAN_MAX_TOKENS)
         plan = json.loads(_strip_json_fences(raw))
         return plan, settings.LLM_MODEL_PRIMARY
+    except LLMTruncated:
+        raise
     except (json.JSONDecodeError, httpx.HTTPError, RuntimeError) as e:
         log.warning("Primary model failed: %s — falling back", e)
 
-    # Fallback: DeepSeek V3.2
-    raw = await _call_model(settings.LLM_MODEL_FALLBACK, messages)
+    raw = await _call_model(settings.LLM_MODEL_FALLBACK, messages, max_tokens=PLAN_MAX_TOKENS)
     plan = json.loads(_strip_json_fences(raw))
     return plan, f"{settings.LLM_MODEL_FALLBACK}_fallback"
