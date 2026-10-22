@@ -2102,10 +2102,6 @@ async def video(
     AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
     render=false: save the project only (the layout check still runs); draft=true: fast.
-    A LONG video (the final render estimated over ~2 min): overlay / edit come back in about a minute with
-    result.preview (a quick MP4 of just what changed, from the editor's small copy) and result.final = {job_id, eta,
-    ready_at} — the final full-quality render runs in the background; status(job_id) shows the time left. Tell the
-    person both. final="wait" renders it now instead; final="background" always in the background.
     Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs
