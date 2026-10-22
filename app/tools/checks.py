@@ -450,17 +450,24 @@ def check_docx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) 
     return make("ok" if specific else "needs_check", [] if specific else [LOOK], verified)
 
 
-async def with_layout(check: dict[str, Any], out: Path) -> dict[str, Any]:
+async def with_layout(check: dict[str, Any], out: Path, file_id: Optional[str] = None,
+                      args: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """A mentett Word-fájl tördelése is (a szerkesztő motorján, kép nélkül): a sikeres mentés nem igazolja a jó
-    tördelést (ChatGPT-teszt 10-13). Hiba vagy figyelmeztetés → needs_check, a validate_document mutatja meg képpel."""
+    tördelést (ChatGPT-teszt 10-13). Hiba vagy figyelmeztetés → needs_check, a validate_document mutatja meg képpel.
+    Az ember „így marad” döntése és a most kifejezetten kért beállítás (pl. keepNext: false) következménye nem hiba."""
     from app.tools import validate
     try:
-        lay = await asyncio.wait_for(validate.quick_layout(out), timeout=25)
+        lay = await asyncio.wait_for(validate.quick_layout(out, file_id, args), timeout=25)
     except Exception as e:
         log.info("tördelés-ellenőrzés kimaradt: %s", e)
         lay = None
     if not lay:
         return make(check["status"], check["findings"] + ["Layout not checked — call validate_document."], check["verified"])
+    if lay.get("kept") or lay.get("as_asked"):
+        check = make(check["status"], check["findings"], check["verified"] + (
+            [f"{len(lay['kept'])} layout point(s) kept as they are by decision — not counted."] if lay.get("kept") else []) + (
+            [f"As asked: {'; '.join(sorted({i['kind'].replace('_', ' ') for i in lay['as_asked']}))} — the result of the "
+             "setting you gave, not counted as a problem."] if lay.get("as_asked") else []))
     found = lay["errors"] + lay["warnings"]
     if not found:
         return make(check["status"], check["findings"], check["verified"] + [
@@ -472,8 +479,9 @@ async def with_layout(check: dict[str, Any], out: Path) -> dict[str, Any]:
     return make("failed" if check["status"] == "failed" else "needs_check",
                 check["findings"] + [f"Layout: {validate.counts(found)}{more} — call validate_document(file_id) to see them "
                                      "marked on the pages, fix the errors, then validate again"
-                                     + ("; validate_document(file_id, fix=true) fixes headings left at a page bottom, "
-                                        "captions apart from their picture and table rows / headers by itself"
+                                     + ("; validate_document(file_id, fix=true) proposes fixes for headings left at a page "
+                                        "bottom, captions apart from their picture and table rows / headers — ask the "
+                                        "person which to apply (or keep=[…] what stays on purpose)"
                                         if any(i["kind"] in ("orphan_heading", "caption_split", "table_row_split",
                                                              "table_header_not_repeated") for i in found) else "") + "."]
                 + lines, check["verified"])
@@ -777,7 +785,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
     if ext == "pptx":
         return await check_deck(out, src, tool, args)
     if ext == "docx":
-        return await with_layout(await asyncio.to_thread(check_docx, out, src, tool, args), out), None
+        return await with_layout(await asyncio.to_thread(check_docx, out, src, tool, args), out, out.name, args), None
     if tool in ("photocraft", "photo_edit") or (ext in ("psd", "png", "jpg", "jpeg", "webp") and tool not in ("design", "vectorcraft")):
         return await asyncio.to_thread(check_photo, out, src, res), None
     return await generic(out), None
