@@ -186,6 +186,30 @@ def _voice(key: str):
         return v
 
 
+# szünet a felolvasásban: [pause: 1.5s] · [pause 2] · [pause: 500ms] · [szünet: 1 mp] — a hang ennyit hallgat (≤ 10 s),
+# a képernyőn nem látszik (strip_pauses). Az ötlet a MoneyPrinterTurbo-ból (10-22).
+PAUSE = re.compile(r"\[\s*(?:pause|break|sz[üu]net|pausa)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(ms|s|sec|secs|seconds?|mp)?\s*\]",
+                   re.IGNORECASE)
+PAUSE_MAX = 10.0
+
+
+def pauses(text: str) -> list[tuple[str, float]]:
+    """A szöveg darabjai a szünetek mentén: [(kimondandó szöveg, utána ennyi mp csend)]."""
+    out, at = [], 0
+    for m in PAUSE.finditer(text or ""):
+        v = float(m.group(1).replace(",", "."))
+        secs = v / 1000 if (m.group(2) or "").lower() == "ms" else v
+        out.append((text[at:m.start()], min(PAUSE_MAX, max(0.0, secs))))
+        at = m.end()
+    out.append(((text or "")[at:], 0.0))
+    return out
+
+
+def strip_pauses(text: str) -> str:
+    """A felirat / a képernyő szövege a szünetjelek nélkül."""
+    return re.sub(r"\s{2,}", " ", PAUSE.sub(" ", text or "")).strip() if text and "[" in text else (text or "")
+
+
 def clean(text: str) -> str:
     """Felolvasható szöveg: linkek, jelölések, emojik nélkül."""
     t = re.sub(r"https?://\S+", "", text or "")
@@ -195,14 +219,39 @@ def clean(text: str) -> str:
 
 
 def synth(text: str, key: str, dst: Path, speed: float = 1.0) -> float:
-    """Egy szöveg → WAV (a hang saját mintavételezésével). → hossz másodpercben (0, ha nincs mit mondani)."""
+    """Egy szöveg → WAV (a hang saját mintavételezésével), a [pause: Xs] jeleknél csenddel. → hossz másodpercben (0, ha
+    nincs mit mondani)."""
     from piper import SynthesisConfig
-    t = clean(text)
-    if not t:
+    parts = [(clean(t), gap) for t, gap in pauses(text)]
+    if not any(t for t, _ in parts):
         return 0.0
     v = _voice(key)
-    with wave.open(str(dst), "wb") as wf:
-        v.synthesize_wav(t, wf, syn_config=SynthesisConfig(length_scale=1.0 / max(0.5, min(2.0, speed))))
+    cfg = SynthesisConfig(length_scale=1.0 / max(0.5, min(2.0, speed)))
+    if len(parts) == 1:
+        with wave.open(str(dst), "wb") as wf:
+            v.synthesize_wav(parts[0][0], wf, syn_config=cfg)
+    else:
+        while parts and not parts[-1][0]:             # a végén álló szünet nem nyújtja a hangot (az avatar ára is másodperc)
+            parts.pop()
+        parts[-1] = (parts[-1][0], 0.0)
+        params, chunks = None, []                      # bájtok, illetve a csend másodpercei
+        for i, (t, gap) in enumerate(parts):
+            if t:
+                part = dst.with_name(f"{dst.stem}.p{i}.wav")
+                try:
+                    with wave.open(str(part), "wb") as wf:
+                        v.synthesize_wav(t, wf, syn_config=cfg)
+                    with wave.open(str(part)) as w:
+                        params = params or w.getparams()
+                        chunks.append(w.readframes(w.getnframes()))
+                finally:
+                    part.unlink(missing_ok=True)
+            if gap:
+                chunks.append(gap)
+        frame = params.sampwidth * params.nchannels
+        with wave.open(str(dst), "wb") as wf:
+            wf.setparams(params)
+            wf.writeframes(b"".join(c if isinstance(c, bytes) else b"\0" * int(c * params.framerate) * frame for c in chunks))
     with wave.open(str(dst)) as w:
         return w.getnframes() / float(w.getframerate() or 1)
 

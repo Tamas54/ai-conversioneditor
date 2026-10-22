@@ -1986,13 +1986,14 @@ async def video(
     if act in ("transcript", "subtitles"):           # időbélyeges átirat + .srt (saját felvétel vagy hangfájl)
         from app.routes.video import transcript_video
         return await transcript_video({"file_id": file_id or "", "language": language, "prompt": prompt,
-                                       "vocabulary": vocabulary, "model": model, "force": force, "correct": correct})
+                                       "vocabulary": vocabulary, "model": model, "force": force, "correct": correct,
+                                       "script": text or (transcript or {}).get("script")})
     if act in ("audiogram", "podcast"):              # hangból videó: borító, hullámforma, cím, szavankénti felirat
         from app.routes.video import audiogram_video
         return await audiogram_video({"file_id": file_id or "", "image": title_image, "format": format, "title": title,
                                       "accent": accent, "style": (ai or {}).get("style"), "language": language,
                                       "caption_style": caption_style, "captions": (ai or {}).get("captions", True),
-                                      "render": render, "transcript": transcript})
+                                      "render": render, "transcript": transcript, "script": text})
     if act in ("overlay", "footage"):                # a felhasználó felvétele + időkódos rétegek
         from app.routes.video import overlay_video
         return await overlay_video({"file_id": file_id or "", "layers": layers or [], "text": text or "", "title": title,

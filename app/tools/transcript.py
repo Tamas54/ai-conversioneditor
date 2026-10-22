@@ -47,8 +47,9 @@ _lock = asyncio.Lock()            # egyszerre egy átírás (CPU-igényes; a tö
 
 # a video tool action="schema" referenciájába (a video sáv köti be): a transcript paraméterei
 SCHEMA_REF = {"transcript": (
-    'video(action="transcript", file_id, language?, prompt?, vocabulary?, model?, force?, correct?) → a job; its result: '
-    "sentences [{at, until, text}], subtitles, an .srt file_id, corrections [{at, heard, fixed, by}], check. "
+    'video(action="transcript", file_id, language?, prompt?, vocabulary?, model?, force?, correct?, text?) → a job; its '
+    "result: sentences [{at, until, text}], subtitles, an .srt file_id, corrections [{at, heard, fixed, by}], check. "
+    "text: the script (what is said, when known) — the words come from it, only the times from the listening. "
     "prompt: a sentence about the recording (topic, names, style) — Whisper's initial prompt. "
     'vocabulary: the words you expect ("sonkával, fakanállal, Voilà" or a list) — passed to Whisper as hotwords, then '
     "close mishearings of them are fixed without AI (same first letter, similar sound, not just another form of the word). "
@@ -147,10 +148,12 @@ def cache_ver(language: Optional[str] = None, prompt: Optional[str] = None, voca
 
 
 async def transcribe(src: Path, language: Optional[str] = None, *, prompt: Optional[str] = None, vocabulary: Any = None,
-                     model: Optional[str] = None, force: bool = False, correct: Optional[bool] = None) -> dict[str, Any]:
+                     model: Optional[str] = None, force: bool = False, correct: Optional[bool] = None,
+                     script: Optional[str] = None) -> dict[str, Any]:
     """→ {language, model, duration, sentences [{start, end, text}], words [{w, start, end}]} — gyorsítótárból, ha volt
     (force: újrahallgatás). vocabulary / correct esetén a javítás is: + corrections [{at, heard, fixed, by}] és, ha a
-    Studio AI dolgozott, studio_ai {steps, credits}."""
+    Studio AI dolgozott, studio_ai {steps, credits}. script (a kimondott szöveg): a szavak abból, az idők a hallásból
+    (align_script) — ilyenkor más javítás nem kell; ha a szöveg nem ehhez a hanghoz való, correction_notes mondja."""
     from app import db
     name = model_name(model)
     vocab = vocab_list(vocabulary)
@@ -177,9 +180,19 @@ async def transcribe(src: Path, language: Optional[str] = None, *, prompt: Optio
             await db.ocr_cache_put(sha, ver, name, json.dumps(out, ensure_ascii=False), replace=force)
         except Exception:
             log.warning("átirat-gyorsítótár írása nem sikerült", exc_info=True)
+    script = str(script or "").strip()[:20_000]
+    note = None
+    if script and out.get("words"):
+        aligned = align_script(out, script)
+        if aligned is not None:
+            return aligned
+        note = ("The script doesn't match what is said (fewer than 40% of its words are heard) — the captions are as heard.")
     if correct is False or (not vocab and not correct):
-        return out
-    return await fix(out, vocab, prompt=prompt, use_ai=bool(correct), force=force)
+        return {**out, "correction_notes": [note]} if note else out
+    res = await fix(out, vocab, prompt=prompt, use_ai=bool(correct), force=force)
+    if note:
+        res["correction_notes"] = [note] + list(res.get("correction_notes") or [])
+    return res
 
 
 # ---------- javítás: adat (szókincs) → determinisztikus → AI ----------
@@ -399,6 +412,108 @@ async def fix(tr: dict[str, Any], vocab: list[str], *, prompt: Optional[str] = N
     return out
 
 
+# ---------- a forgatókönyv a hallott időkkel (MoneyPrinterTurbo-ötlet, 10-22) ----------
+
+SCRIPT_MIN_MATCH = 0.4      # a forgatókönyv szavainak legalább ennyi része hallatszik szó szerint — különben nem ehhez a hanghoz való
+_ADLIB = 4                  # ennyi vagy több hallott szó, ami nincs a forgatókönyvben: rögtönzés (marad); kevesebb: félrehallás, töltelék
+_SKIPPED = 4                # ennyi vagy több forgatókönyv-szó a széleken, amit nem hallani: nem hangzott el (kimarad)
+
+
+def _script_tokens(script: str) -> list[str]:
+    """A forgatókönyv szavai írásjellel; a magában álló írásjel az előző szóhoz tapad (a gondolatjel önálló marad)."""
+    out: list[str] = []
+    lead = ""                                    # a legelső szó előtti írásjel („„”) a szóhoz
+    for t in str(script or "").split():
+        if _norm(t) or re.fullmatch(r"[-‐–—]", t):
+            out.append(lead + t)
+            lead = ""
+        elif out:
+            out[-1] += t
+        else:
+            lead += t
+    return out
+
+
+def _spread(toks: list[str], t0: float, t1: float) -> list[dict[str, Any]]:
+    """Szavak egy időszakaszba, a betűik arányában."""
+    total = sum(max(1, len(_norm(t))) for t in toks) or 1
+    out, at = [], t0
+    for k, t in enumerate(toks):
+        end = t1 if k == len(toks) - 1 else at + (t1 - t0) * max(1, len(_norm(t))) / total
+        out.append({"w": t, "start": round(at, 2), "end": round(max(end, at), 2)})
+        at = end
+    return out
+
+
+def _sentences_of(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out, cur = [], []
+    for w in words:
+        cur.append(w)
+        if re.search(r"[.!?…][\"”»)]*$", w["w"]) and not re.fullmatch(r"(?:\d+|[IVXLCDM]+)\.", w["w"]):
+            out.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": _join(cur)})
+            cur = []
+    if cur:
+        out.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": _join(cur)})
+    return out
+
+
+def align_script(tr: dict[str, Any], script: str) -> Optional[dict[str, Any]]:
+    """A kimondott szöveg ismert (forgatókönyv, a felolvasott szöveg): a felirat SZÖVEGE abból jön, az IDEJE a hallott
+    szavakból. Szóillesztés (difflib) a normalizált szavakon: az egyezők a hallott időt kapják, a félrehallott szavak
+    helyén a forgatókönyv szavai a hallott szakasz idejében, a nem hallott 1–3 szó a szomszédok közé. A hosszabb hallott
+    rész, ami nincs a forgatókönyvben, rögtönzés: marad; a forgatókönyv elején/végén a nem hallott rész nem hangzott el:
+    kimarad. → az átirat másolata (+ script: a számok, corrections: hallott → írott), vagy None, ha a forgatókönyv nem
+    ehhez a hanghoz való (a szavainak kevesebb mint 40%-a hallatszik)."""
+    from app.tools.narration import clean, strip_pauses
+    words = tr.get("words") or []
+    toks = _script_tokens(clean(strip_pauses(script)))          # ami nem hangzik el (szünetjel, link, emoji): nem szó
+    if not words or not toks:
+        return None
+    a = [_norm(w["w"]) for w in words]
+    b = [_norm(t) for t in toks]
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    ops = sm.get_opcodes()
+    same = sum(i2 - i1 for tag, i1, i2, _, _ in ops if tag == "equal")
+    if same < SCRIPT_MIN_MATCH * len([x for x in b if x]):
+        return None
+    out = json.loads(json.dumps(tr))
+    new: list[dict[str, Any]] = []
+    fixes: list[dict[str, Any]] = []
+    stats = {"words": len(toks), "heard_as_written": same, "corrected": 0, "added": 0, "not_said": 0, "dropped": 0, "kept_heard": 0}
+    for k, (tag, i1, i2, j1, j2) in enumerate(ops):
+        if tag == "equal":
+            new += [{"w": toks[j1 + d], "start": words[i1 + d]["start"], "end": words[i1 + d]["end"]} for d in range(i2 - i1)]
+        elif tag == "replace":
+            span = _spread(toks[j1:j2], words[i1]["start"], words[i2 - 1]["end"])
+            new += span
+            stats["corrected"] += j2 - j1
+            fixes.append({"at": round(words[i1]["start"], 2), "heard": " ".join(w["w"] for w in words[i1:i2]),
+                          "fixed": " ".join(toks[j1:j2]), "by": "script"})
+        elif tag == "delete":
+            if i2 - i1 >= _ADLIB:
+                new += [dict(w) for w in words[i1:i2]]
+                stats["kept_heard"] += i2 - i1
+            else:
+                stats["dropped"] += i2 - i1
+                fixes.append({"at": round(words[i1]["start"], 2), "heard": " ".join(w["w"] for w in words[i1:i2]),
+                              "fixed": "", "by": "script"})
+        else:                                            # insert: a forgatókönyv szavai, amelyeket nem hallott a gép
+            n = j2 - j1
+            edge = k == 0 or k == len(ops) - 1
+            if edge and n >= _SKIPPED:
+                stats["not_said"] += n
+                continue
+            prev_end = new[-1]["end"] if new else max(0.0, words[0]["start"] - 0.3 * n)
+            nxt = words[i1]["start"] if i1 < len(words) else prev_end + 0.3 * n
+            new += _spread(toks[j1:j2], prev_end, max(nxt, prev_end))
+            stats["added"] += n
+    out["words"] = new
+    out["sentences"] = _sentences_of(new)
+    out["script"] = stats
+    out["corrections"] = fixes
+    return out
+
+
 # ---------- egy elhangzó mondat helye ----------
 
 def _norm(s: str) -> str:
@@ -448,8 +563,10 @@ def srt(tr: dict[str, Any]) -> str:
 
 
 def _glued(out: str, t: str) -> bool:
-    """A token az előzőhöz tapad-e (szóköz nélkül): kötőjellel / írásjellel kezdődik, vagy nyitó zárójel / idézőjel után jön."""
-    return bool(out) and (bool(re.match(r"[-‐–,.;:!?…)\]”»]", t)) or out.endswith(("(", "„", "«")))
+    """A token az előzőhöz tapad-e (szóköz nélkül): kötőjellel / írásjellel kezdődik, vagy nyitó zárójel / idézőjel után jön.
+    A magában álló gondolatjel („szó – szó”) nem tapad."""
+    return bool(out) and ((bool(re.match(r"[-‐–,.;:!?…)\]”»]", t)) and not re.fullmatch(r"[-‐–—]", t))
+                          or out.endswith(("(", "„", "«")))
 
 
 def _join(words: list[dict[str, Any]]) -> str:

@@ -181,7 +181,7 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/api/video/transcript")
 async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
-    """{file_id: <videó | hang | overlay-projekt>, language?, prompt?, vocabulary?, model?, force?, correct?} → job
+    """{file_id: <videó | hang | overlay-projekt>, language?, prompt?, vocabulary?, model?, force?, correct?, script?} → job
     (időbélyeges mondatok + .srt + a javítások) — a paraméterek: app/tools/transcript.py."""
     from app import jobs
     from app.tools import transcript, video
@@ -200,6 +200,8 @@ async def transcript_video(body: dict[str, Any]) -> dict[str, Any]:
         opts = {"prompt": body.get("prompt"), "vocabulary": transcript.vocab_list(body.get("vocabulary")),
                 "model": transcript.model_name(body.get("model")), "force": bool(flag(body.get("force"))),
                 "correct": flag(body.get("correct"))}
+        if str(body.get("script") or "").strip():          # a kimondott szöveg: a szavak abból, az idők a hallásból
+            opts["script"] = str(body["script"]).strip()[:20_000]
     except ValueError as e:
         raise HTTPException(400, str(e))
 

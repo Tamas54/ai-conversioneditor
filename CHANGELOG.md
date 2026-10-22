@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-22 — Captions from the script, pauses in the narration
+
+From the look at MoneyPrinterTurbo.
+- **Captions follow the script:** when the spoken text is known, the captions take its words and only the timing
+  comes from the listening.
+  - Pass it as `transcript={"script": "…"}` (overlay, audiogram), `text=` (`action="transcript"`, audiogram) or in
+    the web subtitler's new field.
+  - Matching words keep their heard times. Misheard words are replaced by the script's (names spelt as written), and
+    1–3 unheard words are fitted in between.
+  - Longer unscripted speech is kept, a short "öö" is dropped, and a script start or end that isn't said is left out.
+    Every change is in `corrections` (`by: "script"`).
+  - If fewer than 40% of the script's words are heard, it isn't for this recording; the captions stay as heard and
+    the check says so.
+  - A talking avatar made from text remembers its text, so its captions (overlay, audiogram, transcript) follow it
+    without asking.
+- **`[pause: 1.5s]`** (also `[pause 500ms]`, `[szünet: 1 mp]`, ≤ 10 s) in a caption or an avatar's text: the voice
+  stops there.
+  - The mark is never shown on screen, and a pause at the very end doesn't lengthen (or raise the price of) the speech.
+  - With `keep_wording`, the scene writer keeps the marks.
+
 ## 2026-10-22 — Waveform and audiogram
 
 From the look at vanta: audio visualisation for podcasts and interviews.
