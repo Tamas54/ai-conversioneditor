@@ -17,6 +17,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import logging
 import os
 import shutil
@@ -91,7 +92,25 @@ def from_plan(c: dict[str, Any], clean) -> tuple[Optional[dict[str, Any]], list[
     if isinstance(c.get("backdrop"), (int, float)):
         out["backdrop"] = max(0.0, min(1.0, float(c["backdrop"])))
     return out, [f"3D scene “{title or 'three.js'}”: {code.count(chr(10)) + 1} lines of three.js ({VERSION}), rendered in a "
-                 "sandbox; text drawn in it is not checked against the source."]
+                 "sandbox; text drawn in it is not checked against the source."] + label_mistakes(code)
+
+
+def label_mistakes(code: str) -> list[str]:
+    """A label() két gyakori félreértése (10-22, Tamás TV-próba: size 1.25 → 1 px-es betű, a felirat elmosódott folt lett;
+    a scale.setScalar összenyomta): size = betűméret px-ben, height = a világbeli magasság, a scale-ben az arány van."""
+    out = []
+    for m in re.finditer(r"\blabel\s*\([^;{]*\{([^}]*)\}", code):
+        sz = re.search(r"\bsize\s*:\s*([0-9]*\.?[0-9]+)", m.group(1))
+        if sz and float(sz.group(1)) < 8:
+            out.append(f"⚠ 3D scene: label(…, {{size: {sz.group(1)}}}) — size is the FONT size in pixels (default 48), so this "
+                       "draws an unreadable blur. Use e.g. size: 120 and set how big it is in the scene with height (world "
+                       "units, default 0.5).")
+    for name in dict.fromkeys(re.findall(r"\b(\w+)\s*=\s*label\s*\(", code)):
+        if re.search(rf"\b{re.escape(name)}\.scale\.setScalar\s*\(", code):
+            out.append(f"⚠ 3D scene: {name}.scale.setScalar(…) squashes the label — its scale holds the text's width and "
+                       f"height. Keep the start (const s0 = {name}.scale.clone()) and grow it with {name}.scale.set(s0.x * k, "
+                       f"s0.y * k, 1).")
+    return out
 
 
 def _key(code: str, W: int, H: int, dur: float, transparent: bool, accent: list[float]) -> str:

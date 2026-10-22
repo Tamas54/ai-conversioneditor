@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-10-22 — Video edits: nothing is dropped silently; colour correction reaches the picture
+
+Found in the owner's two-minute "Tamás TV" test: an iPhone video with 16 layers, subtitles and an end card.
+- **A graphic layer's elements given at the top of an edit were ignored**, and so was a network diagram's `direction`.
+  Neither said so.
+  - A chart's or graphic's own fields (`elements`, `backdrop`, `title`, `items`…) now apply at the top of a layer
+    change, the same as when the layer is made.
+  - A diagram's nodes change by id, as in scene edits.
+  - A picture-in-picture takes `corner`, `size` and `aspect`.
+  - Any field that isn't applied, on making or editing, is named in the check. A network's `direction` is reported:
+    its layout comes from its links.
+- **Colour correction on a video with an end card never reached the picture,** while the check said
+  "Auto: gamma 0.7…". The extended footage was named only by the card's length, so the edit took the parent project's
+  uncorrected file of that name. Now the name carries its source.
+- **`auto` darkened a bright, warm room hard.** On a skin patch, lightness went 0.66 → 0.52 and saturation 0.53 → 0.36.
+  It now darkens only a truly overexposed picture, and by a small step. On the same footage it now gives 0.65 / 0.50,
+  with the hue within 1°. Dark pictures are lifted as before.
+- **three.js `label()`:** the reference now says `size` is the font size in pixels and `height` is world units. The
+  check flags a size under 8 px (today's 1.25 drew a blur) and a `scale.setScalar()` that squashes a label.
+- **A Lottie that shows nothing** at all three sampled moments is now a finding, not "verified".
+
 ## 2026-10-22 — Uploads: a stalled piece is sent again after 30 s, and the progress line says so
 
 The owner's first real test, from an iPhone over the home Wi-Fi to the local Studio: the server got the first three

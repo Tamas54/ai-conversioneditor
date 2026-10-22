@@ -124,7 +124,9 @@ Types:
 A lower third or source caption without position goes where nothing else is (other layers, a made video's headlines and
 charts). Overlaps that remain, a layer past the end, a dropped number, a text that collides or runs out of its box all
 come back in the check's findings. Edit by id: changes={"layers": [{"id": "L2", …only the fields that change} | {"id":
-"L2", "remove": true}], "add_layers": [new layers]} (a "chart" without "type" fixes just those chart fields).
+"L2", "remove": true}], "add_layers": [new layers]} (a "chart" without "type" fixes just those chart fields; a chart or
+graphic's own fields may also go at the top, as when it was made — {"id": "L5", "elements": […]}; a diagram's nodes
+change by id; a pip takes corner, size, aspect). A field that isn't applied is named in the check.
 See one: files(action="preview", file_id, scene="L2") (+ frames=6: in → out); video(action="render", scene="L2"): a
 short clip of its span.
 alpha (make, overlay, edit): true = also a transparent, graphics-only video: ProRes 4444 .mov (yuva444p12le — Premiere,
@@ -202,8 +204,12 @@ legend), "order"?, "size"? 1–3, "at"?}], "edges": [{"from", "to", "label"?, "k
 network edges alone. Change one with action=edit {"chart": {…}} WITHOUT "type": only the nodes (by id) and edges (by
 from + to) you send change; {"remove": true} deletes, {"pace": 1.5} slows the build-up.
 threejs — a 3D scene in three.js (r170): {"type": "threejs", "title"?, "transparent"? (default true), "code": "…"} — a
-function body that gets THREE, renderer, W, H, dur, accent (THREE.Color) and label(text, {size, height, color, bg}) and
-returns {scene, camera, update(t)}; animate from t (0…dur, 30 fps), never from the clock; no network. A code error comes
+function body that gets THREE, renderer, W, H, dur, accent (THREE.Color) and label(text, {size, height, weight, color, bg}) and
+returns {scene, camera, update(t)}; animate from t (0…dur, 30 fps), never from the clock; no network. label() is a text
+sprite that always faces the camera: size = the FONT size in pixels (default 48 — 100–160 for a title), height = how tall
+it is in the scene (world units, default 0.5); its scale holds the text's aspect, so grow it from a copy (const s0 =
+t.scale.clone(); t.scale.set(s0.x * k, s0.y * k, 1)) and fade it with t.material.opacity — e.g. const t =
+label("TAMÁS TV", {size: 140, height: 1.2}); scene.add(t); A code error comes
 back in the check — fix it with action=edit {"chart": {"code": "…"}}.
 script — your own EffectCraft code (After Effects-style JavaScript): {"type": "script", "title"?, "backdrop"?, "code":
 "…"}; gets comp, W, H, dur, accent ([r, g, b] 0–1) and D (D.font.bold|semibold|regular); sandboxed (no files outside the
