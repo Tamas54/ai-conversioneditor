@@ -889,8 +889,9 @@ async def wordcraft(
          (read="comments" lists them with id, author, paragraph, type);
        {"comment": id, "edit": "new text"} | {"comment": id, "delete": true}
          (whole thread) | {"comment": id, "reopen": true};
-       {"final": true} → a clean copy: all changes accepted, all comments
-         removed (send it when the review is over).
+       {"final": true} → a clean copy: all changes accepted (in footnotes,
+         headers and footers too), all comments removed, the footnotes of
+         deleted text dropped (send it when the review is over).
     Threads, resolved state, durable ids, dates and authors stay Word-native
     (commentsExtended / commentsIds / commentsExtensible / people) — also
     after `commands`, so the reviewer's Word shows exactly what they sent.
@@ -905,9 +906,17 @@ async def wordcraft(
     Jump to the n-th paragraph (1-based) with edit.goto {"paragraph": n}.
     text.insert: "\\n" is a line break INSIDE the paragraph (Shift+Enter). Several paragraphs at once:
       text.paragraphs {"text": "first\\nsecond"} or {"paragraphs": ["first", "second"]} — each its own paragraph.
-    Select by text: select.text {"text": exact words, "occurrence"?: n} (reliable). select.range {anchor, focus}
-      takes Pos = {"block": n (0-based), "off": n} where off is a UTF-8 BYTE offset — á, é, ő… count 2, a
-      footnote or field mark 3 — so prefer select.text.
+    Select by text: select.text {"text": exact words, "occurrence"?: n} (reliable) — also text in a footnote,
+      endnote, header or footer (the server turns it into select.range in that note, as the document reads when
+      the call starts; for several edits in one note, work from its end). select.range {anchor, focus} takes
+      Pos = {"block": n (0-based), "off": n} where off is a UTF-8 BYTE offset — á, é, ő… count 2, a footnote or
+      field mark 3 — so prefer select.text.
+    Rewrite with one call: review.compare {"text": the whole new text, as read="text" gives it — one line per
+      paragraph, a table row's cells separated by tabs} → word-level tracked changes under `author`; footnotes,
+      pictures, fields and comments stay where they are; a new line is a new tracked paragraph, a missing one a
+      tracked deletion (its footnote goes when the deletion is accepted). Table rows aren't added or removed this
+      way (the result says so) — use table.* for that.
+    Reads alone (document.selection, document.text, caret.*, select.*, edit.find…) never save a new version.
     After insert.picture the picture stays SELECTED: run caret.end before
       text.newParagraph, or Enter replaces (deletes) it.
     para.alignCenter/Left/Right TOGGLE like Word's buttons; to set an

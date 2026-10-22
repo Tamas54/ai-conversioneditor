@@ -160,6 +160,29 @@ def _ptext(p) -> str:
     return "".join(_char(a[0]) for a in _atoms(p))
 
 
+def _orig_text(p) -> str:
+    """A bekezdés a változások ELŐTT: a törölt szöveg benne, a beszúrt nélkül."""
+    out = []
+    for el in p.iter(T, DT, *_CHARS):
+        if el.getparent() is None or el.getparent().tag != R or _owner(el) is not p:
+            continue
+        a, inserted = el.getparent(), False
+        while a is not None and a is not p:
+            inserted = inserted or a.tag in (INS, MOVE_TO)
+            a = a.getparent()
+        if not inserted:
+            out.append(el.text or "" if el.tag in (T, DT) else _CHARS[el.tag])
+    return "".join(out)
+
+
+def view_texts(path: Path) -> tuple[list[str], list[str]]:
+    """A dokumentum bekezdései (táblázatcellákkal) két nézetben: (a változások elfogadása után, a változások előtt).
+    A szószám ebből: a python-docx bekezdés-szövege a követett beszúrást nem látja (10-22: egy teljes átírás után
+    4201 → 361 szó)."""
+    ps = _paras(_body(_Pkg(path)))
+    return [_ptext(p) for p in ps], [_orig_text(p) for p in ps]
+
+
 def _marks(p) -> list[tuple[str, str, int]]:
     """(jelölő-tag, megjegyzés-id, offset) a bekezdés megjegyzés-jelölőire, a végleges nézet szerinti offsettel."""
     out, off = [], 0
@@ -817,7 +840,9 @@ def _address_sync(file_id: str, items: Any, author: str, dry_run: bool = False) 
     others_before = _others(doc, author)
     ctx = _Ctx(author, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                _max_id(doc, pkg.xml(_COMMENTS)))
-    taken = {v for root in (doc, pkg.xml(_COMMENTS)) for el in root.iter() for v in [el.get(q("paraId", W14))] if v}
+    # megjegyzés-rész nélküli fájlon is (10-22: new_comment → 'NoneType' object has no attribute 'iter')
+    taken = {v for root in (doc, pkg.xml(_COMMENTS)) if root is not None for el in root.iter()
+             for v in [el.get(q("paraId", W14))] if v}
     results: list[dict[str, Any]] = []
     touched: set[str] = set()
     for item in items:
@@ -928,8 +953,8 @@ def _address_sync(file_id: str, items: Any, author: str, dry_run: bool = False) 
     decided = any(r.get("action") in ("accept", "reject", "final") and r["status"] != "failed" for r in results)
     out_id = new_file_id("docx")
     pkg.save(output_path(out_id))
-    write_meta(out_id, source_file_id=file_id, operation="wordcraft",
-               label=f"{result_stem(file_id, 'comments addressed', 'document')}.docx")
+    what = "clean copy" if all(review_ops.kind(i) == "final" for i in items) else "comments addressed"
+    write_meta(out_id, source_file_id=file_id, operation="wordcraft", label=f"{result_stem(file_id, what, 'document')}.docx")
     out.update(file_id=out_id, url=public_url(out_id), size_kb=output_path(out_id).stat().st_size // 1024,
                tracked_changes_added=sum(r.get("tracked_changes", 0) for r in results),
                others_untouched=None if decided else others_before == others_after,
@@ -956,8 +981,12 @@ async def address(file_id: str, items: Any, author: str) -> dict[str, Any]:
         elif r.get("status") in ("accepted", "rejected"):
             verified.append(f"{r['changes']} tracked change(s) {r['status']} ({', '.join(r['authors'])}).")
         elif r.get("status") == "final":
-            verified.append(f"Clean copy: {r['changes_accepted']} change(s) accepted, {r['comments_removed']} comment(s) "
-                            "removed.")
+            verified.append(f"Clean copy: {r['changes_accepted']} change(s) accepted"
+                            + (f" ({r['in_notes_headers_footers']} of them in footnotes, headers or footers)"
+                               if r.get("in_notes_headers_footers") else "")
+                            + f", {r['comments_removed']} comment(s) removed"
+                            + (f", {r['notes_removed']} footnote(s) of deleted text removed" if r.get("notes_removed") else "")
+                            + ".")
         elif r.get("status") in ("deleted", "reopened", "edited"):
             verified.append(f"Comment {r['comment']} {r['status']}.")
     if fixed:

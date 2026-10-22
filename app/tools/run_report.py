@@ -82,8 +82,12 @@ def arrow_results(log_text: str) -> list[Any]:
 _RO_TAIL = re.compile(r"\.(inspect|get|list|info|state|presets|themes|sites|entries|fields|links|structure|tags|words|"
                       r"formats|styles|json|getData|selectionAttrs|models)$")
 _RO_IDS = {"find.find", "edit.find", "find.objects", "object.findByLabel", "review.accessibility", "review.spelling",
-           "spelling.check", "preflight.run", "edit.copy", "xml.validate", "commands.list", "document.preferences"}
-_NAV = re.compile(r"^(slide\.(go|next|previous|first|last|selectSlides)|edit\.(select|selectAll|deselect)|"
+           "spelling.check", "preflight.run", "edit.copy", "xml.validate", "commands.list", "document.preferences",
+           # WordCraft: a kijelölés, a szöveg, egy bekezdés, a tördelés lekérdezése (10-22: caret.set + select.paragraph +
+           # document.selection új változatot mentett)
+           "document.selection", "document.text", "document.paragraph", "document.layout", "review.wordCount",
+           "review.comments", "review.changes", "references.notes"}
+_NAV = re.compile(r"^(slide\.(go|next|previous|first|last|selectSlides)|edit\.(select|selectAll|deselect|goto)|caret\.\w+|"
                   r"text\.(edit|exit|move|select\w*)|table\.selectCells|select\.\w+|page\.(go|next|previous|first|last)|"
                   r"view\.\w+|zoom\.\w+|selection\.set|cell\.select|sheet\.(go|activate))$")
 

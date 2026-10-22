@@ -134,6 +134,74 @@ def _cmd_arg(c: Command) -> str:
     return f"{cmd}={json.dumps(params, ensure_ascii=False)}" if params else str(cmd)
 
 
+def _cmd_id(c: Command) -> str:
+    return (c.partition("=")[0].strip() if isinstance(c, str) else str(c.get("command") or c.get("id") or ""))
+
+
+def _as_dict(c: Command) -> Command:
+    """A CLI 'id={json}' alakja szótárként — csak ahol a Studio maga dolgozza fel a parancsot."""
+    if isinstance(c, str) and _cmd_id(c) in ("select.text", "review.compare"):
+        raw = c.partition("=")[2].strip()
+        try:
+            return {"command": _cmd_id(c), "params": json.loads(raw) if raw else {}}
+        except ValueError:
+            return c
+    return c
+
+
+def _text_compare(c: Command) -> Optional[dict[str, Any]]:
+    """review.compare {"text"} → a Studio saját összevetése (a motoré eldobta a lábjegyzetet, és „Compare” lett a szerző)."""
+    if isinstance(c, dict) and _cmd_id(c) == "review.compare":
+        params = c.get("params") or {}
+        if isinstance(params.get("text"), str) and not params.get("path") and not params.get("original"):
+            return params
+    return None
+
+
+async def _select_in_notes(src: Path, cmds: list[Command]) -> list[Command]:
+    """select.text, ha a szöveg nem a törzsben, hanem láb-/végjegyzetben, élőfejben vagy -lábban van: select.range a
+    jegyzet saját „story”-jában, bájt-offsettel (a motor select.text-je csak a törzsben keres — 10-22). A dokumentum
+    a hívás ELEJI állapota számít."""
+    wants = [i for i, c in enumerate(cmds) if isinstance(c, dict) and _cmd_id(c) == "select.text"
+             and isinstance((c.get("params") or {}).get("text"), str) and (c["params"]["text"])]
+    if not wants or src.suffix.lower() not in (".docx", ".docm", ".dotx"):
+        return cmds
+    body = await _cli("text", str(src))
+    missing = [i for i in wants if cmds[i]["params"]["text"] not in body]
+    if not missing:
+        return cmds
+    parts = [x for x in json.loads(await _cli("inspect", str(src))).get("parts") or [] if isinstance(x, dict)]
+    out = list(cmds)
+    texts: dict[int, list[str]] = {}
+    for i in missing:
+        needle = cmds[i]["params"]["text"]
+        nth = max(1, int(cmds[i]["params"].get("occurrence") or 1))
+        hits = []
+        for part in parts:
+            if needle.split("\n")[0] not in str(part.get("text") or ""):
+                continue
+            pid = int(part["id"])
+            if pid not in texts:
+                n = str(part.get("text") or "").count("\n") + 1
+                args = ["run", "--file", str(src), "--print"]
+                for k in range(n):
+                    args += ["--cmd", f"document.paragraph={json.dumps({'path': [k], 'story': {'part': pid}})}"]
+                from app.tools import run_report
+                got = run_report.arrow_results(await _cli(*args))
+                texts[pid] = [str(((g or {}).get("paragraph") or {}).get("text") or "") if isinstance(g, dict) else ""
+                              for g in got]
+            for k, t in enumerate(texts[pid]):
+                at = t.find(needle)
+                while at >= 0:
+                    hits.append((pid, k, len(t[:at].encode("utf-8")), len(needle.encode("utf-8"))))
+                    at = t.find(needle, at + 1)
+        if len(hits) >= nth:
+            pid, k, off, n = hits[nth - 1]
+            pos = lambda o: {"story": {"part": pid}, "path": [k], "off": o}           # noqa: E731
+            out[i] = {"command": "select.range", "params": {"anchor": pos(off), "focus": pos(off + n)}}
+    return out
+
+
 async def run(
     *,
     file_id: Optional[str] = None,
@@ -147,28 +215,39 @@ async def run(
     fmt = save_format.lower().lstrip(".")
     if fmt not in SAVE_FORMATS:
         raise ValueError(f"save_format: {fmt} (choose from {', '.join(sorted(SAVE_FORMATS))})")
-    args = ["run"]
     if file_id:
-        args += ["--file", str(_existing(file_id))]
+        start = ["--file", str(_existing(file_id))]
     else:
         tpl = template or "blank"
         if tpl not in TEMPLATES:
             raise ValueError(f"template: {tpl} (choose from {', '.join(sorted(TEMPLATES))})")
-        args += ["--template", tpl]
-    if author:
-        args += ["--author", author]
-    cmd_args = [_cmd_arg(c) for c in expand(commands)]
-    for a in cmd_args:
-        args += ["--cmd", a]
-    args.append("--print")                      # parancsonként „id: eredmény” — a jelentésbe (és az olvasás válasza)
+        start = ["--template", tpl]
+    who = ["--author", author] if author else []
+    cmds = [_as_dict(c) for c in expand(commands)]
+    if file_id:
+        cmds = await _select_in_notes(_existing(file_id), cmds)
+    # szakaszok: a motor parancsai és a Studio saját szöveg-összevetése (review.compare {"text"}) egymás után
+    segs: list[tuple[str, Any]] = []
+    for c in cmds:
+        cmp = _text_compare(c)
+        if cmp is not None:
+            segs.append(("compare", cmp))
+        elif segs and segs[-1][0] == "wc":
+            segs[-1][1].append(_cmd_arg(c))
+        else:
+            segs.append(("wc", [_cmd_arg(c)]))
+    if segs and segs[0][0] == "compare" and not file_id:
+        raise ValueError("review.compare with text needs a document: give file_id")
+    cmd_args = [a for kind, x in segs for a in (x if kind == "wc" else ["review.compare=" + json.dumps(x, ensure_ascii=False)])]
 
     from app.tools import run_report
     parsed = [(a.partition("=")[0], _json_or_none(a.partition("=")[2])) for a in cmd_args]
     if file_id and _existing(file_id).suffix.lstrip(".").lower() == fmt and run_report.only_reads(parsed):
-        # csak olvasó parancsok (document.inspect, edit.find, styles.list…): nincs mentés, nincs új változat
+        # csak olvasó parancsok (document.inspect, edit.find, styles.list, document.selection…): nincs mentés, nincs új
+        # változat (10-22: caret.set + select.paragraph + document.selection új verziót mentett)
         from app.tools.crafts import read_only_result
         try:
-            printed = await _cli(*args)
+            printed = await _cli(*(["run"] + start + who + [x for a in cmd_args for x in ("--cmd", a)] + ["--print"]))
         except RuntimeError as e:
             if "unknown command" in str(e) or "step" in str(e):
                 ids = [c["id"] for c in json.loads(await _cli("commands", "--json"))]
@@ -177,19 +256,52 @@ async def run(
         return read_only_result(file_id, parsed, run_report.arrow_results(printed), t0)
 
     out_id = new_file_id(fmt)
-    args += ["--save", str(output_path(out_id))]
+    from app.storage.files import temp_path
+    work = temp_path(f"wc_{out_id.rsplit('.', 1)[0]}")
+    work.parent.mkdir(parents=True, exist_ok=True)
+    printed_all: list[str] = []
+    compared: list[dict[str, Any]] = []
     try:
-        printed = await _cli(*args)
+        cur = start
+        for k, (kind, x) in enumerate(segs or [("wc", [])]):
+            last = k == len(segs or [1]) - 1
+            if kind == "wc":
+                dst = output_path(out_id) if last else work.with_name(f"{work.name}_{k}.docx")
+                args = ["run"] + cur + who + [y for a in x for y in ("--cmd", a)] + ["--print", "--save", str(dst)]
+                printed_all.append(await _cli(*args))
+            else:
+                if cur[0] != "--file":
+                    src = work.with_name(f"{work.name}_{k}_tpl.docx")
+                    await _cli(*(["run"] + cur + ["--save", str(src)]))
+                else:
+                    src = Path(cur[1])
+                dst = work.with_name(f"{work.name}_{k}.docx")
+                from app.tools import text_compare
+                r = await asyncio.to_thread(text_compare.compare, src, dst, x["text"],
+                                            str(x.get("author") or author or "Studio"))
+                compared.append(r)
+                printed_all.append("review.compare: " + json.dumps(r, ensure_ascii=False))
+                if last:
+                    if fmt == "docx":
+                        shutil.copyfile(dst, output_path(out_id))
+                    else:
+                        await _cli("convert", str(dst), str(output_path(out_id)))
+            cur = ["--file", str(dst)]
     except RuntimeError as e:
         if "unknown command" in str(e) or "step" in str(e):
             ids = [c["id"] for c in json.loads(await _cli("commands", "--json"))]
             raise ValueError(run_report.failure("wordcraft", str(e), "", parsed, ids)) from None
         raise
+    finally:
+        for f in work.parent.glob(f"{work.name}_*"):
+            f.unlink(missing_ok=True)
+    printed = "\n".join(printed_all)
     from app.storage.naming import result_stem
     from app.tools import ios_safe
     if file_id and fmt == "docx" and _existing(file_id).suffix.lower() in (".docx", ".docm", ".dotx"):
         from app.tools import docx_extras                 # a Word megjegyzés-részei (tartós id, szerzők) maradnak
         await asyncio.to_thread(docx_extras.restore, _existing(file_id), output_path(out_id))
+    notes_fixed = await asyncio.to_thread(_tidy_notes, output_path(out_id)) if fmt == "docx" else None
     await ios_safe.finalize(output_path(out_id))          # iPhone (Pages, Quick Look): sémahelyes docx
     ids_used = " ".join(c for c, _ in parsed)
     what = "reviewed" if ("review." in ids_used or "comment" in ids_used) else "edited" if file_id else ""
@@ -204,6 +316,10 @@ async def run(
         "author": author,
         "ms_elapsed": int((time.time() - t0) * 1000),
     }
+    if compared:
+        res["compare"] = compared[-1] if len(compared) == 1 else compared
+    if notes_fixed:
+        res["notes_tidied"] = notes_fixed
     if fmt == "docx":
         try:
             after = _doc_summary(output_path(out_id))
@@ -215,6 +331,22 @@ async def run(
     return res
 
 
+def _tidy_notes(path: Path) -> Optional[dict[str, int]]:
+    """Árva / összekevert láb- és végjegyzet a mentett fájlban → rendbe (review_ops.tidy_notes): a hivatkozás nélküli
+    jegyzet láthatatlan a Wordben, a LibreOffice-ban viszont elcsúsztatja a szövegeket. Csak ha baj van, írunk."""
+    from app.tools import review_loop, review_ops
+    try:
+        pkg = review_loop._Pkg(path)
+        if not review_ops.notes_report(pkg):
+            return None
+        got = review_ops.tidy_notes(pkg)
+        pkg.save(path)
+        return got
+    except Exception as e:
+        log.info("jegyzet-rendrakás kimaradt (%s): %s", path.name, e)
+        return None
+
+
 def _json_or_none(raw: str):
     try:
         return json.loads(raw) if raw else None
@@ -223,14 +355,19 @@ def _json_or_none(raw: str):
 
 
 def _doc_summary(path: Path) -> dict[str, Any]:
-    """Bekezdések, szavak, követett változások, megjegyzések — az előtte–utána jelentéshez."""
+    """Bekezdések, szavak (a követett változások elfogadása utáni szöveg, táblázatokkal), követett változások,
+    megjegyzések — az előtte–utána jelentéshez."""
     from docx import Document
     from app.tools.checks import _docx_review_counts
+    from app.tools.review_loop import view_texts
     d = Document(str(path))
-    words = sum(len(par.text.split()) for par in d.paragraphs)
+    final, before = view_texts(path)
     changes, comments, authors = _docx_review_counts(path)
-    return {"paragraphs": len(d.paragraphs), "words": words, "tables": len(d.tables),
-            "tracked_changes": changes, "comments": comments, "authors": authors}
+    out = {"paragraphs": len(d.paragraphs), "words": sum(len(t.split()) for t in final), "tables": len(d.tables),
+           "tracked_changes": changes, "comments": comments, "authors": authors}
+    if changes:                                           # „words”: ahogy elfogadás után olvas; ez: a változások előtt
+        out["words_before_tracked_changes"] = sum(len(t.split()) for t in before)
+    return out
 
 
 # Egy MCP-válasz felső határa: egy 345 oldalas regény szövege 1 MB, az inspect-je 800 KB —

@@ -400,8 +400,9 @@ def _docx_review_counts(p: Path) -> tuple[int, int, list[str]]:
 
 
 def _docx_text(p: Path) -> str:
-    from docx import Document
-    return "\n".join(par.text for par in Document(str(p)).paragraphs)
+    """A szöveg úgy, ahogy elfogadás után olvas (a követett beszúrással, a táblázatokkal)."""
+    from app.tools.review_loop import view_texts
+    return "\n".join(view_texts(p)[0])
 
 
 def check_docx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any]) -> dict[str, Any]:

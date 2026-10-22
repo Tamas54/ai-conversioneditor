@@ -26,14 +26,16 @@ from typing import Any, Callable, Optional
 from app.config import settings
 from app.llm.siliconflow import _call_model, _strip_json_fences
 from app.tools import datasources as ds
+from app.tools import source_quality as sq
 from app.tools import textlang
 from app.tools.docx_marks import Docx
 
 log = logging.getLogger("aice.content_check")
 
 VER_CONSISTENCY = "c4"
-VER_CLAIMS = "f3"          # f3: az éves („YYYY”) és napi időszak is
-VER_VERDICT = "v4"         # v4: időszakos statisztika csak a saját időszakával (a régi ítéletek a legfrissebbel vetettek össze)
+VER_CLAIMS = "f4"          # f4: a megnevezett forrás („az IFR szerint”) is
+VER_VERDICT = "v5"         # v5: forrás-súly, oldal/PDF-részlet, a modell idézete a forrásban (10-22)
+DEEP_PAGES = 2             # állításonként ennyi találatot olvasunk el, ha a kivonatban nincs meg a szám
 VERDICT_MAX_AGE_S = 3 * 86400
 MAX_CHARS = 110_000
 MAX_CLAIMS = 30
@@ -247,6 +249,8 @@ For each claim:
   "quote": the exact words of the paragraph that state it (copy character for character, 3 to 20 words),
   "claim": the claim as one self-contained sentence (who or what, when, how much), in the document's language,
   "query": a web search query that would verify it (the document's language; English for international facts),
+  "source_named": the organisation or publication the document attributes it to ("IFR", "OECD", "PwC", "KSH",
+          "Eurostat"…) — only when the document names one for this claim; otherwise null,
   "stat": ONLY when it is one of these indicators for one country — {indicators} —
           {{"country": "ISO-2 code", "indicator": "<one of the names>", "period": the period the claim is ABOUT —
           "YYYY" for a whole year ("in 2024", "2024-ben": the annual figure), "YYYY-MM" for a month or the end of a
@@ -259,7 +263,11 @@ Document:
 {doc}"""
 
 _VERDICT_PROMPT = """You check factual claims against the evidence listed under each claim — ONLY against that evidence,
-never your own knowledge. For each claim decide:
+never your own knowledge. Each piece of evidence says how much it weighs: "named source" (the publication the claim
+cites), "official" (statistics office, government, international body, university), "secondary" (press, company,
+blog), "weak" (forum, Q&A site, social post — never enough on its own). The evidence must be about the SAME country,
+organisation, measure and period as the claim: a figure the evidence gives for another country, group or year is
+not evidence for this claim. For each claim decide:
 - "supported": the evidence states the same thing (numbers equal at the claim's precision).
 - "contradicted": the evidence clearly states something different about the same thing for the same time — and the
   evidence is clearly about the SAME person, organisation or place (a namesake or an unclear match is "unverified").
@@ -272,6 +280,7 @@ For each claim reply with:
   "verdict": one of the four,
   "explanation": one plain sentence in the document's language that names the source and the figure it gives,
   "source": the evidence id you rely on (e.g. "S2") or null,
+  "evidence_quote": the exact words of that evidence (copied, at most 40 words) that state the figure or fact, or null,
   "claimed": for contradicted or outdated — the value or wording the claim states (e.g. "4,3%"), otherwise null,
   "correct": the right value or wording, copied from the evidence, or null,
   "replacement": for contradicted or outdated only — the quote with ONLY the wrong part corrected (same length and form
@@ -283,16 +292,72 @@ Reply with JSON only: {{"verdicts": [ … ]}}
 {claims}"""
 
 
+_TIER_LABEL = {"named": "named source", "official": "official", "secondary": "secondary", "weak": "weak"}
+
+
 def _evidence_text(ev: list[dict[str, Any]]) -> str:
     lines = []
     for e in ev:
         if e["type"] == "data":
-            lines.append(f"  {e['id']} [{e['source_name']}] {e['what']}: {e['value']:g} {e['unit']} — period {e['period']}"
-                         + (f" — {e['source_url']}" if e.get("source_url") else ""))
+            lines.append(f"  {e['id']} [{e['source_name']}, official] {e['what']}: {e['value']:g} {e['unit']} — period "
+                         f"{e['period']}" + (f" — {e['source_url']}" if e.get("source_url") else ""))
+        elif e["type"] == "page":
+            lines.append(f"  {e['id']} [page, {_TIER_LABEL[e['tier']]}: {sq.host(e['url'])}] {e['title']} — read from the "
+                         f"page: " + " | ".join(f"“{x}”" for x in e["passages"]) + f" — {e['url']}")
         else:
-            lines.append(f"  {e['id']} [web] {e['title']} — {e['snippet']}" + (f" ({e['date']})" if e.get("date") else "")
-                         + f" — {e['url']}")
+            lines.append(f"  {e['id']} [web, {_TIER_LABEL[e['tier']]}: {sq.host(e['url'])}] {e['title']} — {e['snippet']}"
+                         + (f" ({e['date']})" if e.get("date") else "") + f" — {e['url']}")
     return "\n".join(lines) or "  (no evidence found)"
+
+
+def _ev_text(e: dict[str, Any]) -> str:
+    return " ".join([str(e.get("title") or ""), str(e.get("snippet") or "")] + list(e.get("passages") or []))
+
+
+async def _deep(c: dict[str, Any], ev: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ha a keresési kivonatokban nincs meg az állítás száma: a legsúlyosabb találatok elolvasása (oldal vagy PDF, a
+    403-at adó oldal a motor másik kijáratán) — a számok körüli részletek új bizonyítékként (10-22: hét helyes
+    állítás maradt „unverified”, mert a PwC- és OECD-szám csak a PDF-ben állt)."""
+    web = [e for e in ev if e["type"] == "web" and e["tier"] != "weak"]
+    if not web or not sq.key_numbers(c.get("quote") or "") or any(sq.has_numbers(_ev_text(e), c["quote"]) for e in web):
+        return []
+    rank = {t: k for k, t in enumerate(sq.TIERS)}
+    out = []
+    for e in sorted(web, key=lambda e: rank[e["tier"]])[:DEEP_PAGES]:
+        try:
+            text = await ds.scrape(e["url"])
+        except ds.SourceError as err:
+            log.info("oldal nem olvasható (%s): %s", e["url"][:80], err)
+            continue
+        found = sq.passages(text, c["quote"])
+        if found:
+            out.append({"type": "page", "title": e["title"], "url": e["url"], "tier": e["tier"], "passages": found})
+    return out
+
+
+def weigh(verdict: str, src: Optional[dict[str, Any]], v: dict[str, Any], c: dict[str, Any],
+          hu: bool) -> tuple[str, Optional[str], dict[str, Any]]:
+    """A modell ítélete a forrás súlya és az idézete szerint — gépi szabály, nem a modell döntése (10-22):
+      • az ítélet idézetének a forrásban kell állnia (a kitalált vagy máshová kötött idézet nem bizonyíték);
+      • fórum, kérdés-válasz oldal, közösségi poszt egyedül nem bizonyíték;
+      • ha a dokumentum megnevezi a forrását („az IFR szerint”), a „supported”-hez annak saját oldala vagy hivatalos
+        forrás kell — egy másodlagos oldal ismétlése „unverified” marad (weak_support: hol olvasható).
+    → (ítélet, magyarázat-előtag vagy None, többletmezők)"""
+    if verdict == "unverified" or src is None or src["type"] == "data":
+        return verdict, None, {}
+    h, named = sq.host(src.get("url")), c.get("source_named")
+    if not sq.quoted(v.get("evidence_quote"), _ev_text(src)):
+        return "unverified", ("A forrás szövegében nem áll, amire az ítélet hivatkozott — nyisd meg és nézd meg." if hu else
+                              "What the verdict relied on isn't in the source's text — open it and check."), {}
+    if src["tier"] == "weak":
+        return "unverified", (f"Csak egy fórum vagy kérdés-válasz oldal ({h}) mondja — ez nem forrás." if hu else
+                              f"Only a forum or Q&A site ({h}) says so — that isn't a source."), {"weak_support": src["url"]}
+    if verdict == "supported" and named and src["tier"] not in ("named", "official"):
+        return "unverified", (f"Csak egy másodlagos oldal ({h}) ismétli; {named} saját kiadványát nem értük el — onnan "
+                              "erősítsd meg." if hu else
+                              f"Only a secondary site ({h}) repeats it; {named}'s own publication wasn't reached — "
+                              "confirm it there."), {"weak_support": src["url"]}
+    return verdict, None, ({"strength": "secondary"} if src["tier"] == "secondary" else {})
 
 
 def stat_period(c: dict[str, Any]) -> Optional[str]:
@@ -326,11 +391,18 @@ async def _evidence(c: dict[str, Any]) -> list[dict[str, Any]]:
     except ds.SourceError as e:
         log.info("adatforrás (%s): %s", c.get("claim", "")[:60], e)
     if ds.search_enabled() and c.get("query") and not any(e["type"] == "data" for e in ev):
+        named = c.get("source_named")
         try:
             for r in await ds.web_search(str(c["query"]), limit=5):
-                ev.append({"type": "web", **r})
+                ev.append({"type": "web", **r, "tier": sq.tier(r["url"], named)})
+            if named and not any(e.get("tier") == "named" for e in ev):        # a megnevezett forrás saját oldala
+                seen = {e.get("url") for e in ev}
+                for r in await ds.web_search(f"{named} {c['query']}", limit=3):
+                    if r["url"] not in seen:
+                        ev.append({"type": "web", **r, "tier": sq.tier(r["url"], named)})
         except ds.SourceError as e:
             log.info("webes keresés (%s): %s", c.get("query", "")[:60], e)
+        ev += await _deep(c, ev)
     for k, e in enumerate(ev, 1):
         e["id"] = f"S{k}"
     return ev
@@ -528,18 +600,24 @@ async def facts(path: Path, *, charge: Optional[Callable[[int], Any]] = None,
                 if verdict in ("contradicted", "outdated") and not v.get("correct"):
                     verdict = "unverified"            # nincs megnevezett helyes érték → nem állítjuk, hogy hibás
                 src = next((e for e in ev if e["id"] == v.get("source")), None)
+                verdict, why, extra = weigh(verdict, src, v, c, hu)
                 rep = tidy_replacement(c["quote"], str(v.get("replacement") or "")) if verdict in ("contradicted", "outdated") else None
                 if rep == c["quote"] or (rep and len(rep) > 2 * len(c["quote"]) + 20):
                     rep = None                        # nem csere, hanem új mondat lenne (pl. egy idővonal-cellából)
                 if rep and not _numbers_ok(str(rep), c["quote"], ev):
                     log.info("csere elvetve (forrásban nem szereplő szám): %s → %s", c["quote"], rep)
                     rep = None
-                done[c["id"]] = {"verdict": verdict, "explanation": str(v.get("explanation") or "")[:600],
-                                 "source": src and {k2: src.get(k2) for k2 in ("type", "title", "url", "source_name", "source_url",
-                                                                               "value", "unit", "period", "spec")},
-                                 "correct": v.get("correct"), "replacement": rep,
+                said = str(v.get("explanation") or "")
+                done[c["id"]] = {"verdict": verdict, "explanation": (f"{why} {said}" if why else said).strip()[:700],
+                                 "source": src and {**{k2: src.get(k2) for k2 in ("type", "title", "url", "source_name", "source_url",
+                                                                                  "value", "unit", "period", "spec", "tier")
+                                                       if src.get(k2) is not None},
+                                                    **({"evidence_quote": v["evidence_quote"]} if v.get("evidence_quote") else {})},
+                                 "correct": v.get("correct") if verdict in ("contradicted", "outdated") else None,
+                                 "replacement": rep if verdict in ("contradicted", "outdated") else None, **extra,
                                  "evidence": [{k2: e.get(k2) for k2 in ("id", "type", "title", "url", "source_name", "source_url",
-                                                                        "value", "unit", "period")} for e in ev]}
+                                                                        "value", "unit", "period", "tier", "passages")
+                                               if e.get(k2) is not None} for e in ev]}
                 if got:
                     try:
                         await db.check_put("verdict", c["key"], VER_VERDICT, done[c["id"]])

@@ -686,6 +686,36 @@ async def convert_targets(ext: str, all: bool = False) -> dict[str, Any]:
     return {"targets": [{"fmt": t, "label": anyconvert.LABELS.get(t, t.upper())} for t in anyconvert.targets_for(ext)]}
 
 
+@router.post("/api/make/clean_copy")
+async def make_clean_copy(body: dict[str, Any]) -> dict[str, Any]:
+    """Tiszta példány egy Word-fájlból: minden követett változás elfogadva (a lábjegyzetekben, élőfejben is), minden
+    megjegyzés törölve, a törölt szöveg jegyzetei ki — új változat, az eredeti marad. AI nincs benne. (10-22: a
+    LibreOffice „mindent elfogad” mentése után 289 változás és 22 megjegyzés maradt a fájlban.)"""
+    import asyncio
+    from app.tools import review_loop
+    fid = body.get("file_id")
+    if not fid:
+        raise HTTPException(400, "Choose a file.")
+    try:
+        dry = await asyncio.to_thread(review_loop._address_sync, fid, [{"final": True}], "Studio", True)
+    except FileNotFoundError:
+        raise HTTPException(404, "File not found.") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    r = dry["results"][0]
+    if not (r.get("changes_accepted") or r.get("comments_removed") or r.get("notes_removed")):
+        raise HTTPException(400, "Nothing to accept — this document has no tracked changes or comments.")
+    res = await review_loop.address(fid, [{"final": True}], "Studio")
+    if not res.get("file_id"):
+        raise HTTPException(400, "; ".join(res["check"]["findings"]) or "The clean copy couldn't be made.")
+    r = res["results"][0]
+    note = (f"Clean copy: {r['changes_accepted']} change{'s' if r['changes_accepted'] != 1 else ''} accepted, "
+            f"{r['comments_removed']} comment{'s' if r['comments_removed'] != 1 else ''} removed")
+    events.emit("tool_done", tool="make_clean_copy", params={}, result={"file_id": res["file_id"]})
+    return {"file_id": res["file_id"], "url": res["url"], "note": note + " — the original stays as it was.",
+            "check": res["check"], "result": r}
+
+
 @router.post("/api/make/convert")
 async def make_convert(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     from app.tools import anyconvert, crafts

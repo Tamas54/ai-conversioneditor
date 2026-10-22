@@ -185,6 +185,14 @@ _STYLE_KEEP = {"sz": ("val",), "b": ("val",), "i": ("val",), "u": ("val",), "col
                "keepNext": ("val",), "keepLines": ("val",), "pageBreakBefore": ("val",), "outlineLvl": ("val",)}
 
 
+def _coarse(color: Optional[str]) -> Optional[str]:
+    """A téma-szín feloldása motoronként egy-két egységgel eltér (10-22: a címsor accent1 + 75% Wordben 365F91, a
+    WordCraft 0.9-ben 376092) — szemre ugyanaz. Csatornánként 16-os lépcsőre kerekítve hasonlítunk."""
+    if not color or not re.fullmatch(r"[0-9A-Fa-f]{6}", color):
+        return color
+    return "".join(f"{min(255, round(int(color[k:k + 2], 16) / 16) * 16):02X}" for k in (0, 2, 4))
+
+
 def _style_props(s_) -> tuple:
     out = []
     for sect in ("pPr", "rPr"):
@@ -197,6 +205,8 @@ def _style_props(s_) -> tuple:
                 vals = _attrs(c, _STYLE_KEEP[tag])
                 if tag in ("b", "i", "keepNext", "keepLines", "pageBreakBefore", "caps"):
                     vals = ((vals[0] or "1").lower() not in _OFF,)
+                elif tag == "color":
+                    vals = (_coarse(vals[0]),)
                 out.append((tag, vals))
     return tuple(sorted(out, key=repr))
 
