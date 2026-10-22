@@ -110,3 +110,32 @@ def test_posts_from_a_recording_use_its_transcript(monkeypatch, tmp_path, put_fi
     res = asyncio.run(social.posts(fid, platforms="youtube", notes="Link: https://example.org/bees"))
     assert "Bees need water." in got[0] and "https://example.org/bees" in got[0] and res["chapters"] == []
     assert res["platforms"]["youtube"]["title"] == "Bees need water"
+
+
+async def test_over_mcp_the_agent_writes_the_posts(monkeypatch, tmp_path, put_file):
+    """Kommandant 10-22: „az agent irányít” — MCP-n a szerver az anyagot adja, a posztokat az ügynök írja; a szerver
+    ellenőrzi (hossz, a videóban nem szereplő szám), hozzáteszi a fejezeteket és a forrássort. Studio AI nem fut."""
+    from app.llm import siliconflow
+    from app.mcp_server import video
+    from app.storage import output_path
+    called = []
+
+    async def llm(*a, **k):
+        called.append(1)
+        return "{}"
+    monkeypatch.setattr(siliconflow, "_call_model", llm)
+    pid = _made(tmp_path, put_file)
+    pack = await video(action="social", file_id=pid, ai={"platforms": "youtube,x"}, text="Link: https://example.org")
+    assert set(pack["platforms"]) == {"youtube", "x"} and pack["platforms"]["x"]["text_max"] == 280
+    assert "A méhek 70 fajt kedvelnek." in pack["video"]["says"] and "[pause" not in pack["video"]["says"]
+    assert [c["at"] for c in pack["chapters"]] == ["00:00", "00:19", "00:34"] and "NOTHING WRITTEN YET" in pack["how"]
+    assert any("https://example.org" in r for r in pack["rules"]) and not called
+    res = await video(action="social", file_id=pid, ai={"posts": {
+        "YouTube": {"title": "Méhbarát kert három lépésben", "text": "Virág, víz, vegyszer nélkül — 99 tipp.",
+                    "hashtags": ["#méhek", "kert"]},
+        "x": {"text": "Méhbarát kert: virág, víz, vegyszer nélkül.", "hashtags": ["#méhek"]}}})
+    yt = res["platforms"]["youtube"]
+    assert not called and yt["title"] == "Méhbarát kert három lépésben" and yt["hashtags"] == ["#méhek", "#kert"]
+    assert "00:00 Virágok" in yt["text"] and "Photos: Pexels (Anna K.)" in yt["text"]
+    assert any("99" in f for f in res["check"]["findings"]) and "yours, checked" in res["check"]["verified"][0]
+    assert output_path(res["file_id"]).read_text("utf-8").startswith("# Mit tehetsz a méhekért?")

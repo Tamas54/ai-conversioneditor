@@ -1576,18 +1576,23 @@ async def edit_with_instruction(
     wait: Optional[float] = None,
     mode: Optional[str] = None,
     brief: Optional[dict] = None,
+    changes: Optional[list] = None,
+    offset: int = 0,
 ) -> dict:
     """
     Edit a document using a natural-language instruction.
 
-    EDITING MODES (Word documents) — the person decides, nothing is accepted automatically:
+    EDITING MODES (Word documents) — the person decides, YOU write, the server checks; nothing is accepted automatically:
     mode = proofread (language only) | edit (substantive: clearer, less repetition; content and position stay) |
-    expand | shorten | rewrite. Without `brief` → the QUESTIONS to ask the person (goal, the limit e.g. "at most 10%
-    shorter", tables / numbers / position / terms that must stay, new thoughts allowed?, which part), each with a
-    suggested default — nothing changes. Then call again with brief={id: answer, …} → a NEW version where every
-    change is a TRACKED CHANGE with a comment saying why (a new thought: "do you stand behind it?"), checked by machine
-    against the limits (what didn't fit is listed in held_back), plus a preservation report. Accept / reject per
-    change in Word, the editor or wordcraft(address=[{"accept"|"reject": …}]).
+    expand | shorten | rewrite.
+    1. No `brief` → the QUESTIONS to ask the person (goal, the limit e.g. "at most 10% shorter", tables / numbers /
+       position / terms that must stay, new thoughts allowed?, which part), with suggested defaults. Nothing changes.
+    2. brief={id: answer, …} → your work package: the paragraphs to work on (numbered; `offset` pages long texts) and
+       the rules. Write the edit yourself.
+    3. brief + changes=[{"n", "new" (whole paragraph), "why", "kind"}] → the server holds back what breaks the rules
+       (numbers, kept words, proofreading too wide, an unasked new thought, the length limit — listed in held_back)
+       and writes the rest as TRACKED CHANGES with your reasons as comments ("do you stand behind it?" on new
+       thoughts) → a new version + a preservation report. No Studio AI step in any of these.
 
     Runs in the background: the answer comes within ~40 s; a longer edit returns {status: "running", job_id, stage} —
     call edit_with_instruction(job_id=…, wait=30) until it is done (the result) or failed (the reason, nothing
@@ -1613,10 +1618,12 @@ async def edit_with_instruction(
             raise ValueError("A mode needs file_id (a Word document).")
         if brief is None:
             return await edit_modes.brief(file_id, mode, instruction or "")
+        if changes is None:                          # MCP: az ügynök írja a javaslatot (Kommandant 10-22: „az agent irányít”)
+            return await edit_modes.work_package(file_id, mode, brief, instruction or "", offset=offset)
         edit_modes.mode_of(mode)
 
         async def mode_work(progress):
-            return await edit_modes.propose(file_id, mode, brief, instruction or "", progress=progress)
+            return await edit_modes.apply_changes(file_id, mode, brief, changes, progress=progress)
         return await _edit_job_result(jobs.start("edit", mode_work)["id"], EDIT_INLINE_WAIT_S)
     if not file_id or not (instruction or "").strip():
         raise ValueError("edit_with_instruction needs file_id and instruction (or job_id to ask about a running edit).")
@@ -2093,9 +2100,14 @@ async def video(
         return await cutout_video({"file_id": file_id or "", "background": (ai or {}).get("background"),
                                    "key": (ai or {}).get("key"), "alpha": alpha})
     if act in ("social", "posts", "metadata"):       # közösségi szövegek: cím, leírás, hashtagek, fejezetek
-        from app.routes.video import social_video
-        return await social_video({"file_id": file_id or "", "platforms": (ai or {}).get("platforms"), "language": language,
-                                   "notes": text, "force": force or bool((ai or {}).get("fresh"))})
+        from app.tools import social                 # MCP: az ügynök írja (Kommandant 10-22: „az agent irányít”)
+        if not file_id:
+            raise ValueError('social needs file_id (the video, its project, or a sound file).')
+        written = (ai or {}).get("posts")
+        if not written:
+            return await social.pack(file_id, platforms=(ai or {}).get("platforms"), language=language, notes=text or "")
+        return await social.posts(file_id, platforms=(ai or {}).get("platforms"), language=language, notes=text or "",
+                                  written=written)
     if act in ("variants", "ab", "a/b"):             # A/B változatok egy projektből (MoneyPrinterTurbo-ötlet)
         from app.routes.video import variants_video
         return await variants_video({"file_id": file_id or "", "changes": changes or {}, "draft": draft})

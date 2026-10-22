@@ -158,8 +158,8 @@ async def brief(file_id: str, mode: str, instruction: str = "") -> dict[str, Any
                          "untouchable": sum(1 for p in paras if p["busy"] and p["text"].strip())},
             "questions": q,
             "how": ("NOTHING CHANGED. Ask the person these questions (the defaults are suggestions), then call again with "
-                    "the same mode and brief={id: answer, …}. The result will be tracked changes with a comment on each — "
-                    "nothing accepted until the person decides.")}
+                    "the same mode and brief={id: answer, …} — you get the paragraphs and the rules, and you write the edit. "
+                    "It ends as tracked changes with a comment on each — nothing accepted until the person decides.")}
 
 
 def _count_tables(pkg) -> int:
@@ -316,20 +316,14 @@ _COMMENT = {"hu": {"new_idea": "Új gondolat — vállalod? ", "kinds": {"langua
             "clarity": "Clearer", "cut": "Cut", "addition": "Addition", "new_idea": "New thought"}}}
 
 
-async def propose(file_id: str, mode: str, brief_raw: Any, instruction: str = "", force: bool = False,
-                  progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
-    from app.storage import new_file_id, output_path, public_url, write_meta
-    from app.storage.naming import result_stem
-    from app.tools import narration, review_ops
+async def _prepare(file_id: str, mode: str, brief_raw: Any) -> dict[str, Any]:
+    """A közös előkészítés: a mód, a válaszok, a dokumentum, a nyelv, és a bekezdések, amikhez hozzányúlhatunk."""
+    from app.tools import narration
     from app.tools import review_loop as L
-    step = progress or (lambda *a, **k: None)
     m = mode_of(mode)
     b = _brief_of(m, brief_raw)
     pkg = L._load(file_id)
-    body = L._body(pkg)
     paras = await asyncio.to_thread(_paragraphs, pkg)
-    lang = narration.detect(" ".join(p["text"] for p in paras)[:4000]) or "en"
-    words_before = sum(len(_words(p["text"])) for p in paras)
     skipped: list[dict[str, Any]] = []
     work = []
     for p in paras:
@@ -348,35 +342,113 @@ async def propose(file_id: str, mode: str, brief_raw: Any, instruction: str = ""
     if not work:
         raise ValueError("There is nothing to work on in that part (headings, tables kept, and paragraphs with notes or "
                          "fields are left alone).")
+    return {"m": m, "b": b, "pkg": pkg, "work": work, "skipped": skipped,
+            "lang": narration.detect(" ".join(p["text"] for p in paras)[:4000]) or "en",
+            "words_before": sum(len(_words(p["text"])) for p in paras)}
+
+
+GUARDS = ("every number stays and no new number appears (when numbers must stay); the named words stay; proofreading "
+          "may change at most 25% of a paragraph's words; a new thought only if allowed (kind \"new_idea\"); the whole "
+          "text stays within the agreed length limit")
+
+
+async def work_package(file_id: str, mode: str, brief_raw: Any, instruction: str = "", offset: int = 0,
+                       max_chars: int = 20_000) -> dict[str, Any]:
+    """MCP (Kommandant 10-22: „az agent irányít”): a munka az ügynöké, a saját modelljével — innen a bekezdések
+    számozva és a szabályok; a javaslatait changes=[…]-ben küldi vissza, itt ellenőrizzük és követett változás lesz
+    belőlük. Semmi nem változik, AI-lépés nincs. Lapozható (offset = a következő bekezdés sorszáma)."""
+    w = await _prepare(file_id, mode, brief_raw)
+    m, b = w["m"], w["b"]
+    rest = [p for p in w["work"] if p["n"] >= int(offset or 0)]
+    page, size = [], 0
+    for p in rest:
+        if page and size + len(p["text"]) > max_chars:
+            break
+        page.append(p)
+        size += len(p["text"])
+    nxt = rest[len(page)]["n"] if len(page) < len(rest) else None
+    words = sum(len(_words(p["text"])) for p in w["work"])
+    return {"mode": m, "what": MODES[m], "brief": b, "language": w["lang"],
+            "rules": _rules(m, b, words).splitlines(),
+            "paragraphs": [{"n": p["n"], "section": p["section"] or None, "text": p["text"]} for p in page],
+            **({"next_offset": nxt} if nxt else {}),
+            "not_touched": w["skipped"],
+            "words": {"in_scope": words, "whole_text": w["words_before"]},
+            "how": ("NOTHING CHANGED. You write the edit, with your own model: for each paragraph you change, "
+                    "{\"n\": its number, \"new\": the WHOLE new paragraph, \"why\": a short reason in the document's "
+                    "language, \"kind\": language | clarity | cut | addition | new_idea}; leave unchanged paragraphs out"
+                    + (" (more paragraphs: call again with offset=next_offset)" if nxt else "")
+                    + ". Then call again with the same mode and brief, and changes=[…]. The server holds back what "
+                    f"breaks the rules ({GUARDS}) and writes the rest as tracked changes with your reasons as comments — "
+                    "nothing accepted until the person decides.")}
+
+
+async def apply_changes(file_id: str, mode: str, brief_raw: Any, changes: Any,
+                        progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """Az ügynök javaslatai → gépi őrök → követett változás (AI-lépés nélkül)."""
+    if isinstance(changes, str):
+        changes = json.loads(changes)
+    if not isinstance(changes, list) or not changes:
+        raise ValueError('changes: a list of {"n", "new", "why", "kind"} — one per paragraph you change.')
+    w = await _prepare(file_id, mode, brief_raw)
+    return await _finish(file_id, w, [c for c in changes if isinstance(c, dict)], progress, source="agent")
+
+
+async def propose(file_id: str, mode: str, brief_raw: Any, instruction: str = "", force: bool = False,
+                  progress: Optional[Callable[..., None]] = None) -> dict[str, Any]:
+    """Ügynök nélkül (webes felület): a javaslatot a Studio modellje írja (kötegenként egy AI-lépés)."""
+    step = progress or (lambda *a, **k: None)
+    w = await _prepare(file_id, mode, brief_raw)
     batches, cur, size = [], [], 0
-    for p in work:
+    for p in w["work"]:
         if cur and size + len(p["text"]) > BATCH_CHARS:
             batches.append(cur)
             cur, size = [], 0
         cur.append(p)
         size += len(p["text"])
     batches.append(cur)
-    by_n = {p["n"]: p for p in work}
-    accepted: list[dict[str, Any]] = []
-    held: list[dict[str, Any]] = []
+    proposed: list[dict[str, Any]] = []
     for k, batch in enumerate(batches, 1):
         step(k - 1, len(batches) + 1, f"part {k} of {len(batches)}: the AI reads and proposes")
-        for ch in await _ask(batch, m, b, lang, instruction, force):
-            try:
-                n = int(ch.get("n"))
-            except (TypeError, ValueError):
-                continue
-            p = by_n.get(n)
-            new = unicodedata.normalize("NFC", " ".join(str(ch.get("new") or "").split()))
-            if p is None or not new or new == p["text"].strip():
-                continue
-            ch = {**ch, "n": n, "new": new, "why": " ".join(str(ch.get("why") or "").split())[:160],
-                  "kind": str(ch.get("kind") or "clarity").lower()}
-            why_not = _guard(m, b, p["text"], ch)
-            if why_not:
-                held.append({"paragraph": n, "why": why_not, "proposed": new[:200]})
-            else:
-                accepted.append(ch)
+        proposed += await _ask(batch, w["m"], w["b"], w["lang"], instruction, force)
+    return await _finish(file_id, w, proposed, progress, source="studio")
+
+
+async def _finish(file_id: str, w: dict[str, Any], proposed: list[dict[str, Any]],
+                  progress: Optional[Callable[..., None]], source: str) -> dict[str, Any]:
+    """Javaslatok → gépi őrök → a hossz-határ az egészre → követett változás + megjegyzés → új változat + jelentés."""
+    from app.storage import new_file_id, output_path, public_url, write_meta
+    from app.storage.naming import result_stem
+    from app.tools import review_loop as L
+    step = progress or (lambda *a, **k: None)
+    m, b, pkg = w["m"], w["b"], w["pkg"]
+    words_before, skipped = w["words_before"], list(w["skipped"])
+    by_n = {p["n"]: p for p in w["work"]}
+    accepted: list[dict[str, Any]] = []
+    held: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for ch in proposed:
+        try:
+            n = int(ch.get("n"))
+        except (TypeError, ValueError):
+            continue
+        p = by_n.get(n)
+        new = unicodedata.normalize("NFC", " ".join(str(ch.get("new") or "").split()))
+        if p is None:
+            if n not in seen:
+                held.append({"paragraph": n, "why": "that paragraph is not one to change (heading, kept table, note / "
+                                                    "field, or outside the chosen part)", "proposed": new[:200]})
+            continue
+        if not new or new == p["text"].strip() or n in seen:
+            continue
+        seen.add(n)
+        ch = {**ch, "n": n, "new": new, "why": " ".join(str(ch.get("why") or "").split())[:160],
+              "kind": str(ch.get("kind") or "clarity").lower()}
+        why_not = _guard(m, b, p["text"], ch)
+        if why_not:
+            held.append({"paragraph": n, "why": why_not, "proposed": new[:200]})
+        else:
+            accepted.append(ch)
     # a hossz-határ az egészre: a legnagyobb vágás / bővítés vissza, amíg belefér
     delta = lambda chs: sum(len(_words(c["new"])) - len(_words(by_n[c["n"]]["text"])) for c in chs)  # noqa: E731
     if m in ("shorten", "expand", "rewrite") and b["limit"] is not None and words_before:
@@ -392,12 +464,13 @@ async def propose(file_id: str, mode: str, brief_raw: Any, instruction: str = ""
     if not accepted:
         return {"changed": False, "file_id": file_id, "mode": m, "brief": b, "changes": 0, "held_back": held,
                 "skipped": skipped, "note": "No change passed the agreed limits — nothing changed."}
-    step(len(batches), len(batches) + 1, "writing the tracked changes")
-    out = await asyncio.to_thread(_apply_all, pkg, body, accepted, by_n, b, lang)
+    step(1, 2, "writing the tracked changes")
+    out = await asyncio.to_thread(_apply_all, pkg, L._body(pkg), accepted, by_n, b, w["lang"])
     fid = new_file_id("docx")
     pkg.save(output_path(fid))
     label = f"{result_stem(file_id, {'proofread': 'proofread', 'edit': 'edited', 'expand': 'expanded', 'shorten': 'shortened', 'rewrite': 'reworked'}[m] + ' (proposed)')}.docx"
-    write_meta(fid, label=label, source_file_id=file_id, operation=f"edit mode {m}", extra={"edit_brief": b})
+    write_meta(fid, label=label, source_file_id=file_id, operation=f"edit mode {m}",
+               extra={"edit_brief": b, "edit_by": source})
     words_after = words_before + delta([c for c in accepted if c["n"] in out["done"]])
     kinds: dict[str, int] = {}
     for c in accepted:

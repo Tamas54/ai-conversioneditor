@@ -117,12 +117,27 @@ async def test_proofreading_does_not_reword(ai, tmp_path, put_file, monkeypatch)
     assert "rewords more than a proofreading should" in reasons
 
 
-async def test_the_mcp_tool_asks_then_proposes(ai, tmp_path, put_file, monkeypatch):
+async def test_over_mcp_the_agent_writes_and_the_server_checks(ai, tmp_path, put_file, monkeypatch):
+    """Kommandant 10-22: „ha mcp-n keresztül használod … az agent irányít” — a szerkesztést az ügynök írja a saját
+    modelljével; a szerver kérdez, munkacsomagot ad, ellenőriz és követett változást ír. Studio AI-lépés nincs."""
     from app import mcp_server
     from app.mcp_server import edit_with_instruction
+    from app.storage import output_path
     monkeypatch.setattr(mcp_server, "_pool", lambda: None)
     fid = put_file(_doc(tmp_path / "t.docx"))
     asked = await edit_with_instruction(file_id=fid, mode="shorten")
     assert asked["questions"] and "NOTHING CHANGED" in asked["how"]
-    done = await edit_with_instruction(file_id=fid, mode="shorten", brief={"limit": 20})
-    assert done["changed"] and done["file_id"] != fid and "NOTHING IS ACCEPTED" in done["how"]
+    pack = await edit_with_instruction(file_id=fid, mode="shorten", brief={"limit": 20, "keep_terms": ["Magyar Nemzeti Bank"]})
+    texts = {p["n"]: p["text"] for p in pack["paragraphs"]}
+    assert P_CUT in texts.values() and P_NOTE not in texts.values() and pack["not_touched"][0]["why"].startswith("it has a footnote")
+    assert any("Magyar Nemzeti Bank" in r for r in pack["rules"]) and "You write the edit" in pack["how"]
+    assert ai == []                                                                   # a szerver nem hívott AI-t
+    n_of = {t: n for n, t in texts.items()}
+    mine = [{"n": n_of[P_CUT], **PROPOSALS[P_CUT]}, {"n": n_of[P_NUM], **PROPOSALS[P_NUM]},
+            {"n": 1, "new": "Új cím", "why": "x", "kind": "clarity"}]                  # az 1. a címsor: nem az övé
+    done = await edit_with_instruction(file_id=fid, mode="shorten", brief={"limit": 20}, changes=mine)
+    assert ai == [] and done["changed"] and done["changes"] == 1 and "NOTHING IS ACCEPTED" in done["how"]
+    held = " ".join(h["why"] for h in done["preservation"]["held_back"])
+    assert "120" in held and "not one to change" in held
+    com = zipfile.ZipFile(output_path(done["file_id"])).read("word/comments.xml").decode("utf-8")
+    assert "Rövidítés: ismétlés ki" in com

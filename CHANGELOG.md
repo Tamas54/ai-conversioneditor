@@ -1,6 +1,21 @@
 # Changelog
 
-## 2026-10-22 — Editing modes with limits: ask first, propose as tracked changes
+## 2026-10-22 — Editing modes with limits: ask first, propose as tracked changes; over MCP the agent writes
+
+Owner's principle: over MCP the agent directs and thinks on its own tokens. The server gives the data, does the
+deterministic work and the machine checks, and writes the file. The Studio's own AI runs over MCP only for the
+exceptions: reading large books / scans, AI video, and AI pictures for clients that can't make them.
+- **Editing modes over MCP:**
+  1. Questions.
+  2. With `brief`: a work package of numbered paragraphs plus the rules (`offset` pages long texts).
+  3. With `changes=[{n, new, why, kind}]`: the server's guards, then tracked changes with the agent's reasons.
+
+  No Studio AI step in any of these. The Studio's model writes the proposals only where there is no agent (web).
+- **Social posts over MCP:**
+  - `video(action="social")` returns the material: what the video says, chapters, keywords, people, credits, and each
+    platform's limits and style.
+  - The agent writes the posts and sends them back with `ai={"posts": {…}}`. The server checks the lengths and the
+    numbers against the video, and adds chapters, credits and the .md.
 
 The first piece of editorial intelligence, under the owner's principle: within limits, the system asks what the
 author wants, and the person decides.
