@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-22 — A/B variants
+
+From the look at MoneyPrinterTurbo.
+- **`video(action="variants")`** (also `POST /api/video/variants`): 1–3 versions of a finished video for testing on
+  social media; the original is variant A.
+  - `changes={"variants": [{…}, {…}]}`: one set of changes per variant, anything `edit` takes. For example a
+    different opening title or first scene, music, transition, accent, caption style or end title.
+  - `changes={"count": n}`: the look varies without AI or cost. Made videos change the transition, overlays the
+    caption style, and both change the accent; library music changes mood, while your own music stays.
+  - The pictures and sound are reused, so no new AI pictures are made unless a variant asks for one.
+  - Each variant is its own project and MP4, named "… – variant B".
+- **Fixed:** an overlay edit refused `caption_style`.
+- **Fixed:** an overlay project didn't store its caption style, so a later edit turned `bold` captions back into `box`.
+
 ## 2026-10-22 — Captions from the script, pauses in the narration
 
 From the look at MoneyPrinterTurbo.

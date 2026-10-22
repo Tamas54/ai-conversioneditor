@@ -4748,7 +4748,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                          "music_src": own, "music_name": opts.get("music_name") if own else None,
                          "music_start": opts.get("music_start") if own else None,
                          "music_level": opts.get("music_level") if (own or _builtin_music(opts)) else None,
-                         "subtitles": subs or None, "transcript": opts.get("transcript") or None},
+                         "subtitles": subs or None, "transcript": opts.get("transcript") or None,
+                         # a feliratstílus is (10-22: nélküle egy későbbi szerkesztés a bold feliratot box-ra cserélte)
+                         "caption_style": opts.get("caption_style") if subs else None},
                 "source": (source or "")[:30000], "layer_source": (source or "")[:30000],
                 "layer_notes": [n for n in layer_notes if not n.startswith("⚠ ")], "timeline": [], "layer_timeline": rows}
         write_meta(pid, label=f"{label_stem}.ecproj", operation=operation, source_file_id=parent or base["file_id"],
@@ -5353,10 +5355,11 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
 
 async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                progress: Optional[Callable[..., None]] = None, alpha: Any = None, render: bool = True,
-               draft: bool = False) -> dict[str, Any]:
+               draft: bool = False, label_stem: Optional[str] = None) -> dict[str, Any]:
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
-        return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha, render=render, draft=draft)
+        return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha, render=render, draft=draft,
+                           label_stem=label_stem)
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
@@ -5364,7 +5367,7 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
 
 async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                 progress: Optional[Callable[..., None]] = None, alpha: Any = None, render: bool = True,
-                draft: bool = False) -> dict[str, Any]:
+                draft: bool = False, label_stem: Optional[str] = None) -> dict[str, Any]:
     """Egy elkészült videó módosítása a forgatókönyvéből → ÚJ változat (projekt + MP4). changes:
     {"scenes": [{"scene": n (1-től), "headline"?, "caption"?, "image"?, "stat"?, "chart"?, "remove"?}],
      "add": [{"after": n (0 = az első elé), "headline", "caption"?, "image"? | "image_query"?, "stat"?, "chart"?}],
@@ -5383,7 +5386,8 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     if not isinstance(changes, dict) or (not changes and alpha in (None, False)):
         raise ValueError("Say what should change (changes).")
     if spec.get("kind") == "overlay":
-        res = await _edit_overlay(pid, spec, changes, extra_source=extra_source, step=step, alpha=alpha, render=render, draft=draft)
+        res = await _edit_overlay(pid, spec, changes, extra_source=extra_source, step=step, alpha=alpha, render=render, draft=draft,
+                                  label_stem=label_stem)
         res["notes"] = ["Rebuilt from the layer list: changes made by hand in the video editor are not in this version "
                         "(they stay in the previous one)."] if meta.get("hand_edited") else []
         return res
@@ -5507,24 +5511,129 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     from app.storage.naming import result_stem
     opts["layer_source"] = layer_src
     res = await _assemble(story, specs, opts, chart_notes=_kept_chart_notes(spec, story) + notes, source_text=source,
-                          source_file_id=pid, step=step, parent=pid, label_stem=result_stem(pid, "edited"), render=render, draft=draft,
+                          source_file_id=pid, step=step, parent=pid, label_stem=label_stem or result_stem(pid, "edited"), render=render, draft=draft,
                           operation="video edit", layer_notes=_kept_layer_notes(spec, story["layers"]) + lnotes)
     res["notes"] = notes + (["Rebuilt from the video's script: changes made by hand in the video editor are not in this "
                              "version (they stay in the previous one)."] if meta.get("hand_edited") else [])
     return res
 
 
+# ---------- A/B változatok (MoneyPrinterTurbo-ötlet, 10-22): ugyanaz a videó több alakban, a közösségi teszthez ----------
+
+VARIANT_MAX = 3                     # az eredeti (A) mellé legfeljebb ennyi új változat (B, C, D)
+# erős, egymástól távoli akcentusszínek: az automatikus változat a mostanitól legtávolabbit kapja
+_VARIANT_ACCENTS = ("#E63946", "#F4A261", "#FFB703", "#2A9D8F", "#4361EE", "#9B5DE5")
+_VARIANT_TRANSITIONS = ("mix", "push", "zoom", "wipe", "slide")
+_VARIANT_CAPTIONS = ("bold", "karaoke", "highlight", "box")
+
+
+def _hue(hex_color: Optional[str]) -> float:
+    import colorsys
+    return colorsys.rgb_to_hsv(*_rgb(hex_color))[0]
+
+
+def _far_accents(current: Optional[str]) -> list[str]:
+    h = _hue(current)
+    dist = lambda c: min(abs(_hue(c) - h), 1 - abs(_hue(c) - h))                 # noqa: E731
+    return sorted(_VARIANT_ACCENTS, key=lambda c: (-dist(c), c))
+
+
+def variant_plan(spec: dict[str, Any], raw: Any) -> list[dict[str, Any]]:
+    """A változatok: {"variants": [changes, …]} (a kliens írja — pl. más nyitómondat / cím, más zene) vagy {"count": n}
+    (automatikus, AI és költség nélkül: más váltás, akcentus, zene; a feliratos overlaynél más feliratstílus). Minden
+    változat egy szerkesztés (action="edit" changes-e) — ami ott érvényes, itt is. → [{name, changes, what}]"""
+    raw = raw if isinstance(raw, dict) else {}
+    given = raw.get("variants")
+    if given is not None:
+        if not isinstance(given, list) or not given or not all(isinstance(c, dict) and c for c in given):
+            raise ValueError('changes.variants: a list of 1–3 changes, one per variant — e.g. [{"title": "Another opening"}, '
+                             '{"title": "…", "music": "dramatic"}] (anything action="edit" takes).')
+        if len(given) > VARIANT_MAX:
+            raise ValueError(f"At most {VARIANT_MAX} variants at a time (with the original, {VARIANT_MAX + 1} to compare).")
+        return [{"name": "BCD"[i], "changes": dict(c), "what": ", ".join(sorted(c))} for i, c in enumerate(given)]
+    try:
+        n = int(raw.get("count") or 2)
+    except (TypeError, ValueError):
+        raise ValueError("changes.count: how many variants besides the original (1–3).") from None
+    if not 1 <= n <= VARIANT_MAX:
+        raise ValueError(f"changes.count: 1–{VARIANT_MAX} (the original is variant A).")
+    opts = spec.get("opts") or {}
+    overlay = spec.get("kind") == "overlay"
+    accents = [a for a in _far_accents(opts.get("accent")) if a.lower() != str(opts.get("accent") or "").lower()]
+    from app.tools import music as music_lib
+    mood = opts.get("music")
+    has_music = bool(mood and mood != "none") or bool(opts.get("music_asset") or opts.get("music_file_id"))
+    moods = [m for m in music_lib.moods() if m != mood]
+    trans = [t for t in _VARIANT_TRANSITIONS if t != (opts.get("transition") or "fade")]
+    caps = [c for c in _VARIANT_CAPTIONS if c != (opts.get("caption_style") or "box")]
+    out = []
+    for i in range(n):
+        ch: dict[str, Any] = {"accent": accents[i % len(accents)]}
+        if overlay:
+            if opts.get("subtitles"):
+                ch["caption_style"] = caps[i % len(caps)]
+        else:
+            ch["transition"] = trans[i % len(trans)]
+        if has_music and not opts.get("music_file_id") and not opts.get("music_asset"):
+            ch["music"] = moods[(i * 3) % len(moods)]                  # a saját zene marad; a tárból más hangulat
+        out.append({"name": "BCD"[i], "changes": ch,
+                    "what": ", ".join(f"{k} {v}" for k, v in ch.items())})
+    return out
+
+
+async def variants(file_id: str, raw: Any, progress: Optional[Callable[..., None]] = None,
+                   draft: bool = False) -> dict[str, Any]:
+    """Ugyanabból a projektből A/B változatok: az eredeti az A, a többi egy-egy szerkesztés (külön projekt + MP4,
+    „… – variant B” néven). A képek és a hang a szülőé (nem készülnek újra, nem kerülnek kreditbe — kivéve, ha a
+    változat maga kér új AI-képet)."""
+    from app.storage.naming import result_stem
+    step = progress or (lambda *a, **k: None)
+    pid = project_of(file_id)
+    meta = read_meta(pid) or {}
+    spec = meta.get("spec")
+    if not spec:
+        raise ValueError("Variants are made from a video made here (action=make / overlay / audiogram) — this one has no "
+                         "script to vary.")
+    plans = variant_plan(spec, raw)
+    root = result_stem(pid, "")
+    out = [{"name": "A", "what": "the original", "project": _file_entry(pid),
+            **({"video": _file_entry(meta["render_file_id"])} if meta.get("render_file_id") else {})}]
+    findings: list[str] = []
+    for k, p in enumerate(plans):
+        def sub(i, n, msg="", _k=k, _p=p):
+            step(_k, len(plans), f"variant {_p['name']}: {msg}")
+        try:
+            res = await edit(pid, p["changes"], progress=sub, draft=draft,
+                             label_stem=result_stem(pid, f"variant {p['name']}"))
+        except ValueError as e:
+            raise ValueError(f"variant {p['name']}: {e}") from None
+        for f in (res.get("files") or []):
+            write_meta(f["file_id"], extra={"variant": p["name"], "variant_of": pid})
+        chk = res.get("check") or {}
+        findings += [f"variant {p['name']}: {x}" for x in chk.get("findings") or []]
+        out.append({"name": p["name"], "what": p["what"], "changes": p["changes"], "project": res.get("project"),
+                    "video": res.get("video"), "check": chk})
+    ok = all((v.get("check") or {}).get("status", "ok") == "ok" for v in out[1:])
+    return {"variants": out, "root": root,
+            "how": "Post them to the same audience at the same time (or as an A/B test where the platform has one) and "
+                   "keep the one that holds viewers longest; every variant is editable like any video.",
+            "check": {"status": "ok" if ok else "needs_check", "findings": findings,
+                      "verified": [f"{len(out) - 1} variant(s) besides the original: "
+                                   + "; ".join(f"{v['name']} — {v['what']}" for v in out[1:]) + "."]}}
+
+
 async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any], *, extra_source: str,
-                        step: Callable[..., None], alpha: Any = None, render: bool = True, draft: bool = False) -> dict[str, Any]:
+                        step: Callable[..., None], alpha: Any = None, render: bool = True, draft: bool = False,
+                        label_stem: Optional[str] = None) -> dict[str, Any]:
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
     allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "music_file_id", "camera", "subtitles", "end_card",
-               "end_title", "end_subtitle", "transcript", "adjust"}
+               "end_title", "end_subtitle", "transcript", "adjust", "caption_style"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
-                         f"changes.add_layers), accent, title, an end card (changes.end_card) or the footage's colour and light "
+                         f"changes.add_layers), accent, title, subtitles, caption_style, an end card (changes.end_card) or the footage's colour and light "
                          f"(changes.adjust, e.g. {{\"auto\": true}}) — not {', '.join(other)}. To recut the footage itself, use "
                          "file_tools (trim-video…) and run overlay again.")
     opts = dict(spec.get("opts") or {})
@@ -5593,7 +5702,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     base = await _with_end_card(base, card)                    # új / más hosszú kártya: a felvétel újra meghosszabbítva
     return await _assemble_overlay(base, layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
-                                   label_stem=result_stem(pid, "edited"), operation="video edit", parent=pid, render=render,
+                                   label_stem=label_stem or result_stem(pid, "edited"), operation="video edit", parent=pid, render=render,
                                    draft=draft)
 
 
