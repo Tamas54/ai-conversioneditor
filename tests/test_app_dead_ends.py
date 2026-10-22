@@ -183,3 +183,44 @@ def test_choosing_the_same_video_again_resumes_even_with_a_new_date(guest_page, 
     page.set_input_files("#upload", str(vid))
     page.locator("#toast", has_text="Uploaded IMG_9303.MOV").wait_for(timeout=30000)
     assert puts == ["2"]
+
+
+def test_lost_answers_are_asked_again_without_a_second_copy(guest_page, live_url, tmp_path):
+    """Az indító kérés nem jut át („Load failed”), a „kész” válasza elveszik: az app újrakérdez, és a fájl egyszer lesz meg."""
+    page = guest_page
+    vid = tmp_path / "IMG_9304.MOV"
+    vid.write_bytes(os.urandom(20 * 1024 * 1024))
+    tries = {"start": 0, "complete": 0}
+
+    def start(route):
+        tries["start"] += 1
+        route.abort() if tries["start"] == 1 else route.continue_()
+
+    def complete(route):
+        tries["complete"] += 1
+        if tries["complete"] == 1:
+            route.fetch()                                                # a szerver összerakja…
+            route.abort()                                                # …de a válasz nem ér vissza
+        else:
+            route.continue_()
+    page.route("**/api/upload/chunks", start)
+    page.route("**/api/upload/chunks/*/complete", complete)
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(vid))
+    page.locator("#toast", has_text="trying again (1 of 8)").wait_for(timeout=10000)
+    page.locator("#toast", has_text="Uploaded IMG_9304.MOV").wait_for(timeout=30000)
+    assert tries == {"start": 2, "complete": 2}
+    names = page.evaluate("fetch('/api/files').then(r => r.json()).then(d => d.inputs.map(f => f.original_filename))")
+    assert names.count("IMG_9304.MOV") == 1
+
+
+def test_unreachable_server_gets_a_human_message(guest_page, live_url, tmp_path):
+    page = guest_page
+    small = tmp_path / "jegyzet.md"
+    small.write_text("# Jegyzet\n")
+    page.route("**/api/upload", lambda r: r.abort())
+    page.goto(f"{live_url}/app/files")
+    page.set_input_files("#upload", str(small))
+    toast = page.locator("#toast.show")
+    toast.wait_for()
+    assert "Couldn't reach the server" in toast.inner_text() and "Failed to fetch" not in toast.inner_text()

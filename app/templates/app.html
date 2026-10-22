@@ -923,21 +923,41 @@ async function fingerprint(file) {      // a folytatás kulcsa: név + méret + 
   return h.toString(36);
 }
 const online = () => navigator.onLine ? Promise.resolve() : new Promise(r => window.addEventListener("online", r, { once: true }));
+const NET_DOWN = "Couldn't reach the server — check the connection, then choose the file again";
+const offline = (more = "") => Object.assign(new Error(NET_DOWN + more + "."), { offline: true });
+async function steady(call, retrying) {   // hálózati hiba (fetch TypeError: Safari „Load failed”, Chrome „Failed to fetch”) → újra, mint a darabok; HTTP-hibát nem
+  for (let k = 0; ; k++) {
+    await online();
+    try { return await call(); }
+    catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+      if (k >= 7) throw offline(" (it carries on from where it stopped)");
+      retrying?.(k + 1);
+      await sleep(Math.min(15000, 1000 * 2 ** k));
+    }
+  }
+}
 async function uploadFile(file, onProgress) {
   if (account?.guest && file.size > account.guest_max_upload_mb * 1048576) {     // vendég: előbb a fiók-ajánlat, nem 413 a végén
     const why = `${file.name} is ${MB(file.size)} MB — without an account uploads go up to ${account.guest_max_upload_mb} MB.`;
     throw Object.assign(new Error(`${why} Sign in, then choose it again.`), { cta: true, why });
   }
-  if (file.size <= CHUNKED_FROM) {
+  if (file.size <= CHUNKED_FROM) {             // egy kérés: nem ismételjük (ha a válasz veszett el, kétszer lenne meg a fájl)
     const fd = new FormData(); fd.append("file", file);
-    return api("/api/upload", { method: "POST", body: fd });
+    try { return await api("/api/upload", { method: "POST", body: fd }); } catch (err) { throw err instanceof TypeError ? offline() : err; }
   }
   const say = onProgress || ((p, done, total, note) => toastHold(`Uploading ${file.name} — ${p}% (${MB(done)} of ${MB(total)} MB). ${note ? note + ". " : ""}Keep this page open.`));
   const key = `upload:${file.name}:${file.size}:${await fingerprint(file)}`;
-  let st = null, have = [];
-  try { const id = localStorage.getItem(key); if (id) { st = await api(`/api/upload/chunks/${id}`); have = st.size === file.size ? st.received : (st = null, []); } } catch { st = null; have = []; }
+  const slow = (p, done) => k => say(p, done, file.size, `The connection is slow — trying again (${k} of 8)`);
+  let st = null, have = [], id = null;
+  try { id = localStorage.getItem(key); } catch {}
+  if (id) {
+    try { st = await steady(() => api(`/api/upload/chunks/${id}`), slow(0, 0)); } catch (err) { if (err.offline) throw err; st = null; }   // lejárt: új feltöltés
+    if (st?.done) { try { localStorage.removeItem(key); } catch {} return st.done; }       // már összeállt, csak a válasz veszett el
+    have = st && st.size === file.size ? st.received : (st = null, []);
+  }
   if (!st) {
-    st = await api("/api/upload/chunks", { method: "POST", body: JSON.stringify({ filename: file.name, size: file.size }) });
+    st = await steady(() => api("/api/upload/chunks", { method: "POST", body: JSON.stringify({ filename: file.name, size: file.size }) }), slow(0, 0));
     try { localStorage.setItem(key, st.upload_id); } catch {}
   }
   const todo = [...Array(st.chunks).keys()].filter(i => !have.includes(i));
@@ -969,7 +989,7 @@ async function uploadFile(file, onProgress) {
     };
     await Promise.all([worker(), worker(), worker()]);
     say(100, file.size, file.size);
-    const r = await api(`/api/upload/chunks/${st.upload_id}/complete`, { method: "POST" });
+    const r = await steady(() => api(`/api/upload/chunks/${st.upload_id}/complete`, { method: "POST" }), slow(100, file.size));     // ismételhető: a szerver ugyanazt adja vissza
     try { localStorage.removeItem(key); } catch {}
     return r;
   } finally { uploading--; }

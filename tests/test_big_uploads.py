@@ -72,7 +72,12 @@ def test_chunked_upload_resumes_and_rejects_a_short_chunk(client, tmp_path):
     done = client.post(f"/api/upload/chunks/{uid}/complete")
     assert done.status_code == 200, done.text
     assert input_path(done.json()["file_id"]).read_bytes() == data
-    assert client.get(f"/api/upload/chunks/{uid}").status_code == 404           # a darabok eltűntek
+    s = client.get(f"/api/upload/chunks/{uid}").json()                           # a darabok eltűntek, az eredmény marad
+    assert s["received"] == [] and s["done"]["file_id"] == done.json()["file_id"]
+    files = sorted(input_path(done.json()["file_id"]).parent.iterdir())
+    again = client.post(f"/api/upload/chunks/{uid}/complete")                     # elveszett válasz → újra kérdez: ugyanaz, nem új fájl
+    assert again.status_code == 200 and again.json()["file_id"] == done.json()["file_id"]
+    assert sorted(input_path(done.json()["file_id"]).parent.iterdir()) == files
 
 
 async def test_agent_url_import_goes_to_disk_and_recognises_a_phone_video(tmp_path, monkeypatch):
