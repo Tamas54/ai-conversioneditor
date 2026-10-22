@@ -18,6 +18,13 @@ Now:
   project draws the same pixels as one made with the full-size footage.
 - **The end card needs no file:** the footage holds its last frame under it in the project (time remap), the sound is
   silent there.
+- **Cutting the footage** (asked for on the 30-minute test video): `cut=[{"from": "05:00", "to": "07:30"}, …]` at
+  overlay, `changes.cut` in an edit. It is part of the footage's recipe: the working copy and the final video are made
+  from the kept parts of the original, frame-accurate, the sound fading over 15 ms at each cut. Layers, subtitles and
+  the camera move with it; a layer wholly in a removed part is named in the check. Nothing is lost: `cut="none"`
+  brings the whole footage back, with the layers in their old places.
+- **Footage cut or moved by hand in the editor** goes the full render's way: the fast one would have put the uncut
+  footage under the graphics.
 - **If your original has expired** (uploads are kept for a limited time), the video is made from the small copy, and
   the check says so; changing the colours then asks for the original again.
 

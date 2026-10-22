@@ -15,6 +15,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -61,15 +62,15 @@ def _frame(path: Path, t: float, out: Path) -> Path:
     return out
 
 
-def _psnr(a: Path, b: Path, t: float, size: tuple[int, int] = (720, 1280)) -> float:
+def _psnr(a: Path, b: Path, t: float, size: tuple[int, int] = (720, 1280), tb: Optional[float] = None) -> float:
     """Két videó egy kockája YUV-ban (RGB-be bontva a jelöletlen forrást BT.601-ként, a BT.709-nek jelölt kimenetet
     BT.709-ként számolná át az ffmpeg — ugyanaz a kép is ~24 dB-nek látszana); a kisebbik a teljes méretre nagyítva."""
     import re
     w, h = size
     raws = []
-    for k, p in enumerate((a, b)):
-        raw = p.with_name(f"{p.stem}-{t}-{k}.yuv")
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t}", "-i", str(p), "-frames:v", "1", "-vf", f"scale={w}:{h}",
+    for k, (p, tt) in enumerate(((a, t), (b, t if tb is None else tb))):
+        raw = p.with_name(f"{p.stem}-{tt}-{k}.yuv")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{tt}", "-i", str(p), "-frames:v", "1", "-vf", f"scale={w}:{h}",
                         "-f", "rawvideo", "-pix_fmt", "yuv420p", str(raw)], check=True)
         raws += ["-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{w}x{h}", "-i", str(raw)]
     r = subprocess.run(["ffmpeg", "-v", "info", *raws, "-lavfi", "psnr", "-f", "null", "-"], capture_output=True, text=True)
@@ -150,3 +151,77 @@ def test_punch_in_and_full_render_use_the_full_size_footage(tmp_path, put_file, 
     assert any("no longer stored" in f for f in gone["check"]["findings"]), gone["check"]
     assert _psnr(output_path(gone["file_id"]), fa, t) < same - 5
     assert read_meta(fast["file_id"])["spec"]["base"]["proxy"]
+
+
+# ---------------------------------------------------------------- vágás (nem roncsoló: a recept változik, az eredeti marad)
+
+def test_cut_keeps_parts_and_maps_times():
+    k = footage.cut(None, 100.0, [(10, 20)], 25)
+    assert k == [[0.0, 10.0], [20.0, 100.0]] and footage.length(k, 100) == 90.0
+    assert footage.to_src(k, 15) == 25.0 and footage.to_out(k, 25) == 15.0 and footage.to_out(k, 15) is None
+    assert footage.windows(k, 5, 15) == [(5.0, 10.0), (20.0, 25.0)]
+    k2 = footage.cut(k, 100.0, [(0, 5), (80, 90)], 25)                 # a MOSTANI (vágott) idő szerint
+    assert k2 == [[5.0, 10.0], [20.0, 90.0]] and footage.length(k2, 100) == 75.0
+    assert footage.remap(30, k, k2) == 25.0 and footage.remap_span(5, 40, k, k2) == (0.0, 35.0)
+    assert footage.remap_span(0, 4, k, k2) is None                    # teljesen kiesett
+    assert footage.cut(None, 100, [(95, 200)], 25) == [[0.0, 95.0]]
+    assert footage.cut(None, 100, [(10.013, 20.0)], 25) == [[0.0, 10.0], [20.0, 100.0]]     # kockahatárra
+    with pytest.raises(ValueError, match="whole video"):
+        footage.cut(None, 10, [(0, 10)], 25)
+    assert footage.remap_span(5, 15, None, k) == (5.0, 10.0)           # egy réteg a vágás közepén: a megmaradt része
+
+
+def test_cut_ranges_forms_and_errors():
+    from app.tools.video import cut_ranges
+    assert cut_ranges(None, 60) is None and cut_ranges("none", 60) == []
+    assert cut_ranges([{"from": "00:10", "to": "00:20"}, {"to": 5}, {"from": "00:50"}], 60) == [(10, 20), (0, 5), (50, 60)]
+    assert cut_ranges({"from": 1, "to": 2}, 60) == [(1, 2)] and cut_ranges([[3, 4]], 60) == [(3, 4)]
+    with pytest.raises(ValueError, match="after"):
+        cut_ranges([{"from": 20, "to": 10}], 60)
+    with pytest.raises(ValueError, match="past the end"):
+        cut_ranges([{"from": 61}], 60)
+
+
+def test_layers_subtitles_and_camera_move_with_the_cut():
+    from app.tools.video import _recut
+    keep = footage.cut(None, 60.0, [(10, 20)], 25)
+    notes: list[str] = []
+    layers = [{"id": "L1", "type": "chart", "at": 5.0, "dur": 3.0}, {"id": "L2", "type": "quote", "at": 12.0, "dur": 4.0},
+              {"id": "L3", "type": "stat", "at": 25.0, "dur": 5.0}, {"id": "L4", "type": "title", "at": 8.0, "dur": 6.0}]
+    subs = [{"start": 11, "end": 13, "text": "kiesik"}, {"start": 21, "end": 23, "text": "marad", "words": [21, 22]}]
+    ly, sb, cam = _recut(layers, subs, [{"at": 30, "zoom": 1.3}, {"at": 15, "zoom": 1}], None, keep, notes)
+    assert [(x["id"], x["at"], x["dur"]) for x in ly] == [("L1", 5.0, 3.0), ("L3", 15.0, 5.0), ("L4", 8.0, 2.0)]
+    assert any("Layer L2" in n and n.startswith("⚠") for n in notes)
+    assert sb == [{"start": 11.0, "end": 13.0, "text": "marad", "words": [11.0, 12.0]}]
+    assert cam == [{"at": 20.0, "zoom": 1.3}]
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_cut_footage_plays_the_kept_parts_from_the_original_and_comes_back(tmp_path, put_file):
+    from app.storage import output_path, read_meta
+    from app.tools import video
+    clip = _clip(tmp_path / "phone.mp4", secs=6)
+    fid = put_file(clip)
+    res = asyncio.run(video.overlay({"file_id": fid, "brand": "none", "cut": [{"from": "00:02", "to": "00:03.5"}],
+                                     "layers": [{"at": 2.2, "dur": 0.8, "type": "source", "text": "Kiesik"},
+                                                {"at": 4.0, "dur": 1.0, "type": "source", "text": "Marad"}]}))
+    base = read_meta(res["file_id"])["spec"]["base"]
+    assert base["keep"] == [[0.0, 2.0], [3.5, 6.0]] and base["duration"] == pytest.approx(4.5, abs=0.01)
+    assert any("Layer L1" in f for f in res["check"]["findings"]), res["check"]
+    assert [(x["id"], x["at"]) for x in res["layers"]] == [("L2", 2.5)]
+    out = output_path(res["video"]["file_id"])
+    assert float(_probe(out)["format"]["duration"]) == pytest.approx(4.5, abs=0.15)
+    assert float(_probe(output_path(base["media_id"]))["format"]["duration"]) == pytest.approx(4.5, abs=0.15)
+    ref = tmp_path / "ref.mp4"                                         # az eredeti, felállítva (a 3,5 s utáni rész)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(clip), "-c:v", "libx264", "-crf", "1", str(ref)], check=True)
+    assert _psnr(out, ref, 1.0) > 40                                   # a vágás előtt: az eredeti ugyanott
+    assert _psnr(out, ref, 3.5, tb=5.0) > 40                           # utána: 3,5 s a videóban = 5,0 s az eredetiben
+    assert _psnr(out, ref, 3.5) < 30                                   # (és nem a vágatlan felvétel)
+    au = next(s for s in _probe(out)["streams"] if s["codec_type"] == "audio")
+    assert float(au.get("duration") or 0) == pytest.approx(4.5, abs=0.25)
+    # vissza az egész felvétel: a rétegek az eredeti helyükre
+    back = asyncio.run(video.edit(res["file_id"], {"cut": "none"}, render=False))
+    b2 = read_meta(back["file_id"])["spec"]["base"]
+    assert "keep" not in b2 and b2["duration"] == pytest.approx(6.0, abs=0.05)
+    assert [(x["id"], x["at"]) for x in back["layers"]] == [("L2", 4.0)]
