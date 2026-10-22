@@ -77,9 +77,12 @@ def bt709_tags() -> list[str]:
     return ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"]
 
 
-async def final_from_master(master: Path, dst: Path, timeout: float = 3600) -> Path:
-    """A renderelő közel veszteségmentes köztes fájlja (ProRes) → a végső MP4: x264 CRF (final), AAC, +faststart."""
+async def final_from_master(master: Path, dst: Path, timeout: float = 3600, audio: Path | None = None) -> Path:
+    """A renderelő közel veszteségmentes köztes fájlja (ProRes) → a végső MP4: x264 CRF (final), AAC, +faststart.
+    master lehet egy ffmpeg concat-lista (.txt) is — a hosszú videó darabjai —, ilyenkor a hang külön (audio)."""
     from app.convert.engines import run
-    await run("ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(master), "-map", "0:v:0", "-map", "0:a:0?",
+    src = ["-f", "concat", "-safe", "0", "-i", str(master)] if master.suffix == ".txt" else ["-i", str(master)]
+    maps = ["-i", str(audio), "-map", "0:v:0", "-map", "1:a:0?"] if audio else ["-map", "0:v:0", "-map", "0:a:0?"]
+    await run("ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *src, *maps,
               *x264("final"), *bt709_tags(), *aac(), *faststart(dst.suffix.lstrip(".")), str(dst), timeout=timeout)
     return dst

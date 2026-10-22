@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-10-22 — Videos on your own footage render fast: the engine draws only where there are graphics
+
+The owner asked how long an hour-long video would take to edit. On the 2-minute Tamás TV test (16 layers and
+subtitles), the old render drew the whole picture frame by frame into a 1.6 GB intermediate file, then encoded that:
+325 s for the drawing alone. At about 85 ms per frame, the full-frame watermark layer took 27 ms by itself, and it
+was there for the whole video.
+
+Now, for a video made on your own footage (overlay):
+- **The engine draws only the parts with graphics**, as transparent ProRes 4444, several parts at once. Where the
+  footage itself moves (a camera punch-in, a split screen), that part is drawn with the footage.
+- **Layers that stay on screen** (a watermark, a logo bug) are drawn once. The Studio finds where they start
+  repeating (frame checksums): the intro, one cycle and the fade-out are drawn, and ffmpeg repeats the cycle. If one
+  never repeats, it is drawn in full, and the check says so.
+- **Subtitles are drawn by ffmpeg (libass)**, in the Studio caption style: the same rounded dark bar, Inter Semi Bold
+  at the same size, and word-by-word highlight, karaoke, reveal and bold. A test checks that libass really uses Inter,
+  because with the wrong family name it silently falls back to another font.
+- **The sound is mixed by the engine on its own** (the 2-minute video in about 1 s).
+- **One ffmpeg pass** puts footage, graphics, subtitles and sound together, with the same final x264 settings as before.
+  A video over 2 minutes is encoded in time slices at once (four on 16 threads) and joined without re-encoding; the
+  sound goes on whole at the end.
+- **The footage stays as it was.** Where nothing is on it, the fast render gives the original back (48 dB PSNR on a
+  test pattern); the full render redraws it and came out at 23–24 dB. Footage tagged BT.601, or untagged SD footage,
+  is converted to BT.709 to match the output's tags.
+- **Long videos render at all.** The engine's sandbox caps a file at 2 GiB, and the full render's ProRes intermediate
+  reached that at about 2.5 minutes of 1080p ("File too large"). Graphics parts are now cut to fit, and the full
+  render writes its intermediate in pieces too, with the sound rendered separately.
+
+Measured on the owner's laptop (i7-11850H) with a 30-minute HDR iPhone video (15 copies of the 2-minute clip), with a
+watermark, 14 chapter cards, 6 charts, a cut-in, a picture-in-picture, a punch-in, 195 subtitles and an end card:
+- before: the render failed ("File too large");
+- now: graphics 2.3 min (23 parts, 124 s of the video), encoding 22 min, 25 min in all. The final x264 settings
+  (medium, CRF 19) now fill the CPU; the footage preparation before the render (turning upright, HDR to SDR, end card:
+  36 min) is the next step.
+
+Not done this way: a layer with a blend mode, an adjustment layer, a track matte, an effect on the footage, or
+subtitles changed by hand in the editor. Those videos use the full render, and the check says why. If the fast render
+stops, the full render runs, and the check says that too. `VIDEO_FAST_RENDER=0` switches it off.
+
 ## 2026-10-22 — Uploads: a stalled piece is sent again after 30 s, and the progress line says so
 
 The owner's first real test, from an iPhone over the home Wi-Fi to the local Studio: the server got the first three
