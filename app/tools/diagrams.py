@@ -146,6 +146,11 @@ def from_plan(c: dict[str, Any], bad: Optional[Callable[[str], list]] = None,
     if out["direction"] not in ("auto", "down", "right", "outline"):
         raise ValueError(f"diagram “{title}”: direction is auto | down | right (the way the flow goes) | outline (a tree "
                          f"as indented rows), not {out['direction']!r}.")
+    early: list[str] = []
+    if typ == "network" and out["direction"] != "auto":    # a hálózat elrendezése a kapcsolataiból jön, irány nélkül
+        early.append(f"⚠ diagram “{title}”: direction applies to decision_tree and swimlane — a network is laid out from "
+                     f"its links, so {out['direction']!r} was not applied.")
+        out["direction"] = "auto"
     out["reveal"] = str(out.get("reveal") or "steps").lower()
     if out["reveal"] not in ("steps", "all"):
         raise ValueError(f"diagram “{title}”: reveal is steps (builds up step by step — default) | all.")
@@ -300,7 +305,7 @@ def from_plan(c: dict[str, Any], bad: Optional[Callable[[str], list]] = None,
         out.pop("actors")
     out["nodes"], out["edges"] = nodes, edges
 
-    notes: list[str] = []
+    notes: list[str] = early
     if bad is not None:                                 # a számok a forrásból (ugyanaz a próba, mint a grafikán)
         wrong = [n for n in nodes if bad(n["text"])] + [{"text": ln} for ln in out.get("lanes") or [] if bad(ln)]
         if wrong:

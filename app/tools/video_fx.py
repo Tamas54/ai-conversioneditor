@@ -224,9 +224,13 @@ def auto_params(st: dict[str, float]) -> dict[str, Any]:
         p["levels"] = [black, white]
     y = n(st.get("YAVG", 126))
     y = min(0.98, max(0.02, (y - black) / max(0.2, white - black)))
-    target = 0.45
-    if abs(y - target) > 0.06:
-        p["gamma"] = round(min(1.6, max(0.7, math.log(y) / math.log(target))), 3)
+    # középtónus: a sötét kép világosodik (mint eddig); sötétíteni csak a valóban túlexponáltat, kis lépésben — a világos,
+    # meleg fényű kép marad (10-22, Tamás TV-próba: a napfényes, narancsos szobát 0,7-es gammával sötétítette, a bőr
+    # világossága 0,66 → 0,52, telítettsége 0,53 → 0,36 lett)
+    if y < 0.39:
+        p["gamma"] = round(min(1.6, math.log(y) / math.log(0.45)), 3)
+    elif y > 0.72:
+        p["gamma"] = round(max(0.85, math.log(y) / math.log(0.62)), 3)
     sat = st.get("SATAVG", 40)
     if sat < 22:
         p["saturation"] = round(min(1.35, max(1.0, 28 / max(sat, 1))), 3)
