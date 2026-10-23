@@ -373,6 +373,15 @@ CREATE TABLE IF NOT EXISTS provider_balance (
     drift           numeric,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
+-- ---- bővítés (10-23), additív: a render becsült idejének kalibrációja (mért átvitel szakaszonként, ezen a gépen) ----
+CREATE TABLE IF NOT EXISTS render_rates (
+    stage           text NOT NULL,
+    key             text NOT NULL,
+    rate            double precision NOT NULL,
+    n               integer NOT NULL DEFAULT 1,
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (stage, key)
+);
 CREATE TABLE IF NOT EXISTS admin_notices (
     id              bigserial PRIMARY KEY,
     kind            text NOT NULL,
@@ -700,6 +709,23 @@ async def ocr_cache_put(sha256: str, prompt_ver: str, model: str, text: str, rep
                 "ON CONFLICT (sha256, prompt_ver, model) DO "
                 + ("UPDATE SET text = EXCLUDED.text, created_at = now()" if replace else "NOTHING"),
                 (sha256, prompt_ver, model, text))
+
+
+# ---------- a render becsült ideje: mért átvitel (app/tools/render_eta.py) ----------
+
+async def render_rates() -> dict[tuple[str, str], float]:
+    if not enabled():
+        return {}
+    return {(r["stage"], r["key"]): float(r["rate"]) for r in await _rows("SELECT stage, key, rate FROM render_rates")}
+
+
+async def render_rate_observe(stage: str, key: str, rate: float, weight: float = 0.3) -> None:
+    """Egy mért átvitel (s / normalizált s) beolvasztva: mozgó átlag (az új mérés súlya weight)."""
+    if not enabled():
+        return
+    await _rows("INSERT INTO render_rates (stage, key, rate) VALUES (%s, %s, %s) ON CONFLICT (stage, key) DO UPDATE SET "
+                "rate = render_rates.rate * (1 - %s) + EXCLUDED.rate * %s, n = render_rates.n + 1, updated_at = now()",
+                (stage, key, rate, weight, weight))
 
 
 # ---------- tartalmi ellenőrzés (gyorsítótár) és élő adatok ----------

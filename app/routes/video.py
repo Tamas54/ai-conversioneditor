@@ -95,6 +95,7 @@ async def overlay_video(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(503, "The video engine isn't installed on this server.")
     try:
         video.check_music(body.get("music"))
+        video.final_mode(body.get("final"))
         fid, _ = video.overlay_input(body)
     except FileNotFoundError:
         raise HTTPException(400, "That file isn't in the workspace — upload the video first (upload_file), then pass its file_id.")
@@ -240,6 +241,7 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
     try:
         video.project_of(fid)
         video.check_music((body.get("changes") or {}).get("music"))
+        video.final_mode(body.get("final"))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -247,7 +249,7 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
         try:
             res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress,
                                    alpha=body.get("alpha"), render=body.get("render", True) is not False,
-                                   draft=bool(body.get("draft")))
+                                   draft=bool(body.get("draft")), final=body.get("final") or "auto")
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})

@@ -7,6 +7,8 @@ a teljes, élesben elérhető készletet mutatja.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import functools
 import importlib.util
 import os
@@ -125,6 +127,25 @@ def _env_for(exe: str) -> dict[str, str]:
     return env
 
 
+_BACKGROUND: "contextvars.ContextVar[bool]" = contextvars.ContextVar("engines_background", default=False)
+
+
+@contextlib.contextmanager
+def background():
+    """A blokkon belül (és az onnan indított taskokban) induló külső programok alacsony prioritással (nice 10): a
+    végleges render a háttérben fut, a gyors előnézet és a weboldal ne várjon rá (10-23)."""
+    tok = _BACKGROUND.set(True)
+    try:
+        yield
+    finally:
+        _BACKGROUND.reset(tok)
+
+
+def niced(argv: list[str]) -> list[str]:
+    nice = shutil.which("nice") if _BACKGROUND.get() else None
+    return [nice, "-n", "10", *argv] if nice else list(argv)
+
+
 async def run(*args: str, timeout: float = 600, cwd: Optional[Path] = None, stdin: Optional[bytes] = None,
               ok_codes: tuple[int, ...] = (0,)) -> tuple[bytes, bytes]:
     """Külső program futtatása shell nélkül (argumentum-listával), időkorláttal. Hiba → EngineError."""
@@ -132,7 +153,7 @@ async def run(*args: str, timeout: float = 600, cwd: Optional[Path] = None, stdi
     if exe in ("python", "python3"):
         args = (sys.executable, *args[1:])
     proc = await asyncio.create_subprocess_exec(
-        *args, cwd=str(cwd) if cwd else None, env=_env_for(exe),
+        *niced(list(args)), cwd=str(cwd) if cwd else None, env=_env_for(exe),
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
