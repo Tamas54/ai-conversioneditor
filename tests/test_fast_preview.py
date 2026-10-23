@@ -74,11 +74,15 @@ def test_calibration_skips_outliers(monkeypatch):
     async def fake_observe(stage, key, rate, weight=0.3):
         seen.append((stage, key, round(rate, 3)))
     monkeypatch.setattr(db, "render_rate_observe", fake_observe)
+    monkeypatch.setattr(render_eta.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
     render_eta._CACHE.update(at=time.time(), rates=dict(render_eta.DEFAULTS))
     asyncio.run(render_eta.observe("final", "hdr", 900.0, 1000.0))             # 0,9: rendben
     asyncio.run(render_eta.observe("proxy", "hdr", 0.3, 1800.0))               # gyorsítótárból jött: kiugró, nem számít
     asyncio.run(render_eta.observe("graphics", "any", 5.0, 0.2))               # túl kevés mérnivaló
     assert seen == [("final", "hdr", 0.9)]
+    monkeypatch.setattr(render_eta.os, "getloadavg", lambda: (60.0, 50.0, 40.0))   # túlterhelt gép: nem kalibrál
+    asyncio.run(render_eta.observe("final", "hdr", 900.0, 1000.0))
+    assert len(seen) == 1
 
 
 def test_job_remaining_time_and_background_priority():

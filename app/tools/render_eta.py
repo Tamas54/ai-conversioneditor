@@ -10,7 +10,8 @@ Alapértékek (10-22/23, i7-11850H, 16 szál, ffmpeg 4.4, 4 időszelet, a 30:21-
   végső menet    az eredetiből HDR-leképezéssel, rétegekkel, felirattal: 1655 s / 1821 s; SDR-ből 167 s / 300 s
   a régi (teljes) út: a motor kockánként rajzol (2:01 → 325 s köztes fájl) + kódolás
 Minden kész munka beolvad (Postgres render_rates, mozgó átlag): a becslés a gép valós sebességéhez igazodik. A kiugró
-mérés (a becslés negyede alatt / négyszerese fölött — gyorsítótárból jött munkamásolat, túlterhelt gép) nem számít.
+mérés (a becslés negyede alatt / négyszerese fölött — gyorsítótárból jött munkamásolat) és a túlterhelt gépen
+(1 perces load > 1,15 × magszám) mért idő nem számít.
 
     eta = await render_eta.final(spec)          # {"seconds", "parts": {...}}
     render_eta.text(eta["seconds"])             # "about 35 min"
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -117,6 +119,13 @@ async def proxy(m: dict[str, Any], length: float) -> float:
 async def observe(stage: str, key: str, seconds: float, units: float) -> None:
     """Egy kész munka mért ideje → a kalibráció (s / normalizált s). Kiugró mérés nem számít."""
     if units <= 0.5 or seconds <= 0:
+        return
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        load = 0.0
+    if load > 1.15 * (os.cpu_count() or 4):                      # túlterhelt gépen (más munkák is futnak) nem kalibrál
+        log.info("render_eta: %s/%s mérés kihagyva — a gép túlterhelt (load %.1f)", stage, key, load)
         return
     try:
         rate = seconds / units
