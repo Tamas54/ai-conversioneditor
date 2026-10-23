@@ -209,6 +209,9 @@ API_RATE_PER_MIN=60                 # /v1 kulcsonként (sandbox: fele)
 API_MAX_FILE_MB=2048                # /v1 és a darabolt feltöltés felső határa
 ARCHIVE_MAX_FILES=20000  ARCHIVE_MAX_EXTRACT_MB=4096  # archívum-kibontás (zip-bomba ellen)
 VIDEO_TIMEOUT_S=1800                # egy videós lépés felső ideje (mp)
+HEAVY_JOB_SLOTS=                    # egyszerre ennyi videó-/hangkódolás (fájleszközök, konverter), a többi sorban vár;
+                                    # alap: 8 logikai magonként 1, 2 és 4 között
+HEAVY_JOB_THREADS=                  # egy ilyen munka ffmpeg-szálai; alap: a magok / HEAVY_JOB_SLOTS
 GOOGLE_PICKER_CLIENT_ID=…  GOOGLE_PICKER_API_KEY=…  GOOGLE_PICKER_APP_ID=…   # „Google Drive” gomb
 DROPBOX_APP_KEY=…                   # Dropbox Chooser / Saver
 ONEDRIVE_CLIENT_ID=…                # OneDrive-választó

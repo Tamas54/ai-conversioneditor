@@ -326,8 +326,8 @@ function accountCta(title, alt = "", why = "") {     // alt: fiók nélküli kö
 }
 // hosszú munka (job) követése: a státuszsort frissíti, a végén az eredményt adja
 async function pollJob(job, label, st = $("#make-status")) {
-  while (job.status === "running") {
-    if (st) st.textContent = label(job);
+  while (job.status === "running" || job.status === "queued") {      // queued: videós munka a sorban — a szerver mondja, hányadik
+    if (st) st.textContent = job.status === "queued" ? job.message : label(job);
     await new Promise(r => setTimeout(r, 2000));
     job = await api(`/api/jobs/${job.id}`);
   }

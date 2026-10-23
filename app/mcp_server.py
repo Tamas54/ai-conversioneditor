@@ -154,7 +154,7 @@ def _links(res, pages: Optional[dict] = None):
                 walk(v, depth + 1)
     walk(res)
     # háttérmunka (jobs.start): a leírások „call again with job_id”-t mondanak — a kulcs is legyen ott
-    if isinstance(res, dict) and res.get("status") in ("running", "done", "failed", "cancelled") and "id" in res \
+    if isinstance(res, dict) and res.get("status") in ("running", "queued", "done", "failed", "cancelled") and "id" in res \
             and "kind" in res and "job_id" not in res:
         res["job_id"] = res["id"]
     return res

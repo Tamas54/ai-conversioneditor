@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.catalog import tools as T
-from app.catalog.formats import from_filename
+from app.catalog.formats import from_filename, media
 from app.convert.options import OptionError, validate
 
 log = logging.getLogger("aice.ops")
@@ -65,9 +65,25 @@ def _pages(paths: list[Path]) -> int:
     return n
 
 
+def heavy(tool: T.Tool, file_ids: list[str]) -> bool:
+    """ffmpeg-kódolás (videó vagy hang be vagy ki) — az egyesítés PDF-eken nem az."""
+    return "ffmpeg" in tool.engines and (any(media(from_filename(f)) for f in file_ids) or media(tool.output))
+
+
 async def run_tool(key: str, file_ids: list[str], options: Optional[dict[str, Any]] = None,
                    charge: bool = True) -> dict[str, Any]:
-    """Vissza: {"files": [{file_id, url, label, size_kb}], "data": {...}?, "tool": key}."""
+    """Vissza: {"files": [{file_id, url, label, size_kb}], "data": {...}?, "tool": key}. A videó- és hangkódolás a
+    közös kapun át (app/jobs.py heavy): egyszerre néhány fut, a többi sorban vár — web, MCP, /v1 és ügynök egyaránt."""
+    tool = T.get(key)
+    if tool is None or not heavy(tool, file_ids):
+        return await _run_tool(key, file_ids, options, charge)
+    from app import jobs
+    async with jobs.heavy():
+        return await _run_tool(key, file_ids, options, charge)
+
+
+async def _run_tool(key: str, file_ids: list[str], options: Optional[dict[str, Any]] = None,
+                    charge: bool = True) -> dict[str, Any]:
     from app.storage import display_label, output_path, public_url, temp_path, write_meta
     from app.storage.files import new_file_id
     from app.tools import ios_safe

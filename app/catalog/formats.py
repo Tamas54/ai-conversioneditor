@@ -352,6 +352,12 @@ def from_filename(name: str) -> str:
     return normalize(low.rsplit(".", 1)[-1]) if "." in low else ""
 
 
+def media(fmt: str) -> bool:
+    """Videó vagy hang: ffmpeg-kódolás (a nehéz munka kapuja ezt nézi, app/jobs.py heavy)."""
+    f = get(fmt) if fmt else None
+    return f is not None and f.category in ("video", "audio")
+
+
 def by_category(cat: str) -> list[Format]:
     return [f for f in FORMATS.values() if f.category == cat]
 

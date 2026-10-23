@@ -12,6 +12,7 @@ import importlib.util
 import os
 import shutil
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
 
@@ -125,9 +126,27 @@ def _env_for(exe: str) -> dict[str, str]:
     return env
 
 
+# a nehéz munka kapuja (app/jobs.py heavy()) állítja: ennyi szálon dolgozik az ffmpeg ebben a munkában
+FFMPEG_THREADS: ContextVar[Optional[int]] = ContextVar("aice_ffmpeg_threads", default=None)
+
+
+def _threads(args: tuple[str, ...]) -> tuple[str, ...]:
+    """ffmpeg a nehéz munka kapuján belül: -threads minden bemenet elé (dekóder) és a kimenet elé (kódoló), a szűrők
+    szálai globálisan. Az utolsó érvényes, így a hívó saját -threads-e sem viheti el az összes magot."""
+    n = FFMPEG_THREADS.get()
+    if not n or len(args) < 2 or Path(args[0]).name != "ffmpeg":
+        return args
+    t = str(n)
+    out = [args[0], "-filter_threads", t, "-filter_complex_threads", t]
+    for a in args[1:-1]:
+        out += ["-threads", t, a] if a == "-i" else [a]
+    return (*out, "-threads", t, args[-1])
+
+
 async def run(*args: str, timeout: float = 600, cwd: Optional[Path] = None, stdin: Optional[bytes] = None,
               ok_codes: tuple[int, ...] = (0,)) -> tuple[bytes, bytes]:
     """Külső program futtatása shell nélkül (argumentum-listával), időkorláttal. Hiba → EngineError."""
+    args = _threads(args)
     exe = args[0]
     if exe in ("python", "python3"):
         args = (sys.executable, *args[1:])
