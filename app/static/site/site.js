@@ -43,10 +43,14 @@
   }
 
   async function poll(job, bar) {
+    const li = bar && bar.closest("li");
     for (let i = 0; i < 3600; i++) {
       if (job.status === "done") return job.result;
       if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error || tr("failed", "Failed"));
       if (bar && job.total) bar.style.width = Math.round((100 * job.done) / job.total) + "%";
+      let q = li && $(".queued", li);          // videós munka a sorban: a szerver mondja, hányadik
+      if (li && job.status === "queued" && !q) q = li.appendChild(el("span", { class: "queued small muted" }));
+      if (q) q.textContent = job.status === "queued" ? job.message || "" : "";
       await sleep(i < 10 ? 600 : 1500);
       job = await api("/api/jobs/" + job.id);
     }

@@ -12,7 +12,6 @@ import re
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -212,24 +211,8 @@ async def api_upload(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(400, "filename required")
     ext = Path(file.filename).suffix.lstrip(".") or "bin"
     fid = new_file_id(ext)
-    # lemezre, darabonként (10-22: egy 235 MB-os iPhone-videó eddig egészben a memóriába került); a félkész fájl
-    # rejtett nevű, így a fájllista nem látja
-    from app.filecheck import check_path
-    from app.routes.convert_web import _max_upload
-    dst = input_path(fid)
-    part = dst.with_name(f".{fid}.part")
-    size, limit = 0, _max_upload()
-    try:
-        with open(part, "wb") as out:
-            while block := await file.read(1 << 20):
-                size += len(block)
-                if size > limit:
-                    raise HTTPException(413, f"Files up to {limit // (1024 * 1024)} MB.")
-                out.write(block)
-        check_path(part, file.filename)
-        os.replace(part, dst)
-    finally:
-        part.unlink(missing_ok=True)
+    from app.routes.upload import save_upload
+    size = await save_upload(file, fid)
     write_meta(
         fid,
         original_filename=file.filename,

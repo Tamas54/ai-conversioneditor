@@ -1,31 +1,76 @@
 """Upload route — accepts multipart/form-data file upload, returns file_id."""
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from app.config import settings
-from app.storage import new_file_id, input_path, save_bytes, public_url
+from app.storage import new_file_id, input_path, public_url
 
 router = APIRouter()
 
+_FORM_SLACK = 64 * 1024            # a multipart keret (határoló, part-fejlécek) a fájl bájtjain felül
 
-@router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    if not file.filename:
-        raise HTTPException(400, "filename required")
-    ext = Path(file.filename).suffix.lstrip(".") or "bin"
-    fid = new_file_id(ext)
-    data = await file.read()
-    from app.filecheck import check_bytes
-    check_bytes(data, file.filename)
-    await save_bytes(input_path(fid), data)
+
+async def save_upload(file: UploadFile, fid: str) -> int:
+    """A feltöltött fájl a munkaterületre: lemezre, darabonként (10-22: egy 235 MB-os iPhone-videó eddig egészben a
+    memóriába került), a feltöltési korláttal (vendégnek 25 MB, különben API_MAX_FILE_MB). A félkész fájl rejtett
+    nevű, így a fájllista nem látja. → bájtok"""
+    from app.filecheck import check_path
+    from app.routes.convert_web import _max_upload, _too_large
+    dst = input_path(fid)
+    part = dst.with_name(f".{fid}.part")
+    size, limit = 0, _max_upload()
+    try:
+        with open(part, "wb") as out:
+            while block := await file.read(1 << 20):
+                size += len(block)
+                if size > limit:
+                    raise _too_large()
+                out.write(block)
+        check_path(part, file.filename)
+        os.replace(part, dst)
+    finally:
+        part.unlink(missing_ok=True)
+    return size
+
+
+@router.post("/upload", openapi_extra={"requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
+    "type": "object", "required": ["file"], "properties": {"file": {"type": "string", "format": "binary"}}}}}}})
+async def upload_file(request: Request):
+    """Régi, egylépéses feltöltés (multipart, „file” mező) → file_id. 10-23: eddig `await file.read()`, korlát nélkül
+    — most ugyanaz a korlát és 413, mint az app és a darabolt feltöltés útján. A megadott hosszon túli törzset el sem
+    olvassuk; hossz nélkül (chunked) a korlát után abbahagyjuk."""
+    from app.routes.convert_web import _max_upload, _too_large
+    cap, got = _max_upload() + _FORM_SLACK, 0
+    if int(request.headers.get("content-length") or 0) > cap:
+        raise _too_large()
+
+    async def receive():
+        nonlocal got
+        msg = await request.receive()
+        got += len(msg.get("body") or b"")
+        if got > cap:
+            raise _too_large()
+        return msg
+    form = await Request(request.scope, receive).form(max_files=1, max_fields=20)
+    try:
+        file = form.get("file")
+        if file is None or not hasattr(file, "read"):
+            raise HTTPException(400, "Send the file as multipart/form-data in the field “file” (curl -F file=@path).")
+        if not file.filename:
+            raise HTTPException(400, "filename required")
+        fid = new_file_id(Path(file.filename).suffix.lstrip(".") or "bin")
+        size = await save_upload(file, fid)
+    finally:
+        await form.close()
     return {
         "file_id": fid,
-        "size_kb": len(data) // 1024,
+        "size_kb": size // 1024,
         "url": public_url(fid),
     }
 
@@ -37,7 +82,6 @@ async def upload_file(file: UploadFile = File(...)):
 async def upload_by_link(token: str, request: Request, name: Optional[str] = None):
     """`curl -T fájl "<link>"` (PUT, nyers törzs) vagy `curl -F file=@fájl "<link>"` (multipart) → a fájl a link
     gazdájának munkaterületére; version_of esetén annak új változataként."""
-    import os
     from app import tenancy, upload_links
     from app.api_v1 import operations as O
     from app.filecheck import DamagedFile

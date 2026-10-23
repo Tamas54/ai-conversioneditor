@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-23 — Video and audio jobs take turns; the old upload route has the same limit as the others
+
+A code review found two ways one person could slow down the whole site.
+
+- **Video and audio work now runs a few jobs at a time.** The file tools (trim, compress, adjust, merge, resize…),
+  video and audio conversions, and "Save to Photos" started every ffmpeg encode at once, each on all cores. Three people
+  re-encoding 2 GB videos filled the machine, and the website slowed down with it.
+  - At most 2 such jobs run at once on a machine with up to 23 logical cores (3 from 24, 4 from 32).
+    `HEAVY_JOB_SLOTS` changes it. The others wait in line, in the order they came.
+  - A waiting job says so. Its status is "queued", with its place in line and a sentence such as "Waiting for a free
+    slot: the server runs 2 video and audio jobs at a time, and 1 job is ahead of yours. It starts by itself." The app
+    and the converter pages show that sentence, and the REST API puts it in the task's message. Stopping a waiting job
+    gives its place to the next one.
+  - Each of these jobs runs ffmpeg on its share of the cores (8 of 16 by default, `HEAVY_JOB_THREADS`) for decoding,
+    filters and encoding, so one job can't take every core while another runs. A test checks that x264 really encodes
+    on that number of threads.
+  - The limit counts jobs, not ffmpeg runs. The fast video render encodes several time slices at once inside one job,
+    and it still does. Video renders keep their own one-at-a-time limit and don't use these places.
+- **The old `/upload` route read the whole file into memory, with no size limit.** It now writes to disk piece by
+  piece, with the same limit as the app's upload and the resumable upload (`API_MAX_FILE_MB`, 25 MB for guests) and
+  the same 413 message. If a request gives its size and it is over the limit, the server doesn't read the body at all.
+  Without a size, it stops reading at the limit. Uploads with an API key that use this route work as before.
+- **The app's own upload gives the same 413 message**, so a guest over 25 MB is offered to sign in there too, even
+  when the browser doesn't send the size first.
+
 ## 2026-10-23 — A quick preview for every change; the final video renders in the background, with the time it takes
 
 The owner's goal: "I want to see the result QUICKLY — the quality doesn't matter here … the perfect result may take long,

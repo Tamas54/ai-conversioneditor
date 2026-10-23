@@ -730,7 +730,7 @@ async def _run(tool: str, args: dict[str, Any], res: dict[str, Any]) -> tuple[Op
     if tool in _NO_CHECK or args.get("read") or res.get("read_only"):    # olvasás (bármely motor): nincs új fájl, nincs mit ellenőrizni
         return None, None
     # háttérmunka: a kész eredményen (digitize / restore / photo_edit — a hívás job_id-val jön vissza)
-    if res.get("status") in ("running", "failed", "cancelled") and "kind" in res:
+    if res.get("status") in ("running", "queued", "failed", "cancelled") and "kind" in res:
         return None, None
     if res.get("status") == "done" and isinstance(res.get("result"), dict):
         kind, inner = res.get("kind"), res["result"]
