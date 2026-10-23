@@ -146,16 +146,20 @@ def _t(v) -> str:
     return str(v)
 
 
-async def trim(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
+async def trim(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path] | dict[str, Any]:
+    """Videó: smart cut, ahol biztonságos (app/tools/smart_trim.py) — a zöme bitre pontos másolat —, különben a teljes
+    rész újrakódolása; a válasz (data) megmondja, melyik történt és miért."""
     if not o.get("start") and not o.get("end"):
         raise OptionError("give start and/or end (seconds or hh:mm:ss)")
-    res = []
+    res, notes = [], []
     for src in inputs:
         dst = out_name(out, src, "-trimmed")
         info = await probe(src)
         pre = (["-ss", _t(o["start"])] if o.get("start") else []) + (["-to", _t(o["end"])] if o.get("end") else [])
         if _has_video(info):
-            await _video(src, dst, pre=pre)
+            from app.tools import smart_trim
+            notes.append(await smart_trim.trim(src, dst, o.get("start"), o.get("end"), info, _acodec_for(_fmt(dst)),
+                                               lambda src=src, dst=dst, pre=pre: _video(src, dst, pre=pre)))
         else:
             af = []
             dur = _dur_after(info, o)
@@ -166,7 +170,9 @@ async def trim(inputs: list[Path], o: dict[str, Any], out: Path) -> list[Path]:
             args = [*_FF, *pre, "-i", str(src), "-vn", *_acodec_for(_fmt(dst))] + (["-af", ",".join(af)] if af else [])
             await run(*args, str(dst), timeout=VIDEO_TIMEOUT)
         res.append(dst)
-    return res
+    if not notes:
+        return res
+    return {"files": res, "data": notes[0] if len(notes) == 1 else notes}
 
 
 def _secs(v) -> float:
