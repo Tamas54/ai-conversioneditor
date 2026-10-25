@@ -440,3 +440,77 @@ def test_storage_with_postgres_lru(pg_url, monkeypatch):
 def test_no_sqlite_in_the_cache():
     src = Path(pc.__file__).read_text("utf-8")
     assert "sqlite" not in src.lower()
+
+
+# ---------- a futam-render a motorral (kockapontosság, a szakaszfájlok, a hang) ----------
+
+def _engine_ok() -> bool:
+    return video.available() and bool(shutil.which("ffmpeg"))
+
+
+def _reset_gates() -> None:
+    from app.tools import video_preview
+    video_preview._gate = None
+    video._gate = None
+    video._bgate = None
+    pc._CTX.clear()
+
+
+def _probe_ts(p: Path) -> tuple[int, int, str]:
+    out = json.loads(subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v", "-show_entries",
+                                     "stream=nb_read_frames,width:frame=key_frame", "-read_intervals", "%+#1", "-of", "json", str(p)],
+                                    capture_output=True, text=True, check=True).stdout)
+    n = json.loads(subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v", "-show_entries",
+                                   "stream=nb_read_frames", "-of", "json", str(p)], capture_output=True, text=True, check=True).stdout)
+    return int(n["streams"][0]["nb_read_frames"]), int(out["streams"][0]["width"]), str(out["frames"][0]["key_frame"])
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_render_runs_are_frame_exact_on_an_overlay(tmp_path, put_file, monkeypatch):
+    from app.tools import fast_render
+    _reset_gates()
+    src = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "32", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(src)], check=True)
+    fid = put_file(src)
+    layers = [{"at": 1.0, "until": 31.5, "type": "graphic", "anim": "fade", "backdrop": 0, "elements": [
+                  {"shape": "text", "text": "TV", "x": 0.095, "y": 0.06, "size": 34, "weight": "bold", "color": "white"}]},
+              {"at": 4, "dur": 3, "type": "lower_third", "name": "Anna Kovács", "role": "Mayor", "side": "left"},
+              {"at": 20, "dur": 3, "type": "source", "text": "Forrás: teszt", "position": "bottom"}]
+    subs = [{"start": 0.5, "end": 3.5, "text": "Ez az első mondat"}, {"start": 9.0, "end": 12.0, "text": "és ez a második mondat"}]
+
+    async def main():
+        res = await video.overlay({"file_id": fid, "brand": "none", "layers": layers, "subtitles": subs, "caption_style": "highlight",
+                                   "camera": [{"at": 14, "zoom": 1.2, "dur": 0.6}, {"at": 16, "zoom": 1, "dur": 0.6}],
+                                   "end_card": {"title": "Vége", "dur": 2}, "render": False})
+        ctx = await pc.context(res["file_id"])
+        p = ctx["plan"]
+        assert ctx["path"] == "fast" and (p["pw"], p["ph"]) == (960, 540) and p["total"] == 34.0
+        assert ctx["persist"] and ctx["persist"][0]["P"] >= 1 and ctx["opaque"]       # a vízjel körből; a ráközelítés a motoré
+        assert await pc.context(res["file_id"]) is ctx                                 # verziónként egyszer
+        segs = p["segments"]
+        ks = sorted({0, 1, 2, 3, 6, 7, 9, 10, 15, 16, len(segs) - 2, len(segs) - 1})
+        for run in pc.runs(p, ks):
+            hs = await pc.render_run(ctx, run)
+            assert hs == [segs[k]["hash"] for k in run]
+            for k, h in zip(run, hs):
+                n, w, key = _probe_ts(pc.seg_path(p["source_id"], h))
+                assert (n, w, key) == (segs[k]["frames"], 960, "1"), (k, n, w, key)
+        assert await pc.ready([segs[k]["hash"] for k in ks], p["source_id"]) == {segs[k]["hash"] for k in ks}
+        chk = await pc.frame_check(ctx, ks=[1, 2, 3, 7, 10, 16, len(segs) - 1])  # vízjel, alsó harmad, felirat, kamera, kártya
+        assert chk["ok"], chk
+        d = await pc.render_audio(ctx)
+        m3u = (d / "index.m3u8").read_text()
+        got = sum(float(x.split(":")[1].rstrip(",")) for x in m3u.splitlines() if x.startswith("#EXTINF"))
+        assert got == pytest.approx(34.0, abs=0.1) and "#EXT-X-PLAYLIST-TYPE:VOD" in m3u
+        assert await pc.render_audio(ctx) == d                                         # másodszor kész
+        # ha a projekt nem a gyors útra való: a futam a motorból, más hash-sel (a projekt is az ujjlenyomatban)
+        _reset_gates()
+        monkeypatch.setattr(fast_render, "classify", lambda info, spec: {"ok": False, "why": "test"})
+        ctx2 = await pc.context(res["file_id"])
+        assert ctx2["path"] == "engine" and ctx2["plan"]["segments"][3]["hash"] != segs[3]["hash"]
+        hs2 = await pc.render_run(ctx2, [3, 4])
+        assert [_probe_ts(pc.seg_path(p["source_id"], h))[0] for h in hs2] == [segs[3]["frames"], segs[4]["frames"]]
+    asyncio.run(main())
