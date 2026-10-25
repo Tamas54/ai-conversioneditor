@@ -147,3 +147,28 @@ def test_a_cut_copy_is_made_from_the_old_copy_and_matches_a_full_remake(tmp_path
     au = json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration",
                                     "-of", "json", str(p1)], capture_output=True, text=True, check=True).stdout)["streams"][0]
     assert float(au["duration"]) == pytest.approx(24.0 - 3.7, abs=0.06)
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="ffmpeg needed")
+def test_the_cut_copy_stays_on_the_old_copys_frame_grid(tmp_path, put_file):
+    """iPhone-felvétel: a vágatlan munkamásolat a névleges 30-on áll, a felvétel mért átlaga 29,993 — a vágott másolat a
+    régi rácsán marad (kocka = idő), nem csúszik el a hangtól."""
+    from app.storage import output_path
+    clip = _clip(tmp_path / "talk.mp4")
+    fid = put_file(clip)
+    base = {"file_id": fid, "asset": "footage.mp4", "width": 1280, "height": 720, "fps": 29.97, "duration": 24.0, "audio": True}
+
+    async def main():
+        await footage.make_proxy(base, clip)
+        keep = footage.cut(None, 24.0, [(10.0, 12.5)], 29.97)
+        return await footage.make_proxy({**base, "keep": keep, "duration": footage.length(keep, 24.0)}, clip)
+    b1, _ = asyncio.run(main())
+    p1 = output_path(b1["media_id"])
+    L = footage.length(b1["keep"], 24.0)
+    assert _frames(p1) == round(L * 30) and _max_gap(p1) == pytest.approx(1 / 30, abs=0.002)
+    info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "json",
+                                      str(p1)], capture_output=True, text=True, check=True).stdout)["streams"]
+    dv = next(float(s["duration"]) for s in info if s["codec_type"] == "video")
+    da = next(float(s["duration"]) for s in info if s["codec_type"] == "audio")
+    assert dv == pytest.approx(L, abs=0.04) and da == pytest.approx(L, abs=0.06)
