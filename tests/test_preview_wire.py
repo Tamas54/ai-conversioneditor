@@ -216,3 +216,22 @@ def test_a_colour_change_does_not_wait_for_the_working_copy(tmp_path, put_file, 
         assert b2["asset"] in output_path(pid).read_text("utf-8")                # a projekt az új munkamásolatot látja
         assert not video.full_pending(pid)
     asyncio.run(main())
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_if_the_playlist_fails_the_old_mp4_preview_comes(tmp_path, put_file, hls, monkeypatch):
+    import app.tools as tools
+    from app.tools import video
+    fid = put_file(_clip(tmp_path / "talk.mp4"))
+    monkeypatch.setattr(video, "_start_final", lambda pid, eta: {"id": "stub"})
+
+    def broken(pid):
+        raise LookupError("no plan")
+    monkeypatch.setattr(tools.preview_serve, "plan_of", broken)
+
+    async def main():
+        _reset_gates()
+        res = await video.overlay({"file_id": fid, "brand": "none", "final": "background", "layers": LAYERS})
+        assert res["preview"]["parts"] and res["preview"]["file_id"].endswith(".mp4")
+    asyncio.run(main())
