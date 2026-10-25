@@ -10,10 +10,15 @@ Egy kért szakasz a FUTAMÁT rendereli (preview_cache.runs: néhány összefügg
 előre); ugyanaz a szakasz kétszer kérve egyszer készül, mindenki ugyanarra a munkára vár (hash → élő munka), egy
 már sorban álló munka a magasabb elsőbbségű kéréssel előrébb kerül (új bejegyzés; a régit a dolgozó eldobja).
 
-A dolgozók (VIDEO_PREVIEW_WORKERS, alap 2) a video_preview.gate()-en belül renderelnek, SOSEM a jobs.heavy() kapuján
-(PR #41: az előnézet nem áll be a fájleszközök / a végleges render mögé), és ÜRES kontextusban indulnak: se a hívó
-heavy-helye (_held), se a végleges render nice 10-e (engines.background) nem öröklődik rájuk — a munka tenancyje
-(kinek a munkaterületén) a kéréskor rögzül és munkánként áll be.
+A dolgozók (VIDEO_PREVIEW_WORKERS, alap 2) a video_preview.gate()-en belül renderelnek — a kaput a preview_cache maga
+kéri (render_run, render_audio, a context felépítése), a dolgozó NEM tartja: a kapu nem újrabelépő szemafor (2), két
+dolgozó két helye mellett a belső kérés örökre várna. SOSEM a jobs.heavy() kapuján (PR #41: az előnézet nem áll be a
+fájleszközök / a végleges render mögé), és ÜRES kontextusban indulnak: se a hívó heavy-helye (_held), se a végleges
+render nice 10-e (engines.background) nem öröklődik rájuk — a munka tenancyje (kinek a munkaterületén) a kéréskor
+rögzül és munkánként áll be.
+
+A terv (plan_of) a preview_cache.context() terve: a hash-ekben a végig látható rétegek mért köre és (motoros úton /
+kézzel szerkesztett projektnél) a projektfájl is benne van — ezt csak a context tudja, a puszta plan(spec) nem.
 
 Python 3.10: az asyncio-sor és a dolgozók eseményhurkonként jönnek létre (az egyik hurokhoz kötött primitív a
 másikban elakad); a tesztek _reset()-tel kezdenek.
@@ -143,7 +148,7 @@ def json_url(pid: str) -> str:
     return f"{_base()}/api/video/{pid}/preview.json{signed(pid)}"
 
 
-# ---------- a terv (a projekt metájának spec-jéből, tiszta függvény → gyorsítótárban) ----------
+# ---------- a terv (a verzió preview_cache.context()-jéé → gyorsítótárban) ----------
 
 _PLANS: dict[tuple[str, str], tuple[tuple[int, int], dict[str, Any]]] = {}
 _PLANS_MAX = 64
@@ -163,21 +168,32 @@ def _remember(pid: str, stamp: tuple[int, int], plan: dict[str, Any]) -> None:
         _PLANS.pop(next(iter(_PLANS)))
 
 
-def plan_of(pid: str) -> dict[str, Any]:
-    """A verzió szakasz-terve (preview_cache.plan a metában tárolt spec-ből). FileNotFoundError: nincs ilyen projekt;
-    LookupError: nincs szakasz-előnézete (nem a saját felvételre épülő projekt, vagy a terv nem készíthető el)."""
+def cached_plan(pid: str) -> Optional[dict[str, Any]]:
+    """A már ismert terv (plan_of / schedule után), ha a projekt és a metája azóta nem változott; különben None."""
+    try:
+        st = _stamp(pid)
+    except OSError:
+        return None
+    hit = _PLANS.get((_workspace(pid), pid))
+    return hit[1] if hit and hit[0] == st else None
+
+
+async def plan_of(pid: str) -> dict[str, Any]:
+    """A verzió szakasz-terve: a preview_cache.context(pid) terve (a context verziónként egyszer épül, a P1 tartja
+    gyorsítótárban; itt a projekt és a meta idejéhez kötve). FileNotFoundError: nincs ilyen projekt; LookupError: nincs
+    szakasz-előnézete (nem a saját felvételre épülő projekt, vagy a terv nem készíthető el)."""
     from app.storage import output_path, read_meta
     if not pid.lower().endswith(".ecproj") or not output_path(pid).exists():
         raise FileNotFoundError(pid)
+    hit = cached_plan(pid)
+    if hit is not None:
+        return hit
     st = _stamp(pid)
-    hit = _PLANS.get((_workspace(pid), pid))
-    if hit and hit[0] == st:
-        return hit[1]
     spec = (read_meta(pid) or {}).get("spec")
-    if not isinstance(spec, dict) or not spec.get("base"):
+    if not isinstance(spec, dict) or spec.get("kind") != "overlay" or not spec.get("base"):
         raise LookupError("This project has no segment preview (it isn't built on your own footage).")
     try:
-        plan = _pc().plan(spec)
+        plan = (await _pc().context(pid))["plan"]
     except Exception as e:
         log.warning("előnézet-terv %s: %s", pid, e)
         raise LookupError(f"The segment preview can't be planned for this project: {str(e)[:160]}") from None
@@ -242,10 +258,9 @@ class _State:
         self.seq = itertools.count()
         self.live: dict[str, _Job] = {}            # hash | "a:<audio_hash>" → a munka, ami előállítja
         self.failed: dict[str, tuple[float, str]] = {}
-        self.ctx: dict[tuple[str, str, tuple[int, int]], asyncio.Future] = {}
         self.workers: list[asyncio.Task] = []
         self.tasks: set[asyncio.Task] = set()
-        self.touched: set[str] = set()
+        self.touched: dict[str, set[str]] = {}       # source_id → a kiszolgált hash-ek (LRU, kötegben)
         self.touch_task: Optional[asyncio.Task] = None
         self.swept = 0.0
         self.stats = {"hits": 0, "misses": 0, "runs": 0, "segments": 0, "failed": 0}
@@ -360,18 +375,6 @@ def _as(job: _Job):
         tenancy.reset(t_user)
 
 
-async def _context(st: _State, job: _Job) -> dict[str, Any]:
-    """preview_cache.context(pid) — verziónként egyszer (a dolgozók közösen várják), amíg a projekt / a meta nem változik."""
-    key = (_workspace(job.pid), job.pid, _stamp(job.pid))
-    fut = st.ctx.get(key)
-    if fut is None or (fut.done() and (fut.cancelled() or fut.exception() is not None)):
-        fut = st.loop.create_task(_pc().context(job.pid))      # a munka tenancyjében (a _as alatt hívva)
-        st.ctx[key] = fut
-        while len(st.ctx) > 8:
-            st.ctx.pop(next(iter(st.ctx)))
-    return await asyncio.shield(fut)
-
-
 def _done_ok(job: _Job) -> bool:
     if job.kind == "audio":
         idx = _audio_index(job.plan)
@@ -380,7 +383,6 @@ def _done_ok(job: _Job) -> bool:
 
 
 async def _worker(st: _State) -> None:
-    from app.tools import video_preview
     while True:
         prio, _, job = await st.queue.get()
         if job.started or job.fut.done() or prio != job.prio:
@@ -389,12 +391,13 @@ async def _worker(st: _State) -> None:
         t0 = time.monotonic()
         try:
             with _as(job):
-                ctx = await _context(st, job)
-                async with video_preview.gate():   # az előnézet saját kapuja — NEM jobs.heavy() (PR #41)
-                    if job.kind == "audio":
-                        await _pc().render_audio(ctx)
-                    else:
-                        await _pc().render_run(ctx, list(job.ks))
+                # a context verziónként egyszer épül (P1: gyorsítótár + zár); a render a video_preview.gate()-et maga
+                # kéri — itt NEM tartjuk (nem újrabelépő: két dolgozó mellett a belső kérés örökre várna), és nem heavy()
+                ctx = await _pc().context(job.pid)
+                if job.kind == "audio":
+                    await _pc().render_audio(ctx)
+                else:
+                    await _pc().render_run(ctx, list(job.ks))
             if not _done_ok(job):
                 raise RuntimeError("the preview renderer finished without writing "
                                    + ("the audio track" if job.kind == "audio" else f"segment(s) {job.ks}"))
@@ -444,16 +447,17 @@ def _spawn(st: _State, coro) -> asyncio.Task:
     return t
 
 
-def _touch(st: _State, hashes: list[str]) -> None:
-    st.touched.update(hashes)
+def _touch(st: _State, source_id: str, hashes: list[str]) -> None:
+    st.touched.setdefault(source_id, set()).update(hashes)
     if st.touch_task is None or st.touch_task.done():
         async def flush():
             await asyncio.sleep(TOUCH_EVERY_S)
-            hs, st.touched = sorted(st.touched), set()
-            try:
-                await _pc().touch(hs)
-            except Exception as e:
-                log.debug("előnézet touch: %s", e)
+            todo, st.touched = st.touched, {}
+            for sid, hs in todo.items():
+                try:
+                    await _pc().touch(sorted(hs), sid)
+                except Exception as e:
+                    log.debug("előnézet touch: %s", e)
         st.touch_task = st.loop.create_task(flush())
 
 
@@ -478,7 +482,7 @@ async def request(pid: str, k: int, *, priority: int = P_PLAYER, plan: Optional[
     """A k. szakasz fájlja: kész → azonnal; különben a futama sorba (elsőbbséggel), és legfeljebb wait_s()-ig
     (VIDEO_PREVIEW_SEG_WAIT_S) vár rá — utána TimeoutError (a munka megy tovább, a következő kérés ugyanarra vár).
     A lejátszó kérése (0) a következő néhányat is előtölti. RuntimeError: a render elakadt."""
-    plan = plan or plan_of(pid)
+    plan = plan or await plan_of(pid)
     segs = plan["segments"]
     if not 0 <= k < len(segs):
         raise IndexError(f"segment {k} is not in this preview (0…{len(segs) - 1})")
@@ -487,7 +491,7 @@ async def request(pid: str, k: int, *, priority: int = P_PLAYER, plan: Optional[
     st = _state()
     if path.exists():
         st.stats["hits"] += 1
-        _touch(st, [h])
+        _touch(st, plan["source_id"], [h])
         if priority == P_PLAYER:
             _prefetch(st, pid, plan, k)
         return path
@@ -506,7 +510,7 @@ async def request(pid: str, k: int, *, priority: int = P_PLAYER, plan: Optional[
 async def request_audio(pid: str, *, priority: int = P_PLAYER, plan: Optional[dict[str, Any]] = None,
                         timeout: Optional[float] = None) -> Path:
     """A hang-rendition könyvtára (benne index.m3u8): kész → azonnal; különben sorba, és vár (mint a request())."""
-    plan = plan or plan_of(pid)
+    plan = plan or await plan_of(pid)
     idx = _audio_index(plan)
     if idx is None:
         raise LookupError("This preview has no sound track.")
@@ -620,10 +624,17 @@ def durations(plan: dict[str, Any]) -> list[float]:
     return out
 
 
+def _known(pid: str, plan: Optional[dict[str, Any]]) -> dict[str, Any]:
+    plan = plan or cached_plan(pid)
+    if plan is None:
+        raise LookupError("no plan for this preview yet — await plan_of(pid) first")
+    return plan
+
+
 def master_m3u8(pid: str, plan: Optional[dict[str, Any]] = None) -> str:
     """A master: a kép (video.m3u8) + a hang külön, folytonos renditionként (#EXT-X-MEDIA TYPE=AUDIO) — a 10-25-i
-    A1 prototípus alakja (hls.js 1.5.13 + Chrome: hézag nélkül, tekeréssel is)."""
-    plan = plan or plan_of(pid)
+    A1 prototípus alakja (hls.js 1.5.13 + Chrome: hézag nélkül, tekeréssel is). plan nélkül: a már ismert terv."""
+    plan = _known(pid, plan)
     q = signed(pid)
     audio = bool(plan.get("audio_hash"))
     w, h, fps = int(plan.get("pw") or 960), int(plan.get("ph") or 540), float(plan.get("fps") or 30)
@@ -732,7 +743,7 @@ def final_status(pid: str, meta: Optional[dict[str, Any]] = None) -> dict[str, A
 def status(pid: str, plan: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """GET /api/video/{pid}/preview.json → {playlist_url, duration, segments_total, segments_ready, markers, final}."""
     from app.storage import read_meta
-    plan = plan or plan_of(pid)
+    plan = _known(pid, plan)
     segs = plan.get("segments") or []
     have = ready_hashes(plan)
     meta = read_meta(pid) or {}

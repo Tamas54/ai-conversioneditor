@@ -378,7 +378,7 @@ async def video_asset(request: Request, project: str = Query(...), name: str = Q
 _NO_STORE = {"Cache-Control": "private, no-store"}       # a listában friss tokenek: ne gyorsítótárazzák
 
 
-def _hls_plan(pid: str, h: Optional[str], t: str, u: str) -> dict[str, Any]:
+async def _hls_plan(pid: str, h: Optional[str], t: str, u: str) -> dict[str, Any]:
     from app.tools import preview_serve as ps
     if not ps.verify(pid, h, t, u):
         raise HTTPException(403, "invalid or expired token")
@@ -387,7 +387,7 @@ def _hls_plan(pid: str, h: Optional[str], t: str, u: str) -> dict[str, Any]:
     if not preview_cache.enabled():
         raise HTTPException(404, "The segment preview is off on this server (VIDEO_PREVIEW_HLS=0).")
     try:
-        return ps.plan_of(pid)
+        return await ps.plan_of(pid)          # a verzió preview_cache.context()-jének terve (első kéréskor épül)
     except FileNotFoundError:
         raise HTTPException(404, "no such video project") from None
     except LookupError as e:
@@ -410,7 +410,7 @@ async def preview_master(project_id: str, t: str = Query(..., description="signe
     """A lejátszó (hls.js) mindig a 0. szakasszal indul (P4 mérése: később indulva nem hozza létre a puffereit) — ezért a
     lista kérésekor a 0. szakasz és a hang elsőbbséggel (0) sorba áll, ha még nincs kész (nem vár rá)."""
     from app.tools import preview_serve as ps
-    plan = _hls_plan(project_id, None, t, u)
+    plan = await _hls_plan(project_id, None, t, u)
     ps.warm(project_id, plan)
     return _m3u8(ps.master_m3u8(project_id, plan))
 
@@ -418,7 +418,7 @@ async def preview_master(project_id: str, t: str = Query(..., description="signe
 @router.get("/api/video/{project_id}/video.m3u8")
 async def preview_video_playlist(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
     from app.tools import preview_serve as ps
-    plan = _hls_plan(project_id, None, t, u)
+    plan = await _hls_plan(project_id, None, t, u)
     ps.warm(project_id, plan)
     return _m3u8(ps.video_m3u8(project_id, plan))
 
@@ -427,7 +427,7 @@ async def preview_video_playlist(project_id: str, t: str = Query(...), u: str = 
 async def preview_audio_playlist(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
     """A hang-rendition; ha még nincs (a hangkeverés gyors, de az első kérés megelőzheti), elsőbbséggel elkészül."""
     from app.tools import preview_serve as ps
-    plan = _hls_plan(project_id, None, t, u)
+    plan = await _hls_plan(project_id, None, t, u)
     if not plan.get("audio_hash"):
         raise HTTPException(404, "This preview has no sound track.")
     try:
@@ -442,7 +442,7 @@ async def preview_audio_playlist(project_id: str, t: str = Query(...), u: str = 
 @router.get("/api/video/{project_id}/preview.json")
 async def preview_state(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
     from app.tools import preview_serve as ps
-    return JSONResponse(ps.status(project_id, _hls_plan(project_id, None, t, u)), headers=_NO_STORE)
+    return JSONResponse(ps.status(project_id, await _hls_plan(project_id, None, t, u)), headers=_NO_STORE)
 
 
 @router.get("/api/video/preview/seg/{seg_hash}.ts")
@@ -451,7 +451,7 @@ async def preview_segment(seg_hash: str, p: str = Query(..., description="the vi
     """Egy szakasz: kész → a fájl (a hash a tartalom: örökre ugyanaz); nincs → elsőbbséggel (0) sorba, és legfeljebb
     VIDEO_PREVIEW_SEG_WAIT_S-ig vár, utána 503 + Retry-After (a lejátszó újrapróbálja, a render közben megy tovább)."""
     from app.tools import preview_serve as ps
-    plan = _hls_plan(p, seg_hash, t, u)
+    plan = await _hls_plan(p, seg_hash, t, u)
     k = ps.k_of(plan, seg_hash)
     if k is None:
         raise HTTPException(404, "That segment isn't in this project's preview (the project changed — reload the playlist).")
@@ -468,7 +468,7 @@ async def preview_segment(seg_hash: str, p: str = Query(..., description="the vi
 async def preview_audio_piece(audio_hash: str, name: str, p: str = Query(...), t: str = Query(...),
                               u: str = Query(tenancy.ADMIN_ID)):
     from app.tools import preview_serve as ps
-    plan = _hls_plan(p, audio_hash, t, u)
+    plan = await _hls_plan(p, audio_hash, t, u)
     if plan.get("audio_hash") != audio_hash:
         raise HTTPException(404, "That sound track isn't this project's preview (reload the playlist).")
     try:
