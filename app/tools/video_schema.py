@@ -103,12 +103,12 @@ The result's duration is the footage's (mode "footage"; + the end card — resul
 render=false saves the project only (the layout check still comes back).
 QUICK PREVIEW, FINAL IN THE BACKGROUND: when the final render is estimated over ~2 minutes (a long video), overlay and
 edit don't wait for it. They come back with result.preview — a short MP4 of just what changed (new / changed / removed
-layers ±2 s, cut points ±3 s, new subtitles, the end card, samples for a colour change), made from the editor's small
-copy, each part labelled with its time — and result.final = {job_id, eta ("about 35 min"), ready_at}: the full-quality
-render from the original, running in the background. video(action="status", job_id) shows its stage and the time left;
-its result is the final MP4. Tell the person both: look at the preview now, the final is ready at ready_at.
-final="wait" renders it now instead (the old way); final="background" always previews. draft=true on action="render"
-makes a quick whole-video preview from the small copy.
+layers ±2 s, cut points and an inserted clip's start and end ±3 s, new subtitles, the end card, samples for a colour
+change), made from the editor's small copy, each part labelled with its time — and result.final = {job_id, eta ("about
+35 min"), ready_at}: the full-quality render from the original, running in the background. video(action="status",
+job_id) shows its stage and the time left; its result is the final MP4. Tell the person both: look at the preview now,
+the final is ready at ready_at. final="wait" renders it now instead (the old way); final="background" always previews.
+draft=true on action="render" makes a quick whole-video preview from the small copy.
 Example: video(action="overlay", file_id="ab12.mov", text="…", layers=[{"at": "00:02", "type": "lower_third", "name":
 "Anna Kovács", "role": "Mayor"}, {"at": 9, "dur": 5, "type": "column", "title": "Budget", "unit": "bn Ft", "items":
 [{"label": "2024", "value": 44.8}, {"label": "2025", "value": 47.5}]}])"""

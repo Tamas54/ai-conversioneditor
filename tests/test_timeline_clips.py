@@ -38,6 +38,26 @@ def test_insert_then_cut_it_out_gives_the_whole_footage_back():
     assert footage.out_near(footage.cut(None, 100.0, [(10, 20)], 25), 15) == 10.0           # kivágott pont: a következő
 
 
+def test_the_quick_preview_shows_where_a_clip_starts_and_ends():
+    """A gyors előnézet (app/tools/video_preview.py) a beszúrt klip elejét és végét is mutatja; szerkesztéskor csak az új
+    illesztést, és ahol egy klipet kivettek."""
+    from app.tools import video_preview as vp
+    k = footage.insert(footage.cut(None, 100.0, [(80, 90)], 25), 100.0, 40.0,
+                       {"src": "clip.mp4", "a": 2.0, "b": 12.0, "join": "smooth"}, 25)
+    spec = {"story": {"layers": []}, "base": {"keep": k}}
+    assert vp.spans_new(spec, 100.0) == [(37.0, 43.0, "clip clip.mp4 starts"), (47.0, 53.0, "clip clip.mp4 ends"),
+                                         (87.0, 93.0, "cut")]
+    k2 = footage.insert(k, 100.0, 95.0, {"src": "c3.mp4", "a": 0.0, "b": 5.0, "join": "dissolve"}, 25)
+    got = vp.spans_edit(spec, {"story": {"layers": []}, "base": {"keep": k2}}, {"insert": [{}]}, 105.0)
+    assert got == [(92.0, 98.0, "clip c3.mp4 starts"), (97.0, 103.0, "clip c3.mp4 ends")]      # a régiek nem
+    back = footage.cut(k, 100.0, [(40, 50)], 25)
+    got = vp.spans_edit(spec, {"story": {"layers": []}, "base": {"keep": back}}, {"cut": [{}]}, 90.0)
+    assert got == [(37.0, 43.0, "clip clip.mp4 taken out")]                                    # ott, ahol volt
+    short = footage.insert(None, 100.0, 40.0, {"src": "clip.mp4", "a": 2.0, "b": 5.0, "join": "smooth"}, 25)
+    picked, left = vp.pick(vp.spans_new({"story": {"layers": []}, "base": {"keep": short}}, 103.0), 103.0, fps=25)
+    assert picked == [(37.0, 46.0, "clip clip.mp4 starts, clip clip.mp4 ends")] and not left   # egy rövid klip egészben
+
+
 def test_insert_specs_forms_and_errors(put_file, tmp_path):
     from app.tools.video import insert_specs
     p = tmp_path / "c.mp4"
@@ -235,3 +255,34 @@ def test_a_smooth_join_matches_the_sound_and_a_dissolve_renders_the_same_both_wa
     for t in (6.2, 7.5):                                                          # az áttűnés közepe, és a klip
         x, y = _yuv(fa, t, tmp_path / f"a{t}.yuv", "null"), _yuv(fb, t, tmp_path / f"b{t}.yuv", "null")
         assert _psnr_raw(x, y, 720, 1280) > 30, t
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_the_quick_preview_has_the_inserted_clip_and_the_final_comes_in_the_background(tmp_path, put_file):
+    """A gyors előnézet (#40) a beszúrt klip elejét és végét is megmutatja; a végleges render a háttérben, az eredetikből."""
+    from app import jobs
+    from app.storage import output_path
+    from app.tools import video
+    main, clip = _main(tmp_path / "main.mp4"), _clip(tmp_path / "clip.mp4")
+    fid, cid = put_file(main), put_file(clip)
+
+    async def go() -> None:
+        res = await video.overlay({"file_id": fid, "brand": "none", "final": "background",
+                                   "layers": [{"at": 0.5, "dur": 1.0, "type": "source", "text": "Eleje"}],
+                                   "insert": [{"file_id": cid, "at": {"between": [1, 5]}}]})
+        parts, T = res["preview"]["parts"], res["inserted"][0]["at"]
+        whats = " ".join(p["what"] for p in parts)
+        assert "clip clip.mp4 starts" in whats and "clip clip.mp4 ends" in whats, parts
+        assert any(p["from"] <= T and T + 3.0 <= p["to"] for p in parts), (T, parts)
+        pv = _probe(output_path(res["preview"]["file_id"]))
+        assert float(pv["format"]["duration"]) == pytest.approx(sum(p["to"] - p["from"] for p in parts), abs=0.4)
+        for _ in range(40):
+            st = await jobs.wait_status(res["final"]["job_id"], 15)
+            if st["status"] != "running":
+                break
+        assert st["status"] == "done", st
+        out = _probe(output_path(st["result"]["file_id"]))
+        assert float(out["format"]["duration"]) == pytest.approx(9.0, abs=0.2)
+        assert {(s["width"], s["height"]) for s in out["streams"] if s["codec_type"] == "video"} == {(720, 1280)}
+    asyncio.run(go())
