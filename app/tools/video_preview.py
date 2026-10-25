@@ -313,7 +313,7 @@ def describe_hls(pv: dict[str, Any]) -> str:
             f"{pv['segments_dirty']} of {pv['segments_total']} segment(s) made new, {pv['reused']} reused"
             + (f"; the first change plays after {first:g} s" if first is not None else "; the first changed segment is "
                "still being made — the player waits for it")
-            + (f". Changes: {where}." if mk else "."))
+            + (f". Changes: {where}." if mk else ".") + (f" Watch it: {pv['page_url']}" if pv.get("page_url") else ""))
 
 
 def describe(spans: list[tuple[float, float, str]], left: int, secs: float) -> str:

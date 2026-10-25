@@ -2158,12 +2158,12 @@ async def video(
       are checked against it (else "not checked against a source").
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again; scene="s3" | "L2": just that scene / layer.
-    Also: transcript (what is said, timed) · audiogram (sound → podcast video) · variants (A/B versions of a
+    Also: transcript (what is said) · audiogram (sound → podcast video) · variants (A/B versions of a
     video) · social (posts, hashtags, chapters) · cutout (green screen out) · stock (free footage) · lottie ·
     info (ids) · to_pptx.
     AI video (credits): action="ai_clip" · "avatar" · "enhance" · "estimate".
     alpha=true | "webm" | "both": also a transparent graphics-only file.
-    render=false: project only (the check runs); draft=true: fast; preview="mp4": long-video preview MP4.
+    render=false: project only; draft=true: fast; long video: give preview.page_url (preview="mp4": an MP4).
     Every result has a check (status, findings); files(action="preview", file_id, scene=…) shows it.
     """
     from app import jobs

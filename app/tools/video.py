@@ -5466,7 +5466,11 @@ async def _hls_preview(hls: tuple[Any, Any], pid: str, spec: dict[str, Any], old
     marks = video_preview.markers(spans, total)
     have = await pc.ready([x["hash"] for x in segs], plan["source_id"])
     write_meta(pid, extra={"preview": {"markers": marks, "first_ready_s": first_s, "dirty": dirty}})
-    pv: dict[str, Any] = {"playlist_url": ps.playlist_url(pid), "segments_total": len(segs), "segments_dirty": len(dirty),
+    from urllib.parse import quote
+    pv: dict[str, Any] = {"playlist_url": ps.playlist_url(pid),
+                          # a személynek szóló lap (a lejátszó + a változások jelölői; a puszta .m3u8 csak a Safariban szól)
+                          "page_url": f"{settings.PUBLIC_BASE_URL.rstrip('/')}/app/file/{quote(pid)}/preview",
+                          "segments_total": len(segs), "segments_dirty": len(dirty),
                           "segments_ready": sum(1 for x in segs if x["hash"] in have), "first_ready_s": first_s,
                           "reused": int(d["reused"]), "markers": marks}
     log.info("szakasz-előnézet %s: %d szakasz, %d új, %d a gyorsítótárból, az első %.1f s alatt", pid, len(segs), len(dirty),
