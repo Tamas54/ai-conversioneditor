@@ -4399,7 +4399,7 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
                                        render=body.get("render", True) is not False, draft=bool(body.get("draft")),
-                                       final=final_mode(body.get("final")))
+                                       final=final_mode(body.get("final")), preview=body.get("preview"))
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
@@ -5089,12 +5089,15 @@ def _footage_camera(cam: Any) -> Any:
 async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], opts: dict[str, Any], *, source: str,
                             layer_notes: list[str], step: Callable[..., None], label_stem: str, operation: str,
                             parent: Optional[str] = None, render: bool = True, draft: bool = False, final: str = "auto",
-                            changed: Optional[tuple[dict[str, Any], dict[str, Any]]] = None) -> dict[str, Any]:
+                            changed: Optional[tuple[dict[str, Any], dict[str, Any]]] = None,
+                            preview: Optional[str] = None) -> dict[str, Any]:
     """Felvétel + rétegek → .ecproj (+ MP4, + átlátszó grafika). Az overlay és a szerkesztése közös útja; parent = a
     szerkesztett projekt (a felvétel és a rétegek képei onnan jönnek, nem másolódnak újra). Hosszú videónál (a végleges
     render becslése VIDEO_INLINE_RENDER_S fölött) — vagy final="background" — gyors előnézet a megváltozott
     szakaszokról, a végleges render háttérmunka becsült idővel (app/tools/video_preview.py); final="wait": mindig itt
     renderel. changed = (a régi spec, a changes) a szerkesztésnél: ebből derül ki, mi változott."""
+    from app.tools import video_preview
+    pv_mode = video_preview.preview_mode(preview)
     W, H = int(base["width"]), int(base["height"])
     fps = float(base.get("fps") or FPS)
     fps = fps if 1 <= fps <= 120 else FPS
@@ -5202,6 +5205,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         # PROFILE.md: a _build 99 %-a a felirat-ciklus), az előnézet a feliratot libass-szal rajzolja; a teljes (feliratos)
         # projekt a végleges render első lépése (ensure_full), addig a verzió metája: full_project = "pending"
         bg_eta = await _final_eta(spec, render=render, draft=draft, kinds=kinds, final=final)
+        if bg_eta is None and base.get("proxy_pending"):    # (a munkamásolat már a háttérre vár: a végleges is oda)
+            from app.tools import render_eta
+            bg_eta = float((await render_eta.final(spec))["seconds"])
         deferred = bg_eta is not None and bool(D["captions"] or base.get("proxy_pending"))
         step(2, 4, "building the timeline")
         out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
@@ -5263,7 +5269,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                             notes=layer_notes,
                                             findings=problems + gfx_findings + script_findings + [
                                                 f"Shortened text — {t}. Shorten it yourself, or change it with action=edit."
-                                                for t in (_TRUNC.get() or [])[:6]])
+                                                for t in (_TRUNC.get() or [])[:6]], preview=pv_mode)
         step(3, 4, "rendering the video")
         vid = await _render_staged(pid, work / "project.ecproj", label_stem, group=group, want_s=total, mode="footage", draft=draft)
         result["duration"] = vid.pop("duration", None) or result["duration"]
@@ -5305,6 +5311,33 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         shutil.rmtree(work, ignore_errors=True)
 
 
+async def _proxy_later(base: dict[str, Any], stand_in: dict[str, Any], m: dict[str, Any], src: Path,
+                       layers: list[dict[str, Any]], opts: dict[str, Any], card: Optional[dict[str, Any]], *, render: bool,
+                       draft: bool, final: str) -> Optional[tuple[dict[str, Any], list[str]]]:
+    """Új munkamásolat kell (pl. új színkorrekció — a 30 perces felvételen 430 s): ha a végleges render úgyis a háttérben
+    fut, és a szakasz-előnézet be van kötve (az alapképet addig az EREDETIBŐL rajzolja, footage.chain), a szerkesztés nem
+    várja meg: a verzió base-ében a szülő munkamásolata áll a helyén (ugyanaz a méret), proxy_pending = true, és a
+    munkamásolat a teljes projekttel együtt a végleges render első lépése (ensure_full → _finish_proxy). A recept (auto
+    mérés) itt készül, hogy az előnézet ugyanazt a láncot kapja. Ami másodpercek alatt megvan (kész, vagy vágásnál egy
+    meglévőből smart cuttal), az itt készül. → (az új base, a korrekció leírása), vagy None."""
+    from app.tools import video_fx, video_preview, videonorm
+    if footage.ready_soon(base) or not stand_in.get("asset") or not video_preview.hls():
+        return None
+    probe = {"kind": "overlay", "base": {**_with_end_card(base, card), **{k: stand_in.get(k) for k in ("proxy", "hdr")}},
+             "story": {"layers": layers}, "opts": opts}
+    if await _final_eta(probe, render=render, draft=draft, kinds=alpha_kinds(opts.get("alpha")), final=final) is None:
+        return None
+    adj = base.get("adjust") or {}
+    opts["proxy_base"] = dict(base)                      # a munkamásolat receptje (make_proxy a háttérben)
+    b = {**base, **stand_in, "proxy_pending": True}
+    b.pop("auto", None)
+    if adj.get("auto"):                                  # egyszer mérve, az eredetin (mint a _build_proxy-ban)
+        b["auto"] = video_fx.auto_params(await video_fx.measure(src, videonorm.head_filters(m)))
+    applied = video_fx.describe(adj, b.get("auto")) if adj else []
+    return b, applied + ["The editor's copy with it is being made in the background; until then the preview is drawn "
+                         "from your original."]
+
+
 async def _timed_proxy(base: dict[str, Any], src: Path) -> tuple[dict[str, Any], list[str]]:
     """footage.make_proxy — a mért ideje a becslés kalibrációjába (a gyorsítótárból jött másolat kiugró, nem számít; a
     nehéz munka sorában töltött idő nem a munkamásolaté)."""
@@ -5340,19 +5373,37 @@ async def _job_eta(info: dict[str, Any], items: int, proxy: bool, render: bool) 
 async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], changed: Any, work: Path, pid: str,
                              base: dict[str, Any], W: int, H: int, fps: float, total: float, label_stem: str, group: Any,
                              eta: float, srt_entry: Optional[dict[str, Any]], step: Callable[..., None], *,
-                             verified: list[str], notes: list[str], findings: list[str]) -> dict[str, Any]:
-    """Gyors előnézet a megváltozott szakaszokról (a munkamásolatból), a végleges render háttérmunkaként indul —
-    a válasz nem várja meg (10-23, Kommandant: „egy alapszintű gyors eredmény KELL”)."""
+                             verified: list[str], notes: list[str], findings: list[str],
+                             preview: str = "hls") -> dict[str, Any]:
+    """Gyors előnézet, a végleges render háttérmunkaként indul — a válasz nem várja meg (10-23, Kommandant: „egy
+    alapszintű gyors eredmény KELL”). VIDEO_PREVIEW_HLS (alap): a teljes videó szakasz-gyorsítótáras HLS-listája — a
+    kérés csak a 0. és az első megváltozott szakaszt várja, a többi a háttérben készül, a változások helyei jelölők
+    (markers); preview="mp4": mellé a kész szakaszok összefűzve egy MP4-be. Különben (VIDEO_PREVIEW_HLS=0, vagy nincs
+    bekötve) a PR #40-es MP4 a megváltozott szakaszokról."""
     from app.tools import render_eta, video_preview
+    old_spec = None
     if changed:
         old, changes = changed
+        old_spec = old
         ok, nk = (old.get("base") or {}).get("keep"), (spec.get("base") or {}).get("keep")
         remap = (lambda a, b: footage.remap_span(a, b, ok, nk)) if ok != nk else None
         spans = video_preview.spans_edit(old, spec, changes, total, remap)
     else:
         spans = video_preview.spans_new(spec, total)
-    picked, left = video_preview.pick(spans, total, fps=fps)
+    hls = video_preview.hls()
+    picked: list = []
     pv_note = None
+    if hls:
+        try:
+            pv, more = await _hls_preview(hls, pid, spec, old_spec, spans, total, step, preview, label_stem, group)
+            result["preview"] = pv
+            pv_note = video_preview.describe_hls(pv)
+            findings = findings + more
+        except Exception as e:                       # az előnézet sose állítja meg a szerkesztést: a válasz megy
+            log.warning("szakasz-előnézet (%s): %s", pid, e)
+            findings = findings + [f"The preview couldn't be started ({str(e)[:160]}); the final video is still coming."]
+    else:
+        picked, left = video_preview.pick(spans, total, fps=fps)
     if picked:
         step(3, 4, "a quick preview of what changed")
         scale = int(base["proxy"]["w"]) / W if base.get("proxy") else min(1.0, footage.PROXY_SIDE / max(W, H))
@@ -5373,7 +5424,9 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
     result["final"] = {"job_id": job["id"], "eta_s": round(eta), "eta": render_eta.text(eta),
                        "ready_at": render_eta.ready_at(eta),
                        "how": "video(action=\"status\", job_id=…, wait=55) — when it is done, its result is the final MP4."}
-    result["files"] = [result["project"]] + ([result["preview"]] if picked else []) + ([srt_entry] if srt_entry else [])
+    mp4 = (result.get("preview") or {}).get("mp4") if hls else None
+    result["files"] = [result["project"]] + ([result["preview"]] if picked else []) + ([mp4] if mp4 else []) + \
+        ([srt_entry] if srt_entry else [])
     lay_v, lay_f = _split_notes(notes)
     fs = list(dict.fromkeys(lay_f + findings))
     result["check"] = {"status": "needs_check" if fs else "ok", "findings": fs,
@@ -5383,6 +5436,121 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
                           f"video(action=\"status\", job_id=\"{job['id']}\")."] + verified + lay_v}
     step(4, 4, "done — the final video is rendering in the background")
     return result
+
+
+async def _hls_preview(hls: tuple[Any, Any], pid: str, spec: dict[str, Any], old_spec: Optional[dict[str, Any]],
+                       spans: list[tuple[float, float, str]], total: float, step: Callable[..., None], preview: str,
+                       label_stem: str, group: Any) -> tuple[dict[str, Any], list[str]]:
+    """A verzió szakasz-terve, a szülőéhez mérve (ami változatlan, az a gyorsítótárból jön); a 0. és az első piszkos
+    szakasz megvárva (elsőbbséggel), a többi a háttérben (preview_serve.schedule); a változások helyei a verzió
+    metájába is (a lejátszó jelölői). → (a válasz preview mezője, findings)."""
+    from app.tools import video_preview
+    pc, ps = hls
+    t0 = time.time()
+    plan = ps.plan_of(pid)
+    old_plan = None
+    if old_spec:
+        try:
+            old_plan = pc.plan(old_spec)
+        except Exception as e:                       # a régi verzió terve nélkül minden szakasz újnak számít
+            log.info("a szülő szakasz-terve nem készült el: %s", e)
+    d = pc.diff(old_plan, plan)
+    segs, dirty, more = plan["segments"], list(d["dirty"]), []
+    first = dirty[0] if dirty else None
+    need = sorted({0} | ({first} if first is not None else set())) if segs else []
+    step(3, 4, "the first preview segments")
+    first_s: Optional[float] = None
+    try:
+        await asyncio.gather(*(ps.request(pid, k, priority=ps.P_EDIT, plan=plan) for k in need))
+        first_s = round(time.time() - t0, 2)
+    except (TimeoutError, asyncio.TimeoutError):      # a lejátszó megvárja; a munka megy tovább
+        pass
+    except RuntimeError as e:
+        more.append(f"A preview segment couldn't be made ({str(e)[:160]}) — the player retries; the final video is still coming.")
+    ps.schedule(pid, plan, dirty, playhead=float(segs[first]["out_start"]) if first is not None else 0.0)
+    marks = video_preview.markers(spans, total)
+    have = await pc.ready([x["hash"] for x in segs], plan["source_id"])
+    write_meta(pid, extra={"preview": {"markers": marks, "first_ready_s": first_s, "dirty": dirty}})
+    pv: dict[str, Any] = {"playlist_url": ps.playlist_url(pid), "segments_total": len(segs), "segments_dirty": len(dirty),
+                          "segments_ready": sum(1 for x in segs if x["hash"] in have), "first_ready_s": first_s,
+                          "reused": int(d["reused"]), "markers": marks}
+    log.info("szakasz-előnézet %s: %d szakasz, %d új, %d a gyorsítótárból, az első %.1f s alatt", pid, len(segs), len(dirty),
+             pv["segments_ready"], first_s if first_s is not None else -1)
+    if preview == "mp4":
+        step(3, 4, "the preview as one MP4")
+        mp4, note = await _preview_mp4(hls, pid, plan, label_stem, group)
+        if mp4:
+            pv["mp4"] = mp4
+        if note:
+            more.append(note)
+    return pv, more
+
+
+async def _preview_mp4(hls: tuple[Any, Any], pid: str, plan: dict[str, Any], label_stem: str,
+                       group: Any) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """preview="mp4" (az MCP-kliens nem játszik HLS-t): a szakaszok elölről, újrakódolás nélkül (-c copy) egy MP4-be, a
+    hang-renditionnel — legfeljebb VIDEO_PREVIEW_MP4_WAIT_S-ig (alap 90) vár a még készülőkre; ami addig összefüggően
+    kész, az kerül bele (from 0). Ha az egész videó benne van, a projekt „vázlat-renderje” is ez (render_draft: a
+    files(action="preview", file_id=<projekt>, at=[…]) a markerek idejében erről mutat kockát), amíg nincs végleges."""
+    from app.config import settings as cfg
+    from app.convert.engines import run
+    pc, ps = hls
+    segs = plan["segments"]
+    try:
+        budget = float(os.getenv("VIDEO_PREVIEW_MP4_WAIT_S", "90"))
+    except ValueError:
+        budget = 90.0
+    deadline = time.time() + budget
+    have = await pc.ready([x["hash"] for x in segs], plan["source_id"])
+    n = 0
+    for k, sg in enumerate(segs):                     # az összefüggő kész rész elölről (a hiányzót elsőbbséggel kéri)
+        if sg["hash"] not in have:
+            left = deadline - time.time()
+            if left <= 0:
+                break
+            try:
+                await ps.request(pid, k, priority=ps.P_EDIT, plan=plan, timeout=left)
+            except (TimeoutError, asyncio.TimeoutError, RuntimeError):
+                break
+        n = k + 1
+    if not n:
+        return None, "The preview MP4 isn't ready yet — ask again in a minute (the playlist plays already)."
+    work = Path(tempfile.mkdtemp(prefix="pv-mp4-", dir=str(temp_path("").parent)))
+    try:
+        lst = "".join(f"file '{pc.seg_path(plan['source_id'], sg['hash'])}'\nduration {float(sg['dur']):.6f}\n" for sg in segs[:n])
+        (work / "segs.txt").write_text(lst, "utf-8")
+        length = round(sum(float(sg["dur"]) for sg in segs[:n]), 3)
+        aud: list[str] = []
+        if plan.get("audio_hash"):
+            try:
+                adir = await ps.request_audio(pid, priority=ps.P_EDIT, plan=plan, timeout=max(5.0, deadline - time.time()))
+                aud = ["-i", str(Path(adir) / "index.m3u8"), "-map", "1:a:0"]
+            except (LookupError, TimeoutError, asyncio.TimeoutError, RuntimeError) as e:
+                log.info("az előnézet-MP4 hang nélkül: %s", e)
+        out = work / "preview.mp4"
+        base_args = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "segs.txt", *aud, "-map", "0:v:0"]
+        try:
+            await run(*base_args, "-c", "copy", "-t", f"{length:.3f}", "-movflags", "+faststart", str(out),
+                      timeout=cfg.VIDEO_TIMEOUT_S, cwd=work)
+        except Exception:                             # (más hangformátum: a hang AAC-ba, a kép továbbra is másolva)
+            if not aud:
+                raise
+            await run(*base_args, "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-t", f"{length:.3f}", "-movflags",
+                      "+faststart", str(out), timeout=cfg.VIDEO_TIMEOUT_S, cwd=work)
+        vid = new_file_id("mp4")
+        shutil.move(str(out), output_path(vid))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    whole = n == len(segs)
+    write_meta(vid, label=f"{label_stem} (preview).mp4", operation="video preview", source_file_id=pid,
+               extra={"group": group, "variant": "preview"})
+    meta = read_meta(pid) or {}
+    if whole and (not meta.get("render_file_id") or meta.get("render_draft")):
+        write_meta(pid, extra={"render_file_id": vid, "render_draft": True})
+    entry = {**_file_entry(vid), "from": 0.0, "to": length, "whole": whole}
+    note = None if whole else (f"The preview MP4 has the first {_tc(length)} so far (of {_tc(float(plan.get('total') or 0))}); "
+                               "the playlist has all of it as the rest is made — ask again with preview=\"mp4\" for more.")
+    return entry, note
 
 
 def _start_final(pid: str, eta: float) -> dict[str, Any]:
@@ -6059,11 +6227,12 @@ def _scene_from(ch: dict[str, Any], source: str, notes: list[str], base: Optiona
 
 async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                progress: Optional[Callable[..., None]] = None, alpha: Any = None, render: bool = True,
-               draft: bool = False, label_stem: Optional[str] = None, final: str = "auto") -> dict[str, Any]:
+               draft: bool = False, label_stem: Optional[str] = None, final: str = "auto",
+               preview: Optional[str] = None) -> dict[str, Any]:
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
     try:
         return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha, render=render, draft=draft,
-                           label_stem=label_stem, final=final_mode(final))
+                           label_stem=label_stem, final=final_mode(final), preview=preview)
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
@@ -6071,7 +6240,8 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
 
 async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                 progress: Optional[Callable[..., None]] = None, alpha: Any = None, render: bool = True,
-                draft: bool = False, label_stem: Optional[str] = None, final: str = "auto") -> dict[str, Any]:
+                draft: bool = False, label_stem: Optional[str] = None, final: str = "auto",
+                preview: Optional[str] = None) -> dict[str, Any]:
     """Egy elkészült videó módosítása a forgatókönyvéből → ÚJ változat (projekt + MP4). changes:
     {"scenes": [{"scene": n (1-től), "headline"?, "caption"?, "image"?, "stat"?, "chart"?, "remove"?}],
      "add": [{"after": n (0 = az első elé), "headline", "caption"?, "image"? | "image_query"?, "stat"?, "chart"?}],
@@ -6096,7 +6266,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
             step.eta(await _job_eta({**b_, "duration": b_.get("duration") or 0}, n_,
                                     bool(b_.get("proxy")) and ("adjust" in changes or "cut" in changes), render))
         res = await _edit_overlay(pid, spec, changes, extra_source=extra_source, step=step, alpha=alpha, render=render, draft=draft,
-                                  label_stem=label_stem, final=final)
+                                  label_stem=label_stem, final=final, preview=preview)
         res["notes"] = ["Rebuilt from the layer list: changes made by hand in the video editor are not in this version "
                         "(they stay in the previous one)."] if meta.get("hand_edited") else []
         return res
@@ -6333,7 +6503,7 @@ async def variants(file_id: str, raw: Any, progress: Optional[Callable[..., None
 
 async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any], *, extra_source: str,
                         step: Callable[..., None], alpha: Any = None, render: bool = True, draft: bool = False,
-                        label_stem: Optional[str] = None, final: str = "auto") -> dict[str, Any]:
+                        label_stem: Optional[str] = None, final: str = "auto", preview: Optional[str] = None) -> dict[str, Any]:
     """Overlay-projekt célzott szerkesztése: rétegek id alapján (layers / add_layers), akcentus, alpha → ÚJ változat
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
@@ -6428,11 +6598,16 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             base, layers, opts["subtitles"], opts["camera"], opts["inserted"] = await _insert_clips(
                 base, inserts, layers, opts["subtitles"], opts.get("camera"), notes, step,
                 frame=lambda x: footage.remap_near(x, before, now), unframe=lambda t: footage.remap_near(t, now, before))
+        stand_in = {k: v for k, v in _with_end_card(dict(spec["base"]), None).items() if k in footage._KEEP}
         for k in ("auto", "clean_media_id", "media_id", "proxy", "rotated", "hdr"):
             base.pop(k, None)
         if footage.needed(m, base.get("adjust"), src.stat().st_size, base.get("keep")):   # új munkamásolat az eredetiből
-            step(0, 4, "making the editor's copy of your footage")
-            base, applied = await _timed_proxy(base, src)
+            later = await _proxy_later(base, stand_in, m, src, layers, opts, card, render=render, draft=draft, final=final)
+            if later:                                           # hosszú videó: a munkamásolat a háttérben (proxy_pending)
+                base, applied = later
+            else:
+                step(0, 4, "making the editor's copy of your footage")
+                base, applied = await _timed_proxy(base, src)
             if applied and "adjust" in changes:
                 notes.append("Your footage — " + " ".join(applied))
         else:                                                   # korrekció és vágás nélkül, kis álló SDR-felvétel: az eredeti
@@ -6441,7 +6616,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     return await _assemble_overlay(base, layers, opts, source=source,
                                    layer_notes=_kept_layer_notes(spec, layers) + notes, step=step,
                                    label_stem=label_stem or result_stem(pid, "edited"), operation="video edit", parent=pid, render=render,
-                                   draft=draft, final=final, changed=(spec, changes))
+                                   draft=draft, final=final, changed=(spec, changes), preview=preview)
 
 
 _EDIT_PLAN = """You change a short video made of scenes. Reply with ONE json object of changes — only what the request asks:

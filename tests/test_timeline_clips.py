@@ -308,9 +308,10 @@ def test_a_smooth_join_matches_the_sound_and_a_dissolve_renders_the_same_both_wa
 
 @pytest.mark.engines
 @pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
-def test_the_quick_preview_has_the_inserted_clip_and_the_final_comes_in_the_background(tmp_path, put_file):
+def test_the_quick_preview_has_the_inserted_clip_and_the_final_comes_in_the_background(tmp_path, put_file, monkeypatch):
     """A gyors előnézet (#40) a beszúrt klip elejét és végét is megmutatja; a végleges render a háttérben, az eredetikből.
     Ugyanaz a klip kétszer: mindkettő a saját helyén (at: az új videó ideje, at_given: a kérésé)."""
+    monkeypatch.setenv("VIDEO_PREVIEW_HLS", "0")                 # a PR #40-es MP4-előnézet (a HLS: test_preview_wire.py)
     from app import jobs
     from app.storage import output_path
     from app.tools import video

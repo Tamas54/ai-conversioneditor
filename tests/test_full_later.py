@@ -69,6 +69,7 @@ SUBS = [{"start": 0.5, "end": 2.5, "text": "Első sor"}, {"start": 3.0, "end": 5
 def test_the_full_project_comes_later_and_is_there_for_whoever_needs_it(tmp_path, put_file, monkeypatch):
     from app.storage import output_path, read_meta
     from app.tools import video
+    monkeypatch.setenv("VIDEO_PREVIEW_HLS", "0")                 # az MP4-előnézet libass-felirata (a HLS: test_preview_wire)
     fid = put_file(_clip(tmp_path / "talk.mp4"))
     finals: list[str] = []
     monkeypatch.setattr(video, "_start_final", lambda pid, eta: finals.append(pid) or {"id": "stub"})
