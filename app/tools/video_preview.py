@@ -87,16 +87,40 @@ def _ly(ly: dict[str, Any]) -> tuple[float, float, str]:
     return a, a + float(ly.get("dur") or 0), f"{ly.get('id')} {ly.get('type') or ''}".strip()
 
 
+def persistent(ly: dict[str, Any]) -> bool:
+    """Végig látható réteg (vízjel, logó: a gyors render PERSISTENT_S-nél hosszabbja): nem alkot szakaszt — a 3,5–1815 s-os
+    vízjel mindent egy szakaszba olvasztott, a 60 s-os korlát levágta, és az előnézet csak az első percet mutatta, a
+    címkéje mégis mind a 24 réteget felsorolta (PROFILE.md 6.4); helyette néhány minta a videó hosszában."""
+    from app.tools import fast_render
+    return float(ly.get("dur") or 0) >= fast_render.PERSISTENT_S
+
+
+def _layer_spans(lys: list[dict[str, Any]], total: float, suffix: str = "") -> list[tuple[float, float, str]]:
+    out, held = [], []
+    for ly in lys:
+        a, b, lab = _ly(ly)
+        if persistent(ly):
+            held.append(lab + suffix)
+        else:
+            out.append(_span(a, b, lab + suffix, PAD, total))
+    if held:
+        out += _samples(total, ", ".join(held), 2)
+    return out
+
+
 def spans_new(spec: dict[str, Any], total: float) -> list[tuple[float, float, str]]:
-    """Új videó: minden réteg, vágáspont, a zárókártya; felirat csak, ha más nincs (az első sorok)."""
+    """Új videó: minden (rövid) réteg, vágáspont, a zárókártya; felirat csak, ha más nincs (az első sorok)."""
     story, base = spec.get("story") or {}, spec.get("base") or {}
-    out = [_span(*_ly(ly)[:2], _ly(ly)[2], PAD, total) for ly in story.get("layers") or []]
+    lys = story.get("layers") or []
+    out = _layer_spans([ly for ly in lys if not persistent(ly)], total)
     out += [_span(t, t, what, CUT_PAD, total) for t, what, _ in _joins(base.get("keep"))]
     if base.get("end_card"):
         out.append(_span(float(base["plain"]["duration"]), total, "end card", 1.0, total))
     subs = story.get("subtitles") or []
     if subs and not out:
         out += [_span(float(c["start"]), float(c["end"]), "subtitles", 0.5, total) for c in subs[:3]]
+    if not out and any(persistent(ly) for ly in lys):          # csak végig látható réteg: minták
+        out += _layer_spans([ly for ly in lys if persistent(ly)], total)
     return out
 
 
@@ -106,14 +130,13 @@ def spans_edit(old: dict[str, Any], new: dict[str, Any], changes: dict[str, Any]
     olds = {ly["id"]: ly for ly in (old.get("story") or {}).get("layers") or []}
     news = {ly["id"]: ly for ly in (new.get("story") or {}).get("layers") or []}
     touched = {str(c.get("id")) for c in changes.get("layers") or [] if isinstance(c, dict) and c.get("id")}
-    out = []
-    for lid, ly in news.items():
-        if lid not in olds or lid in touched:
-            a, b, lab = _ly(ly)
-            out.append(_span(a, b, lab, PAD, total))
+    out = _layer_spans([ly for lid, ly in news.items() if lid not in olds or lid in touched], total)
     for lid in touched - set(news):                              # törölt réteg: ahol volt (az új időben)
         if lid in olds:
             a, b, lab = _ly(olds[lid])
+            if persistent(olds[lid]):
+                out += _samples(total, f"{lab} (removed)", 2)
+                continue
             ab = remap(a, b) if remap else (a, b)
             if ab:
                 out.append(_span(ab[0], ab[1], f"{lab} (removed)", PAD, total))
@@ -147,7 +170,7 @@ def spans_edit(old: dict[str, Any], new: dict[str, Any], changes: dict[str, Any]
     if "music" in changes or "music_file_id" in changes:
         out += _samples(total, "music", 2)
     if any(k in changes for k in ("accent", "title", "caption_style")) and not out:
-        lys = sorted(news.values(), key=lambda x: float(x.get("at") or 0))[:2]
+        lys = sorted((ly for ly in news.values() if not persistent(ly)), key=lambda x: float(x.get("at") or 0))[:2]
         out += [_span(*_ly(ly)[:2], _ly(ly)[2], PAD, total) for ly in lys]
         subs = (new.get("story") or {}).get("subtitles") or []
         out += [_span(float(c["start"]), float(c["end"]), "subtitles", 0.5, total) for c in subs[:1]]
@@ -185,9 +208,10 @@ def pick(spans: list[tuple[float, float, str]], total: float, cap: Optional[floa
 
 
 async def render(work: Path, project: str, comp: str, spans: list[tuple[float, float, str]], scale: float,
-                 out: Path) -> dict[str, Any]:
+                 out: Path, ass: Optional[str] = None) -> dict[str, Any]:
     """A szakaszok a motorral, kicsiben, vázlatminőségben (a munkamásolatból), egymás után egy MP4-be, mindegyiken
-    az időkódja. → {seconds, parts, length}."""
+    az időkódja. ass: a felirat (fast_render.ass_subtitles, a videó idejében) — a hosszú videó projektje a kérés útjában
+    felirat nélkül épül (video.ensure_full), a feliratot itt a libass rajzolja rá. → {seconds, parts, length}."""
     from app.convert.engines import run
     from app.tools import fast_render, video
     t0 = time.time()
@@ -201,6 +225,8 @@ async def render(work: Path, project: str, comp: str, spans: list[tuple[float, f
             names.append(name)
         from app.tools import mediaprobe
         font = Path(fast_render.INTER_DIR, "Inter-SemiBold.otf")
+        if ass:
+            (work / "pv-subs.ass").write_text(ass, "utf-8")
         heard = [bool((await mediaprobe.info(work / n)).get("has_audio")) for n in names]
         args, chains, extra = [], [], len(names)
         for k, (name, (a, b, lab)) in enumerate(zip(names, spans)):
@@ -208,7 +234,9 @@ async def render(work: Path, project: str, comp: str, spans: list[tuple[float, f
             (work / f"pv-{k:03d}.txt").write_text(f"{video._tc(a)}–{video._tc(b)}  {lab}", "utf-8")   # (textfile: nincs escape)
             text = (f",drawtext=fontfile={font}:textfile=pv-{k:03d}.txt:x=12:y=12:fontsize=h/24:fontcolor=white:"
                     "box=1:boxcolor=black@0.55:boxborderw=6") if font.exists() else ""
-            chains.append(f"[{k}:v]setsar=1{text}[v{k}]")
+            subs = (f",setpts=PTS+{a:.4f}/TB,ass=pv-subs.ass:fontsdir={fast_render.INTER_DIR},setpts=PTS-STARTPTS"
+                    if ass else "")                       # (a darab 0-tól indul, a felirat a videó idejében)
+            chains.append(f"[{k}:v]setsar=1{subs}{text}[v{k}]")
         if any(heard):                                   # hang nélküli darab: csend a helyén (a concat mindenhol hangot vár)
             for k, (a, b, _lab) in enumerate(spans):
                 if heard[k]:
@@ -228,6 +256,7 @@ async def render(work: Path, project: str, comp: str, spans: list[tuple[float, f
     for n in names:
         (work / n).unlink(missing_ok=True)
         (work / n.replace(".mp4", ".txt")).unlink(missing_ok=True)
+    (work / "pv-subs.ass").unlink(missing_ok=True)
     return {"seconds": round(time.time() - t0, 1), "parts": len(spans), "length": round(sum(b - a for a, b, _ in spans), 1)}
 
 

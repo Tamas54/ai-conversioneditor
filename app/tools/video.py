@@ -219,10 +219,8 @@ def _asset_name(name: str) -> str:
     return re.sub(r"[^\w.\- ]+", "_", name)[:120]
 
 
-def stage(project_id: str, workdir: Path) -> Path:
-    """Projekt + médiafájlok egy mappába; a médiahivatkozások a fájlnévre igazítva (a böngészőben importált
-    fájl útvonala lehet /név is). → a projekt útvonala."""
-    src = crafts.existing(project_id)
+def _link_assets(project_id: str, workdir: Path) -> dict[str, str]:
+    """A projekt médiafájljai linkként a mappába (név szerint). → az assets."""
     assets = assets_of(project_id)
     for name, fid in assets.items():
         try:
@@ -236,6 +234,14 @@ def stage(project_id: str, workdir: Path) -> Path:
                 os.symlink(p, dst)
             except OSError:
                 shutil.copyfile(p, dst)
+    return assets
+
+
+def stage(project_id: str, workdir: Path) -> Path:
+    """Projekt + médiafájlok egy mappába; a médiahivatkozások a fájlnévre igazítva (a böngészőben importált
+    fájl útvonala lehet /név is). → a projekt útvonala. (A „pending” projektet a hívó előbb teljessé teszi: ensure_full.)"""
+    src = crafts.existing(project_id)
+    assets = _link_assets(project_id, workdir)
     data = json.loads(src.read_text("utf-8"))
     for item in (data.get("items") or {}).values():
         kind = item.get("kind") or {}
@@ -3747,9 +3753,11 @@ def _split_notes(notes: list[str]) -> tuple[list[str], list[str]]:
     return [n for n in notes if not n.startswith("⚠ ")], [n[2:] for n in notes if n.startswith("⚠ ")]
 
 
-async def _build(D: dict[str, Any], work: Path, lotties: list[tuple[str, str]], out_name: str = "project.ecproj") -> str:
+async def _build(D: dict[str, Any], work: Path, lotties: list[tuple[str, str]], out_name: str = "project.ecproj",
+                 gate: Optional[asyncio.Semaphore] = None) -> str:
     """D + video_builder.jsx → .ecproj (effectcraft-cli script). A Lottie-k előbb beimportálva (külön kompozíció, a
-    szkript erre a projektre épít); saját szkriptes ábra (jelenet vagy réteg) → csak zárkában."""
+    szkript erre a projektre épít); saját szkriptes ábra (jelenet vagy réteg) → csak zárkában. gate: a háttérben épülő
+    teljes projekt saját kapuja (ensure_full) — a kérés útjának rövid építései ne álljanak a 140 s-os mögé."""
     (work / "build.jsx").write_text("var D = " + json.dumps(D, ensure_ascii=False) + ";\n" + BUILDER_JS.read_text("utf-8"), "utf-8")
     base = ["base.ecproj"] if lotties and (work / "base.ecproj").exists() else []
     if not base:
@@ -3759,9 +3767,149 @@ async def _build(D: dict[str, Any], work: Path, lotties: list[tuple[str, str]], 
             await _run(*args, cwd=work, timeout=120)
             base = ["base.ecproj"]
     scripted = any((sc.get("chart") or {}).get("code") for sc in D.get("scenes") or []) or any(ly.get("code") for ly in D.get("layers") or [])
-    async with _build_gate():               # (nem a render kapuja: egy futó végleges render ne tartsa fel a szerkesztést)
+    async with gate or _build_gate():       # (nem a render kapuja: egy futó végleges render ne tartsa fel a szerkesztést)
         return await _run("script", "build.jsx", *base, "--save-as", out_name, cwd=work, untrusted=scripted,
                           timeout=300 if scripted else None)
+
+
+# ---------- a teljes projekt később (10-25, .claude/qa/long30/PROFILE.md) ----------
+# A 30 perces projekten egy szerkesztés 142–163 s volt, ennek 76–96 %-a a _build, annak ~99 %-a a felirat-ciklus (255
+# feliratdarab, négyzetes: a fő kompozíció rétegszámával nő egy-egy felirat ára); felirat nélkül 0,96 s. A háttérben
+# renderelt (hosszú) videónál ezért a kérés útjában a projekt felirat NÉLKÜL épül — az előnézet a feliratot libass-szal
+# rajzolja —, a teljes projekt pedig a végleges render első lépése. Állapot a verzió metájában:
+#   full_project = "pending"  a projektfájl még a felirat nélküli (és / vagy a munkamásolat helyén a szülőé áll:
+#                             spec.base.proxy_pending); full_build = {input: a builder bemenete (D, JSON-fájl),
+#                             lotties, proxy_base?: a munkamásolat receptje}
+#   full_project = "ready"    a projektfájl teljes (nincs mező: régi / rövid videó — mindig teljes volt)
+# Akinek a teljes projekt kell (render, render scene=…, a szerkesztő a /files/-ból, a végleges render), az ensure_full-t
+# hívja: verziónként egy zár; ha még „pending”, ott helyben megépül (a többi hívó a zárnál vár, utána kész fájlt kap).
+# A következő szerkesztés a specből épít (nem a szülő projektfájljából), annak nem kell.
+
+PREVIEW_ECPROJ = "preview.ecproj"       # a verzió felirat nélküli előnézet-projektje (asset; a preview_cache olvassa)
+FULL_PENDING, FULL_READY = "pending", "ready"
+_FULL_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+_fgate: Optional[tuple[Any, asyncio.Semaphore]] = None
+
+
+def _full_gate() -> asyncio.Semaphore:
+    """A háttérben épülő teljes projektek kapuja (egyszerre egy; a kérés útjának építései a _build_gate-en). A futó
+    eseményhurokhoz kötve (a tesztek asyncio.run-jai ne kapjanak egy régi hurok szemaforját)."""
+    global _fgate
+    loop = asyncio.get_running_loop()
+    if _fgate is None or _fgate[0] is not loop:
+        _fgate = (loop, asyncio.Semaphore(1))
+    return _fgate[1]
+
+
+def _full_lock(pid: str) -> asyncio.Lock:
+    key = (id(asyncio.get_running_loop()), pid)
+    lock = _FULL_LOCKS.get(key)
+    if lock is None:
+        lock = _FULL_LOCKS[key] = asyncio.Lock()
+    return lock
+
+
+def full_pending(pid: str) -> bool:
+    return (read_meta(pid) or {}).get("full_project") == FULL_PENDING
+
+
+async def _final_eta(spec: dict[str, Any], *, render: bool, draft: bool, kinds: list[str], final: str) -> Optional[float]:
+    """A háttérben fut-e a végleges render (hosszú videó: a becslés VIDEO_INLINE_RENDER_S fölött, vagy final="background")
+    → a becsült ideje a sorral együtt; None: itt renderel (rövid videó, final="wait", draft, átlátszó változat, render=False)."""
+    if not render or draft or kinds or final == "wait":
+        return None
+    from app import jobs
+    from app.tools import render_eta, video_preview
+    eta = (await render_eta.final(spec))["seconds"]
+    queue = sum(jobs.remaining_s(j) for j in jobs.running("render", final=True))
+    return float(eta + queue) if final == "background" or eta + queue > video_preview.inline_limit_s() else None
+
+
+async def _full_build_s(D: dict[str, Any], base: dict[str, Any]) -> float:
+    """A háttérben épülő teljes projekt becsült ideje (a végleges render becslése fölé): a felirat-ciklus négyzetes —
+    mérve (PROFILE.md 4.) highlight 63 / 127 / 255 darab: 10 / 38 / 140 s, box 127 / 255: 6 / 22 s; + a munkamásolat,
+    ha az is a háttérben készül (proxy_pending)."""
+    n = len(D.get("captions") or [])
+    k = 0.00034 if (D.get("captionStyle") or "box") == "box" else 0.0022
+    secs = 2.0 + k * n * n if n else 0.0
+    if base.get("proxy_pending"):
+        from app.tools import render_eta
+        m = {"display_width": base.get("width"), "display_height": base.get("height"), "fps": base.get("fps"), "hdr": base.get("hdr")}
+        secs += await render_eta.proxy(m, float((base.get("plain") or {}).get("duration") or base.get("duration") or 0))
+    return secs
+
+
+def _full_later(pid: str, D: dict[str, Any], lotties: list[tuple[str, str]], proxy_base: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """A teljes építés bemenete egy rejtett JSON-fájlba (a builder D-je feliratostul) → a verzió metájának mezői."""
+    fid = new_file_id("json")
+    output_path(fid).write_text(json.dumps(D, ensure_ascii=False), "utf-8")
+    write_meta(fid, operation="video: the full timeline, to build", source_file_id=pid, extra={"ephemeral": True})
+    return {"full_project": FULL_PENDING,
+            "full_build": {"input": fid, "lotties": [list(x) for x in lotties], **({"proxy_base": proxy_base} if proxy_base else {})}}
+
+
+async def ensure_full(pid: str, *, background: bool = False) -> bool:
+    """A verzió projektfájlja teljes legyen (a feliratokkal, a saját munkamásolatával): ha még „pending”, most épül meg
+    (verziónként egyszer; a többi hívó a zárnál vár). background: a végleges render első lépése (a saját kapuján, nice
+    alatt). → True, ha most épült."""
+    if not full_pending(pid):
+        return False
+    lock = _full_lock(pid)
+    async with lock:
+        meta = read_meta(pid) or {}
+        if meta.get("full_project") != FULL_PENDING:
+            return False
+        t0 = time.time()
+        fb = meta.get("full_build") or {}
+        try:
+            D = json.loads(output_path(fb["input"]).read_text("utf-8"))
+        except (KeyError, OSError, ValueError):
+            raise RuntimeError("This version's full timeline can't be built any more (its saved build plan is gone) — "
+                               "edit the video again (any small change) to rebuild it.") from None
+        spec = meta.get("spec") or {}
+        if (spec.get("base") or {}).get("proxy_pending"):     # a munkamásolat is most készül (pl. új színkorrekció)
+            spec = await _finish_proxy(pid, spec, fb)
+            b = spec["base"]
+            D["base"] = {**D["base"], "file": b["asset"], **({"scale": round(int(b["width"]) / int(b["proxy"]["w"]), 6)}
+                                                            if b.get("proxy") else {})}
+        work = Path(tempfile.mkdtemp(prefix="video-full-", dir=str(temp_path("").parent)))
+        try:
+            _link_assets(pid, work)
+            await _build(D, work, [(str(a), str(b_)) for a, b_ in fb.get("lotties") or []], out_name="full.ecproj",
+                         gate=_full_gate() if background else None)
+            dst = output_path(pid)
+            tmp = dst.with_name(dst.name + ".full-tmp")
+            shutil.copyfile(work / "full.ecproj", tmp)
+            os.replace(tmp, dst)                              # egy lépésben: az olvasó vagy a régit, vagy a teljeset látja
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        write_meta(pid, extra={"full_project": FULL_READY, "full_build": None})
+        try:
+            output_path(fb["input"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+        _FULL_LOCKS.pop((id(asyncio.get_running_loop()), pid), None)
+        log.info("teljes projekt felépítve: %s (%d felirat, %.1f s)", pid, len(D.get("captions") or []), time.time() - t0)
+        return True
+
+
+async def _finish_proxy(pid: str, spec: dict[str, Any], fb: dict[str, Any]) -> dict[str, Any]:
+    """A háttérben készülő munkamásolat (spec.base.proxy_pending — a kérés addig a szülő munkamásolatát tette a
+    helyére): a recept (full_build.proxy_base) → footage.make_proxy → a verzió base-ében (és a zárókártya plain-jében)
+    az új media_id / asset, a projekt assets-e közé is. → az új spec."""
+    pb = fb.get("proxy_base") or {}
+    src = footage.original(pb) if pb else None
+    if src is None:
+        raise RuntimeError("Your original video is no longer stored (uploads are kept for a limited time) — upload it again "
+                           "to change its colours, light or cuts.")
+    nb, _applied = await _timed_proxy(pb, src)
+    base = {k: v for k, v in spec["base"].items() if k not in footage._KEEP + ("proxy_pending",)}
+    base.update({k: nb[k] for k in footage._KEEP if nb.get(k) is not None})
+    if base.get("plain"):
+        base["plain"] = {**base["plain"], "asset": nb["asset"], "media_id": nb["media_id"]}
+    spec = {**spec, "base": base}
+    write_meta(pid, extra={"spec": spec, "assets": {**assets_of(pid), nb["asset"]: nb["media_id"]}})
+    return spec
 
 
 def alpha_kinds(alpha: Any) -> list[str]:
@@ -5035,22 +5183,10 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             gfx_names = gfx_names + three_names
             m_v = m_v + [n for n in three_notes if not n.startswith("⚠ ")]
             problems = problems + [n[2:] for n in three_notes if n.startswith("⚠ ")]
-        step(2, 4, "building the timeline")
-        out = await _build(D, work, lotties)
-        problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
-        lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
-        problems, m_v = problems + lot_f, m_v + lot_v
-        scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
-        script_findings = _script_report(out, source or "", {ly["id"] for ly in layers}) if scripted else []
-        log.info("overlay felépítve: %s", out.strip().splitlines()[-1:] if out.strip() else "")
-        pid = new_file_id("ecproj")
-        shutil.copyfile(work / "project.ecproj", output_path(pid))
-        from app.routes.make import _new_group
-        group = _new_group()
         credits = _credit_line(credit_list, story)[0]
         spec = {"kind": "overlay", "story": _without_runtime(story),
                 "base": {k: base.get(k) for k in ("asset", "file_id", "media_id", "proxy", "rotated", "hdr", "adjust", "auto", "keep", "width",
-                                                  "height", "fps", "duration", "audio", "end_card", "plain")
+                                                  "height", "fps", "duration", "audio", "end_card", "plain", "proxy_pending")
                          if base.get(k) is not None},
                 "opts": {"accent": opts.get("accent"), "alpha": opts.get("alpha"), "title": story["title"],
                          "music": opts.get("music") if _builtin_music(opts) else None, "camera": opts.get("camera"),
@@ -5062,16 +5198,37 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                          "caption_style": opts.get("caption_style") if subs else None},
                 "source": (source or "")[:30000], "layer_source": (source or "")[:30000],
                 "layer_notes": [n for n in layer_notes if not n.startswith("⚠ ")], "timeline": [], "layer_timeline": rows}
+        # hosszú videó (a végleges render a háttérben): a kérés útjában a projekt felirat NÉLKÜL épül (~1 s a 140 helyett —
+        # PROFILE.md: a _build 99 %-a a felirat-ciklus), az előnézet a feliratot libass-szal rajzolja; a teljes (feliratos)
+        # projekt a végleges render első lépése (ensure_full), addig a verzió metája: full_project = "pending"
+        bg_eta = await _final_eta(spec, render=render, draft=draft, kinds=kinds, final=final)
+        deferred = bg_eta is not None and bool(D["captions"] or base.get("proxy_pending"))
+        step(2, 4, "building the timeline")
+        out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+        problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
+        lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
+        problems, m_v = problems + lot_f, m_v + lot_v
+        scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)
+        script_findings = _script_report(out, source or "", {ly["id"] for ly in layers}) if scripted else []
+        log.info("overlay felépítve%s: %s", " (felirat nélkül)" if bg_eta is not None and D["captions"] else "",
+                 out.strip().splitlines()[-1:] if out.strip() else "")
+        pid = new_file_id("ecproj")
+        shutil.copyfile(work / "project.ecproj", output_path(pid))
+        from app.routes.make import _new_group
+        group = _new_group()
         write_meta(pid, label=f"{label_stem}.ecproj", operation=operation, source_file_id=parent or base["file_id"],
                    extra={"video": {"format": "custom", "width": W, "height": H, "fps": fps, "duration": total, "duration_mode": "footage",
                                     "layers": len(D["layers"]), "title": story["title"]},
-                          "group": group, "credit": credits or None, "spec": spec})
+                          "group": group, "credit": credits or None, "spec": spec,
+                          **(_full_later(pid, D, lotties, opts.get("proxy_base")) if deferred else {})})
         if shared or base.get("media_id"):                    # a felvétel egy példányban: a változatok ugyanazt használják
             write_meta(pid, extra={"assets": {**assets_of(pid), base["asset"]: shared or base["media_id"]}})
         else:
             add_asset(pid, base["asset"], work / base["asset"])
         for name in gfx_names + ([track] if track else []) + ([own] if own else []):
             add_asset(pid, name, work / name)
+        if bg_eta is not None:                                # a felirat nélküli előnézet-projekt (preview_cache ebből rajzol)
+            add_asset(pid, PREVIEW_ECPROJ, work / "project.ecproj")
         placed = {r_["id"] for r_ in rows}
         result: dict[str, Any] = {"file_id": pid, "project": _file_entry(pid), "title": story["title"], "format": "custom",
                                   "width": W, "height": H, "fps": fps,
@@ -5094,21 +5251,19 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             result["files"] = [result["project"]]
             result["check"] = _unrendered_check(_split_notes(layer_notes)[1] + problems + gfx_findings + script_findings, m_v)
             return result
-        if not draft and not kinds and final != "wait":       # hosszú videó: előnézet most, a végleges a háttérben
-            from app import jobs
-            from app.tools import render_eta, video_preview
-            eta = (await render_eta.final(spec))["seconds"]
-            queue = sum(jobs.remaining_s(j) for j in jobs.running("render", final=True))
-            if final == "background" or eta + queue > video_preview.inline_limit_s():
-                return await _preview_and_final(result, spec, changed, work, pid, base, W, H, fps, total, label_stem, group,
-                                                eta + queue, srt_entry, step,
-                                                verified=m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}.",
-                                                                f"{len(rows)} layer(s) on the timeline: "
-                                                                + ", ".join(f"{r_['id']} {_tc(r_['start'])}" for r_ in rows) + "."],
-                                                notes=layer_notes,
-                                                findings=problems + gfx_findings + script_findings + [
-                                                    f"Shortened text — {t}. Shorten it yourself, or change it with action=edit."
-                                                    for t in (_TRUNC.get() or [])[:6]])
+        if bg_eta is not None:                                # hosszú videó: előnézet most, a végleges a háttérben
+            caps_v = [f"{len(subs)} subtitle(s) in the Studio caption style, {len(D['captions'])} on screen (long ones in "
+                      "two-line parts); the .srt is in the files."] if subs else []
+            return await _preview_and_final(result, spec, changed, work, pid, base, W, H, fps, total, label_stem, group,
+                                            bg_eta + (await _full_build_s(D, base) if deferred else 0.0), srt_entry, step,
+                                            verified=m_v + [f"Your footage is the base track: {W}×{H}, {fps:g} fps, {_tc(total)}.",
+                                                            f"{len(rows)} layer(s) on the timeline: "
+                                                            + ", ".join(f"{r_['id']} {_tc(r_['start'])}" for r_ in rows) + "."]
+                                            + caps_v,
+                                            notes=layer_notes,
+                                            findings=problems + gfx_findings + script_findings + [
+                                                f"Shortened text — {t}. Shorten it yourself, or change it with action=edit."
+                                                for t in (_TRUNC.get() or [])[:6]])
         step(3, 4, "rendering the video")
         vid = await _render_staged(pid, work / "project.ecproj", label_stem, group=group, want_s=total, mode="footage", draft=draft)
         result["duration"] = vid.pop("duration", None) or result["duration"]
@@ -5202,8 +5357,13 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
         step(3, 4, "a quick preview of what changed")
         scale = int(base["proxy"]["w"]) / W if base.get("proxy") else min(1.0, footage.PROXY_SIDE / max(W, H))
         pvid = new_file_id("mp4")
+        o_ = spec.get("opts") or {}
+        ass = None
+        if o_.get("subtitles"):                         # a projekt itt felirat nélküli: a feliratot a libass rajzolja
+            from app.tools import fast_render
+            ass = fast_render.ass_subtitles(o_["subtitles"], o_.get("caption_style") or "box", W, H, total, _rgb(o_.get("accent")))
         pv = await video_preview.render(work, "project.ecproj", _main_comp(work / "project.ecproj"), picked, scale,
-                                        output_path(pvid))
+                                        output_path(pvid), ass=ass)
         write_meta(pvid, label=f"{label_stem} (preview).mp4", operation="video preview", source_file_id=pid,
                    extra={"group": group, "variant": "preview"})
         pv_note = video_preview.describe(picked, left, pv["seconds"])
@@ -5231,8 +5391,11 @@ def _start_final(pid: str, eta: float) -> dict[str, Any]:
     from app.convert.engines import background
 
     async def work(progress):
-        progress(0, 1, "rendering the final video in full quality")
         with background():
+            if full_pending(pid):                     # a teljes projekt (feliratok, munkamásolat) — az első lépés
+                progress(0, 1, "building the full timeline (subtitles) for the final video")
+                await ensure_full(pid, background=True)
+            progress(0, 1, "rendering the final video in full quality")
             return await render(pid, progress=progress)
     return jobs.start("render", work, eta_s=eta, final=True, project=pid)
 
@@ -5484,6 +5647,10 @@ async def render(file_id: str, fmt: str = "mp4", draft: bool = False,
     """Egy videóprojekt (akár kézzel szerkesztett) újrarenderelése."""
     if not file_id.lower().endswith(".ecproj"):
         raise ValueError("render needs a video project (.ecproj)")
+    if full_pending(file_id):
+        if progress:
+            progress(0, 1, "building the full timeline (subtitles) first")
+        await ensure_full(file_id)
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(file_id, work)
@@ -6645,6 +6812,7 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
     munkafájl; a teljes videó a render / edit útján készül."""
     pid = project_of(file_id)
     k, sc, row = _scene_index(pid, scene)
+    await ensure_full(pid)                           # a felirat nélküli (háttérben teljessé váló) projekt: előbb teljes
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(pid, work)
