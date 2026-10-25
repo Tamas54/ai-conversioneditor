@@ -118,7 +118,8 @@ def _probe(p: Path) -> dict:
 
 @pytest.mark.engines
 @pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
-def test_long_video_gets_a_quick_preview_and_the_final_in_the_background(tmp_path, put_file):
+def test_long_video_gets_a_quick_preview_and_the_final_in_the_background(tmp_path, put_file, monkeypatch):
+    monkeypatch.setenv("VIDEO_PREVIEW_HLS", "0")                 # a PR #40-es MP4-előnézet (a HLS: test_preview_wire.py)
     from app import jobs
     from app.storage import output_path
     from app.tools import video

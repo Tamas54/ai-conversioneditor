@@ -260,6 +260,62 @@ async def render(work: Path, project: str, comp: str, spans: list[tuple[float, f
     return {"seconds": round(time.time() - t0, 1), "parts": len(spans), "length": round(sum(b - a for a, b, _ in spans), 1)}
 
 
+# ---------- a szakasz-gyorsítótáras HLS-előnézet bekötése (10-25, plan20261025_preview_cache.md) ----------
+
+PREVIEW_MODES = ("hls", "mp4")
+
+
+def preview_mode(v: Any) -> str:
+    """preview: (nincs) / "hls" — a lejátszási lista; "mp4" — mellé a kész szakaszok összefűzve egy letölthető MP4-be."""
+    x = str(v or "hls").strip().lower()
+    if x in ("auto", "playlist", "m3u8", ""):
+        x = "hls"
+    if x not in PREVIEW_MODES:
+        raise ValueError('preview: "mp4" (also a downloadable MP4 of the preview) — or leave it out for the playlist.')
+    return x
+
+
+def hls() -> Optional[tuple[Any, Any]]:
+    """(preview_cache, preview_serve), ha a szakasz-gyorsítótáras előnézet be van kötve és be van kapcsolva
+    (VIDEO_PREVIEW_HLS, alapból be); különben None — ekkor a PR #40-es MP4-előnézet (render) fut."""
+    if os.getenv("VIDEO_PREVIEW_HLS", "1").strip().lower() in ("0", "false", "no", "off"):
+        return None
+    try:
+        from app.tools import preview_cache, preview_serve
+    except ImportError:
+        return None
+    try:
+        return (preview_cache, preview_serve) if preview_cache.enabled() else None
+    except Exception as e:                                   # az előnézet sose állítja meg a szerkesztést
+        log.warning("a szakasz-előnézet nem kapcsolható be: %s", e)
+        return None
+
+
+def markers(spans: list[tuple[float, float, str]], total: float) -> list[dict[str, Any]]:
+    """A változások helyei (spans_new / spans_edit — pick nélkül, korlát nélkül) ugrópontnak: időrendben, a videón
+    belül, ugyanaz egyszer."""
+    out, seen = [], set()
+    for a, b, lab in sorted(spans, key=lambda s: (s[0], s[1])):
+        a, b = round(max(0.0, a), 2), round(min(total, b), 2)
+        if b - a < 0.05 or (a, b, lab) in seen:
+            continue
+        seen.add((a, b, lab))
+        out.append({"from": a, "to": b, "what": lab})
+    return out
+
+
+def describe_hls(pv: dict[str, Any]) -> str:
+    from app.tools import video
+    first = pv.get("first_ready_s")
+    mk = pv.get("markers") or []
+    where = "; ".join(f"{video._tc(m['from'])}–{video._tc(m['to'])} {m['what']}" for m in mk[:8]) + ("…" if len(mk) > 8 else "")
+    return (f"Preview of the whole video (a playlist, from the editor's small copy — the final video is better): "
+            f"{pv['segments_dirty']} of {pv['segments_total']} segment(s) made new, {pv['reused']} reused"
+            + (f"; the first change plays after {first:g} s" if first is not None else "; the first changed segment is "
+               "still being made — the player waits for it")
+            + (f". Changes: {where}." if mk else "."))
+
+
 def describe(spans: list[tuple[float, float, str]], left: int, secs: float) -> str:
     from app.tools import video
     parts = "; ".join(f"{video._tc(a)}–{video._tc(b)} {lab}" for a, b, lab in spans[:8]) + ("…" if len(spans) > 8 else "")
