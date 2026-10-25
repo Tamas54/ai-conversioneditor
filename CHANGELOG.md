@@ -1,22 +1,47 @@
 # Changelog
 
-## 2026-10-23 — Other clips in your video: put where the footage pauses, the join hard to notice
+## 2026-10-25 — Other clips in your video: put where the footage pauses, the join hard to notice
 
 The owner's ask: „a második kis videó 2 percesét vágjuk be a 16–19. perc közé értelemszerűen”, and „a harmadikat tedd
 valahova a végére, csak ne tűnjön fel nagyon, hogy vágás”.
 
 - **`insert=[{"file_id", "at": "16:30" | {"between": ["16:00", "19:00"]} | "end", "from"?, "to"?, "join"?}]`** at
-  overlay, `changes.insert` in an edit. The footage's recipe is now a timeline of parts from several videos; the
-  working copy, the full-size pieces and the fast render's final pass read each part from its own original, with its
-  own chain (upright, HDR to SDR), fitted to the video (a blurred fill for another shape) and to its frame rate.
+  overlay, `changes.insert` in an edit. The footage's recipe (`base.keep`) is now a timeline of parts from several
+  videos; the working copy, the full-size pieces and the fast render's final pass read each part from its own
+  original, with its own chain (upright, HDR to SDR), fitted to the video (a blurred fill for another shape) and to its
+  frame rate.
 - **Where, from the material:** with a window, the longest pause at the end of a sentence (pauses by `silencedetect`,
   sentence ends from the subtitles), else the longest pause, else the window's middle. `result.inserted` and the check
-  say where and why, with the other pauses to choose from. No AI decides it.
+  say where and why, with the other pauses to choose from — `at` / `until` in the new video's time, `at_given` and the
+  candidates in the time of the request. No AI decides it.
 - **The join** (`smooth`, the default): the clip's silent start and end trimmed, its loudness (EBU R128) and colours
   (mean brightness, saturation) matched to the footage around the cut, and a 0.25 s sound crossfade; `dissolve` adds a
   0.4 s picture dissolve; `cut` is a plain cut with the 15 ms fades.
+- **The quick preview** shows each inserted clip's start and end (±3 s); an edit shows only its new joins.
 - **Layers, subtitles and the camera move with it**; a layer the insertion splits keeps its longer part. The check says
   when the clip has no subtitles. `changes.cut` takes a clip out again, and the footage is one part again.
+
+Measured on the owner's footage — a 2:01 HDR (HLG) iPhone video, 1920×1080, with two portrait SDR clips of 1:05 and
+0:36 put in the windows 0:50–1:20 and 1:35–1:58 (the second with a dissolve), two layers; load average 15–21 on 16
+threads:
+- the answer with the quick preview came in **85 s** (working copy 45 s, preview of 5 parts / 35.5 s in 21 s); the
+  final 3:39 video in full quality **197 s later** in the background (estimate: 222 s). An edit putting 10 s of a clip
+  at the end with a dissolve: 59 s to answer, the final 198 s later. A second run, with a test run alongside (load
+  16–24): 140 s and 240 s;
+- the final's picture and sound are the same length within 2 ms (before the frame-exact parts below: the picture was
+  35 ms longer, or 30 ms shorter after the end dissolve);
+- the clips went into a 1.1 s and a 0.6 s pause; within ±0.15 s of every join the sound peaks at −35…−43 dBFS, and the
+  loudness of the 3.7 s before and after each join differs by 0.1–1.5 LU (the clips got −2 and +5.5 dB);
+- **found on the way:** the main footage (30 fps nominal, 29.993 average) and a clip converted to 29.993 made the
+  concat's output "variable frame rate", and ffmpeg filled it at its 1 µs time base: a working-copy slice ran at
+  0.001× and stopped after 30 minutes. Every source now gets the same frame rate (that slice: 1.7×), and every part is
+  exactly as many frames as fall on it — before, a clip's frame flashed just before a dissolve at the end.
+
+Limits: the colour match moves the clip's mean brightness and saturation toward the footage's, bounded to 0.75–1.35;
+it can't tell a darker room from a darker exposure — both clips here (other rooms) got the full 1.35 gamma and
+saturation.
+Subtitles for an inserted clip aren't made automatically (the check says it has none). The place is picked on the main
+footage only, not inside another clip.
 
 ## 2026-10-23 — Video and audio jobs take turns; the old upload route has the same limit as the others
 
