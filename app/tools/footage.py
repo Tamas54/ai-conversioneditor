@@ -368,6 +368,7 @@ async def swap(project: Path, comp: str, asset: str, file: str, name: str, start
 # készülnek; a rétegek, feliratok, a kamera a kimeneti időben állnak, vágáskor / beszúráskor velük együtt tolódnak.
 
 FADE_S = 0.015            # a vágáspontokon a hang ennyi alatt úszik ki / be (ne pattanjon)
+PAD_S = 2.0               # egy darab képe legfeljebb ennyivel lehet rövidebb a receptbelinél (az utolsó kocka áll)
 XFADE_S = 0.25            # smooth / dissolve: a két szakasz hangja ennyi alatt úszik át egymásba
 DISSOLVE_S = 0.4          # dissolve: képi áttűnés
 JOINS = ("cut", "smooth", "dissolve")
@@ -589,13 +590,23 @@ class Timeline:
     def chain(self, src: Optional[str], tag: str) -> str:
         return self.chains[src](tag)
 
+    def frame(self, t: float) -> int:
+        """A kimeneti idő kockája (a videó kockarácsán)."""
+        return round(t * self.fps + 1e-6)
+
     def inputs(self, cs: float, ce: float, first: int = 0) -> tuple[list[str], str, str]:
-        """A kimeneti [cs, ce) ablak: bemenetek, gráf-előtag (';'-vel zárva), a kész kép címkéje."""
-        ps = pieces(self.ss, cs, ce)
+        """A kimeneti [cs, ce) ablak: bemenetek, gráf-előtag (';'-vel zárva), a kész kép címkéje. Minden darab pontosan
+        annyi kocka, amennyi a videó kockarácsán rá esik (0-tól, a végén szükség szerint az utolsó kocka ismételve): a
+        -ss, a kockasebesség-átalakítás és a forrás vége (a tároló hosszabb lehet a képnél) ±1 kockát csúsztatna, és a
+        váltás a rétegek, az áttűnések ideje elé / mögé esne — 10-25, valós anyagon a klip egy kockája villant az
+        áttűnés előtt."""
+        ps = pieces_out(self.ss, cs, ce)
         args, parts = [], []
-        for k, (_, src, a, b) in enumerate(ps):
+        for k, (src, a, b, o) in enumerate(ps):
+            n = max(1, self.frame(o + b - a) - self.frame(o))
             args += ["-ss", f"{a:.4f}", "-t", f"{b - a:.4f}", "-i", str(self.paths[src])]
-            parts.append(f"[{first + k}:v]{self.chain(src, f'tl{k}')}[tv{k}]")
+            parts.append(f"[{first + k}:v]setpts=PTS-STARTPTS,{self.chain(src, f'tl{k}')},"
+                         f"tpad=stop_mode=clone:stop_duration={PAD_S:g},trim=end_frame={n}[tv{k}]")
         if len(ps) == 1:
             return args, parts[0] + ";", "[tv0]"
         return args, ";".join(parts) + ";" + "".join(f"[tv{k}]" for k in range(len(ps))) + \
@@ -650,27 +661,34 @@ async def timeline(base: dict[str, Any], src: Path, W: int, H: int, fps: float, 
 async def transitions(tl: Timeline, work: Path, tag: str, enc: list[str]) -> list[dict[str, Any]]:
     """A „dissolve” illesztések képi áttűnése rövid darabként (a célméreten), a kimeneti [t, t + d) időre — a
     renderelők rétegként teszik a felvétel fölé (fast_render.window_graph items). Az előző szakasz a vágás utáni
-    képeivel úszik át (ha a forrásnak nincs folytatása, az utolsó kockája áll)."""
+    képeivel úszik át (ha a forrásnak nincs folytatása, az utolsó kockája áll). A réteg a videó kockarácsán: az első
+    kockája fél kockával a váltás kockája előtt indul (a kerekítés se hagyja ki — 10-25: a klip egy kockája villant)."""
     from app.config import settings
     from app.convert.engines import run
     items = []
     for i, (t, prev, nxt) in enumerate(tl.joins()):
         if nxt.get("join") != "dissolve":
             continue
-        d = round(min(DISSOLVE_S, (nxt["b"] - nxt["a"]) / 2), 3)
+        n = max(2, round(min(DISSOLVE_S, (nxt["b"] - nxt["a"]) / 2) * tl.fps))
+        d = n / tl.fps
         pa = tl.infos[prev["src"]]
-        more = float(pa.get("duration") or 0) - prev["b"] > d + 0.05
-        a0 = prev["b"] if more else max(0.0, prev["b"] - 1.5 / max(float(pa.get("fps") or 30), 1))
-        name = f"fr-tr-{tag}-{i:03d}.mp4"
         fr = f"fps={tl.fps:g}"
-        graph = (f"[0:v]{tl.chain(prev['src'], 'xa')},{fr},tpad=stop_mode=clone:stop_duration={d + 1:.3f},"
-                 f"trim=duration={d:.4f}[x0];[1:v]{tl.chain(nxt['src'], 'xb')},{fr},trim=duration={d:.4f}[x1];"
+        hold = f"tpad=stop_mode=clone:stop_duration={d + 1:.3f},trim=end_frame={n}"
+        if float(pa.get("duration") or 0) - prev["b"] > d + 0.05:   # az előző forrás a vágás után is folytatódik
+            in0 = ["-ss", f"{prev['b']:.4f}", "-i", str(tl.paths[prev["src"]])]
+            x0 = f"[0:v]setpts=PTS-STARTPTS,{tl.chain(prev['src'], 'xa')},{fr},{hold}[x0]"
+        else:                       # nincs folytatás: az utolsó kockája áll (a kép a tároló vége előtt is véget érhet)
+            in0 = ["-ss", f"{max(prev['a'], prev['b'] - 1.0):.4f}", "-i", str(tl.paths[prev["src"]])]
+            x0 = f"[0:v]{tl.chain(prev['src'], 'xa')},{fr},reverse,trim=end_frame=1,setpts=PTS-STARTPTS,{hold}[x0]"
+        graph = (f"{x0};[1:v]setpts=PTS-STARTPTS,{tl.chain(nxt['src'], 'xb')},{fr},{hold}[x1];"
                  f"[x0][x1]xfade=transition=fade:duration={d:.4f}:offset=0,format=yuv420p[v]")
-        await run("ffmpeg", "-v", "error", "-y", "-ss", f"{a0:.4f}", "-i", str(tl.paths[prev["src"]]), "-ss", f"{nxt['a']:.4f}",
-                  "-t", f"{d + 0.2:.4f}", "-i", str(tl.paths[nxt["src"]]), "-filter_complex", graph, "-map", "[v]", "-an",
-                  "-t", f"{d:.4f}", *enc, name, timeout=settings.VIDEO_TIMEOUT_S, cwd=work)
-        items.append({"name": name, "a": t, "b": round(t + d, 4), "enable": f"between(t,{t:.4f},{t + d - 1e-4:.4f})",
-                      "loop": False})
+        name = f"fr-tr-{tag}-{i:03d}.mp4"
+        await run("ffmpeg", "-v", "error", "-y", *in0, "-ss", f"{nxt['a']:.4f}", "-t", f"{d + 0.2:.4f}", "-i",
+                  str(tl.paths[nxt["src"]]), "-filter_complex", graph, "-map", "[v]", "-an", "-frames:v", str(n), *enc, name,
+                  timeout=settings.VIDEO_TIMEOUT_S, cwd=work)
+        f0 = tl.frame(t) / tl.fps - 0.5 / tl.fps
+        items.append({"name": name, "a": round(f0, 4), "b": round(f0 + d, 4),
+                      "enable": f"between(t,{f0:.4f},{f0 + d - 1e-4:.4f})", "loop": False})
     return items
 
 

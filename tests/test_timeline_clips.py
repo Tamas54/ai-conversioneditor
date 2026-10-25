@@ -190,6 +190,43 @@ def test_sources_of_different_frame_rates_are_joined_at_speed(tmp_path, put_file
     assert abs(int(v["nb_frames"]) - 4.0 * fps) <= 2 and time.time() - t0 < 30, (v["nb_frames"], time.time() - t0)
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg needed")
+def test_a_dissolve_starts_on_the_frame_of_the_join(tmp_path, put_file):
+    """10-25, valós anyagon: a darabok ±1 kockát csúsztak (a -ss, a kockasebesség, a forrás vége), és a klip egy kockája
+    villant az áttűnés előtt. Most minden darab kockára pontos, az áttűnés a váltás kockáján kezdődik — akkor is, ha a fő
+    felvétel képe rövidebb a tárolónál (a hang tovább tart): addig az utolsó kockája áll."""
+    from app.tools import mediaprobe
+    main = tmp_path / "main.mp4"
+    _ff("-f", "lavfi", "-t", "4", "-i", "testsrc2=size=320x240:rate=10", "-f", "lavfi", "-t", "4.5", "-i",
+        "sine=frequency=330:sample_rate=48000", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(main))
+    m = asyncio.run(mediaprobe.info(main))
+    assert m["duration"] >= 4.45                                          # a tároló a hang végéig tart
+    cid = put_file(_clip(tmp_path / "clip.mp4"))
+    keep = footage.insert(None, m["duration"], m["duration"], {"src": cid, "a": 0.0, "b": 3.0, "join": "dissolve"}, 10.0)
+    base = {"keep": keep, "width": 320, "height": 240, "fps": 10.0}
+    enc = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-pix_fmt", "yuv420p"]
+    out = tmp_path / "w.mp4"
+
+    async def go() -> None:
+        tl = await footage.timeline(base, main, 320, 240, 10.0, tmp_path)
+        await footage._tl_window(tl, 3.0, 6.0, ["format=yuv420p"], await footage.transitions(tl, tmp_path, "t", enc), enc,
+                                 out, tmp_path)
+    asyncio.run(go())
+    v = next(s for s in _probe(out)["streams"] if s["codec_type"] == "video")
+    assert int(v["nb_frames"]) == 30
+
+    def fr(n: int) -> Path:
+        _ff("-i", str(out), "-vf", f"select=eq(n\\,{n})", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "yuv420p",
+            str(tmp_path / f"f{n}.yuv"))
+        return tmp_path / f"f{n}.yuv"
+    J = round(m["duration"] * 10) - 30                                   # a váltás kockája az ablakban (4,5 s → 15.)
+    # mérve: J-6…J-1 egymás közt 58–99 dB (áll), J a J-1-hez 34 dB (az áttűnés első kockája, még egy kódolással), a
+    # klipéhez 8 dB; J+1…J+3 az áttűnés, J+4-től a klip
+    assert _psnr_raw(fr(J - 6), fr(J - 1), 320, 240) > 40                # 4,0 s után a kép áll (nincs korai klip)
+    assert _psnr_raw(fr(J - 1), fr(J), 320, 240) > 30                    # az áttűnés az álló utolsó kockáról indul…
+    assert _psnr_raw(fr(J), fr(J + 6), 320, 240) < 15 and _psnr_raw(fr(J + 4), fr(J + 6), 320, 240) > 25   # …0,4 s alatt a klipbe
+
+
 @pytest.mark.engines
 @pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
 def test_a_clip_goes_in_at_the_pause_from_its_original_and_comes_out_again(tmp_path, put_file):
