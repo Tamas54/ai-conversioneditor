@@ -181,7 +181,7 @@ def cached_plan(pid: str) -> Optional[dict[str, Any]]:
 async def plan_of(pid: str) -> dict[str, Any]:
     """A verzió szakasz-terve: a preview_cache.context(pid) terve (a context verziónként egyszer épül, a P1 tartja
     gyorsítótárban; itt a projekt és a meta idejéhez kötve). FileNotFoundError: nincs ilyen projekt; LookupError: nincs
-    szakasz-előnézete (nem a saját felvételre épülő projekt, vagy a terv nem készíthető el)."""
+    szakasz-előnézete (nem a saját felvételre épülő projekt); RuntimeError: a környezet most nem épült fel (átmeneti)."""
     from app.storage import output_path, read_meta
     if not pid.lower().endswith(".ecproj") or not output_path(pid).exists():
         raise FileNotFoundError(pid)
@@ -194,9 +194,11 @@ async def plan_of(pid: str) -> dict[str, Any]:
         raise LookupError("This project has no segment preview (it isn't built on your own footage).")
     try:
         plan = (await _pc().context(pid))["plan"]
-    except Exception as e:
+    except ValueError as e:                    # a projekt nem ilyen (P1: nem overlay) — végleges
+        raise LookupError(f"This project has no segment preview: {str(e)[:160]}") from None
+    except Exception as e:                     # a környezet most nem épült fel (motor, lemez) — a lejátszó újrapróbálja
         log.warning("előnézet-terv %s: %s", pid, e)
-        raise LookupError(f"The segment preview can't be planned for this project: {str(e)[:160]}") from None
+        raise RuntimeError(f"the preview isn't ready to play yet: {str(e)[:160]}") from None
     _remember(pid, st, plan)
     return plan
 

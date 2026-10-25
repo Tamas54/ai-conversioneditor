@@ -392,6 +392,8 @@ async def _hls_plan(pid: str, h: Optional[str], t: str, u: str) -> dict[str, Any
         raise HTTPException(404, "no such video project") from None
     except LookupError as e:
         raise HTTPException(404, str(e)) from None
+    except RuntimeError as e:                 # átmeneti (a környezet nem épült fel): a lejátszó újrapróbálja
+        raise HTTPException(503, str(e), headers={"Retry-After": "2", **_NO_STORE}) from None
 
 
 def _m3u8(text: str) -> Response:

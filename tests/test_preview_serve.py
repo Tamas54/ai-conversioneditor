@@ -681,3 +681,19 @@ def test_edit_route_passes_preview_through(client, pc, monkeypatch):
             time.sleep(0.02)
         assert st["status"] == "done", st
     assert got[0]["preview"] == "mp4" and "preview" not in got[1]
+
+
+def test_context_failures_are_404_when_final_503_when_transient(client, pc, project):
+    from app.tools import preview_serve as ps
+
+    async def not_overlay(pid):
+        raise ValueError("the segment preview is for videos on your own footage")
+
+    async def engine_down(pid):
+        raise OSError("engine crashed")
+    url = f"/api/video/{PID}/video.m3u8{ps.signed(PID)}"
+    pc.context = not_overlay
+    assert client.get(url).status_code == 404
+    pc.context = engine_down
+    r = client.get(url)
+    assert r.status_code == 503 and r.headers["retry-after"] == "2"
