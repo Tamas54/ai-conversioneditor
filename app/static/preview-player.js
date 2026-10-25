@@ -115,7 +115,12 @@
       // (startPosition > 0) a hls.js 1.5.13 sosem hozza létre a puffereket (Chrome-ban mérve, 10-25). → 0-ról indul,
       // a kért helyre a metaadatok után teker (st.pending).
       st.pending = at > 0 ? at : null;
+      // a lista (master / kép / hang) a verzió tervére vár: hideg indításkor egy hosszú videón ez ~10 s is lehet
+      const list = { default: { maxTimeToFirstByteMs: 30000, maxLoadTimeMs: 40000,
+        timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+        errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 4000 } } };
       const h = st.hls = new Hls({
+        manifestLoadPolicy: list, playlistLoadPolicy: list,
         fragLoadPolicy: { default: { maxTimeToFirstByteMs: 30000, maxLoadTimeMs: 60000,
           timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
           errorRetry: { maxNumRetry: 10, retryDelayMs: 2000, maxRetryDelayMs: 4000 } } },
