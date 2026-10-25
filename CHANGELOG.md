@@ -16,8 +16,18 @@ A code review found two ways one person could slow down the whole site.
   - Each of these jobs runs ffmpeg on its share of the cores (8 of 16 by default, `HEAVY_JOB_THREADS`) for decoding,
     filters and encoding, so one job can't take every core while another runs. A test checks that x264 really encodes
     on that number of threads.
+  - **Making the editor's small copy of your footage is one of these jobs too** (30 minutes of HDR iPhone video: about
+    6 minutes of encoding). It encodes its time slices at once inside its one place, each slice on its own share of the
+    cores, as before. When every place is taken, the video job says it is waiting, with its place in line and how long
+    it takes once it starts ("…It starts by itself, then takes about 7 min."). The time left stops while it waits, and
+    the time spent waiting doesn't go into the measured speed behind the estimates.
   - The limit counts jobs, not ffmpeg runs. The fast video render encodes several time slices at once inside one job,
-    and it still does. Video renders keep their own one-at-a-time limit and don't use these places.
+    and it still does.
+  - **Previews never wait for a place.** The quick preview, `render scene=…`, building the project and the video
+    render don't use these places: the render keeps its own one-at-a-time limit, and the final render runs in the
+    background at the lower priority. An edit that keeps the small copy (layers, subtitles, the end card; not colours
+    or cuts, which make a new one) asks for no place at all, so its preview comes back, and the final video is made,
+    even when every place is taken.
 - **The old `/upload` route read the whole file into memory, with no size limit.** It now writes to disk piece by
   piece, with the same limit as the app's upload and the resumable upload (`API_MAX_FILE_MB`, 25 MB for guests) and
   the same 413 message. If a request gives its size and it is over the limit, the server doesn't read the body at all.
