@@ -388,10 +388,17 @@ def _camera_fp(keys: Optional[list[list[float]]], fps: float, f0: int, f1: int) 
     i0 = max([i for i, k in enumerate(ks) if k[0] <= t0 + 1e-9] or [0])
     i1 = min([i for i, k in enumerate(ks) if k[0] >= te - 1e-9] or [len(ks) - 1])
     sub = ks[i0:max(i0, i1) + 1]
-    vals = {json.dumps([float(v) for v in k[1:]]) for k in sub}
-    if len(vals) == 1:
-        return {"static": [float(v) for v in sub[0][1:]]}
-    return {"keys": [[_on(float(k[0]), fps) - f0] + [float(v) for v in k[1:]] for k in sub]}
+    val = lambda k: [float(v) for v in k[1:]]                                        # noqa: E731
+    if len({json.dumps(val(k)) for k in sub}) == 1:
+        return {"static": val(sub[0])}
+    out = [[_on(float(k[0]), fps) - f0] + val(k) for k in sub]
+    # a szakaszon kívüli szélső kulcs ideje nem számít, ha ugyanazt az állást adja, mint a szomszédja (a kamera addig áll):
+    # különben a videó eleji nyugalmi kulcs (t = 0) helyi kockaszáma minden mozgás-szakaszt egy előtte lévő vágáshoz kötne
+    if len(sub) > 1 and val(sub[0]) == val(sub[1]) and out[0][0] < 0:
+        out[0][0] = None
+    if len(sub) > 1 and val(sub[-1]) == val(sub[-2]) and out[-1][0] >= f1 - f0:
+        out[-1][0] = None
+    return {"keys": out}
 
 
 def audio_fingerprint(spec: dict[str, Any], c: dict[str, Any]) -> dict[str, Any]:
