@@ -1701,7 +1701,7 @@
    "title": "Videó vágása — az eleje és a vége levágása online",
    "desc": "Egy videó vágása a szükséges részre kezdő- és végidő szerint.",
    "h1": "Videó vágása",
-   "intro": "A videóvágás a megadott kezdet és vég (másodperc vagy óó:pp:mm) közötti részt tartja meg, képkockapontosan. Ahol a videó engedi (x264-gyel kódolt H.264, mint a Studio saját videói), a kulcskockák közti részt változatlanul átmásolja, és csak a vágáspontoknál lévő pár másodpercet kódolja újra; máskor a teljes részt újrakódolja, és az eredmény megmondja, miért.",
+   "intro": "A videóvágás a megadott kezdet és vég (másodperc vagy óó:pp:mm) közötti részt tartja meg, képkockapontosan. Ahol a videó engedi (x264-gyel, legalább CRF 17-es minőségben kódolt H.264, mint a Studio videóeszközeinek kimenetei), a kulcskockák közti részt változatlanul átmásolja, és csak a vágáspontoknál lévő pár másodpercet kódolja újra; máskor a teljes részt újrakódolja, és az eredmény megmondja, miért.",
    "points": [],
    "faq": []
   },

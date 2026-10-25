@@ -1732,7 +1732,7 @@
    "title": "Trim video — cut the start and end online",
    "desc": "Cut a video to the part you need by start and end time.",
    "h1": "Trim video",
-   "intro": "Trim video keeps the part between the start and end you give (seconds or hh:mm:ss), cut frame-accurately. Where the video allows it (H.264 made by x264, like the Studio's own videos), the part between keyframes is copied untouched and only the few seconds at the cut points are re-encoded; otherwise the whole part is re-encoded, and the result says why.",
+   "intro": "Trim video keeps the part between the start and end you give (seconds or hh:mm:ss), cut frame-accurately. Where the video allows it (H.264 made by x264 at CRF 17 or better, like the files the Studio's video tools make), the part between keyframes is copied untouched and only the few seconds at the cut points are re-encoded; otherwise the whole part is re-encoded, and the result says why.",
    "points": [],
    "faq": []
   },
