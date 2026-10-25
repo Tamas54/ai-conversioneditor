@@ -89,6 +89,13 @@ def _run_max() -> int:
     return max(1, int(getattr(_pc(), "RUN_MAX", 5)))
 
 
+def urgent_run() -> int:
+    """Akire VÁRNAK (a lejátszó, a szerkesztés kérése: elsőbbség 0–1), annak a futama legfeljebb ennyi szakasz: a P1 a
+    futam fájljait a futam VÉGÉN teszi ki, egy RUN_MAX (8 × 2 s) hosszú futam az első kockát is késlelteti. Az előtöltés
+    és a feltöltés (2–3) a teljes RUN_MAX-szal megy (az áteresztés ott számít)."""
+    return int(_env_num("VIDEO_PREVIEW_URGENT_RUN", 3, 1))
+
+
 # ---------- aláírt URL-ek ----------
 
 def _msg(pid: str, h: Optional[str], exp: int, uid: str) -> bytes:
@@ -324,8 +331,8 @@ def _bump(st: _State, job: _Job, prio: int) -> None:
 
 
 def _enqueue_run(st: _State, pid: str, plan: dict[str, Any], k: int, prio: int) -> _Job:
-    """A k. szakasz futama (k-tól előre, ami még nincs kész és nem készül, legfeljebb RUN_MAX, egy részen belül —
-    preview_cache.runs dönt). Ha k már készül: arra a munkára vár (és előrébb kerül)."""
+    """A k. szakasz futama (k-tól előre, ami még nincs kész és nem készül, legfeljebb RUN_MAX — sürgősen urgent_run() —,
+    egy részen belül: preview_cache.runs dönt). Ha k már készül: arra a munkára vár (és előrébb kerül)."""
     segs = plan["segments"]
     h = segs[k]["hash"]
     job = st.live.get(h)
@@ -333,7 +340,8 @@ def _enqueue_run(st: _State, pid: str, plan: dict[str, Any], k: int, prio: int) 
         _bump(st, job, prio)
         return job
     ks, seen = [k], {h}
-    for j in range(k + 1, min(len(segs), k + _run_max())):
+    n_max = _run_max() if prio >= P_NEAR else min(_run_max(), urgent_run())
+    for j in range(k + 1, min(len(segs), k + n_max)):
         hj = segs[j]["hash"]
         if hj in seen or hj in st.live or _have(plan, hj):
             break
