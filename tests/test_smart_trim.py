@@ -272,6 +272,39 @@ async def test_switch_and_failed_self_check_fall_back(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cut_point_encodes_share_the_heavy_job_threads(tmp_path, monkeypatch):
+    """A nehéz munka kapuján belül (HEAVY_JOB_THREADS) a két, egyszerre futó határdarab-kódolás a munka szálain osztozik;
+    a próbakockát és a visszalépés teljes újrakódolását a teljes korlát kapja."""
+    from app import jobs
+    from app.convert import engines
+    from app.tools import smart_trim
+    monkeypatch.setenv("HEAVY_JOB_THREADS", "4")
+    seen, orig = [], engines._threads
+
+    def spy(args):
+        out = orig(args)
+        if "libx264" in args:
+            n = args[args.index("-frames:v") + 1] if "-frames:v" in args else None
+            seen.append(("full" if n is None else "probe" if n == "1" else "piece", out[-2], engines.FFMPEG_THREADS.get()))
+        return out
+    monkeypatch.setattr(engines, "_threads", spy)
+    src = _src(tmp_path / "studio.mp4", seconds=4)
+    async with jobs.heavy():
+        r = await _trim(src, tmp_path / "a", start="1.4", end="3.6")
+    assert r["method"] == "smart cut" and "start and the end" in r["note"], r["note"]
+    assert sorted(seen) == [("piece", "2", 2), ("piece", "2", 2), ("probe", "4", 4)]
+    assert _decode_errors(r["file"]) == "" and len(_md5s(r["file"])) == 66
+    seen.clear()
+
+    async def broken(*a, **k):
+        raise smart_trim.NotSafe("the copied part differs from the original")
+    monkeypatch.setattr(smart_trim, "_verify", broken)
+    async with jobs.heavy():
+        r = await _trim(src, tmp_path / "b", start="1.4", end="3.6")
+    assert r["method"] == "re-encode" and seen[-1] == ("full", "4", 4)
+
+
+@pytest.mark.asyncio
 async def test_trim_video_tool_reports_the_method(tmp_path, put_file):
     from app.ops import run_tool
     fid = put_file(_src(tmp_path / "studio.mp4", seconds=4))

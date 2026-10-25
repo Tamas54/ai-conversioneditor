@@ -312,6 +312,17 @@ async def _encode(src: Path, v: dict[str, Any], p: Plan, frames: list[int], args
               "-video_track_timescale", str(p.tb.denominator), "-f", "mp4", str(dst))
 
 
+async def _share(n: int, job: Awaitable[Any]) -> Any:
+    """Párhuzamos kódolás a nehéz munka kapuján belül (app/jobs.py heavy()): a munka szálkorlátja
+    (engines.FFMPEG_THREADS) az egyszerre futó n kódolás között elosztva — a vágás együtt se használjon több magot, mint
+    egy teljes újrakódolás. A saját taskjában állítjuk (az asyncio.gather a kontextust taskonként másolja)."""
+    from app.convert import engines
+    cap = engines.FFMPEG_THREADS.get()
+    if cap and n > 1:
+        engines.FFMPEG_THREADS.set(max(1, cap // n))
+    return await job
+
+
 async def _copy_body(src: Path, v: dict[str, Any], p: Plan, dst: Path) -> None:
     """A k1 kulcskockától len(body) csomag, változatlanul. Az ffmpeg a keresésnél egy korábbi kulcskockára is ugorhat, és
     alapból az onnantól jövő csomagokat is átmásolja (negatív időbélyeggel, az MP4 vágólistája mögé rejtve) — a
@@ -434,14 +445,15 @@ async def _smart(src: Path, dst: Path, start: Any, end: Any, info: dict[str, Any
     if p.head or p.tail:
         args = await _ps_match(src, v, p, args, want, work)
     files, jobs = [], []                            # (darab, hossz a concat-listába); fej, test, vég és a hang egyszerre
+    enc = int(bool(p.head)) + int(bool(p.tail))     # a két határdarab kódolása osztozik a munka szálain
     if p.head:
         files.append((work / "head.mp4", p.secs(p.frames[0], p.k1)))
-        jobs.append(_encode(src, v, p, p.head, args, files[-1][0]))
+        jobs.append(_share(enc, _encode(src, v, p, p.head, args, files[-1][0])))
     files.append((work / "body.mp4", p.secs(p.k1, p.k2) if p.k2 is not None else None))
     jobs.append(_copy_body(src, v, p, files[-1][0]))
     if p.tail:
         files.append((work / "tail.mp4", None))
-        jobs.append(_encode(src, v, p, p.tail, args, files[-1][0]))
+        jobs.append(_share(enc, _encode(src, v, p, p.tail, args, files[-1][0])))
     has_aux = any(s.get("codec_type") in ("audio", "subtitle") for s in info.get("streams", []))
     aux = work / f"aux{dst.suffix.lower()}"
     auds = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
