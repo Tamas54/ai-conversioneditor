@@ -34,6 +34,21 @@ def test_reuse_maps_kept_parts_to_the_old_copy():
     assert runs == [(0, 0, 1500), (1800, 1500, 1500)]
 
 
+def test_frame_by_frame_mapping_follows_the_old_copys_real_times():
+    """A 30 perces donorban egy 2 kockás lyuk (egy kocka kiesett) és szelet-illesztésnél 0,65 ms csúszás: a lyuk után a
+    régi index egy kockával kevesebb — az index-aritmetika (reuse) ott mellé másolna, a kockaidős leképezés nem."""
+    fps = 30.0
+    times = [k / fps for k in range(0, 1200)] + [(k + 1) / fps for k in range(1200, 2999)]     # a 1200. kocka kiesett
+    times[600:] = [t + 0.00065 for t in times[600:]]                                            # csúszás a 600. kockánál
+    new = [[0.0, 20.0], {"a": 30.0, "b": 100.0, "join": "cut"}]
+    runs = footage.reuse_frames(None, new, fps, times)
+    # 0–20 s: egyben (a 0,65 ms-os csúszás nem szakít); 30 s-tól: a lyukig, utána a régi index eggyel kisebb
+    assert runs == [(0, 0, 600), (600, 900, 300), (901, 1200, 1799)]   # a 40,0 s-os kocka nincs meg: azt kódolni kell
+    j = 2000
+    i = next(r[1] + j - r[0] for r in runs if r[0] <= j < r[0] + r[2])
+    assert abs(times[i] - (30.0 + (j - 600) / fps)) < 0.5 / fps                       # a kocka ideje = a forrás pillanata
+
+
 def test_a_dissolve_comes_from_the_old_copy_only_if_it_is_the_same():
     old = [[0.0, 50.0], {"a": 0.0, "b": 10.0, "src": "c.mp4", "join": "dissolve"}, {"a": 50.0, "b": 100.0, "join": "dissolve"}]
     same = footage.reuse(old, old, 30.0)

@@ -319,6 +319,54 @@ def reuse(old_keep: Any, new_keep: Any, fps: float) -> list[tuple[int, int, int]
     return merged
 
 
+def reuse_frames(old_keep: Any, new_keep: Any, fps: float, times: list[float]) -> list[tuple[int, int, int]]:
+    """Mint a reuse, kockánként, a régi munkamásolat VALÓS kockaidőivel (times: megjelenítési sorrendben, s): az új
+    idővonal j. kockája (a rács: fps) a forrás melyik pillanata, az a régi idővonalon mikor van, és ott a régi
+    munkamásolatnak van-e kockája (fél kockán belül). Futam: egymást követő új kockák egymást követő, egyenletesen
+    (±¼ kocka) álló régi kockákon. Így egy kiesett / megduplázott kocka, egy szelet-illesztés eltolódása a régiben csak
+    ott szakítja meg a másolást (10-25, a 30 perces donorban: egy 2 kockás lyuk és két 0,65 ms-os csúszás — az
+    index-aritmetika a lyuk után egy kockával mellé másolt volna)."""
+    import bisect
+    olds = segs(old_keep) or [{"a": 0.0, "b": _BIG, "src": None}]
+    news = segs(new_keep) or [{"a": 0.0, "b": _BIG, "src": None}]
+    o_off, acc = [], 0.0
+    for y in olds:
+        o_off.append(acc)
+        acc += y["b"] - y["a"]
+    half, step = 0.5 / fps, 1.0 / fps
+    pairs: list[tuple[int, int]] = []
+    on = 0.0
+    for p_, x in enumerate(news):
+        f0, f1 = _frame(on, fps), _frame(on + x["b"] - x["a"], fps)
+        on += x["b"] - x["a"]
+        dn = _dissolve_key(news, p_, fps)
+        cands = [(q, y) for q, y in enumerate(olds) if y["src"] == x["src"] and (y.get("match") or {}) == (x.get("match") or {})]
+        for j in range(f0, f1):
+            sp = x["a"] + (j - f0) / fps                          # a forrás pillanata (a teljes újrakódolás kockája)
+            hit = next(((q, y) for q, y in cands if y["a"] - 1e-6 <= sp < y["b"] - 1e-6), None)
+            if hit is None:
+                continue
+            q, y = hit
+            t_old = o_off[q] + sp - y["a"]
+            k = bisect.bisect_left(times, t_old - half)
+            if k >= len(times) or abs(times[k] - t_old) >= half:
+                continue
+            do = _dissolve_key(olds, q, fps)
+            r_new, r_old = j - f0, round((t_old - o_off[q]) * fps)
+            same = dn is not None and dn == do and r_new == r_old
+            if (dn and r_new < dn[-1] and not same) or (do and r_old < do[-1] and not same):
+                continue                                          # egy áttűnés kockája, ami a régiben nem ugyanaz
+            pairs.append((j, k))
+    runs: list[tuple[int, int, int]] = []
+    for j, k in pairs:
+        if runs and runs[-1][0] + runs[-1][2] == j and runs[-1][1] + runs[-1][2] == k \
+                and abs(times[k] - times[k - 1] - step) <= step / 4:
+            runs[-1] = (runs[-1][0], runs[-1][1], runs[-1][2] + 1)
+        else:
+            runs.append((j, k, 1))
+    return runs
+
+
 def stitch(runs: list[tuple[int, int, int]], keys: list[int], n_old: int, total: int,
            piece: int = 0) -> list[tuple[Any, ...]]:
     """A futamokból a munkamásolat darabjai sorban: ("copy", új első kocka, régi első kocka, db) — a régi kulcskockájától
@@ -376,10 +424,10 @@ def donors(base: dict[str, Any]) -> list[tuple[Any, dict[str, Any]]]:
     return [(kp, hit) for _, kp, hit in sorted(out, key=lambda x: -x[0])]
 
 
-async def _grid(path: Path, pk: list[tuple[int, bool]]) -> Optional[float]:
-    """A munkamásolat kockarácsa (kocka/s), ha állandó: a sáv névleges sebessége, és minden kocka a k / fps idején
-    (0-tól, fél kockán belül). None: nem állandó — kockánként nem feleltethető meg az új idővonalnak. (A vágatlan
-    munkamásolat az iPhone-felvétel névleges 30-ján áll, a vágott idővonal a mért átlagán — 29,993 —: a kettő más rács.)"""
+async def _grid(path: Path, pk: list[tuple[int, bool]]) -> Optional[tuple[float, list[float]]]:
+    """A munkamásolat kockarácsa (kocka/s: a sáv névleges sebessége, ha a kockák ≥ 99 %-a ennyinként jön) és a kockák
+    valós ideje (s, megjelenítési sorrendben, 0-tól). None: nincs ilyen rács. (A vágatlan munkamásolat az iPhone-felvétel
+    névleges 30-ján áll, a vágott idővonal a mért átlagán — 29,993 —: más rács; az új másolat a régiéhez igazodik.)"""
     from fractions import Fraction
     from app.convert.engines import run
     out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=time_base,r_frame_rate",
@@ -389,13 +437,14 @@ async def _grid(path: Path, pk: list[tuple[int, bool]]) -> Optional[float]:
         tb, rate = Fraction(st["time_base"]), Fraction(st["r_frame_rate"])
     except (KeyError, ValueError, ZeroDivisionError):
         return None
-    if rate <= 0 or not pk:
+    if rate <= 0 or len(pk) < 2:
         return None
     ts = sorted(p for p, _ in pk)
-    half = Fraction(1, 2) / rate
-    if any(abs(p * tb - (ts[0] * tb + Fraction(k) / rate)) > half for k, p in enumerate(ts)) or abs(ts[0] * tb) > half:
+    step = 1 / rate
+    regular = sum(1 for a, b in zip(ts, ts[1:]) if abs((b - a) * tb - step) <= step / 4)
+    if regular < 0.99 * (len(ts) - 1) or abs(ts[0] * tb) > step / 2:
         return None
-    return float(rate)
+    return float(rate), [float(p * tb) for p in ts]
 
 
 async def _packets(path: Path) -> list[tuple[int, bool]]:
@@ -478,11 +527,12 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
     old = crafts.existing(donor["media_id"])
     fps = float(m.get("fps") or 30)                         # a kódoló GOP-ja (_build_proxy: -g round(fps))
     pk = await _packets(old)
-    fps_v = await _grid(old, pk)                            # a régi munkamásolat rácsa: az új is ezen áll (lásd _grid)
-    if not fps_v:
-        log.info("smart cut: a régi munkamásolat kockarácsa nem állandó (%s)", old.name)
+    grid = await _grid(old, pk)                             # a régi munkamásolat rácsa: az új is ezen áll (lásd _grid)
+    if not grid:
+        log.info("smart cut: a régi munkamásolatnak nincs állandó kockarácsa (%s)", old.name)
         return None
-    runs = reuse(old_keep, b["keep"], fps_v)
+    fps_v, times = grid
+    runs = reuse_frames(old_keep, b["keep"], fps_v, times)
     work = Path(tempfile.mkdtemp(prefix="proxy-smart-", dir=str(temp_path("").parent)))
     try:
         tl = await timeline(b, src, W, H, fps_v, work, size=(pw, ph))
@@ -547,7 +597,8 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
             if await _count(work / name) != n:
                 log.info("smart cut: %s kockaszáma nem %d", name, n)
                 return None
-        (work / "smart.txt").write_text("".join(f"file '{n}'\n" for n, _, _ in parts), "utf-8")
+        # minden darab a rács pontos helyére (a régi másolat illesztésein 0,65 ms-os csúszás lehet a saját idejében)
+        (work / "smart.txt").write_text("".join(f"file '{n}'\nduration {k / fps_v:.6f}\n" for n, _, k in parts), "utf-8")
         await run("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "smart.txt", "-c", "copy", "proxy-v.mp4",
                   timeout=settings.VIDEO_TIMEOUT_S, cwd=work)
         if await _count(work / "proxy-v.mp4") != total:
