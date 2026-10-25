@@ -240,7 +240,8 @@ async def render_video(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/api/video/edit")
 async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
-    """{file_id: <.ecproj vagy a renderje>, changes: {...}, source?: str, alpha?} → job (az új projekt + MP4)."""
+    """{file_id: <.ecproj vagy a renderje>, changes: {...}, source?: str, alpha?, preview?: "mp4"} → job (az új projekt + MP4;
+    hosszú videónál a szakasz-előnézet listája, preview="mp4": a kész szakaszok egy letölthető MP4-ben)."""
     from app import jobs
     from app.tools import video
     if tenancy.is_guest():
@@ -258,7 +259,8 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
         try:
             res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress,
                                    alpha=body.get("alpha"), render=body.get("render", True) is not False,
-                                   draft=bool(body.get("draft")), final=body.get("final") or "auto")
+                                   draft=bool(body.get("draft")), final=body.get("final") or "auto",
+                                   **({"preview": body["preview"]} if body.get("preview") is not None else {}))  # "mp4": letölthető
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})
@@ -405,14 +407,20 @@ def _busy(what: str) -> Response:
 @router.get("/api/video/{project_id}/preview.m3u8")
 async def preview_master(project_id: str, t: str = Query(..., description="signed token"),
                          u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)")):
+    """A lejátszó (hls.js) mindig a 0. szakasszal indul (P4 mérése: később indulva nem hozza létre a puffereit) — ezért a
+    lista kérésekor a 0. szakasz és a hang elsőbbséggel (0) sorba áll, ha még nincs kész (nem vár rá)."""
     from app.tools import preview_serve as ps
-    return _m3u8(ps.master_m3u8(project_id, _hls_plan(project_id, None, t, u)))
+    plan = _hls_plan(project_id, None, t, u)
+    ps.warm(project_id, plan)
+    return _m3u8(ps.master_m3u8(project_id, plan))
 
 
 @router.get("/api/video/{project_id}/video.m3u8")
 async def preview_video_playlist(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
     from app.tools import preview_serve as ps
-    return _m3u8(ps.video_m3u8(project_id, _hls_plan(project_id, None, t, u)))
+    plan = _hls_plan(project_id, None, t, u)
+    ps.warm(project_id, plan)
+    return _m3u8(ps.video_m3u8(project_id, plan))
 
 
 @router.get("/api/video/{project_id}/audio.m3u8")

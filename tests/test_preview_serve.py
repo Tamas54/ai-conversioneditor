@@ -411,7 +411,7 @@ def test_preview_json_shape_and_final_status(client, pc, project):
     assert j["playlist_url"].startswith(f"http://testserver/api/video/{PID}/preview.m3u8?t=")
     assert j["duration"] == pytest.approx(pc._plan["total"]) and j["segments_total"] == len(pc._plan["segments"])
     assert j["segments_ready"] == 0 and j["markers"] == [{"from": 4.0, "to": 8.0, "what": "cut"}]
-    assert j["final"] == {"status": "none", "eta": None, "video_url": None}
+    assert j["final"] == {"status": "none", "eta": None, "eta_s": None, "ready_at": None, "video_url": None}
     assert client.get(_seg_url(PID, pc._plan["segments"][0]["hash"])).status_code == 200
     assert client.get(url).json()["segments_ready"] >= 1
     now = time.time()
@@ -422,10 +422,12 @@ def test_preview_json_shape_and_final_status(client, pc, project):
     try:
         f = client.get(url).json()["final"]
         assert f["status"] == "running" and isinstance(f["eta"], str) and f["video_url"] is None
+        assert 590 <= f["eta_s"] <= 600 and re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d", f["ready_at"])
         vid = "1234567890abcdef1234567890abcdef.mp4"
         output_path(vid).write_bytes(b"mp4")
         job.update(status="done", result={"file_id": vid, "url": f"http://testserver/files/{vid}?t=x"})
-        assert client.get(url).json()["final"] == {"status": "done", "eta": None, "video_url": f"http://testserver/files/{vid}?t=x"}
+        assert client.get(url).json()["final"] == {"status": "done", "eta": None, "eta_s": None, "ready_at": None,
+                                                   "video_url": f"http://testserver/files/{vid}?t=x"}
         job.update(status="failed", result=None)
         assert client.get(url).json()["final"]["status"] == "failed"
         jobs._JOBS.pop(job["id"])                               # újraindítás után: a meta dönt
@@ -618,3 +620,41 @@ def test_signed_preview_links_need_no_login(client, pc, project, monkeypatch):
     assert client.get(f"/api/video/{PID}/video.m3u8?t=forged").status_code == 403       # nyitva, de az aláírás dönt
     assert client.post("/api/video/render", json={"file_id": PID}).status_code == 401   # a többi videó-végpont nem nyílt meg
     assert client.get(f"/api/video/{PID}/video.m3u8/x{q}").status_code == 401           # csak a pontos címek
+
+
+def test_playlist_request_warms_segment_zero_and_the_sound(client, pc, project, monkeypatch):
+    """P4: a hls.js mindig a 0. szakasszal indul — a lista kérése a 0. futamát és a hangot elsőbbséggel sorba állítja."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "0")
+    r = client.get(f"/api/video/{PID}/preview.m3u8{ps.signed(PID)}")
+    assert r.status_code == 200
+    deadline = time.time() + 10
+    while time.time() < deadline and not (pc.calls and pc.audio_calls):
+        time.sleep(0.02)
+    assert pc.calls[0] == [0, 1, 2] and pc.audio_calls == 1
+    client.get(f"/api/video/{PID}/video.m3u8{ps.signed(PID)}")       # már kész: nem renderel újra
+    time.sleep(0.1)
+    assert pc.calls == [[0, 1, 2]] and pc.audio_calls == 1
+
+
+def test_edit_route_passes_preview_through(client, pc, monkeypatch):
+    """preview="mp4" eléri a video.edit-et (P3: a kész szakaszok egy letölthető MP4-ben); nélküle a kulcs nem megy át."""
+    from app.storage import output_path
+    from app.tools import video
+    got = []
+
+    async def edit(fid, changes, **kw):
+        got.append(kw)
+        return {"files": []}
+    monkeypatch.setattr(video, "edit", edit)
+    monkeypatch.setattr(video, "check_music", lambda m: None)
+    output_path(PID).write_text("{}", "utf-8")
+    for body in ({"file_id": PID, "changes": {}, "preview": "mp4"}, {"file_id": PID, "changes": {}}):
+        job = client.post("/api/video/edit", json=body).json()
+        for _ in range(200):
+            st = client.get(f"/api/jobs/{job['id']}").json()
+            if st["status"] != "running":
+                break
+            time.sleep(0.02)
+        assert st["status"] == "done", st
+    assert got[0]["preview"] == "mp4" and "preview" not in got[1]
