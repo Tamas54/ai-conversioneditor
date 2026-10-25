@@ -159,3 +159,16 @@ def test_short_and_wait_keep_the_full_build_in_the_request(tmp_path, put_file):
             assert "full_project" not in meta and _captions_in(output_path(res["file_id"])) == 1, body
             assert video.PREVIEW_ECPROJ not in (meta.get("assets") or {})
     asyncio.run(main())
+
+
+def test_a_hand_saved_project_does_not_inherit_the_preview_project():
+    from app.storage import new_file_id, output_path, read_meta, write_meta
+    from app.tools import video
+    src, new = new_file_id("ecproj"), new_file_id("ecproj")
+    for f in (src, new):
+        output_path(f).write_text("{}", "utf-8")
+    write_meta(src, extra={"assets": {"footage.mp4": "a.mp4", video.PREVIEW_ECPROJ: "p.ecproj"}, "spec": {"kind": "overlay"},
+                           "full_project": "pending"})
+    video.carry_assets(src, new)
+    meta = read_meta(new)
+    assert meta["assets"] == {"footage.mp4": "a.mp4"} and meta["hand_edited"] and "full_project" not in meta
