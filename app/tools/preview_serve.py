@@ -747,9 +747,8 @@ def status(pid: str, plan: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     segs = plan.get("segments") or []
     have = ready_hashes(plan)
     meta = read_meta(pid) or {}
-    total = plan.get("total")
     return {"playlist_url": playlist_url(pid),
-            "duration": round(float(total if total is not None else sum(durations(plan))), 3),
+            "duration": round(sum(durations(plan)), 3),         # a lista hossza (Σ kocka / fps), nem a kockára nem igazított total
             "segments_total": len(segs),
             "segments_ready": sum(1 for s in segs if s["hash"] in have),
             "markers": list((meta.get("preview") or {}).get("markers") or []),
