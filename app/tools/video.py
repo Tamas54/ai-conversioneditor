@@ -5271,7 +5271,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                             notes=layer_notes,
                                             findings=problems + gfx_findings + script_findings + [
                                                 f"Shortened text — {t}. Shorten it yourself, or change it with action=edit."
-                                                for t in (_TRUNC.get() or [])[:6]], preview=pv_mode)
+                                                for t in (_TRUNC.get() or [])[:6]], preview=pv_mode, parent=parent)
         step(3, 4, "rendering the video")
         vid = await _render_staged(pid, work / "project.ecproj", label_stem, group=group, want_s=total, mode="footage", draft=draft)
         result["duration"] = vid.pop("duration", None) or result["duration"]
@@ -5376,7 +5376,7 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
                              base: dict[str, Any], W: int, H: int, fps: float, total: float, label_stem: str, group: Any,
                              eta: float, srt_entry: Optional[dict[str, Any]], step: Callable[..., None], *,
                              verified: list[str], notes: list[str], findings: list[str],
-                             preview: str = "hls") -> dict[str, Any]:
+                             preview: str = "hls", parent: Optional[str] = None) -> dict[str, Any]:
     """Gyors előnézet, a végleges render háttérmunkaként indul — a válasz nem várja meg (10-23, Kommandant: „egy
     alapszintű gyors eredmény KELL”). VIDEO_PREVIEW_HLS (alap): a teljes videó szakasz-gyorsítótáras HLS-listája — a
     kérés csak a 0. és az első megváltozott szakaszt várja, a többi a háttérben készül, a változások helyei jelölők
@@ -5397,7 +5397,8 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
     pv_note = None
     if hls:
         try:
-            pv, more = await _hls_preview(hls, pid, spec, old_spec, spans, total, step, preview, label_stem, group)
+            pv, more = await _hls_preview(hls, pid, parent if old_spec else None, spans, total, step, preview, label_stem,
+                                          group)
             result["preview"] = pv
             pv_note = video_preview.describe_hls(pv)
             findings = findings + more
@@ -5442,27 +5443,29 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
     return result
 
 
-async def _hls_preview(hls: tuple[Any, Any], pid: str, spec: dict[str, Any], old_spec: Optional[dict[str, Any]],
-                       spans: list[tuple[float, float, str]], total: float, step: Callable[..., None], preview: str,
-                       label_stem: str, group: Any) -> tuple[dict[str, Any], list[str]]:
-    """A verzió szakasz-terve, a szülőéhez mérve (ami változatlan, az a gyorsítótárból jön); a 0. és az első piszkos
-    szakasz megvárva (elsőbbséggel), a többi a háttérben (preview_serve.schedule); a változások helyei a verzió
-    metájába is (a lejátszó jelölői). → (a válasz preview mezője, findings)."""
+async def _hls_preview(hls: tuple[Any, Any], pid: str, parent: Optional[str], spans: list[tuple[float, float, str]],
+                       total: float, step: Callable[..., None], preview: str, label_stem: str,
+                       group: Any) -> tuple[dict[str, Any], list[str]]:
+    """A verzió szakasz-terve, a szülőéhez mérve (ami változatlan, az a gyorsítótárból jön — a hash-ek a P1
+    context()-jéből: a vízjel köre, a projekt is benne van, ezért a szülő terve is onnan); sorba a 0. és az első piszkos
+    szakasz (elsőbbséggel), a többi a háttérben (preview_serve.schedule), a kérés csak e kettőt várja meg; a változások
+    helyei a verzió metájába is (a lejátszó jelölői). → (a válasz preview mezője, findings)."""
     from app.tools import video_preview
     pc, ps = hls
     t0 = time.time()
-    plan = ps.plan_of(pid)
+    plan = await ps.plan_of(pid)
     old_plan = None
-    if old_spec:
+    if parent:
         try:
-            old_plan = pc.plan(old_spec)
-        except Exception as e:                       # a régi verzió terve nélkül minden szakasz újnak számít
-            log.info("a szülő szakasz-terve nem készült el: %s", e)
+            old_plan = await ps.plan_of(parent)
+        except Exception as e:                       # a szülő terve nélkül minden szakasz újnak számít
+            log.info("a szülő (%s) szakasz-terve nem készült el: %s", parent, e)
     d = pc.diff(old_plan, plan)
     segs, dirty, more = plan["segments"], list(d["dirty"]), []
     first = dirty[0] if dirty else None
     need = sorted({0} | ({first} if first is not None else set())) if segs else []
     step(3, 4, "the first preview segments")
+    ps.schedule(pid, plan, dirty, playhead=float(segs[first]["out_start"]) if first is not None else 0.0)
     first_s: Optional[float] = None
     try:
         await asyncio.gather(*(ps.request(pid, k, priority=ps.P_EDIT, plan=plan) for k in need))
@@ -5471,7 +5474,6 @@ async def _hls_preview(hls: tuple[Any, Any], pid: str, spec: dict[str, Any], old
         pass
     except RuntimeError as e:
         more.append(f"A preview segment couldn't be made ({str(e)[:160]}) — the player retries; the final video is still coming.")
-    ps.schedule(pid, plan, dirty, playhead=float(segs[first]["out_start"]) if first is not None else 0.0)
     marks = video_preview.markers(spans, total)
     have = await pc.ready([x["hash"] for x in segs], plan["source_id"])
     write_meta(pid, extra={"preview": {"markers": marks, "first_ready_s": first_s, "dirty": dirty}})

@@ -68,12 +68,12 @@ def _fakes(root: Path, calls: dict):
         return {h for h in hashes if seg_path(source_id, h).exists()}
     pc.enabled, pc.plan, pc.diff, pc.seg_path, pc.ready = (lambda: True), plan, diff, seg_path, ready
 
-    def plan_of(pid):
+    async def plan_of(pid):
         from app.storage import read_meta
         return plan(read_meta(pid)["spec"])
 
     async def request(pid, k, *, priority=0, plan=None, timeout=None):
-        plan = plan or plan_of(pid)
+        plan = plan or await plan_of(pid)
         sg = plan["segments"][k]
         p = seg_path(plan["source_id"], sg["hash"])
         calls.setdefault("request", []).append((pid, k, priority))
@@ -85,7 +85,7 @@ def _fakes(root: Path, calls: dict):
         return p
 
     async def request_audio(pid, *, priority=0, plan=None, timeout=None):
-        plan = plan or plan_of(pid)
+        plan = plan or await plan_of(pid)
         d = root / plan["source_id"] / "a-a1"
         if not (d / "index.m3u8").exists():
             d.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ def test_the_answer_has_the_playlist_and_waits_only_for_the_first_change(tmp_pat
         assert pv["playlist_url"].endswith(f"{pid}/preview.m3u8?t=sig") and pv["page_url"].endswith(f"/app/file/{pid}/preview")
         assert pv["segments_total"] == 4 and pv["segments_dirty"] == 4 and pv["reused"] == 0     # új videó: mind új
         assert [k for p, k, prio in hls["request"]] == [0] and all(prio == 1 for *_, prio in hls["request"])
-        assert hls["schedule"] == [(pid, [0, 1, 2, 3], 0.0)]
+        assert hls["schedule"] == [(pid, [0, 1, 2, 3], 0.0)]                     # (a sorba állítás a várás előtt)
         assert pv["first_ready_s"] is not None and pv["segments_ready"] == 1
         assert [m["what"] for m in pv["markers"]] == ["L1 source", "L2 source"]
         assert read_meta(pid)["preview"]["markers"] == pv["markers"]
@@ -226,7 +226,7 @@ def test_if_the_playlist_fails_the_old_mp4_preview_comes(tmp_path, put_file, hls
     fid = put_file(_clip(tmp_path / "talk.mp4"))
     monkeypatch.setattr(video, "_start_final", lambda pid, eta: {"id": "stub"})
 
-    def broken(pid):
+    async def broken(pid):
         raise LookupError("no plan")
     monkeypatch.setattr(tools.preview_serve, "plan_of", broken)
 
@@ -235,3 +235,14 @@ def test_if_the_playlist_fails_the_old_mp4_preview_comes(tmp_path, put_file, hls
         res = await video.overlay({"file_id": fid, "brand": "none", "final": "background", "layers": LAYERS})
         assert res["preview"]["parts"] and res["preview"]["file_id"].endswith(".mp4")
     asyncio.run(main())
+
+
+def test_markers_and_the_preview_option():
+    from app.tools import video_preview as vp
+    spans = [(310.0, 320.0, "L7 chart"), (-1.0, 3.0, "L1 source"), (310.0, 320.0, "L7 chart"), (1819.0, 1830.0, "end card")]
+    assert vp.markers(spans, 1821.0) == [{"from": 0.0, "to": 3.0, "what": "L1 source"},
+                                         {"from": 310.0, "to": 320.0, "what": "L7 chart"},
+                                         {"from": 1819.0, "to": 1821.0, "what": "end card"}]
+    assert vp.preview_mode(None) == vp.preview_mode("auto") == "hls" and vp.preview_mode("MP4") == "mp4"
+    with pytest.raises(ValueError, match='preview: "mp4"'):
+        vp.preview_mode("gif")
