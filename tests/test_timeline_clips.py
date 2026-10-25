@@ -22,6 +22,14 @@ import pytest
 from app.tools import footage
 
 
+@pytest.fixture(autouse=True)
+def _fresh_gates(monkeypatch):
+    """A modul szintű kapuk (asyncio.Semaphore) a teszt saját loopjában jöjjenek létre (asyncio.run: tesztenként új loop)."""
+    from app.tools import video, video_preview
+    for mod, name in ((video, "_gate"), (video, "_bgate"), (video_preview, "_gate")):
+        monkeypatch.setattr(mod, name, None)
+
+
 def test_insert_then_cut_it_out_gives_the_whole_footage_back():
     k = footage.insert(None, 100.0, 40.0, {"src": "clip.mp4", "a": 2.0, "b": 12.0, "join": "smooth", "gain": 3.0}, 25)
     assert k == [[0.0, 40.0], {"a": 2.0, "b": 12.0, "src": "clip.mp4", "join": "smooth", "gain": 3.0},
