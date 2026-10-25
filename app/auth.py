@@ -1,6 +1,7 @@
 """Hozzáférés és identitás: ki a kérés gazdája (→ tenancy), egy middleware-ben.
 
-    nyitva           /health, /login, /signup, /logout, /files/{id}?t=…[&u=…] (a link maga aláírt)
+    nyitva           /health, /login, /signup, /logout, /files/{id}?t=…[&u=…] (a link maga aláírt), az előnézet
+                     HLS-címei (/api/video/{pid}/*.m3u8|preview.json, /api/video/preview/…?t= — szintén aláírtak)
     MCP-kulcs        /mcp…   Authorization: Bearer <kulcs> VAGY ?key=<kulcs>
                              kulcs = a régi MCP_AUTH_TOKEN (→ admin) vagy egy felhasználó sk_… kulcsa
     belépés VAGY     minden más — süti a böngészőnek, kulcs a programoknak
@@ -16,6 +17,7 @@ import hashlib
 import hmac
 import html
 import logging
+import re
 import time
 from collections import defaultdict, deque
 from typing import Optional
@@ -39,6 +41,12 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
                     "/llms-full.txt", "/sitemap-index.xml", "/sitemaps/", "/v1/openapi.json", "/v1/catalog", "/v1/upload/",
                     "/upload-link/",                     # egyszer használatos, aláírt feltöltési link (app/upload_links.py)
                     "/api/units/", "/api/timezones/", "/indexnow-", "/api/catalog")      # OAuth az MCP-hez (app/oauth.py) — a belépést maga kéri
+
+# A szakasz-előnézet HLS-listái, -szakaszai és állapota (app/tools/preview_serve.py): mint a /files/, a link maga aláírt
+# (a végpont ellenőrzi, a munkaterület az u=-ban) — a lejátszó (Safari natív HLS, hls.js) süti nélkül, megosztott
+# linkről, vendégként is kéri.
+_SIGNED_PREVIEW = re.compile(r"^/api/video/(preview/(seg|aud)/[^/]+(/[^/]+)?"
+                             r"|[0-9a-f]{32}\.ecproj/(preview\.m3u8|video\.m3u8|audio\.m3u8|preview\.json))$")
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
@@ -163,7 +171,7 @@ def _limited(store: dict, ip: str, limit: int, window: int) -> bool:
 
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    if path.startswith(_PUBLIC_PREFIXES):
+    if path.startswith(_PUBLIC_PREFIXES) or (request.method == "GET" and _SIGNED_PREVIEW.match(path)):
         return await call_next(request)
     if request.method in ("GET", "HEAD"):
         from app.site.urls import is_public

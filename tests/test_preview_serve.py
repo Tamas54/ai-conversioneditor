@@ -602,3 +602,19 @@ async def test_timeout_raises_and_the_render_goes_on(aq, pc, project, monkeypatc
         await ps.request(PID, 5, plan=pc._plan, timeout=0.05)
     p = await ps.request(PID, 5, plan=pc._plan)                 # ugyanarra vár
     assert p.exists() and sum(5 in ks for ks in pc.calls) == 1
+
+
+def test_signed_preview_links_need_no_login(client, pc, project, monkeypatch):
+    """Belépéses szerveren is: a lejátszó (Safari natív HLS, megosztott link, vendég) süti nélkül kéri — mint a /files/;
+    a jog az aláírás. Ami nem aláírt előnézet-cím, az továbbra is belépést kér."""
+    from app.config import settings
+    from app.tools import preview_serve as ps
+    monkeypatch.setattr(settings, "DASHBOARD_PASSWORD", "secret")
+    client.cookies.clear()
+    q = ps.signed(PID)
+    for name in ("preview.m3u8", "video.m3u8", "preview.json"):
+        assert client.get(f"/api/video/{PID}/{name}{q}").status_code == 200, name
+    assert client.get(_seg_url(PID, pc._plan["segments"][0]["hash"])).status_code == 200
+    assert client.get(f"/api/video/{PID}/video.m3u8?t=forged").status_code == 403       # nyitva, de az aláírás dönt
+    assert client.post("/api/video/render", json={"file_id": PID}).status_code == 401   # a többi videó-végpont nem nyílt meg
+    assert client.get(f"/api/video/{PID}/video.m3u8/x{q}").status_code == 401           # csak a pontos címek
