@@ -523,6 +523,18 @@ async def request_audio(pid: str, *, priority: int = P_PLAYER, plan: Optional[di
     return idx.parent
 
 
+def warm(pid: str, plan: dict[str, Any]) -> None:
+    """A lista kérésekor (a végpontok): a 0. szakasz futama és a hang elsőbbséggel (0) sorba, ha még nincs kész — a
+    lejátszó mindig a 0.-kal indul, és ez gyorsan kell (P4: a hls.js később indulva nem hozza létre a puffereit). Nem vár."""
+    segs = plan.get("segments") or []
+    st = _state()
+    if segs and not _have(plan, segs[0]["hash"]) and not _held_failure(st, segs[0]["hash"]):
+        _enqueue_run(st, pid, plan, 0, P_PLAYER)
+    idx = _audio_index(plan)
+    if idx is not None and not idx.exists() and not _held_failure(st, f"a:{plan['audio_hash']}"):
+        _enqueue_audio(st, pid, plan, P_PLAYER)
+
+
 def schedule(pid: str, plan: dict[str, Any], dirty: list[int], *, playhead: float = 0.0) -> None:
     """Háttér-előtöltés az új verzióra (futó eseményhurokból hívandó): a 0. és az első piszkos szakasz (1), a lejátszófej
     körüli néhány (2), aztán minden hiányzó elölről (3), a hang (1). Ugyanannak a felvételnek egy korábbi verzióra
@@ -683,8 +695,12 @@ AUDIO_TYPES = {".ts": MP2T, ".aac": "audio/aac", ".m4s": "audio/mp4", ".mp4": "a
 
 # ---------- preview.json (a P4 lejátszója) ----------
 
+_NO_ETA = {"eta": None, "eta_s": None, "ready_at": None}
+
+
 def final_status(pid: str, meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """A végleges render állapota: a jobs-nyilvántartás (video._start_final: kind=render, final=True, project=pid —
+    """{status: none|queued|running|done|failed, eta (szöveg), eta_s, ready_at (ISO, render_eta.ready_at), video_url}.
+    A végleges render állapota: a jobs-nyilvántartás (video._start_final: kind=render, final=True, project=pid —
     ugyanaz, amit a video(action="status") olvas), újraindítás után a projekt metája (render_file_id, nem vázlat)."""
     from app import jobs
     from app.storage import output_path, public_url, read_meta
@@ -696,19 +712,21 @@ def final_status(pid: str, meta: Optional[dict[str, Any]] = None) -> dict[str, A
         j = max(mine, key=lambda x: x.get("started") or 0)
         if j["status"] in ("running", "queued"):
             left = jobs.remaining_s(j)
-            eta = render_eta.text(left) if left > 0 else ("taking longer than estimated — still working"
-                                                          if j.get("eta_s") is not None else None)
-            return {"status": j["status"], "eta": eta, "video_url": None}
+            if left > 0:
+                return {"status": j["status"], "eta": render_eta.text(left), "eta_s": round(left),
+                        "ready_at": render_eta.ready_at(left), "video_url": None}
+            eta = "taking longer than estimated — still working" if j.get("eta_s") is not None else None
+            return {"status": j["status"], "eta": eta, "eta_s": None, "ready_at": None, "video_url": None}
         if j["status"] == "done":
             res = j.get("result") or {}
             fid = res.get("file_id")
             url = res.get("url") or (public_url(fid) if fid and output_path(fid).exists() else None)
-            return {"status": "done", "eta": None, "video_url": url}
-        return {"status": "failed", "eta": None, "video_url": None}
+            return {"status": "done", **_NO_ETA, "video_url": url}
+        return {"status": "failed", **_NO_ETA, "video_url": None}
     rid = meta.get("render_file_id")
     if rid and not meta.get("render_draft") and output_path(rid).exists():
-        return {"status": "done", "eta": None, "video_url": public_url(rid)}
-    return {"status": "none", "eta": None, "video_url": None}
+        return {"status": "done", **_NO_ETA, "video_url": public_url(rid)}
+    return {"status": "none", **_NO_ETA, "video_url": None}
 
 
 def status(pid: str, plan: Optional[dict[str, Any]] = None) -> dict[str, Any]:
