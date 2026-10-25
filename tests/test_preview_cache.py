@@ -183,6 +183,20 @@ def test_moving_everything_by_a_cut_keeps_the_later_segments_with_captions_layer
     assert l4["at"] == pytest.approx(380.033, abs=1e-3)                           # (a réteg valóban odébb került)
 
 
+def test_a_camera_move_after_a_cut_keeps_its_segments():
+    """A ráközelítés szakaszai egy előtte lévő vágás után ugyanazok: a videó eleji nyugalmi kulcs (t = 0) ideje nem
+    számít (10-25, valós anyagon: a mozgás első szakasza a vágás miatt piszkos lett)."""
+    cam_in = [{"at": 451, "zoom": 1.2, "to": [0.3, 0.33], "dur": 0.6}, {"at": 457, "zoom": 1, "dur": 0.6}]
+    v1 = _spec(subs=[], layers=[], camera=cam_in)
+    v2 = _cut(v1, 100.0, 106.0)                                                  # (a rácsra eső vágás: nincs új szakasz)
+    p1, p2 = _plan(v1), _plan(v2)
+    assert pc.diff(p1, p2)["dirty"] == []
+    c = pc.plan_ctx(v1, engine="test-engine")
+    move = next(s for s in pc._grid(c) if s["src_a"] == 450.0)
+    cam = pc.fingerprint(v1, move, c)["camera"]["keys"]
+    assert cam[0][0] is None and cam[1][0] == 30                                 # (a mozgás a szakasz 30. kockáján indul)
+
+
 def test_a_cut_dirties_the_rest_when_the_watermark_cycle_phase_moves():
     v1 = _spec()
     key = _plan(v1)["persistent"][0]["key"]
