@@ -58,6 +58,11 @@ _MEDIA_KEYS = {"credit", "credits", "image", "image_query", "image_prompt", "sto
                "ai_image", "ai_picture", "sound_file"}
 
 
+class Unavailable(ValueError):
+    """Ennek a verziónak nincs szakaszos előnézete, és újrapróbálva sem lesz (nem saját felvételes projekt, vagy a
+    felvétel mindkét példánya — munkamásolat és eredeti — elveszett). Minden más hiba átmeneti."""
+
+
 def enabled() -> bool:
     return os.getenv("VIDEO_PREVIEW_HLS", "1").strip().lower() not in ("0", "false", "no", "off")
 
@@ -176,7 +181,7 @@ def plan_ctx(spec: dict[str, Any], cycles: Optional[dict[str, dict[str, int]]] =
     from app.tools import footage, video
     base = spec.get("base") or {}
     if spec.get("kind") != "overlay" or not base:
-        raise ValueError("the segment preview is for videos on your own footage (overlay projects)")
+        raise Unavailable("the segment preview is for videos on your own footage (overlay projects)")
     story, opts = spec.get("story") or {}, spec.get("opts") or {}
     W, H = int(base["width"]), int(base["height"])
     fps = float(base.get("fps") or 30)
@@ -293,19 +298,12 @@ def _grid(c: dict[str, Any]) -> list[dict[str, Any]]:
         raw += [(tail + g0, None, None, None, None) for g0 in pts[:-1]]
     bounds = [x[0] for x in raw] + [total]
     segs = []
-    for j, (o, part, src, ga, gb) in enumerate(raw):
-        f0, f1 = frame(bounds[j], fps), frame(bounds[j + 1], fps)
-        segs.append({"out_start": round(bounds[j], 6), "dur": round(bounds[j + 1] - bounds[j], 6), "f0": f0, "frames": f1 - f0,
+    for j, (o, part, src, ga, gb) in enumerate(raw):                # out_start / dur a KOCKARÁCSON (f0/fps, frames/fps): a
+        f0, f1 = frame(bounds[j], fps), frame(bounds[j + 1], fps)  # lejátszási lista ideje = a kockák ideje, csúszás nélkül
+        segs.append({"out_start": round(f0 / fps, 6), "dur": round((f1 - f0) / fps, 6), "f0": f0, "frames": f1 - f0,
                      "src": src, "src_a": None if ga is None else round(ga, 6), "src_b": None if gb is None else round(gb, 6),
                      "part": part, "hold": part is None})
-    out: list[dict[str, Any]] = []
-    for s in segs:                                               # kocka nélküli szakasz (egy kockánál rövidebb rész): az előzőbe
-        if s["frames"] <= 0 and out:
-            out[-1]["dur"] = round(out[-1]["dur"] + s["dur"], 6)
-            continue
-        if s["frames"] <= 0:
-            continue
-        out.append(s)
+    out = [s for s in segs if s["frames"] > 0]                   # (egy kockánál rövidebb rész: nincs saját kockája)
     for k, s in enumerate(out):
         s["k"] = k
     return out
@@ -420,9 +418,11 @@ def plan(spec: dict[str, Any], cycles: Optional[dict[str, dict[str, int]]] = Non
     segs = _grid(c)
     for s in segs:
         s["hash"] = _sha(fingerprint(spec, s, c))
-    return {"version": PREVIEW_CACHE_VERSION, "source_id": c["source_id"], "recipe": c["recipe"], "fps": c["fps"],
-            "W": c["W"], "H": c["H"], "pw": c["pw"], "ph": c["ph"], "total": c["total"], "plain": c["end"],
-            "frames": frame(c["total"], c["fps"]), "seg_s": SEG_S, "audio_hash": _sha(audio_fingerprint(spec, c)),
+    n, fps = frame(c["total"], c["fps"]), c["fps"]
+    hold = c["hold_at"] if c["hold_at"] is not None else c["end"]
+    return {"version": PREVIEW_CACHE_VERSION, "source_id": c["source_id"], "recipe": c["recipe"], "fps": fps,
+            "W": c["W"], "H": c["H"], "pw": c["pw"], "ph": c["ph"], "total": round(n / fps, 6), "frames": n,
+            "plain": round(frame(hold, fps) / fps, 6), "seg_s": SEG_S, "audio_hash": _sha(audio_fingerprint(spec, c)),
             "persistent": [{"id": e["id"], "key": e["key"], "ps": e["ps"], "lb": e["lb"], "a": e["a"], "b": e["b"]}
                            for e in c["layers"] if e.get("persist")],
             "segments": segs}
@@ -821,7 +821,7 @@ async def context(pid: str) -> dict[str, Any]:
     meta = read_meta(pid) or {}
     spec = meta.get("spec") or {}
     if spec.get("kind") != "overlay" or not spec.get("base"):
-        raise ValueError("the segment preview is for videos on your own footage (overlay projects)")
+        raise Unavailable("the segment preview is for videos on your own footage (overlay projects)")
     hand = bool(meta.get("hand_edited"))
     key = f"{pid}:{_sha(spec)[:16]}:{int(hand)}"
     if key in _CTX:
@@ -920,7 +920,7 @@ async def _build(pid: str, spec: dict[str, Any], meta: dict[str, Any], key: str,
                     pending = False
                     notes.append("The original footage is no longer stored — the preview uses the editor's older copy.")
                 except FileNotFoundError:
-                    raise RuntimeError("Neither the editor's copy nor the original footage is stored any more — upload it again.")
+                    raise Unavailable("Neither the editor's copy nor the original footage is stored any more — upload it again.")
         ctx.update(pending=pending, media=media, src=src, tl=None, tl_items=[])
         if pending:
             m = await mediaprobe.info(src)
@@ -1143,6 +1143,84 @@ async def render_audio(ctx: dict[str, Any]) -> Path:
                 shutil.rmtree(tmp, ignore_errors=True)
             await register("a-" + h, ctx["source_id"], _size(d))
     return d
+
+
+# ---------- a hang darabokban (a lejátszó első kockája nem várja meg az egész keverést) ----------
+# P2 mérése (10-25): egy 10 perces projekt egész hangja (motor-keverés + egy AAC/HLS-kódolás) 13,4 s — az hls.js a hangsáv
+# nélkül nem indul, így az első kocka is ennyit várt (30 percen ~40 s). Most: a hang AUDIO_CHUNK videószakaszonként egy
+# darab, a darab a motorból csak a saját idejére keveredik (render --start --end --format wav: mérve mintapontos, 15 s
+# hang 0,13 s), AAC, MPEG-TS 0-tól — a lejátszási listában a darabok között #EXT-X-DISCONTINUITY. A darab hossza
+# mintára a videó kockarácsán (round(f·48000/fps)): a darabok összege a videó hossza, csúszás nélkül. Az AAC előtöltése
+# (1024 minta) a darab elején marad: minden darab hangja ~21 ms-mal a kép mögött (állandó, nem halmozódik — a darab a
+# lista szerinti helyén indul); a darab vége legfeljebb ~21 ms-mal hosszabb (az utolsó AAC-keret), a következő darab
+# ráíródik. VIDEO_PREVIEW_AUDIO_CHUNK=1: szakaszonként egy darab (a kép discontinuity-szerkezete pontosan; a prototípus
+# A2-je), ha egy lejátszó (iOS Safari) az eltérő szakaszolást nem viselné.
+
+AUDIO_CHUNK = max(1, int(os.getenv("VIDEO_PREVIEW_AUDIO_CHUNK", "15") or 15))
+AUDIO_SR = 48000
+AUDIO_MARGIN_S = 0.05        # a motor ennyivel bővebben keveri a darabot (a vágás mintára a köteten történik)
+
+
+def _sample(f: int, fps: float) -> int:
+    return round(f * AUDIO_SR / fps)
+
+
+def audio_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """A hang darabjai (tiszta): AUDIO_CHUNK egymást követő videószakasz egy darab. → [{k, seg0, seg1, f0, frames,
+    out_start, dur, samples, hash}] — a hash a hang ujjlenyomatából (audio_hash) + a darab kockáiból; a fájl a
+    seg_path(source_id, hash)-en (ugyanaz a tár, ugyanaz az LRU, ugyanaz a ready / touch, mint a képszakaszoké)."""
+    segs, fps = plan["segments"], plan["fps"]
+    out = []
+    for j, i in enumerate(range(0, len(segs), AUDIO_CHUNK)):
+        grp = segs[i:i + AUDIO_CHUNK]
+        f0, n = grp[0]["f0"], sum(s["frames"] for s in grp)
+        out.append({"k": j, "seg0": grp[0]["k"], "seg1": grp[-1]["k"] + 1, "f0": f0, "frames": n,
+                    "out_start": round(f0 / fps, 6), "dur": round(n / fps, 6), "samples": _sample(f0 + n, fps) - _sample(f0, fps),
+                    "hash": _sha({"v": PREVIEW_CACHE_VERSION, "kind": "audio", "audio": plan["audio_hash"], "f0": f0, "frames": n,
+                                  "fps": fps, "sr": AUDIO_SR, "aac": AUDIO_BITRATE})})
+    return out
+
+
+async def render_audio_chunk(ctx: dict[str, Any], k: int) -> str:
+    """A hang k. darabja (audio_plan) → MPEG-TS (AAC, 0-tól, pontosan a darab mintái) a seg_path(source_id, hash)-en,
+    nyilvántartva; ha már kész, csak a használatát jegyzi. → a hash. A video_preview.gate() alatt (maga kéri)."""
+    from app.tools import video, video_preview
+    if "audio_plan" not in ctx:
+        ctx["audio_plan"] = audio_plan(ctx["plan"])
+    ch = ctx["audio_plan"][int(k)]
+    h, sid = ch["hash"], ctx["source_id"]
+    dst = seg_path(sid, h)
+    if dst.exists():
+        await touch([h], sid)
+        return h
+    async with _lock("ach:" + h):
+        if dst.exists():
+            return h
+        fps = ctx["fps"]
+        s0 = _sample(ch["f0"], fps)
+        a = max(0.0, s0 / AUDIO_SR - AUDIO_MARGIN_S)
+        b = (s0 + ch["samples"]) / AUDIO_SR + AUDIO_MARGIN_S
+        sa, sb = f"{a:.6f}", f"{b:.6f}"
+        first = math.floor(float(sa) * AUDIO_SR + 1e-6)           # a motor keverésének első mintája (mérve: a start lefelé)
+        tag = uuid.uuid4().hex[:6]
+        wav, tmp = ctx["work"] / f"pc-a{ch['f0']}-{tag}.wav", dst.with_name(f"{h}.tmp-{tag}.ts")
+        async with video_preview.gate():
+            try:
+                await video._run("render", "--project", ctx["project"], "--comp", ctx["comp"], "--out", wav.name, "--format", "wav",
+                                 "--start", sa, "--end", sb, "--json", cwd=ctx["work"])
+                ins = ["-i", str(wav)] if wav.exists() and wav.stat().st_size > 1024 else \
+                    ["-f", "lavfi", "-t", f"{b - a:.6f}", "-i", f"anullsrc=r={AUDIO_SR}:cl=stereo"]   # néma projekt: csend
+                x = max(0, s0 - first)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                await _ffmpeg(*ins, "-af", f"aresample={AUDIO_SR},atrim=start_sample={x}:end_sample={x + ch['samples']},"
+                              f"asetpts=PTS-STARTPTS,apad=whole_len={ch['samples']}", "-ac", "2", "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+                              "-f", "mpegts", str(tmp), cwd=ctx["work"])
+                os.replace(tmp, dst)
+            finally:
+                wav.unlink(missing_ok=True)
+                tmp.unlink(missing_ok=True)
+        await register(h, sid, dst.stat().st_size)
+    return h
 
 
 # ---------- kockapontosság (elfogadás): szakaszonként vs. egy menetben ----------

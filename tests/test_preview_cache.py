@@ -93,13 +93,15 @@ def _tiles(p: dict) -> None:
     segs = p["segments"]
     assert [s["k"] for s in segs] == list(range(len(segs)))
     assert sum(s["frames"] for s in segs) == round(p["total"] * p["fps"]) == p["frames"]
+    assert p["total"] == pytest.approx(p["frames"] / p["fps"], abs=1e-6)          # a teljes hossz is a kockarácson
     for a, b in zip(segs, segs[1:]):
         assert a["f0"] + a["frames"] == b["f0"]                                    # nincs hézag, nincs átfedés
-        assert abs(a["out_start"] + a["dur"] - b["out_start"]) < 1e-5
+        assert abs(a["out_start"] + a["dur"] - b["out_start"]) < 2e-6
     assert segs[0]["f0"] == 0 and all(s["frames"] > 0 for s in segs)
-    assert all(s["dur"] <= pc.SEG_S + pc.MIN_S + 1e-6 for s in segs)
+    assert all(s["dur"] <= pc.SEG_S + pc.MIN_S + 0.5 / p["fps"] + 1e-6 for s in segs)
     for s in segs:
         assert s["f0"] == pc.frame(s["out_start"], p["fps"])
+        assert s["out_start"] == pytest.approx(s["f0"] / p["fps"], abs=1e-6) and s["dur"] == pytest.approx(s["frames"] / p["fps"], abs=1e-6)
         assert len(s["hash"]) == 64
 
 
@@ -367,6 +369,25 @@ def test_the_plan_shape_and_the_audio_hash():
         pc.plan({"kind": "make", "story": {}})
 
 
+def test_the_audio_chunks_tile_the_video_on_the_sample_grid(monkeypatch):
+    for fps in (30.0, 29.97, 29.993):
+        p = _plan(_cut(_spec(fps=fps, card=CARD), 300.47, 320.21))
+        ch = pc.audio_plan(p)
+        assert ch[0]["seg0"] == 0 and ch[-1]["seg1"] == len(p["segments"])
+        assert all(a["seg1"] == b["seg0"] and a["f0"] + a["frames"] == b["f0"] for a, b in zip(ch, ch[1:]))
+        assert all(c["seg1"] - c["seg0"] <= pc.AUDIO_CHUNK for c in ch)
+        assert sum(c["samples"] for c in ch) == round(p["frames"] * pc.AUDIO_SR / fps)    # nincs csúszás a darabok között
+        assert sum(c["frames"] for c in ch) == p["frames"] and len({c["hash"] for c in ch}) == len(ch)
+    base = _plan(_spec())
+    assert [c["hash"] for c in pc.audio_plan(_plan(_spec(accent="#000000")))] == [c["hash"] for c in pc.audio_plan(base)]
+    assert pc.audio_plan(_plan(_cut(_spec(), 100.0, 110.0)))[0]["hash"] != pc.audio_plan(base)[0]["hash"]
+    monkeypatch.setattr(pc, "AUDIO_CHUNK", 1)                                     # szakaszonként egy darab (a kép szerkezete)
+    one = pc.audio_plan(base)
+    assert [(c["f0"], c["frames"]) for c in one] == [(s["f0"], s["frames"]) for s in base["segments"]]
+    with pytest.raises(pc.Unavailable):
+        pc.plan({"kind": "make", "story": {}})
+
+
 def test_the_fingerprint_has_no_output_time():
     """A kimeneti idő (out_start) nem kerül az ujjlenyomatba: ugyanaz a tartalom máshol ugyanaz a hash."""
     spec = _spec(subs=[], layers=[])
@@ -515,6 +536,16 @@ def test_render_runs_are_frame_exact_on_an_overlay(tmp_path, put_file, monkeypat
         assert await pc.ready([segs[k]["hash"] for k in ks], p["source_id"]) == {segs[k]["hash"] for k in ks}
         chk = await pc.frame_check(ctx, ks=[1, 2, 3, 7, 10, 16, len(segs) - 1])  # vízjel, alsó harmad, felirat, kamera, kártya
         assert chk["ok"], chk
+        ch = pc.audio_plan(p)
+        for j in (0, len(ch) - 1):                                                # a hang darabokban: a lista szerinti hosszal
+            h = await pc.render_audio_chunk(ctx, j)
+            f = pc.seg_path(p["source_id"], h)
+            info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,sample_rate", "-of", "json",
+                                              str(f)], capture_output=True, text=True, check=True).stdout)
+            assert info["streams"][0]["codec_name"] == "aac" and info["streams"][0]["sample_rate"] == "48000"
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(f), "-f", "s16le", "-ac", "1", "-"], capture_output=True, check=True).stdout
+            assert ch[j]["samples"] + 1024 <= len(raw) // 2 < ch[j]["samples"] + 2048    # a darab mintái + az AAC előtöltése
+            assert await pc.render_audio_chunk(ctx, j) == h and h in await pc.ready([h], p["source_id"])
         d = await pc.render_audio(ctx)
         m3u = (d / "index.m3u8").read_text()
         got = sum(float(x.split(":")[1].rstrip(",")) for x in m3u.splitlines() if x.startswith("#EXTINF"))
