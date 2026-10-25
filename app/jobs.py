@@ -4,8 +4,8 @@ A kérés azonnal visszaad egy job_id-t; a felület a GET /api/jobs/{id}-t kérd
 folyamat memóriájában él (átmeneti UI-állapot, nem tárolás): újraindításkor a futó munka elvész,
 de a drága rész — az oldalankénti OCR — a Postgres ocr_cache-ben megmarad, az újrafuttatás onnan olvas.
 
-A videó- és hangkódolás (fájleszközök, konverter) a közös kapun át fut (heavy(), lent): egyszerre néhány,
-a többi job „queued” állapotban, a helyével vár.
+A videó- és hangkódolás (fájleszközök, konverter, a videó munkamásolata) a közös kapun át fut (heavy(), lent):
+egyszerre néhány, a többi job „queued” állapotban, a helyével vár.
 """
 from __future__ import annotations
 
@@ -89,9 +89,11 @@ def running(kind: str, **match: Any) -> list[dict[str, Any]]:
 
 
 def remaining_s(job: dict[str, Any]) -> float:
+    """A becslésből hátralévő idő; a nehéz munka sorában álló jobé a beálláskor megmaradt (a várakozás nem fogy belőle)."""
     if job.get("eta_s") is None:
         return 0.0
-    return max(0.0, job["eta_from"] + job["eta_s"] - time.time())
+    now = job.get("_queued_at") if job["status"] == "queued" else None
+    return max(0.0, job["eta_from"] + job["eta_s"] - (now or time.time()))
 
 
 def _gc() -> None:
@@ -142,8 +144,11 @@ async def job_cancel(job_id: str) -> dict[str, Any]:
 
 # ---------- nehéz munka: videó- és hangkódolás ffmpeggel ----------
 # 10-23 (kódátnézés): a fájleszközök ffmpeg-futásainak nem volt korlátja — három felhasználó három 2 GB-os újrakódolása
-# elvitte a gépet, vele a weboldalt. A kapu a MUNKÁT korlátozza, nem az ffmpeg-folyamatot: a gyors render egy munkán
-# belül szándékosan párhuzamos szeletekben kódol (app/tools/fast_render.py), a videó-render a saját kapuja mögött.
+# elvitte a gépet, vele a weboldalt. A kapu a MUNKÁT korlátozza, nem az ffmpeg-folyamatot. Egy-egy munka: egy fájleszköz,
+# egy konverzió, a Fotókba mentés, a videó munkamásolata (footage.make_proxy, a szeletei egy helyen, a saját
+# -threads-ükkel). Nem kér helyet: az előnézet és a render scene=… (video_preview.gate()), a projekt felépítése
+# (video._build_gate()), a render (video._render_gate(), egyszerre egy; a háttérben futó végleges render nice 10-zel) —
+# az előnézet így sosem áll be egy végleges render mögé, a munkamásolat sem.
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -158,11 +163,13 @@ def heavy_slots() -> int:
 
 
 def heavy_threads() -> int:
-    """Egy nehéz munka ffmpeg-szálai (HEAVY_JOB_THREADS); alapból a magok egyenlő része a helyek között."""
+    """A fájleszközök és a konverter ffmpeg-szálai egy munkában (HEAVY_JOB_THREADS); alapból a magok egyenlő része a
+    helyek között."""
     return _env_int("HEAVY_JOB_THREADS", max(2, (os.cpu_count() or 4) // heavy_slots()))
 
 
 _held: ContextVar[bool] = ContextVar("aice_heavy_held", default=False)
+_waited: ContextVar[float] = ContextVar("aice_heavy_waited", default=0.0)
 _report: ContextVar[Optional[Callable[[Optional[int]], None]]] = ContextVar("aice_heavy_report", default=None)
 _heavy_running = 0
 _heavy_queue: list[tuple[asyncio.Future, Optional[Callable[[Optional[int]], None]]]] = []   # érkezési sorrendben
@@ -174,39 +181,61 @@ def on_queue(report: Callable[[Optional[int]], None]) -> None:
     _report.set(report)
 
 
-def queue_text(pos: int) -> str:
+def queue_text(pos: int, then: float = 0) -> str:
+    """then: a job becsült ideje, ha már futna (pl. a videó munkamásolattal) — a várakozás után ennyi."""
     ahead = pos - 1
-    return (f"Waiting for a free slot: the server runs {heavy_slots()} video and audio jobs at a time, and "
-            + ("yours is next." if not ahead else f"{ahead} job{'s are' if ahead > 1 else ' is'} ahead of yours.")
-            + " It starts by itself.")
+    s = (f"Waiting for a free slot: the server runs {heavy_slots()} video and audio jobs at a time, and "
+         + ("yours is next." if not ahead else f"{ahead} job{'s are' if ahead > 1 else ' is'} ahead of yours."))
+    if then > 0:
+        from app.tools import render_eta
+        return s + f" It starts by itself, then takes {render_eta.text(then)}."
+    return s + " It starts by itself."
+
+
+def waited() -> float:
+    """Ennyit várt eddig ez a munka a nehéz munka sorában — a mért idők (render_eta kalibrációja) ne számolják bele."""
+    return _waited.get()
 
 
 def _queued(job: dict[str, Any], pos: Optional[int]) -> None:
+    now = time.time()
     if pos is None:
         job.pop("position", None)
         job.pop("message", None)
         if job["status"] == "queued":
+            if job.get("eta_s") is not None:            # a várakozás nem fogy a becslésből: indulva ugyanannyi van hátra
+                job["eta_from"] += now - job.get("_queued_at", now)
+            job.pop("_queued_at", None)
             job.update(status="running", stage=job.pop("_stage", ""))
         return
     if job["status"] != "queued":
-        job["_stage"] = job["stage"]
-    job.update(status="queued", stage="queued", position=pos, message=queue_text(pos))
+        job.update(_stage=job["stage"], _queued_at=now)
+    job.update(status="queued", stage="queued", position=pos)
+    job["message"] = queue_text(pos, remaining_s(job))
 
 
 @contextlib.asynccontextmanager
-async def heavy():
-    """A nehéz munka kapuja: egyszerre legfeljebb heavy_slots() fut, a többi érkezési sorrendben vár, közben az ffmpeg
-    heavy_threads() szálon dolgozik. Egy munkán belül egyszer foglal: a beágyazott hívás (konverzió egy eszközben, a
-    munka saját al-taskjai) átmegy, nem vár önmagára."""
+async def heavy(threads: bool = True):
+    """A nehéz munka kapuja: egyszerre legfeljebb heavy_slots() fut, a többi érkezési sorrendben vár. Egy munkán belül
+    egyszer foglal: a beágyazott hívás (konverzió egy eszközben, a munka saját al-taskjai) átmegy, nem vár önmagára.
+    threads=True: az ffmpeg heavy_threads() szálon dolgozik (fájleszközök, konverter). threads=False: a munka maga osztja
+    a -threads-et a párhuzamos szeletei között (a munkamásolat: magok // szeletek) — a kapu nem szól bele, beágyazva
+    sem."""
     global _heavy_running
+    from app.convert import engines
     if _held.get():
-        yield
+        tok = None if threads else engines.FFMPEG_THREADS.set(None)
+        try:
+            yield
+        finally:
+            if tok is not None:
+                engines.FFMPEG_THREADS.reset(tok)
         return
     if _heavy_running < heavy_slots() and not _heavy_queue:
         _heavy_running += 1
     else:
         fut = asyncio.get_running_loop().create_future()
-        me = (fut, _report.get())
+        me, t0 = (fut, _report.get()), time.time()
         _heavy_queue.append(me)
         _tell()
         try:
@@ -219,14 +248,14 @@ async def heavy():
                 _heavy_release()                        # a hely épp megjött, amikor leállították: továbbadjuk
             raise
         finally:
+            _waited.set(_waited.get() + time.time() - t0)
             if me[1]:
                 me[1](None)
-    from app.convert import engines
-    held, threads = _held.set(True), engines.FFMPEG_THREADS.set(heavy_threads())
+    held, cap = _held.set(True), engines.FFMPEG_THREADS.set(heavy_threads() if threads else None)
     try:
         yield
     finally:
-        engines.FFMPEG_THREADS.reset(threads)
+        engines.FFMPEG_THREADS.reset(cap)
         _held.reset(held)
         _heavy_release()
 

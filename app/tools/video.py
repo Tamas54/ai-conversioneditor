@@ -5000,15 +5000,17 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
 
 
 async def _timed_proxy(base: dict[str, Any], src: Path) -> tuple[dict[str, Any], list[str]]:
-    """footage.make_proxy — a mért ideje a becslés kalibrációjába (a gyorsítótárból jött másolat kiugró, nem számít)."""
+    """footage.make_proxy — a mért ideje a becslés kalibrációjába (a gyorsítótárból jött másolat kiugró, nem számít; a
+    nehéz munka sorában töltött idő nem a munkamásolaté)."""
+    from app import jobs
     from app.tools import mediaprobe, render_eta
-    t = time.time()
+    t, w0 = time.time(), jobs.waited()
     b, applied = await footage.make_proxy(base, src)
     try:
         m = await mediaprobe.info(src)
         units = float(b.get("duration") or m["duration"] or 0) * render_eta.norm(m["display_width"] or 1920,
                                                                                  m["display_height"] or 1080, m.get("fps") or 30)
-        await render_eta.observe("proxy", "hdr" if m.get("hdr") else "sdr", time.time() - t, units)
+        await render_eta.observe("proxy", "hdr" if m.get("hdr") else "sdr", time.time() - t - (jobs.waited() - w0), units)
     except Exception as e:
         log.warning("a munkamásolat idejének mérése: %s", e)
     return b, applied

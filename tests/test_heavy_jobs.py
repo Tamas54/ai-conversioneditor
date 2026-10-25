@@ -3,13 +3,19 @@
 - a videó- és hangkódolás (fájleszközök, konverter) közös kapun át fut: egyszerre HEAVY_JOB_SLOTS, a többi job
   „queued”, a helyével és egy mondattal; sorra kerülve fut; a sorból leállított job helyét a következő kapja;
 - a kapu munkánként foglal, nem ffmpeg-folyamatonként: a beágyazott hívás és a munka al-taskjai átmennek;
-- az ffmpeg a kapun belül HEAVY_JOB_THREADS szálon kódol (az x264 a fájlba is beírja);
+- az ffmpeg a kapun belül HEAVY_JOB_THREADS szálon kódol (az x264 a fájlba is beírja) — a fájleszközöknél; a videó
+  munkamásolata (heavy(threads=False)) a saját szeletenkénti -threads-ét tartja, beágyazva is;
+- a munkamásolat egy nehéz munka: foglalt helynél a job „queued”, és megmondja, indulva mennyi idő; a hátralévő idő a
+  várakozás alatt nem fogy; a meglévő másolat nem kér helyet;
+- az előnézet és a háttérben futó végleges render sosem kér helyet: minden hely foglalt, a szerkesztés előnézete mégis
+  visszajön, és a végleges MP4 is elkészül;
 - a régi /upload lemezre ír, a korlát fölött 413 ugyanazzal a szöveggel, mint a darabolt feltöltés — a megadott
   hosszon túli törzset el sem olvassa, hossz nélkül a korlátnál abbahagyja.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import threading
 import time
@@ -153,6 +159,192 @@ async def test_ffmpeg_in_a_heavy_job_encodes_on_the_capped_threads(tmp_path, mon
         await run("ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=d=1:s=640x360",
                   "-vf", "scale=320:180", "-c:v", "libx264", "-threads", "12", str(out), timeout=60)
     assert b" threads=3 " in out.read_bytes()                   # az x264 a beállításait a fájlba írja
+
+
+@contextlib.asynccontextmanager
+async def _every_place_taken():
+    """Valaki más nehéz munkája fogja a helyet (HEAVY_JOB_SLOTS=1 mellett mindet), amíg a blokk tart."""
+    from app import jobs
+    hold, go = asyncio.Event(), asyncio.Event()
+
+    async def blocker():
+        async with jobs.heavy():
+            hold.set()
+            await go.wait()
+    task = asyncio.create_task(blocker())
+    await hold.wait()
+    try:
+        yield
+    finally:
+        go.set()
+        await task
+
+
+async def _until_queued(jid: str) -> dict:
+    from app import jobs
+    for _ in range(250):
+        st = await jobs.job_status(jid)
+        if st["status"] == "queued":
+            return st
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"job {jid} did not queue: {st}")
+
+
+async def test_video_work_keeps_its_own_threads_even_when_nested(monkeypatch):
+    from app import jobs
+    from app.convert import engines
+    monkeypatch.setenv("HEAVY_JOB_THREADS", "3")
+    args = ("ffmpeg", "-i", "a.mp4", "-c:v", "libx264", "-threads", "4", "piece.mp4")
+    async with jobs.heavy(threads=False):                       # a munkamásolat
+        assert engines._threads(args) == args
+        async with jobs.heavy():                                # beágyazva: a külső dönt
+            assert engines._threads(args) == args
+    async with jobs.heavy():                                    # fájleszköz…
+        assert "-filter_threads" in engines._threads(args)
+        async with jobs.heavy(threads=False):                   # …benne a munkamásolat: kifejezetten kivétel
+            assert engines._threads(args) == args
+        assert "-filter_threads" in engines._threads(args)
+    assert engines._threads(args) == args
+    assert jobs._heavy_running == 0 and not jobs._heavy_queue
+
+
+async def test_a_queued_job_keeps_its_time_for_when_it_runs(monkeypatch):
+    """A sorban álló job megmondja, indulva mennyi idő; a hátralévő idő a várakozás alatt nem fogy, indulva onnan
+    számol, és a szakasza visszaáll."""
+    from app import jobs
+    monkeypatch.setenv("HEAVY_JOB_SLOTS", "1")
+    ran, finish = asyncio.Event(), asyncio.Event()
+
+    async def work(progress):
+        progress(0, 4, "making a small working copy for the editor")
+        progress.eta(600)
+        async with jobs.heavy(threads=False):
+            ran.set()
+            await finish.wait()
+        return {"ok": True}
+    async with _every_place_taken():
+        j = jobs.start("video", work)
+        st = await _until_queued(j["id"])
+        assert st["position"] == 1 and st["stage"] == "queued" and "remaining_s" not in st
+        assert st["message"] == ("Waiting for a free slot: the server runs 1 video and audio jobs at a time, and yours is "
+                                 "next. It starts by itself, then takes about 10 min.")
+        job = jobs._JOBS[j["id"]]
+        left = jobs.remaining_s(job)
+        await asyncio.sleep(0.4)
+        assert jobs.remaining_s(job) == pytest.approx(left, abs=0.01) and left == pytest.approx(600, abs=1)
+    await asyncio.wait_for(ran.wait(), 5)
+    st = await jobs.job_status(j["id"])
+    assert st["status"] == "running" and st["stage"] == "making a small working copy for the editor"
+    assert st["remaining_s"] >= 599 and "message" not in st and "position" not in st   # a 0,4 s várakozás nem fogyott
+    finish.set()
+    assert (await jobs.wait_status(j["id"], 5))["status"] == "done"
+    assert jobs._heavy_running == 0 and not jobs._heavy_queue
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg needed")
+async def test_the_working_copy_waits_for_a_place_then_runs_its_slices_in_it(tmp_path, monkeypatch, put_file):
+    """A munkamásolat (footage.make_proxy) egy nehéz munka: foglalt helynél vár; utána a szeletei egy helyen futnak, a
+    szeletenkénti -threads-üket (magok // szeletek) a kapu nem írja felül (a sapka 3 volna). A meglévő másolat — a
+    szerkesztés előnézete ezt kapja — nem kér helyet, akkor sem, ha minden hely foglalt."""
+    import os
+    import subprocess
+    from pathlib import Path
+    from app import jobs
+    from app.convert import engines
+    from app.storage import output_path
+    from app.tools import fast_render, footage
+    monkeypatch.setenv("HEAVY_JOB_SLOTS", "1")
+    monkeypatch.setenv("HEAVY_JOB_THREADS", "3")
+    clip = tmp_path / "phone.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=10", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(clip)], check=True)
+    fid = put_file(clip)
+    base = {"file_id": fid, "width": 1280, "height": 720}
+    monkeypatch.setattr(fast_render, "chunks", lambda dur, fps, *a, **k: [(0.0, dur / 2), (dur / 2, dur)])
+    seen, real = [], engines.run
+
+    async def spy(*a, **k):
+        if Path(a[0]).name == "ffmpeg":
+            seen.append((engines._threads(a), jobs._heavy_running))
+        return await real(*a, **k)
+    monkeypatch.setattr(engines, "run", spy)
+
+    async def work(progress):
+        progress(0, 4, "making a small working copy for the editor")
+        b, _ = await footage.make_proxy(base, clip)
+        return {"b": b, "waited": jobs.waited()}
+    async with _every_place_taken():
+        j = jobs.start("video", work)
+        assert (await _until_queued(j["id"]))["position"] == 1
+        await asyncio.sleep(0.3)
+        assert not seen                                         # a helyére vár: még egy ffmpeg sem indult
+    st = await jobs.wait_status(j["id"], 30)
+    assert st["status"] == "done", st
+    b = st["result"]["b"]
+    assert output_path(b["media_id"]).exists() and b["proxy"] == {"w": 960, "h": 540}
+    assert st["result"]["waited"] >= 0.3                        # a sorban töltött idő (a kalibráció levonja)
+    slices = [a for a, _ in seen if "libx264" in a]
+    want = str(max(2, (os.cpu_count() or 4) // 2))
+    assert len(slices) == 2 and all(a.count("-threads") == 1 and a[a.index("-threads") + 1] == want for a in slices)
+    assert not any("-filter_threads" in a for a, _ in seen)
+    assert all(n == 1 for _, n in seen)                         # egy hely: a szeletek és az összefűzés benne
+    assert jobs._heavy_running == 0
+    seen.clear()
+    async with _every_place_taken():                            # minden hely foglalt: a meglévő másolat azonnal jön
+        b2, _ = await asyncio.wait_for(footage.make_proxy(base, clip), 5)
+        assert b2["media_id"] == b["media_id"] and not seen and not jobs._heavy_queue
+
+
+def _engine_ok() -> bool:
+    from app.tools import video
+    return video.available() and bool(shutil.which("ffmpeg"))
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_previews_and_the_final_render_never_wait_for_a_place(tmp_path, put_file, monkeypatch):
+    """Minden hely foglalt (valaki más videója kódol): a szerkesztés előnézete mégis visszajön (a munkamásolat a
+    gyorsítótárból, az előnézet a saját kapuján), és a háttérben futó végleges render is elkészül — egyik sem kér helyet."""
+    import json
+    import subprocess
+    from app import jobs
+    from app.storage import output_path, read_meta
+    from app.tools import video, video_preview
+    monkeypatch.setenv("HEAVY_JOB_SLOTS", "1")
+    for mod, name in ((video, "_gate"), (video, "_bgate"), (video_preview, "_gate")):
+        monkeypatch.setattr(mod, name, None)        # a kapuk ennek a tesztnek a loopjában jönnek létre (asyncio.run)
+    clip = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=10", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "8", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(clip)], check=True)
+    fid = put_file(clip)
+
+    async def until_done(jid: str) -> dict:
+        for _ in range(16):                                     # legfeljebb 4 perc (egy helyre váró render sosem végezne)
+            st = await jobs.wait_status(jid, 15)
+            if st["status"] not in ("running", "queued"):
+                break
+        return st
+
+    async def main():
+        res = await video.overlay({"file_id": fid, "brand": "none", "final": "background",
+                                   "layers": [{"at": 1, "dur": 1.5, "type": "source", "text": "Forrás: teszt"}]})
+        assert (read_meta(fid) or {}).get("proxies")            # a munkamásolat elkészült (szabad helyen)
+        async with _every_place_taken():
+            t0 = time.time()
+            ed = await video.edit(res["file_id"], {"layers": [{"id": "L1", "text": "Forrás: második"}]}, final="background")
+            assert time.time() - t0 < 120 and ed["preview"]["parts"][0]["what"].startswith("L1")
+            for jid in (res["final"]["job_id"], ed["final"]["job_id"]):
+                st = await until_done(jid)
+                assert st["status"] == "done", st
+                out = output_path(st["result"]["file_id"])
+                probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(out)],
+                                                  capture_output=True, text=True, check=True).stdout)
+                assert float(probe["format"]["duration"]) == pytest.approx(8.0, abs=0.3)
+            assert jobs._heavy_running == 1 and not jobs._heavy_queue   # csak a másiké: senki nem kért, nem várt helyet
+        assert jobs._heavy_running == 0
+    asyncio.run(main())
 
 
 # ---------- a régi /upload ----------
