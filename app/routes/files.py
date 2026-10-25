@@ -1,6 +1,7 @@
 """File-serving route — signed token required."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
 
@@ -13,6 +14,7 @@ from app.storage import (
 )
 
 router = APIRouter()
+log = logging.getLogger("aice.files")
 
 
 @router.api_route("/files/{file_id}", methods=["GET", "HEAD"])     # HEAD: iOS/Quick Look és letöltéskezelők előre kérdeznek
@@ -21,6 +23,13 @@ async def get_file(file_id: str, t: str = Query(..., description="signed token")
     if not verify_file_token(file_id, t, uid=u):
         raise HTTPException(403, "invalid or expired token")
     tenancy.set_user(u)  # a link aláírása igazolja: ennek a munkaterületnek a fájlja
+    if file_id.lower().endswith(".ecproj"):
+        from app.tools import video
+        if video.full_pending(file_id):      # hosszú videó: a feliratos projekt a háttérben készül — a szerkesztő, a
+            try:                             # letöltés a teljeset kapja (most épül, ha még nem kész)
+                await video.ensure_full(file_id)
+            except Exception as e:           # inkább a felirat nélküli projekt, mint semmi
+                log.warning("a teljes projekt nem épült meg (%s): %s", file_id, e)
     p = output_path(file_id)
     if not p.exists():
         p = input_path(file_id)
