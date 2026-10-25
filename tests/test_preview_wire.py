@@ -246,3 +246,39 @@ def test_markers_and_the_preview_option():
     assert vp.preview_mode(None) == vp.preview_mode("auto") == "hls" and vp.preview_mode("MP4") == "mp4"
     with pytest.raises(ValueError, match='preview: "mp4"'):
         vp.preview_mode("gif")
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_a_cut_does_not_wait_either_and_the_background_copy_is_the_smart_cut(tmp_path, put_file, hls, monkeypatch):
+    from app.storage import read_meta
+    from app.tools import footage, video
+    fid = put_file(_clip(tmp_path / "talk.mp4", secs=12))
+    monkeypatch.setattr(video, "_start_final", lambda pid, eta: {"id": "stub"})
+    full, smart = [], []
+    real_full, real_smart = footage._build_proxy, footage.smart_proxy
+
+    async def spy_full(base, src):
+        full.append(base.get("keep"))
+        return await real_full(base, src)
+
+    async def spy_smart(*a, **k):
+        r = await real_smart(*a, **k)
+        smart.append(r is not None)
+        return r
+    monkeypatch.setattr(footage, "_build_proxy", spy_full)
+    monkeypatch.setattr(footage, "smart_proxy", spy_smart)
+
+    async def main():
+        _reset_gates()
+        res = await video.overlay({"file_id": fid, "brand": "none", "final": "background", "layers": LAYERS})
+        assert full == [None]
+        ed = await video.edit(res["file_id"], {"cut": [{"from": "00:03.5", "to": "00:05"}]}, final="background")
+        pid = ed["file_id"]
+        b1 = read_meta(pid)["spec"]["base"]
+        assert b1["proxy_pending"] is True and b1["keep"] and full == [None] and not smart     # nem várt a munkamásolatra
+        await video.ensure_full(pid)
+        b2 = read_meta(pid)["spec"]["base"]
+        assert smart == [True] and full == [None] and "proxy_pending" not in b2           # a háttérben: smart cut
+        assert b2["duration"] == pytest.approx(10.5, abs=0.05)
+    asyncio.run(main())
