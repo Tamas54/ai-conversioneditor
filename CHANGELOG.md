@@ -1,5 +1,79 @@
 # Changelog
 
+## 2026-10-25 — Trimming copies the video where it can: only the seconds at the cuts are re-encoded
+
+Before, `trim-video` re-encoded everything it kept (x264 CRF 17). Cutting one minute off a 30-minute video meant
+29 minutes of encoding, and one more generation of quality loss on all of it.
+
+Now it makes a **smart cut** wherever that is provably safe:
+- **Between keyframes, the video is copied bit for bit.** Only the frames from each cut point to the next keyframe are
+  re-encoded, and the pieces are joined. The cut stays frame-accurate. Every frame keeps its own timestamp, also on
+  variable-frame-rate video, and a phone's rotation tag is kept.
+- **The sound is copied too** when it is AAC: bit for bit, starting and ending with the picture. Other sound is
+  re-encoded as before.
+- **The re-encoded frames fit the rest exactly.** x264 writes its settings into the video, so the Studio re-encodes
+  the cut points with the same stream settings, at today's preset and at least today's quality (CRF 17). Then it checks
+  that the stream settings (SPS/PPS) came out byte for byte the same as the original's. The finished file has one
+  stream description, valid for every frame, like the original: nothing that only some players could follow.
+- **Every result is checked before it is handed over:** the stream settings, codec, profile, level, colour tags and
+  rotation; the number of frames and each frame's time; the copied packets; and both joins, decoded back with no
+  errors, with the copied frames' checksums matching the original's. It also checks that the sound starts and ends
+  with the picture. If anything differs, the whole part is re-encoded as before.
+- **It stays within its job's share of the cores.** Trimming is one of the heavy jobs that take turns: the start and
+  end pieces are encoded at the same time, each on half of the job's ffmpeg threads.
+- **The result says what happened** (`data.note`), e.g. "Smart cut: 28:20.6 of the video was copied untouched; only
+  9.2 s at the start and the end was re-encoded, up to the nearest keyframe." or "The whole clip was re-encoded
+  because …".
+
+Where it is used, and where not:
+- **Used:** H.264 made by x264 at CRF 17 or better (or at a set bitrate), in MP4 or MOV. In practice: the files the
+  Studio's video tools make (trim, convert, crop, resize…), trimmed again.
+- **Not used; the full re-encode runs, and the note says why.** The decision takes 0.04–0.33 s on the owner's files:
+  - **Phone video.** IMG_9302 (iPhone 17 Pro Max, HEVC Main 10, HLG, Dolby Vision 8.4): "smart cut works on H.264
+    video only, and this one is HEVC (H.265) (it was recorded by an Apple device)". x265, set as close as it goes,
+    still writes different stream settings than the phone's encoder (for example the picture coded 1088 px wide with a
+    crop window, and general_non_packed_constraint_flag); the keyframes are open GOP (129 of a 2-minute clip's 130
+    can't be cut at); every frame carries Dolby Vision data. One track with two different sets of stream settings isn't
+    played reliably by Apple's players. IMG_9270 (iPhone H.264): "it wasn't encoded by x264, so its cut points can't
+    be re-encoded to match the rest (it was recorded by an Apple device)".
+  - **The renderer's final videos (x264 CRF 19).** x264 writes the CRF into the stream settings, so a matching cut
+    point could only be re-encoded at that lower quality.
+  - **MKV**, e.g. a 720p WEB-DL episode: "smart cut works on MP4 and MOV files only"; copied into MP4 it still isn't
+    x264 ("it wasn't encoded by x264 …").
+  - Open GOP, interlaced, 10-bit or 4:2:2 H.264.
+- **The re-encoded stretch runs to the next keyframe.** x264 puts one at least every 250 frames (8.3 s at 30 fps), so
+  up to about 8 s per cut point is re-encoded.
+
+Measured in the prod-like image (ffmpeg 4.4.2), inside the heavy-job gate as the tool runs (8 ffmpeg threads of the
+laptop's 16; other agents' work ran alongside, 1-minute load 4–10). "x264 copy" is today's trim output of the owner's
+phone video, i.e. a file the Studio made:
+
+| Source | Cut | Copied / re-encoded | Smart cut | Full re-encode (before) |
+|---|---|---|---|---|
+| IMG_9270 x264 copy, 55 s, 1080×1920 | 7.3–41.7 s | 33.3 s / 1.1 s | 7.2 s | 35.5 s |
+| IMG_9302 x264 copy, 100 s, 1920×1080, HLG-tagged | 10.2 s–1:30.3 | 1:04.6 / 15.5 s | 28.0 s | 98.9 s |
+| 30 min (that copy 18 times, joined) | 0:30.5–29:00.3 | 28:20.6 / 9.2 s | 21.3 s | 1766.0 s (29.4 min) |
+| the same 30 min, end only | –29:00 | 28:55.7 / 4.3 s | 19.9 s | not measured |
+| 49-min 720p film episode, the Studio's x264 MP4 of it (local test) | 2:00–45:00 | 42:50.4 / 9.6 s | 10.4 s | not measured; converting the whole episode took 957.1 s |
+| IMG_9270 as recorded (iPhone H.264): falls back | 5–60 s | — | 55.7 s | 56.1 s |
+
+Checked from outside against the source (decoded, not the tool's own check), on the 55 s, 100 s and 30-minute cuts:
+- **The same frames, at the same times:** 1032, 2403 and 51 294 frames, every frame's time equal to the source's.
+  Today's re-encode matches on the first two. On the 30-minute file, whose picture starts 21 ms after its sound, it
+  made 51 295 frames, one more than the source has there, and its sound is 21 ms (1009 samples) off the source's.
+- **Bit for bit:** 1000 of 1032, 1937 of 2403 and 51 017 of 51 294 frames are the source's own (today: none).
+- **The re-encoded frames:** PSNR to the source 47.6/45.9, 47.2/47.6 and 48.9/49.0 dB (mean, start/end piece);
+  today's re-encode of the same frames 47.9/45.0 and 47.3/47.8 dB. The means are within 0.3 dB; the worst single
+  frame is up to 0.9 dB below today's.
+- **Sound:** 0 samples (48 kHz) off the source at both ends.
+- **One stream description** (`stsd`: avc1), colour tags unchanged (BT.709, or BT.2020/HLG on the HDR-derived copy),
+  and the whole file decodes without an error.
+- The file is 3–7% larger than today's re-encode: the copied frames keep the original's bits.
+- Not checked from outside (the machine was needed elsewhere): the end-only 30-minute cut and the episode cut. The
+  tool's own check passed on both (it only answers "smart cut" after it).
+
+`VIDEO_SMART_TRIM=0` switches it off.
+
 ## 2026-10-25 — Other clips in your video: put where the footage pauses, the join hard to notice
 
 The owner's ask: „a második kis videó 2 percesét vágjuk be a 16–19. perc közé értelemszerűen”, and „a harmadikat tedd
