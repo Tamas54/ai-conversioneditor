@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,34 @@ def _clip(path: Path) -> Path:
     _ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=25", "-f", "lavfi", "-i", "sine=frequency=550:sample_rate=48000",
         "-t", "3", "-af", "volume=6dB", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-c:a", "aac", str(path))
     return path
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg needed")
+def test_sources_of_different_frame_rates_are_joined_at_speed(tmp_path, put_file, monkeypatch):
+    """10-25, valós anyagon: az iPhone-felvétel (30 tbr, 29,993 átlag) és egy klip concatja „VFR” lett, az ffmpeg 1 µs-os
+    kockákra töltötte ki — a munkamásolat szelete 0,001× sebességgel ment, 30 perc után állt meg. Most minden forrás
+    ugyanarra a kockasebességre jön: az ablak a rendes idő alatt kész, a kockaszám a hossz × fps."""
+    from app.config import settings
+    from app.tools import mediaprobe
+    raw, main = tmp_path / "raw.mp4", tmp_path / "main.mp4"
+    _ff("-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30", "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(raw))
+    _ff("-i", str(raw), "-vf", "select='not(between(n,40,45))'", "-vsync", "vfr", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        str(main))                                                      # 6 kocka ki: az átlag 28,5, a tbr 30 marad
+    m = asyncio.run(mediaprobe.info(main))
+    assert m["fps"] < 29.5
+    cid, fps = put_file(_clip(tmp_path / "clip.mp4")), float(m["fps"])
+    base = {"keep": footage.insert(None, 4.0, 2.0, {"src": cid, "a": 0.0, "b": 2.0, "join": "cut"}, fps),
+            "width": 320, "height": 240, "fps": fps}
+    monkeypatch.setattr(settings, "VIDEO_TIMEOUT_S", 60)
+
+    async def go() -> None:
+        tl = await footage.timeline(base, main, 320, 240, fps, tmp_path)
+        await footage._tl_window(tl, 1.0, 5.0, ["format=yuv420p"], [], ["-c:v", "libx264", "-preset", "ultrafast",
+                                                                         "-pix_fmt", "yuv420p"], tmp_path / "w.mp4", tmp_path)
+    t0 = time.time()
+    asyncio.run(go())
+    v = next(s for s in _probe(tmp_path / "w.mp4")["streams"] if s["codec_type"] == "video")
+    assert abs(int(v["nb_frames"]) - 4.0 * fps) <= 2 and time.time() - t0 < 30, (v["nb_frames"], time.time() - t0)
 
 
 @pytest.mark.engines

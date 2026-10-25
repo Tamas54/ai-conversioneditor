@@ -617,13 +617,17 @@ async def timeline(base: dict[str, Any], src: Path, W: int, H: int, fps: float, 
         if x["src"] and x["src"] not in paths:
             paths[x["src"]] = crafts.existing(x["src"])
     infos = {k: await mediaprobe.info(p) for k, p in paths.items()}
+    # MINDEN forrás lánca ugyanarra a kockasebességre (a fő felvételé is): a concat a különböző kockasebességű
+    # bemenetekből „VFR” kimenetet csinál (frame_rate 1/0), és az ffmpeg a kódolásnál a time base-zel (1 µs) állandó
+    # kockasebességre töltené ki — 10-25, valós anyagon (iPhone: 30 tbr, 29,993 átlag; a klip fps=29,993): minden kocka
+    # ezerszer ismételve, 0,001× sebesség, a munkamásolat egy szelete 30 perc után időtúllépéssel állt meg
     tail = f"fps={fps:g},format=yuv420p,setsar=1,settb=AVTB"
     chains: dict[Optional[str], Any] = {}
     m = infos[None]
     mw, mh = int(m["display_width"] or W), int(m["display_height"] or H)
     main = ([f"scale={tw}:{th}"] if (tw, th) != (mw, mh) else []) + chain(base, m, work) + \
         (await fast_render.base_filters(src) if bt709 else [])
-    chains[None] = lambda tag, f=",".join(main + ["format=yuv420p,setsar=1,settb=AVTB"]): f
+    chains[None] = lambda tag, f=",".join(main + [tail]): f
     for k, info in infos.items():
         if k is None:
             continue
