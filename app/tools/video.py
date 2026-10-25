@@ -4573,7 +4573,9 @@ def _cut_note(old: Any, new: Any, src_dur: float) -> str:
     before, after = footage.length(old, src_dur), footage.length(new, src_dur)
     if not new:
         return f"Cut: the whole footage is back ({_tc(after)})."
-    gaps = len(new) - 1 + (new[0][0] > 0.01) + (new[-1][1] < src_dur - 0.05)
+    main = [x for x in footage.segs(new) if x["src"] is None]        # (a beszúrt klipek mellett: a fő felvétel hézagai)
+    gaps = sum(q["a"] - p["b"] > 1e-3 for p, q in zip(main, main[1:])) + bool(main and main[0]["a"] > 0.01) + \
+        bool(main and main[-1]["b"] < src_dur - 0.05)
     return (f"Cut: {_tc(before)} → {_tc(after)} — the footage plays in {len(new)} part(s), {gaps} removed; layers and "
             "subtitles moved with it. The original stays whole: cut=\"none\" brings it back.")
 
@@ -6234,7 +6236,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             old = base.get("keep")
             ranges = cut_ranges(changes["cut"], float(base["duration"]))
             new = footage.cut(old, src_dur, ranges, float(base.get("fps") or FPS)) if ranges else None
-            if new and len(new) == 1 and new[0][0] <= 1e-3 and new[0][1] >= src_dur - 1e-3:
+            if footage.whole(new, src_dur):
                 new = None
             layers, opts["subtitles"], opts["camera"] = _recut(layers, opts["subtitles"], opts.get("camera"), old, new, notes)
             notes.append(_cut_note(old, new, src_dur))

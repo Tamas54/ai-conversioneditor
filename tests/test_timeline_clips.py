@@ -36,6 +36,10 @@ def test_insert_then_cut_it_out_gives_the_whole_footage_back():
     end = footage.insert(k, 100.0, 110.0, {"src": "c3.mp4", "a": 0, "b": 5, "join": "dissolve"}, 25)
     assert end[-1] == {"a": 0, "b": 5, "src": "c3.mp4", "join": "dissolve"} and footage.length(end, 100) == 115.0
     assert footage.out_near(footage.cut(None, 100.0, [(10, 20)], 25), 15) == 10.0           # kivágott pont: a következő
+    from app.tools.video import _cut_note                          # vágás egy klipes idővonalon: a fő felvétel hézagai
+    both = footage.cut(k, 100.0, [(90, 100)], 25)
+    assert "plays in 4 part(s), 1 removed" in _cut_note(k, both, 100.0)
+    assert footage.whole([[0.0, 100.0]], 100.0) and not footage.whole(k, 100.0) and not footage.whole(both, 100.0)
 
 
 def test_the_quick_preview_shows_where_a_clip_starts_and_ends():

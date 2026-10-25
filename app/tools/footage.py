@@ -397,6 +397,12 @@ def store(ss: list[dict[str, Any]]) -> list[Any]:
     return out
 
 
+def whole(keep: Any, dur: float) -> bool:
+    """Egy darab, a fő felvétel egésze (a vágás visszavonva, a klipek kivéve): a recept üres lehet."""
+    ss = segs(keep)
+    return len(ss) == 1 and ss[0]["src"] is None and ss[0]["a"] <= 1e-3 and ss[0]["b"] >= dur - 1e-3
+
+
 def length(keep: Any, dur: float) -> float:
     return round(sum(x["b"] - x["a"] for x in segs(keep)), 4) if keep else dur
 
