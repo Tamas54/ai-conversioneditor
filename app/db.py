@@ -390,6 +390,25 @@ CREATE TABLE IF NOT EXISTS admin_notices (
     created_at      timestamptz NOT NULL DEFAULT now(),
     resolved_at     timestamptz
 );
+-- ---- bővítés (10-25), additív: a szakasz-gyorsítótáras előnézet (app/tools/preview_cache.py) — a fájlok a köteten
+-- (DATA_DIR/preview-cache/<source_id>/<hash>.ts), itt a nyilvántartásuk: méret + utolsó használat (LRU a
+-- VIDEO_PREVIEW_CACHE_GB fölött); a hash a TARTALOMÉ (ugyanaz a szakasz egy másik verzióban is ugyanaz a sor) ----
+CREATE TABLE IF NOT EXISTS preview_segments (
+    hash            text PRIMARY KEY,
+    source_id       text NOT NULL,
+    bytes           bigint NOT NULL,
+    created_at      timestamptz DEFAULT now(),
+    last_used_at    timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS preview_segments_used_idx ON preview_segments (last_used_at);
+-- a végig látható rétegek (vízjel) köre: a réteg tartalmának kulcsa → bevezetés + periódus kockában (0: nem ismétlődik);
+-- egyszer mérve (minta-render + kockánkénti md5), utána minden verzió ezt kapja
+CREATE TABLE IF NOT EXISTS preview_cycles (
+    key             text PRIMARY KEY,
+    intro           integer NOT NULL,
+    period          integer NOT NULL,
+    created_at      timestamptz DEFAULT now()
+);
 """
 
 _pool = None
@@ -726,6 +745,56 @@ async def render_rate_observe(stage: str, key: str, rate: float, weight: float =
     await _rows("INSERT INTO render_rates (stage, key, rate) VALUES (%s, %s, %s) ON CONFLICT (stage, key) DO UPDATE SET "
                 "rate = render_rates.rate * (1 - %s) + EXCLUDED.rate * %s, n = render_rates.n + 1, updated_at = now()",
                 (stage, key, rate, weight, weight))
+
+
+# ---------- a szakasz-gyorsítótáras előnézet (app/tools/preview_cache.py) ----------
+
+async def preview_seg_put(h: str, source_id: str, nbytes: int) -> None:
+    if not enabled():
+        return
+    await _rows("INSERT INTO preview_segments (hash, source_id, bytes) VALUES (%s, %s, %s) ON CONFLICT (hash) DO UPDATE SET "
+                "source_id = EXCLUDED.source_id, bytes = EXCLUDED.bytes, last_used_at = now()", (h, source_id, int(nbytes)))
+
+
+async def preview_seg_get(hashes: list[str]) -> list[dict[str, Any]]:
+    if not enabled() or not hashes:
+        return []
+    return await _rows("SELECT hash, source_id, bytes FROM preview_segments WHERE hash = ANY(%s)", (list(hashes),))
+
+
+async def preview_seg_touch(hashes: list[str]) -> None:
+    if enabled() and hashes:
+        await _rows("UPDATE preview_segments SET last_used_at = now() WHERE hash = ANY(%s)", (list(hashes),))
+
+
+async def preview_seg_total() -> int:
+    if not enabled():
+        return 0
+    return int((await _rows("SELECT COALESCE(sum(bytes), 0) AS n FROM preview_segments"))[0]["n"])
+
+
+async def preview_seg_oldest(n: int) -> list[dict[str, Any]]:
+    if not enabled():
+        return []
+    return await _rows("SELECT hash, source_id, bytes FROM preview_segments ORDER BY last_used_at ASC, hash LIMIT %s", (int(n),))
+
+
+async def preview_seg_delete(hashes: list[str]) -> None:
+    if enabled() and hashes:
+        await _rows("DELETE FROM preview_segments WHERE hash = ANY(%s)", (list(hashes),))
+
+
+async def preview_cycle_get(key: str) -> Optional[dict[str, int]]:
+    if not enabled():
+        return None
+    rows = await _rows("SELECT intro, period FROM preview_cycles WHERE key = %s", (key,))
+    return {"intro": int(rows[0]["intro"]), "period": int(rows[0]["period"])} if rows else None
+
+
+async def preview_cycle_put(key: str, intro: int, period: int) -> None:
+    if enabled():
+        await _rows("INSERT INTO preview_cycles (key, intro, period) VALUES (%s, %s, %s) ON CONFLICT (key) DO UPDATE SET "
+                    "intro = EXCLUDED.intro, period = EXCLUDED.period", (key, int(intro), int(period)))
 
 
 # ---------- tartalmi ellenőrzés (gyorsítótár) és élő adatok ----------
