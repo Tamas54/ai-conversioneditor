@@ -4169,13 +4169,14 @@ def overlay_input(body: dict[str, Any]) -> tuple[str, str]:
     crafts.existing(fid)
     alpha_kinds(body.get("alpha"))
     card = end_card_of(body)                                                   # a zárókártya alakja is most derüljön ki
-    if not body.get("layers") and not body.get("subtitles") and not card and not body.get("cut"):
+    if not body.get("layers") and not body.get("subtitles") and not card and not body.get("cut") and not body.get("insert"):
         raise ValueError("overlay needs layers=[…] and/or subtitles=[…] (or \"auto\"), e.g. [{\"at\": \"00:02\", \"type\": "
                          "\"lower_third\", \"name\": \"Anna Kovács\", \"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, "
                          "\"type\": \"chart\", \"chart\": {…}}].")
     layers_from(_unsaid(body.get("layers")), body.get("text") or "", [])   # szerkezeti hiba (típus, idő, hely) most derüljön ki
     if body.get("subtitles") != "auto":
         subtitle_cues(body.get("subtitles"))                                   # a feliratok formája is
+    insert_specs(body.get("insert"))                                           # a beszúrandó klipek is
     mc = music_choice(body.get("music"), body.get("music_file_id"))           # a zene is (a saját zenefájl megvan-e)
     if mc["file_id"]:
         crafts.existing(mc["file_id"])
@@ -4211,7 +4212,8 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
             else subtitle_cues(body.get("subtitles"))
         card = end_card_of(body)
         ranges = cut_ranges(body.get("cut"), float(info["duration"]))
-        if not layers and not subs and not card and not ranges:
+        inserts = insert_specs(body.get("insert"))
+        if not layers and not subs and not card and not ranges and not inserts:
             raise ValueError("overlay needs layers=[…], e.g. [{\"at\": \"00:02\", \"type\": \"lower_third\", \"name\": \"Anna Kovács\", "
                              "\"role\": \"Mayor\"}, {\"at\": \"00:09\", \"dur\": 5, \"type\": \"chart\", \"chart\": {…}}]"
                              + (" — every layer given was left out: " + "; ".join(n[2:] for n in notes if n.startswith("⚠ ")) if notes else "") + ".")
@@ -4223,6 +4225,12 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
             layers, subs, camera = _recut(layers, subs, camera, None, keep, notes)
             notes.append(_cut_note(None, keep, float(info["duration"])))
             base.update(keep=keep, duration=footage.length(keep, float(info["duration"])))
+        inserted: list[dict[str, Any]] = []
+        if inserts:                                           # klipek beszúrása (az idők a felvétel saját idejében)
+            kept = base.get("keep")
+            base, layers, subs, camera, inserted = await _insert_clips(base, inserts, layers, subs, camera, notes, step,
+                                                                       frame=lambda x: footage.out_near(kept, x),
+                                                                       unframe=lambda t: footage.to_src(kept, t))
         if footage.needed(info, None, crafts.existing(fid).stat().st_size, base.get("keep")):
             # telefonos felvétel elforgatás-jelöléssel (a motor a tárolt, oldalra fektetett képet olvasná), HDR (HLG/PQ):
             # a szerkesztő kis munkamásolatot kap, felállítva, SDR-re képezve; a végső kép az eredetiből készül
@@ -4233,7 +4241,7 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         opts = {"accent": await _brand_accent(body), "alpha": body.get("alpha"), "music": mc["mood"],
                 "music_file_id": mc["file_id"], "music_start": mc["start"], "music_level": mc["level"],
                 "title": _clean(body.get("title") or root_name(display_label(fid), "Video"), 70, "Title"),
-                "camera": camera, "subtitles": subs, **({"transcript": topts} if topts else {}),
+                "camera": camera, "subtitles": subs, **({"transcript": topts} if topts else {}), "inserted": inserted,
                 "caption_style": cstyle}
         return await _assemble_overlay(base, layers, opts, source=body.get("text") or "", layer_notes=notes, step=step,
                                        label_stem=result_stem(fid, "with graphics"), operation="video overlay",
@@ -4566,9 +4574,145 @@ def _cut_note(old: Any, new: Any, src_dur: float) -> str:
     before, after = footage.length(old, src_dur), footage.length(new, src_dur)
     if not new:
         return f"Cut: the whole footage is back ({_tc(after)})."
-    gaps = len(new) - 1 + (new[0][0] > 0.01) + (new[-1][1] < src_dur - 0.05)
+    main = [x for x in footage.segs(new) if x["src"] is None]        # (a beszúrt klipek mellett: a fő felvétel hézagai)
+    gaps = sum(q["a"] - p["b"] > 1e-3 for p, q in zip(main, main[1:])) + bool(main and main[0]["a"] > 0.01) + \
+        bool(main and main[-1]["b"] < src_dur - 0.05)
     return (f"Cut: {_tc(before)} → {_tc(after)} — the footage plays in {len(new)} part(s), {gaps} removed; layers and "
             "subtitles moved with it. The original stays whole: cut=\"none\" brings it back.")
+
+
+INSERT_HELP = ('insert: [{"file_id": <a video>, "at": "16:30" | {"between": ["16:00", "19:00"]} | "end", "from"?: "00:05", '
+               '"to"?: "02:10" (a part of the clip), "join"?: "smooth" (default: on a pause, the sound and colours matched, '
+               'a 0.25 s sound crossfade) | "dissolve" (+ a 0.4 s picture dissolve) | "cut"}, …]')
+
+
+def insert_specs(raw: Any) -> list[dict[str, Any]]:
+    """insert → [{file_id, at: float | ("between", t1, t2) | "end", from?, to?, join}] — a klipek megvannak-e, videók-e."""
+    if raw in (None, "", [], False):
+        return []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError(INSERT_HELP)
+    out = []
+    for c in raw[:20]:
+        if not isinstance(c, dict) or not c.get("file_id"):
+            raise ValueError(INSERT_HELP)
+        fid = str(c["file_id"])
+        if fid.rsplit(".", 1)[-1].lower() not in MOVIE_EXTS:
+            raise ValueError(f"insert: {fid} isn't a video (mp4, mov, webm, m4v, mkv).")
+        crafts.existing(fid)
+        at = c.get("at", "end")
+        if isinstance(at, dict) and isinstance(at.get("between"), list) and len(at["between"]) == 2:
+            w0, w1 = (timecode(x, "insert between") for x in at["between"])
+            at = ("between", min(w0, w1), max(w0, w1))
+        elif at in ("end", None, ""):
+            at = "end"
+        else:
+            at = timecode(at, "insert at")
+        join = str(c.get("join") or "smooth").lower()
+        if join not in footage.JOINS:
+            raise ValueError(f"insert join: {' | '.join(footage.JOINS)} — not {join!r}.")
+        sp: dict[str, Any] = {"file_id": fid, "at": at, "join": join}
+        for k in ("from", "to"):
+            if c.get(k) not in (None, ""):
+                sp[k] = timecode(c[k], f"insert {k}")
+        out.append(sp)
+    return out
+
+
+async def _insert_clips(base: dict[str, Any], specs: list[dict[str, Any]], layers: list[dict[str, Any]],
+                        subs: list[dict[str, Any]], camera: Any, notes: list[str], step: Callable[..., None],
+                        frame: Callable[[float], float], unframe: Callable[[float], float]
+                        ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], Any, list[dict[str, Any]]]:
+    """Klipek beszúrása a videóba (footage.insert): a hely az anyagból (a fő felvétel szünetei, mondatvég), az illesztés
+    észrevétlen (a klip csendig vágva, a hangereje és a színei a fő felvételéhez); a rétegek, feliratok, a kamera vele
+    csúsznak. frame: a kérés ideje → a mostani idővonal ideje (overlaykor a felvétel saját idejéből); unframe: vissza.
+    → (base, rétegek, feliratok, kamera, a beszúrások leírása az eredménybe: at / until az új videó idejében, at_given
+    és a jelöltek a kérés idejében — abban, amiben az ügynök egy másik helyet kérhet)."""
+    from app.tools import mediaprobe
+    src = footage.original(base)
+    if src is None:
+        raise ValueError("Your original video is no longer stored (uploads are kept for a limited time) — upload it again to "
+                         "insert clips into it.")
+    m = await mediaprobe.info(src)
+    src_dur, fps = float(m["duration"] or base["duration"]), float(base.get("fps") or FPS)
+    old = base.get("keep")
+    total = footage.length(old, src_dur)
+    step(0, 4, "finding where the clips go")
+    plans = []
+    for k, sp in enumerate(specs, 1):
+        clip = crafts.existing(sp["file_id"])
+        ci = await mediaprobe.info(clip)
+        if not ci.get("has_video"):
+            raise ValueError(f"insert: {sp['file_id']} has no picture.")
+        cdur = float(ci["duration"] or 0)
+        a, b = float(sp.get("from", 0.0)), min(float(sp.get("to") or cdur), cdur)
+        if b - a < 0.5:
+            raise ValueError(f"insert: clip {k} would be shorter than half a second ({_tc(a)} → {_tc(b)}).")
+        cands: list[dict[str, Any]] = []
+        if sp["at"] == "end":
+            t, why = total, "the end of the video"
+        elif isinstance(sp["at"], tuple):
+            w0, w1 = min(frame(sp["at"][1]), total), min(frame(sp["at"][2]), total)
+            cands = await footage.candidates(old, src, m, w0, w1, subs, fps)
+            t, why = footage.pick(cands, w0, w1, fps)
+            why += f" (window {_tc(sp['at'][1])}–{_tc(sp['at'][2])})"
+        else:
+            t, why = min(frame(sp["at"]), total), "the given time"
+        plans.append((t, k, sp, clip, ci, a, b, why, cands))
+    new, done = old, []
+    for t, k, sp, clip, ci, a, b, why, cands in sorted(plans, key=lambda p: (-p[0], -p[1])):   # hátulról: az idők érvényesek
+        join, bits = sp["join"], []
+        seg: dict[str, Any] = {"src": sp["file_id"], "join": join}
+        if join != "cut":
+            if "from" not in sp and "to" not in sp:
+                a2, b2 = await footage.trim_silence(clip, ci, a, b)
+                if (a2, b2) != (a, b):
+                    bits.append(f"its silent start / end trimmed ({_tc(a2 - a)} / {_tc(b - b2)})")
+                    a, b = a2, b2
+            src_at, s_at = footage.at(old, t)
+            s_main = s_at if src_at is None else 0.0
+            lm = await footage.loudness(src, max(0.0, s_main - 60), min(src_dur, s_main + 60), m.get("audio_stream"))
+            lc = await footage.loudness(clip, a, b, ci.get("audio_stream"))
+            if lm is not None and lc is not None and abs(lm - lc) >= 1:
+                seg["gain"] = round(max(-15.0, min(15.0, lm - lc)) * 2) / 2
+                bits.append(f"sound {seg['gain']:+g} dB to match the footage")
+            look = footage.match_look(await footage.look(src, m, max(0.0, s_main - 60), min(src_dur, s_main + 60)),
+                                      await footage.look(clip, ci, a, b))
+            if look:
+                seg["match"] = look
+                bits.append("colours matched (" + ", ".join(f"{x} {v:g}" for x, v in look.items()) + ")")
+            bits.append("a 0.25 s sound crossfade" + (" and a 0.4 s picture dissolve" if join == "dissolve" else ""))
+        b = round(a + round((b - a) * fps) / fps, 4)
+        seg.update(a=round(a, 4), b=b, _k=k)                  # (_k: a jelölése, amíg a helyét kikeressük)
+        new = footage.insert(new, src_dur, t, seg, fps)
+        done.append({"clip": k, "file_id": sp["file_id"], "a": seg["a"], "b": b, "why": why, "bits": bits, "t": t,
+                     "candidates": cands[:20]})
+    placed = {x["_k"]: off for off, x in footage._offsets(new) if x.get("_k")}   # a végleges helyük (ugyanaz a klip kétszer is)
+    new = footage.store([{k_: v for k_, v in x.items() if k_ != "_k"} for x in footage.segs(new)])
+    for d in sorted(done, key=lambda d: d["clip"]):
+        d["at"] = round(placed.get(d["clip"], d["t"]), 3)
+        d["until"] = round(d["at"] + d["b"] - d["a"], 3)
+        name = display_label(d["file_id"])
+        d["at_given"] = round(unframe(d["t"]), 3)                # a kérés idejében (a korábbi beszúrások nélkül)
+        d["candidates"] = [{**c, "at": round(unframe(c["at"]), 3)} for c in d["candidates"]]
+        given = f" ({_tc(d['at_given'])} in the time you gave)" if abs(d["at_given"] - d["at"]) > 0.05 else ""
+        notes.append(f"Clip {d['clip']} ({name}) inserted at {_tc(d['at'])}{given} — {d['why']}; {_tc(d['b'] - d['a'])} long"
+                     + (f"; {', '.join(d['bits'])}" if d["bits"] else "; a plain cut") + ".")
+        others = sorted((c for c in d["candidates"] if abs(c["at"] - d["at_given"]) > 0.05), key=lambda c: -c["pause"])[:5]
+        if others:
+            notes.append(f"Other places for clip {d['clip']} in the window (in the time you gave — \"at\" takes them): "
+                         + ", ".join(f"{_tc(c['at'])} ({c['pause']:.1f} s{', sentence end' if c['sentence_end'] else ''})"
+                                     for c in others) + ".")
+        if subs:
+            notes.append(f"⚠ Clip {d['clip']} ({name}) has no subtitles — give them in subtitles (they move with the video), "
+                         "or leave it without.")
+    layers, subs, camera = _recut(layers, subs, camera, old, new, notes)
+    base["keep"] = new
+    base["duration"] = footage.length(new, src_dur)
+    return base, layers, subs, camera, [{k: d[k] for k in ("clip", "file_id", "at", "until", "at_given", "why", "candidates")}
+                                        for d in sorted(done, key=lambda d: d["clip"])]
 
 
 def _with_end_card(base: dict[str, Any], card: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -4930,6 +5074,8 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                                   "layers": layer_listing([ly for ly in layers if ly["id"] in placed]), "credits": credits or None}
         if _lottie_picks(story):
             result["lottie_picks"] = _lottie_picks(story)
+        if opts.get("inserted"):                              # hova kerültek a klipek, és miért (a jelöltekkel)
+            result["inserted"] = opts["inserted"]
         if card:
             result["end_card"] = {**card, "at": float(base["plain"]["duration"]), "until": total}
         srt_entry = None
@@ -6020,12 +6166,13 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
     (projekt + MP4); a felvétel ugyanaz a fájl marad, a változatlan rétegek érintetlenek."""
     from app.storage.naming import result_stem
     allowed = {"layers", "add_layers", "accent", "title", "alpha", "music", "music_file_id", "camera", "subtitles", "end_card",
-               "end_title", "end_subtitle", "transcript", "adjust", "caption_style", "cut"}
+               "end_title", "end_subtitle", "transcript", "adjust", "caption_style", "cut", "insert"}
     other = sorted(k for k in set(changes) - allowed if changes[k] not in (None, "", [], {}))
     if other:
         raise ValueError(f"This video is your own footage with layers on it: change its layers (changes.layers with an id, "
                          f"changes.add_layers), accent, title, subtitles, caption_style, an end card (changes.end_card), the footage's colour and light "
-                         f"(changes.adjust, e.g. {{\"auto\": true}}) or its cuts (changes.cut = [{{\"from\": \"05:00\", \"to\": \"07:30\"}}]) — not "
+                         f"(changes.adjust, e.g. {{\"auto\": true}}), its cuts (changes.cut = [{{\"from\": \"05:00\", \"to\": \"07:30\"}}]) or "
+                         f"clips put in it (changes.insert) — not "
                          f"{', '.join(other)}.")
     opts = dict(spec.get("opts") or {})
     if "camera" in changes:
@@ -6073,11 +6220,14 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             merged = {**(card or {}), **(ec if isinstance(ec, dict) else {})}
             merged.update({k_: changes[f"end_{k_}"] for k_ in ("title", "subtitle") if changes.get(f"end_{k_}")})
         card = end_card_of({"end_card": merged})
-    if not layers and not opts["subtitles"] and not card and not (spec["base"].get("keep") or cut_ranges(changes.get("cut"), 1e9)):
+    if not layers and not opts["subtitles"] and not card and not (spec["base"].get("keep") or cut_ranges(changes.get("cut"), 1e9)
+                                                                   or changes.get("insert")):
         raise ValueError("That would leave no layers and no subtitles — keep at least one, or use the original video as it is.")
-    if "adjust" in changes or "cut" in changes:  # a felvétel receptje (korrekció, vágás) — mindig az eredetiből
+    inserts = insert_specs(changes.get("insert"))
+    if "adjust" in changes or "cut" in changes or inserts:   # a felvétel receptje (korrekció, vágás, beszúrás) — az eredetiből
         from app.tools import mediaprobe, video_fx
         base = _with_end_card(base, None)
+        before = base.get("keep")
         src = footage.original(base)
         if src is None:
             raise ValueError("Your original video is no longer stored (uploads are kept for a limited time) — upload it again "
@@ -6093,7 +6243,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             old = base.get("keep")
             ranges = cut_ranges(changes["cut"], float(base["duration"]))
             new = footage.cut(old, src_dur, ranges, float(base.get("fps") or FPS)) if ranges else None
-            if new and len(new) == 1 and new[0][0] <= 1e-3 and new[0][1] >= src_dur - 1e-3:
+            if footage.whole(new, src_dur):
                 new = None
             layers, opts["subtitles"], opts["camera"] = _recut(layers, opts["subtitles"], opts.get("camera"), old, new, notes)
             notes.append(_cut_note(old, new, src_dur))
@@ -6101,6 +6251,11 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             if new:
                 base["keep"] = new
             base["duration"] = footage.length(new, src_dur)
+        if inserts:                             # az idők a szerkesztés előtti videóé (a vágás után odébb kerülhetnek)
+            now = base.get("keep")
+            base, layers, opts["subtitles"], opts["camera"], opts["inserted"] = await _insert_clips(
+                base, inserts, layers, opts["subtitles"], opts.get("camera"), notes, step,
+                frame=lambda x: footage.remap_near(x, before, now), unframe=lambda t: footage.remap_near(t, now, before))
         for k in ("auto", "clean_media_id", "media_id", "proxy", "rotated", "hdr"):
             base.pop(k, None)
         if footage.needed(m, base.get("adjust"), src.stat().st_size, base.get("keep")):   # új munkamásolat az eredetiből

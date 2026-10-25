@@ -91,16 +91,24 @@ CUT: cut=[{"from": "05:00", "to": "07:30"}, …] removes those parts of the foot
 (changes.cut — the times of the same edit's layers are the video's before the cut too). Layers, subtitles and the
 camera move with it; a layer wholly in a removed part is left out (said in the check). Nothing is lost: the original
 stays whole, changes.cut = "none" brings it all back. The sound fades over 15 ms at each cut.
+INSERT: insert=[{"file_id": <another video>, "at": "16:30" | {"between": ["16:00", "19:00"]} | "end", "from"?, "to"? (a
+part of the clip), "join"?: "smooth" (default) | "dissolve" | "cut"}] puts other clips in the footage (changes.insert in an
+edit; times as for cut). With "between" the place comes from the footage: the longest pause at the end of a sentence (from
+the subtitles), else the longest pause — result.inserted and the check say where and why: at / until in the new video's
+time, at_given and the other pauses (candidates) in the time you gave ("at" takes one of them). "smooth" makes the join hard to notice: the clip's silent start and end trimmed, its
+sound level (EBU R128) and colours matched to the footage, a 0.25 s sound crossfade; "dissolve" adds a 0.4 s picture
+dissolve. Other sizes and frame rates are fitted to the video (a blurred fill for another shape); layers, subtitles and the
+camera move with it; changes.cut can take a clip out again.
 The result's duration is the footage's (mode "footage"; + the end card — result.end_card says where it starts).
 render=false saves the project only (the layout check still comes back).
 QUICK PREVIEW, FINAL IN THE BACKGROUND: when the final render is estimated over ~2 minutes (a long video), overlay and
 edit don't wait for it. They come back with result.preview — a short MP4 of just what changed (new / changed / removed
-layers ±2 s, cut points ±3 s, new subtitles, the end card, samples for a colour change), made from the editor's small
-copy, each part labelled with its time — and result.final = {job_id, eta ("about 35 min"), ready_at}: the full-quality
-render from the original, running in the background. video(action="status", job_id) shows its stage and the time left;
-its result is the final MP4. Tell the person both: look at the preview now, the final is ready at ready_at.
-final="wait" renders it now instead (the old way); final="background" always previews. draft=true on action="render"
-makes a quick whole-video preview from the small copy.
+layers ±2 s, cut points and an inserted clip's start and end ±3 s, new subtitles, the end card, samples for a colour
+change), made from the editor's small copy, each part labelled with its time — and result.final = {job_id, eta ("about
+35 min"), ready_at}: the full-quality render from the original, running in the background. video(action="status",
+job_id) shows its stage and the time left; its result is the final MP4. Tell the person both: look at the preview now,
+the final is ready at ready_at. final="wait" renders it now instead (the old way); final="background" always previews.
+draft=true on action="render" makes a quick whole-video preview from the small copy.
 Example: video(action="overlay", file_id="ab12.mov", text="…", layers=[{"at": "00:02", "type": "lower_third", "name":
 "Anna Kovács", "role": "Mayor"}, {"at": 9, "dur": 5, "type": "column", "title": "Budget", "unit": "bn Ft", "items":
 [{"label": "2024", "value": 44.8}, {"label": "2025", "value": 47.5}]}])"""
@@ -296,7 +304,7 @@ true}], "add": [{"after": "s2" | n (0 / "title" = first), "headline", "caption",
 "narration_voice"?, "duration_mode"?, "layers"?: [{"id": "L2", …} | {"id": "L2", "remove": true}], "add_layers"?: […]}.
 Untouched layers stay as they are; the AI narration is recorded again from the changed captions. Numbers in a new chart
 or stat must be in the video's source or in `text`. An overlay project takes layers, add_layers, accent, title, music,
-camera, subtitles, end_card, adjust and cut. alpha=… renders the transparent version again.
+camera, subtitles, end_card, adjust, cut and insert. alpha=… renders the transparent version again.
 Faster turns (an edit re-renders the whole video, ~1–2 minutes): render=false saves the new version without rendering
 (the layout check still comes back; render it later with action="render"); draft=true (make, overlay, edit) renders it
 half size and fast — previews use the draft until a full render; action="render" with scene="s3" (a scene) or

@@ -572,19 +572,25 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
         base_in = (await footage.full(base, src, work)).name
     elif proxy:                                                 # az eredeti, ugyanazzal a lánccal, mint a munkamásolat
         base_in, pre = str(src), footage.chain(base, await mediaprobe.info(src), work)
-    keep = base.get("keep") if proxy and not footage.stabilized(base) else None   # vágás: csak az eredetiből olvasva
-    path_in = work / base_in                                    # (abszolút útnál maga az út)
-    m_in = await mediaprobe.info(path_in)
-    pre += await base_filters(path_in)
-    if not draft and (m_in["display_width"], m_in["display_height"]) != (W, H):
-        pre.append(f"scale={W}:{H}")                            # (lejárt eredetinél a munkamásolat, teljes méretre)
-    media = footage.length(keep, float(m_in["duration"] or dur))
+    tl = None
+    if proxy and base.get("keep") and not footage.stabilized(base):   # vágás / beszúrás: az eredetikből, forrásonként
+        tl = await footage.timeline(base, src, W, H, fps, work, bt709=True)
+        items = await footage.transitions(tl, work, "f", ["-c:v", "libx264", "-preset", "veryfast", "-crf",
+                                                          str(encoding.intermediate_crf()), "-pix_fmt", "yuv420p"]) + items
+        pre, media = [], tl.length
+    else:
+        path_in = work / base_in                                # (abszolút útnál maga az út)
+        m_in = await mediaprobe.info(path_in)
+        pre += await base_filters(path_in)
+        if not draft and (m_in["display_width"], m_in["display_height"]) != (W, H):
+            pre.append(f"scale={W}:{H}")                        # (lejárt eredetinél a munkamásolat, teljes méretre)
+        media = float(m_in["duration"] or dur)
     if dur - media > 0.5 / fps:                                 # zárókártya: a felvétel utolsó kockája áll alatta
         pre.append(f"tpad=stop_mode=clone:stop_duration={dur - media + 1:.3f}")
     cuts = chunks(dur, fps, media=media)
     t_e = time.time()
     if len(cuts) == 1:
-        ins, graph = window_graph(base_in, 0.0, dur, items, ass, (ow, oh) if draft else None, chunked=False, pre=pre, keep=keep)
+        ins, graph = window_graph(base_in, 0.0, dur, items, ass, (ow, oh) if draft else None, chunked=False, pre=pre, tl=tl)
         audio_map: list[str] = []
         if has_audio:
             ins += ["-i", "fr-audio.wav"]
@@ -595,7 +601,7 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
         threads = str(max(2, (os.cpu_count() or 4) // len(cuts)))
 
         async def piece(k: int, cs: float, ce: float) -> str:
-            ins, graph = window_graph(base_in, cs, ce, items, ass, (ow, oh) if draft else None, chunked=True, pre=pre, keep=keep)
+            ins, graph = window_graph(base_in, cs, ce, items, ass, (ow, oh) if draft else None, chunked=True, pre=pre, tl=tl)
             name = f"fr-piece-{k:03d}.mp4"
             await _ffmpeg(*ins, "-filter_complex", graph, "-map", "[vout]", "-an", "-t", f"{ce - cs:.4f}",
                           *encoding.x264("preview" if draft else "final"), "-threads", threads, *encoding.bt709_tags(), name, cwd=work)
@@ -611,8 +617,9 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
     e_secs = round(time.time() - t_e, 1)
     for p in work.glob("span-*.mov"):
         p.unlink(missing_ok=True)
-    for p in list(work.glob("full-*.mov")) + list(work.glob("persist-*.mov")) + list(work.glob("fr-foot*.mp4")):
-        p.unlink(missing_ok=True)
+    for pat in ("full-*.mov", "persist-*.mov", "fr-foot*.mp4", "fr-tr-*.mp4"):
+        for p in work.glob(pat):
+            p.unlink(missing_ok=True)
     g_len = sum(b - a for _, a, b, _, _ in jobs)
     return {"path": "fast", "seconds": round(time.time() - t_start, 1), "graphics_parts": len(jobs),
             "graphics_seconds_of_video": round(g_len, 1), "graphics_render_s": g_secs, "encode_s": e_secs,
@@ -635,16 +642,14 @@ def chunks(dur: float, fps: float, n: Optional[int] = None, media: Optional[floa
 
 def window_graph(base: str, cs: float, ce: float, items: list[dict[str, Any]], ass: Optional[Path],
                  size: Optional[tuple[int, int]], chunked: bool, pre: Optional[list[str]] = None,
-                 keep: Optional[list[list[float]]] = None) -> tuple[list[str], str]:
+                 tl: Any = None) -> tuple[list[str], str]:
     """Egy időablak [cs, ce) ffmpeg-bemenetei és szűrőgráfja. A felvétel időbélyegei abszolútak maradnak (setpts +cs), így
     a rétegek enable-kifejezése és a felirat ugyanaz, mint egy menetben; az ablak előtt induló réteg a saját közepéből
     kezd (-ss), az ismétlődő kör a fázisából; a végén a szelet 0-ról indul (setpts −cs), hogy összefűzhető legyen."""
     chain: list[str] = []
-    if keep:                                                    # vágott felvétel: az ablakba eső megtartott szakaszok
-        from app.tools import footage
-        ins, cat, cur = footage.inputs(Path(base), footage.windows(keep, cs, ce))
-        if cat:
-            chain.append(cat.rstrip(";"))
+    if tl is not None:                                          # vágott / beszúrt idővonal (footage.Timeline): az ablak
+        ins, cat, cur = tl.inputs(cs, ce)                       # szakaszai, forrásonként a saját láncukkal
+        chain.append(cat.rstrip(";"))
     else:
         ins, cur = (["-ss", f"{cs:.4f}", "-t", f"{ce - cs:.4f}"] if chunked else []) + ["-i", base], "[0:v]"
     k = ins.count("-i")

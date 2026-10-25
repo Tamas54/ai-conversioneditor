@@ -6,7 +6,7 @@ végleges renderet: a projekt elkészül, a motor a munkamásolatból (kicsiben,
 szakaszokat rajzolja meg — egy rövid MP4, rajta minden szakasz időkóddal —, a végleges render pedig háttérmunkaként
 indul, becsült idővel (app/tools/render_eta.py). Ami változott:
   - új, módosított, törölt réteg: az ideje ±PAD;
-  - vágáspont: ±CUT_PAD;
+  - vágáspont, egy beszúrt klip eleje és vége: ±CUT_PAD;
   - felirat: az új / átírt sorok (legfeljebb néhány);
   - zárókártya: a vége; kamera: a mozgások;
   - korrekció, akcentus, feliratstílus, zene: néhány minta a videó hosszában.
@@ -60,11 +60,25 @@ def _samples(total: float, label: str, n: int = 3) -> list[tuple[float, float, s
     return [(max(0.0, total * f - SAMPLE_S / 2), min(total, total * f + SAMPLE_S / 2), label) for f in (0.1, 0.5, 0.9)[:n]]
 
 
-def _cut_points(keep: Optional[list[list[float]]]) -> list[float]:
-    out, acc = [], 0.0
-    for a, b in (keep or [])[:-1]:
-        acc += b - a
-        out.append(round(acc, 3))
+def _clip_name(fid: str) -> str:
+    from app.storage import display_label
+    try:
+        return display_label(fid)
+    except Exception:
+        return fid
+
+
+def _joins(keep: Any) -> list[tuple[float, str, tuple[Any, ...]]]:
+    """Az idővonal illesztései a videó idejében (footage.keep: vágás, beszúrt klip): (idő, mi, azonosító) — a beszúrt
+    klip eleje és vége is (ott kell látni, észrevehető-e a váltás). Az azonosító a két szomszédos darab forrásideje:
+    egy másik helyen végzett vágás / beszúrás után is ugyanaz."""
+    from app.tools import footage
+    offs = footage._offsets(keep) if keep else []
+    out = []
+    for (_, prev), (t, x) in zip(offs, offs[1:]):
+        what = (f"clip {_clip_name(x['src'])} starts" if x["src"] else
+                f"clip {_clip_name(prev['src'])} ends" if prev["src"] else "cut")
+        out.append((round(t, 3), what, (prev["src"], round(prev["b"], 3), x["src"], round(x["a"], 3))))
     return out
 
 
@@ -77,7 +91,7 @@ def spans_new(spec: dict[str, Any], total: float) -> list[tuple[float, float, st
     """Új videó: minden réteg, vágáspont, a zárókártya; felirat csak, ha más nincs (az első sorok)."""
     story, base = spec.get("story") or {}, spec.get("base") or {}
     out = [_span(*_ly(ly)[:2], _ly(ly)[2], PAD, total) for ly in story.get("layers") or []]
-    out += [_span(t, t, "cut", CUT_PAD, total) for t in _cut_points(base.get("keep"))]
+    out += [_span(t, t, what, CUT_PAD, total) for t, what, _ in _joins(base.get("keep"))]
     if base.get("end_card"):
         out.append(_span(float(base["plain"]["duration"]), total, "end card", 1.0, total))
     subs = story.get("subtitles") or []
@@ -103,8 +117,19 @@ def spans_edit(old: dict[str, Any], new: dict[str, Any], changes: dict[str, Any]
             ab = remap(a, b) if remap else (a, b)
             if ab:
                 out.append(_span(ab[0], ab[1], f"{lab} (removed)", PAD, total))
-    if "cut" in changes:
-        out += [_span(t, t, "cut", CUT_PAD, total) for t in _cut_points((new.get("base") or {}).get("keep"))]
+    if "cut" in changes or "insert" in changes:                 # az új illesztések, és ahol egy régi megszűnt
+        from app.tools import footage
+        ok, nk = (old.get("base") or {}).get("keep"), (new.get("base") or {}).get("keep")
+        was = {ident: (t, what) for t, what, ident in _joins(ok)}
+        now = _joins(nk)
+        out += [_span(t, t, what, CUT_PAD, total) for t, what, ident in now if ident not in was]
+        idents, gone = {i for _, _, i in now}, {}
+        for ident, (t, _what) in was.items():                   # (egy kivett klip két illesztése egy helyre esik)
+            if ident not in idents:
+                clip = ident[2] or ident[0]
+                gone.setdefault((round(footage.remap_near(t, ok, nk), 3), clip), None)
+        out += [_span(t2, t2, f"clip {_clip_name(clip)} taken out" if clip else "cut undone", CUT_PAD, total)
+                for t2, clip in gone]
     if any(k in changes for k in ("end_card", "end_title", "end_subtitle")) and (new.get("base") or {}).get("end_card"):
         out.append(_span(float(new["base"]["plain"]["duration"]), total, "end card", 1.0, total))
     if "camera" in changes:
