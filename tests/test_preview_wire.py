@@ -137,7 +137,7 @@ def test_the_answer_has_the_playlist_and_waits_only_for_the_first_change(tmp_pat
         pv, pid = res["preview"], res["file_id"]
         assert set(pv) >= {"playlist_url", "segments_total", "segments_dirty", "segments_ready", "first_ready_s", "reused",
                            "markers"}
-        assert pv["playlist_url"].endswith(f"{pid}/preview.m3u8?t=sig")
+        assert pv["playlist_url"].endswith(f"{pid}/preview.m3u8?t=sig") and pv["page_url"].endswith(f"/app/file/{pid}/preview")
         assert pv["segments_total"] == 4 and pv["segments_dirty"] == 4 and pv["reused"] == 0     # új videó: mind új
         assert [k for p, k, prio in hls["request"]] == [0] and all(prio == 1 for *_, prio in hls["request"])
         assert hls["schedule"] == [(pid, [0, 1, 2, 3], 0.0)]

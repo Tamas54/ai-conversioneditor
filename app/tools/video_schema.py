@@ -105,8 +105,9 @@ QUICK PREVIEW, FINAL IN THE BACKGROUND: when the final render is estimated over 
 edit don't wait for it. They come back with result.preview = {playlist_url (HLS: the WHOLE video from the editor's small
 copy, in 2 s segments — only the segments that changed are made again, the rest comes from the cache), segments_total,
 segments_dirty, segments_ready, first_ready_s, reused, markers: [{from, to, what}] — where it changed (layers ±2 s, cut
-points and an inserted clip's start and end ±3 s, new subtitles, the end card, samples for a colour change)} — give the
-person the playlist (the result page plays it). You can't play HLS: preview="mp4" adds preview.mp4 (the ready segments
+points and an inserted clip's start and end ±3 s, new subtitles, the end card, samples for a colour change), page_url} —
+give the person page_url: it plays the preview with the changes marked on its timeline (a bare .m3u8 link plays only in
+Safari). You can't play HLS: preview="mp4" adds preview.mp4 (the ready segments
 joined without re-encoding; when it has the whole video, files(action="preview", file_id=<project>, at=[marker times])
 shows those frames). result.final = {job_id, eta ("about 35 min"), ready_at}: the full-quality render from the original,
 running in the background. video(action="status", job_id) shows its stage and the time left; its result is the final
