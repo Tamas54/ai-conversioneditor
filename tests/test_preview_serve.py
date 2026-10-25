@@ -497,14 +497,14 @@ async def test_player_request_overtakes_background_fill(aq, pc, project, monkeyp
         await asyncio.sleep(0.01)
         if pc.calls:
             break
-    assert pc.calls == [[0, 1, 2, 3]]                          # az egyetlen dolgozó a 0. futamon áll (elsőbbség 1)
+    assert pc.calls == [[0, 1, 2]]                             # az egyetlen dolgozó a 0. futamon áll (elsőbbség 1: rövid)
     st = ps._state()
     assert st.queue.qsize() >= 9                                # a többi háttér-feltöltésként vár (elsőbbség 3)
     late = asyncio.create_task(ps.request(PID, 33, plan=plan))  # a lejátszó a 33.-at kéri (tekerés)
     await asyncio.sleep(0.05)
     pc.gate.set()
     await late
-    assert pc.calls[1] == [32, 33, 34, 35]                     # rögtön a 0. futam után, a sorban várók előtt: a 33.-at már
+    assert pc.calls[1] == [31, 32, 33, 34]                     # rögtön a 0. futam után, a sorban várók előtt: a 33.-at már
     #                                                             a feltöltés egy futama tartalmazta — az került előre
     await _drain()
     done = sorted(k for ks in pc.calls for k in ks)
@@ -540,16 +540,15 @@ async def test_schedule_priorities_and_supersede(aq, pc, project, monkeypatch):
     live = {}
     for j in set(st.live.values()):
         live.setdefault(j.prio, []).append(j.ks)
-    assert [20, 21, 22, 23] in live[ps.P_EDIT]                 # az első piszkos: elsőbbség 1 (a kérés ezt várja)
-    assert any(20 in ks for ks in live[ps.P_EDIT])
-    assert any(ks[0] == 24 for ks in live[ps.P_NEAR])          # a lejátszófej (40 s = 20.) utáni néhány: elsőbbség 2
+    assert [20, 21, 22] in live[ps.P_EDIT]                     # az első piszkos: elsőbbség 1, rövid futam (a kérés ezt várja)
+    assert any(ks[0] == 23 for ks in live[ps.P_NEAR])          # a lejátszófej (40 s = 20.) körüli többi: elsőbbség 2
     assert ("a:" + new["audio_hash"]) in st.live and st.live["a:" + new["audio_hash"]].prio == ps.P_EDIT
     pc.gate.set()
     await _drain()
     order = [ks for ks in pc.calls]
-    assert order[0] == [0, 1, 2, 3]                            # ami már futott
-    assert order[1] == [20, 21, 22, 23]                        # utána az elsőbbség 1
-    assert order[2][0] == 24                                   # aztán a lejátszófej körüli
+    assert order[0] == [0, 1, 2]                               # ami már futott
+    assert order[1] == [20, 21, 22]                            # utána az elsőbbség 1
+    assert order[2] == [23, 24, 25, 26]                        # aztán a lejátszófej körüli (teljes futam)
     hashes = [new["segments"][k]["hash"] for k in range(30)]
     assert all(pc.seg_path(SRC, h).exists() for h in hashes)   # az új verzió minden szakasza kész
     assert sorted(k for ks in pc.calls for k in ks) == list(range(30))     # mindegyik egyszer (a közöseket nem kétszer)
@@ -588,7 +587,7 @@ async def test_two_workers_and_a_gate_taken_inside_do_not_deadlock(aq, pc, proje
     pc.delay = 0.05
     await asyncio.wait_for(asyncio.gather(*(ps.request(PID, k, plan=plan, priority=ps.P_EDIT) for k in (0, 4, 8, 12)),
                                           ps.request_audio(PID, plan=plan)), 5)
-    assert sorted(k for ks in pc.calls for k in ks) == list(range(16))
+    assert sorted(pc.calls) == [[0, 1, 2], [4, 5, 6], [8, 9, 10], [12, 13, 14]] and pc.audio_calls == 1
 
 
 async def test_the_job_runs_in_the_callers_workspace(aq, pc, monkeypatch):
@@ -610,12 +609,11 @@ async def test_player_hits_are_touched_and_prefetch_ahead(aq, pc, project, monke
     monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "3")
     plan = make_plan(parts=((None, 0.0, 40.0),), hold_s=0)
     pc._plan = plan
-    await ps.request(PID, 0, plan=plan, priority=ps.P_EDIT)     # nem a lejátszó: nincs előtöltés
-    assert pc.calls == [[0, 1, 2, 3]]
-    await ps.request(PID, 2, plan=plan)                          # találat a lejátszótól: a touch + előtöltés (4–6)
-    st = ps._state()
+    await ps.request(PID, 0, plan=plan, priority=ps.P_EDIT)     # nem a lejátszó: nincs előtöltés (sürgős: rövid futam)
+    assert pc.calls == [[0, 1, 2]]
+    await ps.request(PID, 2, plan=plan)                          # találat a lejátszótól: a touch + előtöltés (3–)
     await _drain()
-    assert pc.calls[1][0] == 4 and sorted(k for ks in pc.calls for k in ks)[:7] == list(range(7))
+    assert pc.calls[1] == [3, 4, 5, 6] and sorted(k for ks in pc.calls for k in ks) == list(range(7))
     await asyncio.sleep(0.15)
     assert plan["segments"][2]["hash"] in pc.touched
 
@@ -697,3 +695,16 @@ def test_context_failures_are_404_when_final_503_when_transient(client, pc, proj
     pc.context = engine_down
     r = client.get(url)
     assert r.status_code == 503 and r.headers["retry-after"] == "2"
+
+
+async def test_urgent_runs_are_short_prefetch_runs_full(aq, pc, project, monkeypatch):
+    """A várt szakasz (0–1) futama rövid (az első kocka hamar kint van), az előtöltésé a teljes RUN_MAX."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "6")
+    monkeypatch.setenv("VIDEO_PREVIEW_URGENT_RUN", "2")
+    plan = make_plan(parts=((None, 0.0, 40.0),), hold_s=0)
+    pc._plan = plan
+    await ps.request(PID, 10, plan=plan)
+    await _drain()
+    assert pc.calls[0] == [10, 11]                              # a várt: 2 szakasz
+    assert sorted(pc.calls[1:]) == [[12, 13, 14, 15], [16, 17, 18, 19]]   # az előtöltés (12–17-ben induló) futamai: teljesek
