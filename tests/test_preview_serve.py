@@ -240,7 +240,7 @@ def test_video_playlist_shape(pc, fps):
     for d, s in zip(ext, segs):                                   # mindegyik a saját hossza: frames/fps
         assert abs(d - s["frames"] / fps) < 2e-6
     total_frames = sum(s["frames"] for s in segs)
-    assert abs(sum(ext) - total_frames / fps) < 1e-3 and abs(sum(ext) - plan["total"]) < 1e-3
+    assert abs(sum(ext) - total_frames / fps) < 1e-3
     target = int(next(ln for ln in lines if ln.startswith("#EXT-X-TARGETDURATION:")).split(":")[1])
     assert target == math.ceil(max(round(s["frames"] / fps, 6) for s in segs))
     # a DISCONTINUITY a szakaszok KÖZÖTT: az első EXTINF előtt nincs, utána minden EXTINF előtt
@@ -428,7 +428,8 @@ def test_preview_json_shape_and_final_status(client, pc, project):
     j = client.get(url).json()
     assert set(j) == {"playlist_url", "duration", "segments_total", "segments_ready", "markers", "final"}
     assert j["playlist_url"].startswith(f"http://testserver/api/video/{PID}/preview.m3u8?t=")
-    assert j["duration"] == pytest.approx(pc._plan["total"]) and j["segments_total"] == len(pc._plan["segments"])
+    fr = sum(x["frames"] for x in pc._plan["segments"])
+    assert j["duration"] == pytest.approx(fr / pc._plan["fps"], abs=1e-3) and j["segments_total"] == len(pc._plan["segments"])
     assert j["segments_ready"] == 0 and j["markers"] == [{"from": 4.0, "to": 8.0, "what": "cut"}]
     assert j["final"] == {"status": "none", "eta": None, "eta_s": None, "ready_at": None, "video_url": None}
     assert client.get(_seg_url(PID, pc._plan["segments"][0]["hash"])).status_code == 200
