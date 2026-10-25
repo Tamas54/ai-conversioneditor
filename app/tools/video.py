@@ -203,6 +203,8 @@ def carry_assets(source_id: Optional[str], new_id: str) -> None:
         return
     meta = read_meta(source_id) or {}
     extra = {k: meta[k] for k in ("assets", "video", "spec") if meta.get(k)}
+    if extra.get("assets"):                    # a felirat nélküli előnézet-projekt a régi változaté, nem a kézzel átírté
+        extra["assets"] = {k: v for k, v in extra["assets"].items() if k != PREVIEW_ECPROJ}
     if extra.get("spec"):
         extra["hand_edited"] = True            # az ügynöki szerkesztés a forgatókönyvből épít újra — ezt jelezni kell
     if extra:
@@ -5900,6 +5902,8 @@ def info(file_id: str) -> dict[str, Any]:
             "video": meta.get("video"), "last_render": ({**_file_entry(rid), **({"draft": True} if meta.get("render_draft") else {})}
                                                         if rid and output_path(rid).exists() else None),
             "credits": meta.get("credit"), "editable_by_description": bool(spec),
+            **({"full_project": "the subtitles are being put into the project in the background (render, the editor "
+                                "and downloads wait for it)"} if meta.get("full_project") == FULL_PENDING else {}),
             **({"title": spec["story"].get("title"), "scenes": scenes, "layers": layers, "options": spec.get("opts")} if spec else {}),
             **({"base": spec["base"], "how_to_edit": "changes={\"layers\": [{\"id\": \"L2\", …fields} | {\"id\": \"L2\", "
                 "\"remove\": true}], \"add_layers\": […]}; see one layer with files(action=\"preview\", scene=\"L2\", frames=6)."}
