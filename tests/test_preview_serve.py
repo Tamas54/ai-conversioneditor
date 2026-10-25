@@ -59,7 +59,8 @@ def make_plan(parts=((None, 0.0, 6.0), (CLIP, 10.0, 14.4), (None, 20.0, 23.0)), 
 
 
 class FakePC:
-    """A preview_cache szerződése (API v1) — a render csak fájlt ír (tmp + átnevezés, mint P1-é)."""
+    """A preview_cache szerződése (API v1) — a render csak fájlt ír (tmp + átnevezés, mint P1-é). Mint a P1-é: a context
+    verziónként egyszer épül (és a terv onnan jön), a render a video_preview.gate()-et MAGA kéri."""
     SEG_S, PREVIEW_CACHE_VERSION, RUN_MAX = 2.0, 1, 4
 
     def __init__(self, root: Path, plan: dict):
@@ -70,7 +71,8 @@ class FakePC:
         self.touched: list[str] = []
         self.delay = 0.0
         self.gate: asyncio.Event | None = None          # ha van: a render erre vár (a sor sorrendjének teszteléséhez)
-        self.seen: list[dict] = []                      # a render pillanatának környezete (tenancy, heavy, nice)
+        self.seen: list[dict] = []                      # a render pillanatának környezete (tenancy, heavy, nice, kapu)
+        self._ctx: dict = {}
 
     def enabled(self):
         return True
@@ -94,19 +96,30 @@ class FakePC:
         return self.root / "preview-cache" / source_id / f"a-{audio_hash}"
 
     async def context(self, pid):
-        self.contexts += 1
-        await asyncio.sleep(0)
-        return {"pid": pid, "plan": self._plan}
+        key = (pid, id(self._plan))
+        if key not in self._ctx:
+            self.contexts += 1
+            await asyncio.sleep(0)
+            self._ctx[key] = {"pid": pid, "plan": self._plan}
+        return self._ctx[key]
 
     def _seen(self, what):
         from app import jobs
         from app.convert import engines
+        from app.tools import video_preview
+        g = video_preview.gate()
         self.seen.append({"what": what, "uid": tenancy.current_user_id(), "held": jobs._held.get(),
-                          "background": engines._BACKGROUND.get(), "heavy_running": jobs._heavy_running})
+                          "background": engines._BACKGROUND.get(), "heavy_running": jobs._heavy_running,
+                          "gate_free": getattr(g, "_value", None)})
 
     async def render_run(self, ctx, ks):
+        from app.tools import video_preview
         self._seen(list(ks))
         self.calls.append(list(ks))
+        async with video_preview.gate():                 # mint a P1-é: a kaput maga kéri
+            return await self._run(ctx, ks)
+
+    async def _run(self, ctx, ks):
         if self.gate is not None:
             await self.gate.wait()
         if self.delay:
@@ -123,8 +136,13 @@ class FakePC:
         return out
 
     async def render_audio(self, ctx):
+        from app.tools import video_preview
         self._seen("audio")
         self.audio_calls += 1
+        async with video_preview.gate():
+            return await self._audio(ctx)
+
+    async def _audio(self, ctx):
         if self.delay:
             await asyncio.sleep(self.delay)
         d = self.audio_dir(ctx["plan"]["source_id"], ctx["plan"]["audio_hash"])
@@ -139,7 +157,8 @@ class FakePC:
     async def ready(self, hashes):
         return {h for h in hashes if self.seg_path(self._plan["source_id"], h).exists()}
 
-    async def touch(self, hashes):
+    async def touch(self, hashes, source_id=None):
+        assert source_id == self._plan["source_id"]
         self.touched += list(hashes)
 
     async def sweep(self):
@@ -189,7 +208,7 @@ def project(pc):
     """Egy videóprojekt az admin munkaterületén, a metájában spec-kel (a terv az álmodulé)."""
     from app.storage import output_path, write_meta
     output_path(PID).write_text("{}", "utf-8")
-    write_meta(PID, label="clip.ecproj", extra={"spec": {"base": {"file_id": SRC}},
+    write_meta(PID, label="clip.ecproj", extra={"spec": {"kind": "overlay", "base": {"file_id": SRC}},
                                                 "preview": {"markers": [{"from": 4.0, "to": 8.0, "what": "cut"}]}})
     yield PID
     output_path(PID).unlink(missing_ok=True)
@@ -353,7 +372,7 @@ def test_other_workspace_signed_link(client, pc):
     tok = tenancy.set_user(uid)
     try:
         output_path(PID).write_text("{}", "utf-8")
-        write_meta(PID, extra={"spec": {"base": {"file_id": SRC}}})
+        write_meta(PID, extra={"spec": {"kind": "overlay", "base": {"file_id": SRC}}})
         q = ps.signed(PID)
     finally:
         tenancy.reset(tok)
@@ -454,7 +473,6 @@ async def test_dedupe_one_render_for_everyone(aq, pc, project):
     assert sum(1 in ks or 2 in ks for ks in pc.calls) == 1
     again = await ps.request(PID, 2, plan=plan)
     assert again.exists() and sum(2 in ks for ks in pc.calls) == 1
-    assert pc.contexts == 1                                     # a context verziónként egyszer
 
 
 async def test_same_content_twice_in_the_plan_renders_once(aq, pc, project):
@@ -538,20 +556,10 @@ async def test_schedule_priorities_and_supersede(aq, pc, project, monkeypatch):
 
 async def test_workers_never_take_the_heavy_gate(aq, pc, project, monkeypatch):
     """PR #41: az előnézet sosem áll be a jobs.heavy() mögé — a dolgozó üres kontextusban indul (a hívó heavy-helye és
-    a végleges render nice 10-e nem öröklődik), és a video_preview.gate()-en belül renderel."""
+    a végleges render nice 10-e nem öröklődik); a video_preview.gate()-et a render maga kéri, a dolgozó nem tartja."""
     from app import jobs
     from app.convert import engines
-    from app.tools import preview_serve as ps, video_preview
-    entered = []
-
-    class Gate:
-        async def __aenter__(self):
-            entered.append(len(pc.calls))
-
-        async def __aexit__(self, *a):
-            return False
-
-    monkeypatch.setattr(video_preview, "gate", lambda: Gate())
+    from app.tools import preview_serve as ps
 
     def no_heavy(*a, **k):
         raise AssertionError("a preview worker took jobs.heavy()")
@@ -564,8 +572,22 @@ async def test_workers_never_take_the_heavy_gate(aq, pc, project, monkeypatch):
     finally:
         engines._BACKGROUND.reset(bg)
         jobs._held.reset(held)
-    assert entered == [0, 1]                                    # mindkét render a saját kapun belül
+    assert [s["what"] for s in pc.seen] == [[0, 1, 2], "audio"]
     assert all(s["held"] is False and s["background"] is False for s in pc.seen), pc.seen
+    assert all(s["gate_free"] == 2 for s in pc.seen), pc.seen   # a dolgozó nem foglal a kapuból (a render kéri)
+
+
+async def test_two_workers_and_a_gate_taken_inside_do_not_deadlock(aq, pc, project, monkeypatch):
+    """A preview_cache a render_run / render_audio / context-építés idejére maga kéri a video_preview.gate()-et (2 hely,
+    nem újrabelépő). Ha a dolgozó is tartaná, két dolgozó mellett a belső kérés örökre várna."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_WORKERS", "2")
+    plan = make_plan(parts=((None, 0.0, 40.0),), hold_s=0)
+    pc._plan = plan
+    pc.delay = 0.05
+    await asyncio.wait_for(asyncio.gather(*(ps.request(PID, k, plan=plan, priority=ps.P_EDIT) for k in (0, 4, 8, 12)),
+                                          ps.request_audio(PID, plan=plan)), 5)
+    assert sorted(k for ks in pc.calls for k in ks) == list(range(16))
 
 
 async def test_the_job_runs_in_the_callers_workspace(aq, pc, monkeypatch):
@@ -575,7 +597,7 @@ async def test_the_job_runs_in_the_callers_workspace(aq, pc, monkeypatch):
     tok = tenancy.set_user(uid)
     try:
         output_path(PID).write_text("{}", "utf-8")
-        write_meta(PID, extra={"spec": {"base": {"file_id": SRC}}})
+        write_meta(PID, extra={"spec": {"kind": "overlay", "base": {"file_id": SRC}}})
         await ps.request(PID, 0, priority=ps.P_EDIT)
     finally:
         tenancy.reset(tok)
