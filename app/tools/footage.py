@@ -109,7 +109,11 @@ async def make_proxy(base: dict[str, Any], src: Path) -> tuple[dict[str, Any], l
                 return {**b, **{k: hit[k] for k in _KEEP if k in hit}}, list(hit.get("applied") or [])
         except FileNotFoundError:
             pass
-        b, applied = await _build_proxy(base, src)
+        from app import jobs
+        # a munkamásolat egy nehéz munka (app/jobs.py): sorban vár, ha minden hely foglalt; a szeletei egy helyen, a saját
+        # -threads-ükkel. A gyorsítótárból jött másolat (fent) nem kér helyet: a szerkesztés előnézete nem vár.
+        async with jobs.heavy(threads=False):
+            b, applied = await _build_proxy(base, src)
         if fid0:
             have = (read_meta(fid0) or {}).get("proxies") or {}
             write_meta(fid0, extra={"proxies": {**have, key: {**{k: b[k] for k in _KEEP if k in b}, "applied": applied}}})

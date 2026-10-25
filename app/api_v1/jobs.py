@@ -198,7 +198,15 @@ def start(job: Job) -> None:
     job.runner = asyncio.get_running_loop().create_task(_run(job))
 
 
+def _queued(job: Job, t: Task, pos: Optional[int]) -> None:
+    """A task a nehéz munka sorában vár (status marad „processing”): az üzenete mondja meg, hányadik."""
+    from app import jobs as studio_jobs
+    t.message = studio_jobs.queue_text(pos) if pos else None
+    job.emit("task.updated", t.public())
+
+
 async def _run(job: Job) -> None:
+    from app import jobs as studio_jobs
     from app.api_v1 import operations as ops, store, webhooks
     job.status, job.started_at = "processing", _now()
     await store.save_job(job)
@@ -207,6 +215,7 @@ async def _run(job: Job) -> None:
 
     async def run_task(t: Task) -> None:
         t.status, t.started_at = "processing", _now()
+        studio_jobs.on_queue(lambda pos: _queued(job, t, pos))   # videó / hang: a közös kapu sorában (app/jobs.py heavy)
         job.emit("task.updated", t.public())
         await store.save_task(job, t)
         try:

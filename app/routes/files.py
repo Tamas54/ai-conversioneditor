@@ -144,10 +144,12 @@ async def _photos_convert(src, dst) -> None:
     tmp = dst.with_name(f".{dst.name}")
     try:
         if dst.suffix == ".mp4":
-            await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
-                      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-                      "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "192k",
-                      "-map_metadata", "-1", "-movflags", "+faststart", "-f", "mp4", str(tmp), timeout=3600)
+            from app import jobs
+            async with jobs.heavy():                    # videókódolás: a közös kapun át (app/jobs.py)
+                await run("ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                          "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "192k",
+                          "-map_metadata", "-1", "-movflags", "+faststart", "-f", "mp4", str(tmp), timeout=3600)
         else:
             from PIL import Image, ImageOps
 

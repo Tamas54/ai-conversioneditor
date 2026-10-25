@@ -52,7 +52,8 @@ async def _await_or_job(kind: str, coro_factory, wait_s: float = 45) -> dict[str
     try:
         await asyncio.wait_for(asyncio.shield(task), wait_s)
     except asyncio.TimeoutError:
-        return {**jobs._public(jobs._JOBS[job["id"]]), "hint": "Still running — call again with job_id."}
+        j = jobs._public(jobs._JOBS[job["id"]])
+        return {**j, "hint": ("Queued" if j["status"] == "queued" else "Still running") + " — call again with job_id."}
     j = jobs._public(jobs._JOBS[job["id"]])
     if j["status"] == "failed":
         raise ValueError(j.get("error") or "the tool failed")

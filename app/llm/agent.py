@@ -3017,13 +3017,14 @@ async def _await_job(state: AgentState, job: dict[str, Any]) -> dict[str, Any]:
     """Háttérmunka (OCR, fotószerkesztés, helyreállítás) megvárása — az ügynök idekeretéig, de legalább 60 s-ig."""
     from app import jobs
     wait_until = max(state.deadline, time.time() + 60)
-    while job.get("status") == "running" and time.time() < wait_until:
+    while job.get("status") in ("running", "queued") and time.time() < wait_until:
         await asyncio.sleep(2)
         job = await jobs.job_status(job["id"])
     if job.get("status") == "done":
         return job.get("result") or {}
-    if job.get("status") == "running":
-        return {"job_id": job["id"], "status": "running", "done": job.get("done"), "total": job.get("total"),
+    if job.get("status") in ("running", "queued"):
+        return {"job_id": job["id"], "status": job["status"], "done": job.get("done"), "total": job.get("total"),
+                **({"message": job["message"]} if job.get("message") else {}),      # queued: hányadik a sorban
                 "note": "Still working — call the same tool again with this job_id to keep waiting."}
     return {"error": job.get("error") or "the job failed"}
 

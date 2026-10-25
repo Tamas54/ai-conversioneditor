@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-from app.catalog.formats import FORMATS, from_filename, normalize
+from app.catalog.formats import FORMATS, from_filename, media, normalize
 from app.convert import graph
 from app.convert.engines import EngineError
 from app.convert.options import OptionError, parse_pages, validate
@@ -183,6 +183,16 @@ def _legacy_ok(ext: str, target: str, options: dict[str, Any]) -> bool:
 
 async def convert_file(file_id: str, target: str, options: Optional[dict[str, Any]] = None, pool=None,
                        split: bool = False) -> dict[str, Any]:
+    """Videó vagy hang a forrás vagy a cél: ffmpeg-kódolás → a közös kapun át (app/jobs.py heavy)."""
+    if not (media(from_filename(file_id)) or media(target)):
+        return await _convert_file(file_id, target, options, pool, split)
+    from app import jobs
+    async with jobs.heavy():
+        return await _convert_file(file_id, target, options, pool, split)
+
+
+async def _convert_file(file_id: str, target: str, options: Optional[dict[str, Any]] = None, pool=None,
+                        split: bool = False) -> dict[str, Any]:
     """Munkaterület-fájl konvertálása. Több kimenet (pl. oldalanként egy kép) → egy .zip, vagy split=True
     esetén külön fájlok (`files`)."""
     from app.storage import display_label, output_path, public_url, temp_path, write_meta

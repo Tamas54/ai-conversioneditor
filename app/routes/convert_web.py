@@ -202,6 +202,11 @@ def _max_upload() -> int:
     return int(os.getenv("API_MAX_FILE_MB", "2048")) * 1024 * 1024
 
 
+def _too_large() -> HTTPException:
+    """413 a feltöltési korlát fölött — minden feltöltési út ugyanígy mondja; a vendégnek belépést ajánl."""
+    return HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account — sign in or create a free one for bigger files." if tenancy.is_guest() else "."))
+
+
 def _store(src, filename: str, operation: str) -> dict[str, Any]:
     import os
     from app.api_v1.operations import _save_named
@@ -292,7 +297,7 @@ async def chunks_start(body: dict[str, Any]) -> dict[str, Any]:
     if not name or size <= 0:
         raise HTTPException(400, "filename and size are required")
     if size > _max_upload():
-        raise HTTPException(413, f"Files up to {_max_upload() // (1024 * 1024)} MB" + (" without an account — sign in or create a free one for bigger files." if tenancy.is_guest() else "."))
+        raise _too_large()
     uid = secrets.token_urlsafe(18)
     d = temp_path(f"chunks-{uid}")
     d.mkdir(parents=True)
