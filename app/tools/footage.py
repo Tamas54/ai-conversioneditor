@@ -486,6 +486,45 @@ async def _extradata(path: Path) -> str:
     return "".join(ln.split(":", 1)[1][:40].replace(" ", "") for ln in str(st.get("extradata") or "").splitlines() if ":" in ln)
 
 
+async def _audio_copy_of(orig: Path, k: Optional[int], copy: Path) -> bool:
+    """A munkamásolat hangja az eredeti hangsávjának bitre azonos másolata-e (a vágatlan másolat AAC-nál -c copy-val
+    viszi): az első 10 s csomagjai (md5) ugyanazok. Ha igen, a hang onnan dekódolva ugyanaz a minta, mint az eredetiből —
+    a 3 GB-os eredeti helyett a kicsi másolatot kell olvasni (10-25, a 30 perces vágás hangja hideg lemezről 60 s volt)."""
+    from app.convert.engines import run
+    if k is None:
+        return False
+
+    async def md5s(p: Path, stream: str) -> list[str]:
+        out, _ = await run("ffmpeg", "-v", "error", "-t", "10", "-i", str(p), "-map", stream, "-c", "copy", "-f", "framemd5", "-",
+                           timeout=120)
+        return [ln.rsplit(",", 1)[1].strip() for ln in out.decode("utf-8", "replace").splitlines() if ln and not ln.startswith("#")]
+
+    async def pcm(p: Path, stream: str, at: float) -> str:        # dekódolva, kereséssel: az előtöltés / az időbélyegek is
+        out, _ = await run("ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-t", "1", "-i", str(p), "-map", stream, "-f", "md5", "-",
+                           timeout=120)
+        return out.decode().strip()
+    try:
+        a, b = await md5s(orig, f"0:a:{k}"), await md5s(copy, "0:a:0")
+        same = bool(a) and a == b
+        for at in (0.0, 61.37):
+            same = same and await pcm(orig, f"0:a:{k}", at) == await pcm(copy, "0:a:0", at)
+    except Exception:
+        return False
+    return same
+
+
+async def _sar(path: Path) -> str:
+    """A sáv képpont-aránya setsar-értéknek: "0" (nincs megadva — a vágatlan munkamásolaté), "1" (1:1 — az idővonalé:
+    setsar=1), vagy num/den. Az SPS-be kerül (VUI): ha a kódolt darabé más, a paraméterkészlet sem egyezik."""
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=sample_aspect_ratio",
+                       "-of", "csv=p=0", str(path), timeout=60)
+    v = out.decode().strip()
+    if not v or v in ("N/A", "0:1"):
+        return "0"
+    return "1" if v == "1:1" else v.replace(":", "/")
+
+
 async def _count(path: Path) -> int:
     """A videósáv kockáinak száma (MP4: a mintatábla szerint — nem kell végigolvasni)."""
     from app.convert.engines import run
@@ -547,6 +586,7 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
         gop = str(max(1, round(fps)))
         venc = ["-c:v", "libx264", "-preset", "veryfast", *_rate(dur), "-g", gop, "-pix_fmt", "yuv420p"]
         encs = [op for op in ops if op[0] == "enc"]
+        sar = await _sar(old)                               # (a régiével egyező SPS-hez a képpont-arány is ugyanaz)
         threads = ["-threads", str(max(2, (os.cpu_count() or 4) // max(1, min(4, len(encs)))))]
         items = await transitions(tl, work, "p", venc) if encs else []
         gate = asyncio.Semaphore(4)
@@ -554,12 +594,18 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
         async def encode(k: int, f0: int, f1: int) -> str:
             name = f"smart-enc-{k:04d}.mp4"
             async with gate:
-                await _tl_window(tl, f0 / fps_v, f1 / fps_v, ["format=yuv420p"], items, venc + threads, work / name, work)
+                await _tl_window(tl, f0 / fps_v, f1 / fps_v, ["format=yuv420p", f"setsar={sar}"], items, venc + threads,
+                                 work / name, work)
             return name
 
         async def audio() -> list[str]:
             if any(i.get("audio_stream") is not None for i in tl.infos.values()):
-                await tl_audio(tl, work / "proxy-a.m4a", work)
+                tl_a = tl
+                if old_keep is None and await _audio_copy_of(src, m.get("audio_stream"), old):
+                    import copy as copy_mod                # a fő felvétel hangja a régi másolatból (ugyanazok a csomagok)
+                    tl_a = copy_mod.copy(tl)
+                    tl_a.paths, tl_a.infos = {**tl.paths, None: old}, {**tl.infos, None: await mediaprobe.info(old)}
+                await tl_audio(tl_a, work / "proxy-a.m4a", work)
                 return ["-i", "proxy-a.m4a", "-map", "1:a:0", "-c:a", "copy"]
             return []
         bounds = sorted(({op[2] for op in ops if op[0] == "copy"} | {op[2] + op[3] for op in ops if op[0] == "copy"})

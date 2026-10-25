@@ -4698,18 +4698,18 @@ def _recut(layers: list[dict[str, Any]], subs: list[dict[str, Any]], camera: Any
             notes.append(f"⚠ Layer {ly['id']} ({ly['type']}, {_tc(float(ly['at']))}) was in a part that was cut out — "
                          "it is left out.")
             continue
-        out_layers.append({**ly, "at": round(span[0], 3), "dur": round(max(0.3, span[1] - span[0]), 3)})
+        out_layers.append({**ly, "at": round(span[0], 4), "dur": round(max(0.3, span[1] - span[0]), 4)})
     out_subs, gone = [], 0
     for c in subs or []:
         span = footage.remap_span(float(c["start"]), float(c["end"]), old, new)
         if span is None:
             gone += 1
             continue
-        cue = {**c, "start": round(span[0], 3), "end": round(max(span[1], span[0] + 0.4), 3)}
+        cue = {**c, "start": round(span[0], 4), "end": round(max(span[1], span[0] + 0.4), 4)}
         if c.get("words"):
             ws = [footage.remap(float(w), old, new) for w in c["words"]]
             if all(w is not None for w in ws):
-                cue["words"] = [round(min(max(w, cue["start"]), cue["end"]), 3) for w in ws]
+                cue["words"] = [round(min(max(w, cue["start"]), cue["end"]), 4) for w in ws]
             else:
                 cue.pop("words", None)                       # a darab közepéből vágtunk: a szavak ideje nem tartható
         out_subs.append(cue)
@@ -4720,7 +4720,7 @@ def _recut(layers: list[dict[str, Any]], subs: list[dict[str, Any]], camera: Any
         for mv in camera:
             at = footage.remap(float(mv.get("at", 0)), old, new)
             if at is not None:
-                moved.append({**mv, "at": round(at, 3)})
+                moved.append({**mv, "at": round(at, 4)})
         camera = moved or None
     return out_layers, out_subs, camera
 
@@ -4954,11 +4954,11 @@ def _word_times(text: str, a: float, b: float, given: Optional[list[float]] = No
     """A szöveg szavainak kezdőideje: az átiratból (ha a tokenek száma egyezik), különben a betűszám arányában."""
     toks = text.split()
     if given and len(given) == len(toks):
-        return [round(float(v), 3) for v in given]
+        return [round(float(v), 4) for v in given]
     tot = sum(len(t) + 1 for t in toks) or 1
     out, cur = [], a
     for t in toks:
-        out.append(round(cur, 3))
+        out.append(round(cur, 4))
         cur += (b - a) * (len(t) + 1) / tot
     return out
 
@@ -4990,7 +4990,7 @@ def caption_track(cues: list[dict[str, Any]], W: int, H: int, total: float, styl
                 t1 = times[groups[gi + 1][0]] if gi + 1 < len(groups) else b
                 txt = " ".join(toks[j] for j in g)
                 s_ = _fit_size(txt.upper(), size, L["capW"], size * 1.22 * 2, "Caption")
-                out.append({"t0": round(t0, 3), "t1": round(max(t1, t0 + 0.2), 3), "text": txt, "size": s_,
+                out.append({"t0": round(t0, 4), "t1": round(max(t1, t0 + 0.2), 4), "text": txt, "size": s_,
                             "lines": _wrap(txt.upper(), s_, L["capW"])[0], "words": [times[j] for j in g]})
             continue
         parts = _chunks(c["text"], int(cpl * 2 * 0.9)) or [c["text"]]
@@ -4998,7 +4998,7 @@ def caption_track(cues: list[dict[str, Any]], W: int, H: int, total: float, styl
         for x in parts:
             span = (b - a) * len(x) / tot
             n = len(x.split())
-            row = {"t0": round(cur, 3), "t1": round(cur + span, 3), "text": x, "lines": 1 if len(x) <= cpl * 0.95 else 2}
+            row = {"t0": round(cur, 4), "t1": round(cur + span, 4), "text": x, "lines": 1 if len(x) <= cpl * 0.95 else 2}
             if style != "box":
                 row["words"] = times[k:k + n] if c.get("words") and len(times) == len(toks) else \
                     _word_times(x, cur, cur + span)
@@ -5320,10 +5320,11 @@ async def _proxy_later(base: dict[str, Any], stand_in: dict[str, Any], m: dict[s
     fut, és a szakasz-előnézet be van kötve (az alapképet addig az EREDETIBŐL rajzolja, footage.chain), a szerkesztés nem
     várja meg: a verzió base-ében a szülő munkamásolata áll a helyén (ugyanaz a méret), proxy_pending = true, és a
     munkamásolat a teljes projekttel együtt a végleges render első lépése (ensure_full → _finish_proxy). A recept (auto
-    mérés) itt készül, hogy az előnézet ugyanazt a láncot kapja. Ami másodpercek alatt megvan (kész, vagy vágásnál egy
-    meglévőből smart cuttal), az itt készül. → (az új base, a korrekció leírása), vagy None."""
+    mérés) itt készül, hogy az előnézet ugyanazt a láncot kapja. Ami már kész (proxies), az itt jön. Vágásnál is a háttérbe
+    kerül: a smart cut (footage.smart_proxy) a képet másodpercek alatt adja, de a hangot egyben kell kódolni (30 percnél
+    25–60 s) — a háttérben így ~1 perc a 7–9 helyett, a szerkesztés pedig nem vár. → (az új base, a leírás), vagy None."""
     from app.tools import video_fx, video_preview, videonorm
-    if footage.ready_soon(base) or not stand_in.get("asset") or not video_preview.hls():
+    if footage.cached(base) is not None or not stand_in.get("asset") or not video_preview.hls():
         return None
     probe = {"kind": "overlay", "base": {**_with_end_card(base, card), **{k: stand_in.get(k) for k in ("proxy", "hdr")}},
              "story": {"layers": layers}, "opts": opts}
