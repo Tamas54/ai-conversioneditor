@@ -5398,8 +5398,10 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
             findings = findings + more
         except Exception as e:                       # az előnézet sose állítja meg a szerkesztést: a válasz megy
             log.warning("szakasz-előnézet (%s): %s", pid, e)
-            findings = findings + [f"The preview couldn't be started ({str(e)[:160]}); the final video is still coming."]
-    else:
+            hls = None
+            if base.get("proxy_pending"):             # (a régi MP4-előnézet a szülő munkamásolatát mutatná)
+                findings = findings + [f"The preview couldn't be started ({str(e)[:160]}); the final video is still coming."]
+    if not hls and not base.get("proxy_pending"):      # VIDEO_PREVIEW_HLS=0 (vagy a lista nem indult): a PR #40-es MP4
         picked, left = video_preview.pick(spans, total, fps=fps)
     if picked:
         step(3, 4, "a quick preview of what changed")
