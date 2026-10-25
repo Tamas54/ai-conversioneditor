@@ -94,8 +94,8 @@ stays whole, changes.cut = "none" brings it all back. The sound fades over 15 ms
 INSERT: insert=[{"file_id": <another video>, "at": "16:30" | {"between": ["16:00", "19:00"]} | "end", "from"?, "to"? (a
 part of the clip), "join"?: "smooth" (default) | "dissolve" | "cut"}] puts other clips in the footage (changes.insert in an
 edit; times as for cut). With "between" the place comes from the footage: the longest pause at the end of a sentence (from
-the subtitles), else the longest pause — result.inserted and the check say where and why, with the other pauses to choose
-from (give "at" for one of them). "smooth" makes the join hard to notice: the clip's silent start and end trimmed, its
+the subtitles), else the longest pause — result.inserted and the check say where and why: at / until in the new video's
+time, at_given and the other pauses (candidates) in the time you gave ("at" takes one of them). "smooth" makes the join hard to notice: the clip's silent start and end trimmed, its
 sound level (EBU R128) and colours matched to the footage, a 0.25 s sound crossfade; "dissolve" adds a 0.4 s picture
 dissolve. Other sizes and frame rates are fitted to the video (a blurred fill for another shape); layers, subtitles and the
 camera move with it; changes.cut can take a clip out again.

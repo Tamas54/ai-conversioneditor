@@ -301,7 +301,8 @@ def test_a_smooth_join_matches_the_sound_and_a_dissolve_renders_the_same_both_wa
 @pytest.mark.engines
 @pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
 def test_the_quick_preview_has_the_inserted_clip_and_the_final_comes_in_the_background(tmp_path, put_file):
-    """A gyors előnézet (#40) a beszúrt klip elejét és végét is megmutatja; a végleges render a háttérben, az eredetikből."""
+    """A gyors előnézet (#40) a beszúrt klip elejét és végét is megmutatja; a végleges render a háttérben, az eredetikből.
+    Ugyanaz a klip kétszer: mindkettő a saját helyén (at: az új videó ideje, at_given: a kérésé)."""
     from app import jobs
     from app.storage import output_path
     from app.tools import video
@@ -311,8 +312,13 @@ def test_the_quick_preview_has_the_inserted_clip_and_the_final_comes_in_the_back
     async def go() -> None:
         res = await video.overlay({"file_id": fid, "brand": "none", "final": "background",
                                    "layers": [{"at": 0.5, "dur": 1.0, "type": "source", "text": "Eleje"}],
-                                   "insert": [{"file_id": cid, "at": {"between": [1, 5]}}]})
-        parts, T = res["preview"]["parts"], res["inserted"][0]["at"]
+                                   "insert": [{"file_id": cid, "at": {"between": [1, 5]}},
+                                              {"file_id": cid, "at": "end", "join": "cut"}]})       # ugyanaz a klip még egyszer
+        parts, (one, two) = res["preview"]["parts"], res["inserted"]
+        T = one["at"]
+        assert one["at_given"] == pytest.approx(T, abs=0.01) and 2.5 <= T <= 3.5
+        assert two["at_given"] == pytest.approx(6.0, abs=0.01) and two["at"] == pytest.approx(9.0, abs=0.01)   # az 1. után
+        assert any(f"inserted at 00:09 (00:06 in the time you gave)" in v for v in res["check"]["verified"]), res["check"]
         whats = " ".join(p["what"] for p in parts)
         assert "clip clip.mp4 starts" in whats and "clip clip.mp4 ends" in whats, parts
         assert any(p["from"] <= T and T + 3.0 <= p["to"] for p in parts), (T, parts)
@@ -324,6 +330,6 @@ def test_the_quick_preview_has_the_inserted_clip_and_the_final_comes_in_the_back
                 break
         assert st["status"] == "done", st
         out = _probe(output_path(st["result"]["file_id"]))
-        assert float(out["format"]["duration"]) == pytest.approx(9.0, abs=0.2)
+        assert float(out["format"]["duration"]) == pytest.approx(12.0, abs=0.2)
         assert {(s["width"], s["height"]) for s in out["streams"] if s["codec_type"] == "video"} == {(720, 1280)}
     asyncio.run(go())

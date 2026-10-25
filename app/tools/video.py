@@ -4229,7 +4229,8 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         if inserts:                                           # klipek beszúrása (az idők a felvétel saját idejében)
             kept = base.get("keep")
             base, layers, subs, camera, inserted = await _insert_clips(base, inserts, layers, subs, camera, notes, step,
-                                                                       frame=lambda x: footage.out_near(kept, x))
+                                                                       frame=lambda x: footage.out_near(kept, x),
+                                                                       unframe=lambda t: footage.to_src(kept, t))
         if footage.needed(info, None, crafts.existing(fid).stat().st_size, base.get("keep")):
             # telefonos felvétel elforgatás-jelöléssel (a motor a tárolt, oldalra fektetett képet olvasná), HDR (HLG/PQ):
             # a szerkesztő kis munkamásolatot kap, felállítva, SDR-re képezve; a végső kép az eredetiből készül
@@ -4622,12 +4623,13 @@ def insert_specs(raw: Any) -> list[dict[str, Any]]:
 
 async def _insert_clips(base: dict[str, Any], specs: list[dict[str, Any]], layers: list[dict[str, Any]],
                         subs: list[dict[str, Any]], camera: Any, notes: list[str], step: Callable[..., None],
-                        frame: Callable[[float], float]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], Any,
-                                                                  list[dict[str, Any]]]:
+                        frame: Callable[[float], float], unframe: Callable[[float], float]
+                        ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], Any, list[dict[str, Any]]]:
     """Klipek beszúrása a videóba (footage.insert): a hely az anyagból (a fő felvétel szünetei, mondatvég), az illesztés
     észrevétlen (a klip csendig vágva, a hangereje és a színei a fő felvételéhez); a rétegek, feliratok, a kamera vele
-    csúsznak. frame: a kérés ideje → a mostani idővonal ideje (overlaykor a felvétel saját idejéből). → (base, rétegek,
-    feliratok, kamera, a beszúrások leírása az eredménybe)."""
+    csúsznak. frame: a kérés ideje → a mostani idővonal ideje (overlaykor a felvétel saját idejéből); unframe: vissza.
+    → (base, rétegek, feliratok, kamera, a beszúrások leírása az eredménybe: at / until az új videó idejében, at_given
+    és a jelöltek a kérés idejében — abban, amiben az ügynök egy másik helyet kérhet)."""
     from app.tools import mediaprobe
     src = footage.original(base)
     if src is None:
@@ -4683,28 +4685,33 @@ async def _insert_clips(base: dict[str, Any], specs: list[dict[str, Any]], layer
                 bits.append("colours matched (" + ", ".join(f"{x} {v:g}" for x, v in look.items()) + ")")
             bits.append("a 0.25 s sound crossfade" + (" and a 0.4 s picture dissolve" if join == "dissolve" else ""))
         b = round(a + round((b - a) * fps) / fps, 4)
-        seg.update(a=round(a, 4), b=b)
+        seg.update(a=round(a, 4), b=b, _k=k)                  # (_k: a jelölése, amíg a helyét kikeressük)
         new = footage.insert(new, src_dur, t, seg, fps)
         done.append({"clip": k, "file_id": sp["file_id"], "a": seg["a"], "b": b, "why": why, "bits": bits, "t": t,
                      "candidates": cands[:20]})
-    for d in sorted(done, key=lambda d: d["clip"]):           # a végleges helyük (a korábbi beszúrások után)
-        d["at"] = next((off for off, x in footage._offsets(new) if x["src"] == d["file_id"] and abs(x["a"] - d["a"]) < 1e-3),
-                       d["t"])
+    placed = {x["_k"]: off for off, x in footage._offsets(new) if x.get("_k")}   # a végleges helyük (ugyanaz a klip kétszer is)
+    new = footage.store([{k_: v for k_, v in x.items() if k_ != "_k"} for x in footage.segs(new)])
+    for d in sorted(done, key=lambda d: d["clip"]):
+        d["at"] = round(placed.get(d["clip"], d["t"]), 3)
         d["until"] = round(d["at"] + d["b"] - d["a"], 3)
         name = display_label(d["file_id"])
-        notes.append(f"Clip {d['clip']} ({name}) inserted at {_tc(d['at'])} — {d['why']}; {_tc(d['b'] - d['a'])} long"
+        d["at_given"] = round(unframe(d["t"]), 3)                # a kérés idejében (a korábbi beszúrások nélkül)
+        d["candidates"] = [{**c, "at": round(unframe(c["at"]), 3)} for c in d["candidates"]]
+        given = f" ({_tc(d['at_given'])} in the time you gave)" if abs(d["at_given"] - d["at"]) > 0.05 else ""
+        notes.append(f"Clip {d['clip']} ({name}) inserted at {_tc(d['at'])}{given} — {d['why']}; {_tc(d['b'] - d['a'])} long"
                      + (f"; {', '.join(d['bits'])}" if d["bits"] else "; a plain cut") + ".")
-        others = sorted((c for c in d["candidates"] if abs(c["at"] - d["t"]) > 0.05), key=lambda c: -c["pause"])[:5]
+        others = sorted((c for c in d["candidates"] if abs(c["at"] - d["at_given"]) > 0.05), key=lambda c: -c["pause"])[:5]
         if others:
-            notes.append(f"Other places for clip {d['clip']} in the window: " + ", ".join(
-                f"{_tc(c['at'])} ({c['pause']:.1f} s{', sentence end' if c['sentence_end'] else ''})" for c in others) + ".")
+            notes.append(f"Other places for clip {d['clip']} in the window (in the time you gave — \"at\" takes them): "
+                         + ", ".join(f"{_tc(c['at'])} ({c['pause']:.1f} s{', sentence end' if c['sentence_end'] else ''})"
+                                     for c in others) + ".")
         if subs:
             notes.append(f"⚠ Clip {d['clip']} ({name}) has no subtitles — give them in subtitles (they move with the video), "
                          "or leave it without.")
     layers, subs, camera = _recut(layers, subs, camera, old, new, notes)
     base["keep"] = new
     base["duration"] = footage.length(new, src_dur)
-    return base, layers, subs, camera, [{k: d[k] for k in ("clip", "file_id", "at", "until", "why", "candidates")}
+    return base, layers, subs, camera, [{k: d[k] for k in ("clip", "file_id", "at", "until", "at_given", "why", "candidates")}
                                         for d in sorted(done, key=lambda d: d["clip"])]
 
 
@@ -6248,7 +6255,7 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
             now = base.get("keep")
             base, layers, opts["subtitles"], opts["camera"], opts["inserted"] = await _insert_clips(
                 base, inserts, layers, opts["subtitles"], opts.get("camera"), notes, step,
-                frame=lambda x: footage.remap_near(x, before, now))
+                frame=lambda x: footage.remap_near(x, before, now), unframe=lambda t: footage.remap_near(t, now, before))
         for k in ("auto", "clean_media_id", "media_id", "proxy", "rotated", "hdr"):
             base.pop(k, None)
         if footage.needed(m, base.get("adjust"), src.stat().st_size, base.get("keep")):   # új munkamásolat az eredetiből
