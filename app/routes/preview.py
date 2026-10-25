@@ -287,9 +287,9 @@ async def preview(file_id: str, request: Request, view: str = "", page: int = 0)
         from html import escape
         from app.storage import public_url, read_meta
         meta = (read_meta(file_id) or {}) if ext == "ecproj" else {}
-        page = _hls_page(file_id, meta) if ext == "ecproj" else None
-        if page is not None:      # szakasz-gyorsítótáras előnézet: HLS-lejátszó a változások jelölőivel
-            return page
+        player = _hls_page(file_id, meta) if ext == "ecproj" else None
+        if player is not None:    # szakasz-gyorsítótáras előnézet: HLS-lejátszó a változások jelölőivel
+            return player
         movie = file_id if ext != "ecproj" else meta.get("render_file_id")
         if movie and not (output_path(movie).exists() or input_path(movie).exists()):
             movie = None
