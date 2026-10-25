@@ -11,10 +11,10 @@
   Szakasz-gyorsítótáras HLS-előnézet (app/tools/preview_serve.py) — mind aláírt (?t=, mint a /files/):
     GET  /api/video/{pid}/preview.m3u8   master (kép + külön hang-rendition)
     GET  /api/video/{pid}/video.m3u8     a szakaszok (VOD, szakaszonként #EXT-X-DISCONTINUITY)
-    GET  /api/video/{pid}/audio.m3u8     a hang (egy folytonos rendition)
+    GET  /api/video/{pid}/audio.m3u8     a hang darabokban (darabonként #EXT-X-DISCONTINUITY)
     GET  /api/video/{pid}/preview.json   a lejátszó állapota (kész szakaszok, markerek, a végleges render)
     GET  /api/video/preview/seg/{hash}.ts?p=<pid>&t=   egy szakasz: kész → fájl; különben sorba (0), vár, 503 + Retry-After
-    GET  /api/video/preview/aud/{audio_hash}/{name}?p=&t=   a hang-rendition egy darabja
+    GET  /api/video/preview/aud/{hash}.ts?p=<pid>&t=   egy hangdarab: mint a szakasz (kész → fájl; különben sorba, vár, 503)
 """
 from __future__ import annotations
 
@@ -427,17 +427,13 @@ async def preview_video_playlist(project_id: str, t: str = Query(...), u: str = 
 
 @router.get("/api/video/{project_id}/audio.m3u8")
 async def preview_audio_playlist(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
-    """A hang-rendition; ha még nincs (a hangkeverés gyors, de az első kérés megelőzheti), elsőbbséggel elkészül."""
+    """A hang darabjai — azonnal (nem vár a hangra: a darabot a darab-végpont kérésre rendereli, a 0.-at a lista kérése
+    már sorba tette)."""
     from app.tools import preview_serve as ps
     plan = await _hls_plan(project_id, None, t, u)
     if not plan.get("audio_hash"):
         raise HTTPException(404, "This preview has no sound track.")
-    try:
-        await ps.request_audio(project_id, plan=plan)
-    except TimeoutError:
-        return _busy("sound track")
-    except RuntimeError as e:
-        raise HTTPException(500, f"The preview sound track could not be made: {str(e)[:200]}") from None
+    ps.warm(project_id, plan)
     return _m3u8(ps.audio_m3u8(project_id, plan))
 
 
@@ -466,25 +462,20 @@ async def preview_segment(seg_hash: str, p: str = Query(..., description="the vi
     return FileResponse(path, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})
 
 
-@router.get("/api/video/preview/aud/{audio_hash}/{name}")
-async def preview_audio_piece(audio_hash: str, name: str, p: str = Query(...), t: str = Query(...),
-                              u: str = Query(tenancy.ADMIN_ID)):
+@router.get("/api/video/preview/aud/{chunk_hash}.ts")
+async def preview_audio_chunk(chunk_hash: str, p: str = Query(..., description="the video project"),
+                              t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
+    """Egy hangdarab (preview_cache.audio_plan): mint a képszakasz — kész → a fájl (immutable); nincs → elsőbbséggel (0)
+    sorba, legfeljebb VIDEO_PREVIEW_SEG_WAIT_S-ig vár, utána 503 + Retry-After; ami nincs a verzió tervében: 404."""
     from app.tools import preview_serve as ps
-    plan = await _hls_plan(p, audio_hash, t, u)
-    if plan.get("audio_hash") != audio_hash:
-        raise HTTPException(404, "That sound track isn't this project's preview (reload the playlist).")
+    plan = await _hls_plan(p, chunk_hash, t, u)
+    j = ps.ck_of(plan, chunk_hash)
+    if j is None:
+        raise HTTPException(404, "That part of the sound isn't in this project's preview (the project changed — reload the playlist).")
     try:
-        path = ps.audio_file(plan, name)
-    except FileNotFoundError:
-        raise HTTPException(404, "no such part of the sound track") from None
-    if not path.exists():
-        try:
-            await ps.request_audio(p, plan=plan)
-        except TimeoutError:
-            return _busy("sound track")
-        except RuntimeError as e:
-            raise HTTPException(500, f"The preview sound track could not be made: {str(e)[:200]}") from None
-        if not path.exists():
-            raise HTTPException(404, "no such part of the sound track")
-    return FileResponse(path, media_type=ps.AUDIO_TYPES.get(path.suffix.lower(), "application/octet-stream"),
-                        headers={"Cache-Control": ps.IMMUTABLE})
+        path = await ps.request_audio_chunk(p, j, priority=ps.P_PLAYER, plan=plan)
+    except TimeoutError:
+        return _busy("sound")
+    except RuntimeError as e:
+        raise HTTPException(500, f"This part of the preview sound could not be made: {str(e)[:200]}") from None
+    return FileResponse(path, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})

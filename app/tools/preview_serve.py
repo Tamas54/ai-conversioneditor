@@ -17,6 +17,10 @@ fájleszközök / a végleges render mögé), és ÜRES kontextusban indulnak: s
 render nice 10-e (engines.background) nem öröklődik rájuk — a munka tenancyje (kinek a munkaterületén) a kéréskor
 rögzül és munkánként áll be.
 
+A hang (10-26): darabokban (preview_cache.audio_plan: AUDIO_CHUNK videószakasz egy darab, render_audio_chunk), a darab
+ugyanúgy kérésre készül, mint a képszakasz — az egész hang keverése (render_audio, 10 percen 13,4 s) nincs a hideg úton
+(csak a letölthető MP4-é, request_audio). A lista a darabok között #EXT-X-DISCONTINUITY.
+
 A terv (plan_of) a preview_cache.context() terve: a hash-ekben a végig látható rétegek mért köre és (motoros úton /
 kézzel szerkesztett projektnél) a projektfájl is benne van — ezt csak a context tudja, a puszta plan(spec) nem.
 
@@ -39,7 +43,6 @@ import itertools
 import logging
 import math
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -52,8 +55,7 @@ log = logging.getLogger("aice.preview_serve")
 P_PLAYER, P_EDIT, P_NEAR, P_FILL = 0, 1, 2, 3
 MPEGURL, MP2T = "application/vnd.apple.mpegurl", "video/mp2t"
 IMMUTABLE = "private, max-age=31536000, immutable"
-AUDIO_INDEX = "index.m3u8"                    # a hang-rendition listája az audio_dir-ben (P1 írja UTOLJÁRA)
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+AUDIO_INDEX = "index.m3u8"                    # az egész hang (render_audio, csak az MP4-hez) listája az audio_dir-ben
 FAIL_HOLD_S = 15.0                            # elakadt szakasz: ennyi ideig nem renderel újra (a lejátszó újrapróbál)
 TOUCH_EVERY_S = 2.0                           # a kiszolgált szakaszok last_used_at-je kötegben
 SWEEP_EVERY_S = 300.0                         # LRU (preview_cache.sweep) legfeljebb ennyi időnként, render után
@@ -236,6 +238,39 @@ def ready_hashes(plan: dict[str, Any]) -> set[str]:
     return {s["hash"] for s in plan.get("segments") or [] if _have(plan, s["hash"])}
 
 
+_APLANS: dict[int, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+
+
+def audio_chunks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """A hang darabjai (preview_cache.audio_plan, tiszta: [{k, seg0, seg1, f0, frames, out_start, dur, samples, hash}]) —
+    tervenként egyszer számolva. A darab fájlja ugyanott, mint a képszakaszé: seg_path(source_id, hash)."""
+    if not plan.get("audio_hash"):
+        return []
+    hit = _APLANS.get(id(plan))
+    if hit is not None and hit[0] is plan:
+        return hit[1]
+    chunks = _pc().audio_plan(plan)
+    _APLANS[id(plan)] = (plan, chunks)
+    while len(_APLANS) > _PLANS_MAX:
+        _APLANS.pop(next(iter(_APLANS)))
+    return chunks
+
+
+def chunk_at(plan: dict[str, Any], k: int) -> Optional[int]:
+    """A k. képszakaszt tartalmazó hangdarab sorszáma."""
+    for c in audio_chunks(plan):
+        if c["seg0"] <= k < c["seg1"]:
+            return int(c["k"])
+    return None
+
+
+def ck_of(plan: dict[str, Any], h: str) -> Optional[int]:
+    for i, c in enumerate(audio_chunks(plan)):
+        if c["hash"] == h:
+            return i
+    return None
+
+
 def _seg_at(plan: dict[str, Any], t: float) -> int:
     segs = plan.get("segments") or []
     for s in segs:
@@ -362,10 +397,36 @@ def _enqueue_audio(st: _State, pid: str, plan: dict[str, Any], prio: int) -> Opt
     return _new_job(st, "audio", pid, plan, [], [f"a:{ah}"], prio)
 
 
+def _enqueue_chunk(st: _State, pid: str, plan: dict[str, Any], j: int, prio: int) -> Optional[_Job]:
+    """A hang j. darabja (egy darab = egy munka, preview_cache.render_audio_chunk). None: már kész."""
+    h = audio_chunks(plan)[j]["hash"]
+    job = st.live.get(h)
+    if job is not None:
+        _bump(st, job, prio)
+        return job
+    if _have(plan, h):
+        return None
+    return _new_job(st, "achunk", pid, plan, [j], [h], prio)
+
+
+def _chunk_missing(st: _State, plan: dict[str, Any], j: int) -> bool:
+    h = audio_chunks(plan)[j]["hash"]
+    return h not in st.live and not _have(plan, h) and not _held_failure(st, h)
+
+
+def _prefetch_audio(st: _State, pid: str, plan: dict[str, Any], k0: int, k1: int, prio: int = P_NEAR) -> None:
+    """A [k0, k1) képszakaszokat lefedő hangdarabok, amelyek még nincsenek kész és nem készülnek."""
+    for c in audio_chunks(plan):
+        if c["seg1"] > k0 and c["seg0"] < k1 and _chunk_missing(st, plan, int(c["k"])):
+            _enqueue_chunk(st, pid, plan, int(c["k"]), prio)
+
+
 def _prefetch(st: _State, pid: str, plan: dict[str, Any], k: int) -> None:
-    """A lejátszó k-t kérte: a következő néhány (elsőbbség 2), ami még nincs kész és nem készül."""
+    """A lejátszó k-t kérte: a következő néhány képszakasz és a k körüli hangdarab(ok) (elsőbbség 2), ami még nincs
+    kész és nem készül (a hangdarabot a lejátszó maga is kéri — így az előbb indul, vagy már kész, mire kéri)."""
     segs = plan["segments"]
     j, end = k + 1, min(len(segs), k + 1 + prefetch_n())
+    _prefetch_audio(st, pid, plan, k, end)
     while j < end:
         h = segs[j]["hash"]
         if h in st.live or _have(plan, h):
@@ -386,6 +447,8 @@ def _as(job: _Job):
 
 
 def _done_ok(job: _Job) -> bool:
+    if job.kind == "achunk":
+        return _have(job.plan, job.keys[0])
     if job.kind == "audio":
         idx = _audio_index(job.plan)
         return bool(idx and idx.exists())
@@ -404,13 +467,16 @@ async def _worker(st: _State) -> None:
                 # a context verziónként egyszer épül (P1: gyorsítótár + zár); a render a video_preview.gate()-et maga
                 # kéri — itt NEM tartjuk (nem újrabelépő: két dolgozó mellett a belső kérés örökre várna), és nem heavy()
                 ctx = await _pc().context(job.pid)
-                if job.kind == "audio":
+                if job.kind == "achunk":
+                    await _pc().render_audio_chunk(ctx, job.ks[0])
+                elif job.kind == "audio":
                     await _pc().render_audio(ctx)
                 else:
                     await _pc().render_run(ctx, list(job.ks))
             if not _done_ok(job):
                 raise RuntimeError("the preview renderer finished without writing "
-                                   + ("the audio track" if job.kind == "audio" else f"segment(s) {job.ks}"))
+                                   + {"audio": "the audio track", "achunk": f"audio part {job.ks}"}.get(job.kind,
+                                                                                                         f"segment(s) {job.ks}"))
             st.stats["runs"] += 1
             st.stats["segments"] += len(job.ks)
             log.info("előnézet %s %s %s: %.2f s (elsőbbség %d)", job.pid, job.kind, job.ks or "", time.monotonic() - t0, job.prio)
@@ -517,9 +583,43 @@ async def request(pid: str, k: int, *, priority: int = P_PLAYER, plan: Optional[
     return path
 
 
+async def request_audio_chunk(pid: str, j: int, *, priority: int = P_PLAYER, plan: Optional[dict[str, Any]] = None,
+                              timeout: Optional[float] = None) -> Path:
+    """A hang j. darabjának fájlja (mint a request() a képszakaszra): kész → azonnal; különben sorba, legfeljebb wait_s()-ig
+    vár, utána TimeoutError. A lejátszó kérése (0) a következő darabo(ka)t is előtölti (2)."""
+    plan = plan or await plan_of(pid)
+    chunks = audio_chunks(plan)
+    if not 0 <= j < len(chunks):
+        raise IndexError(f"audio part {j} is not in this preview (0…{len(chunks) - 1})")
+    h = chunks[j]["hash"]
+    path = _seg_file(plan, h)
+    st = _state()
+    nxt = chunks[j]["seg1"]
+
+    def ahead() -> None:
+        if priority == P_PLAYER:
+            _prefetch_audio(st, pid, plan, nxt, nxt + max(1, prefetch_n()))
+    if path.exists():
+        st.stats["hits"] += 1
+        _touch(st, plan["source_id"], [h])
+        ahead()
+        return path
+    st.stats["misses"] += 1
+    if h not in st.live and (why := _held_failure(st, h)):
+        raise RuntimeError(why)
+    job = _enqueue_chunk(st, pid, plan, j, priority)
+    ahead()
+    if job is not None:
+        await _wait(job, timeout)
+    if not path.exists():
+        raise RuntimeError("the preview audio part was not written")
+    return path
+
+
 async def request_audio(pid: str, *, priority: int = P_PLAYER, plan: Optional[dict[str, Any]] = None,
                         timeout: Optional[float] = None) -> Path:
-    """A hang-rendition könyvtára (benne index.m3u8): kész → azonnal; különben sorba, és vár (mint a request())."""
+    """Az EGÉSZ hang (preview_cache.render_audio, könyvtár index.m3u8-cal) — csak a letölthető MP4-hez (P3, preview="mp4");
+    a lejátszó a darabokat kapja (request_audio_chunk). Kész → azonnal; különben sorba, és vár (mint a request())."""
     plan = plan or await plan_of(pid)
     idx = _audio_index(plan)
     if idx is None:
@@ -538,20 +638,21 @@ async def request_audio(pid: str, *, priority: int = P_PLAYER, plan: Optional[di
 
 
 def warm(pid: str, plan: dict[str, Any]) -> None:
-    """A lista kérésekor (a végpontok): a 0. szakasz futama és a hang elsőbbséggel (0) sorba, ha még nincs kész — a
-    lejátszó mindig a 0.-kal indul, és ez gyorsan kell (P4: a hls.js később indulva nem hozza létre a puffereit). Nem vár."""
+    """A lista kérésekor (a végpontok): a 0. képszakasz futama és a 0. hangdarab elsőbbséggel (0) sorba, ha még nincs
+    kész — a lejátszó mindig a 0.-kal indul, és ez gyorsan kell (P4: a hls.js később indulva nem hozza létre a
+    puffereit). Nem vár."""
     segs = plan.get("segments") or []
     st = _state()
     if segs and not _have(plan, segs[0]["hash"]) and not _held_failure(st, segs[0]["hash"]):
         _enqueue_run(st, pid, plan, 0, P_PLAYER)
-    idx = _audio_index(plan)
-    if idx is not None and not idx.exists() and not _held_failure(st, f"a:{plan['audio_hash']}"):
-        _enqueue_audio(st, pid, plan, P_PLAYER)
+    if audio_chunks(plan) and _chunk_missing(st, plan, 0):
+        _enqueue_chunk(st, pid, plan, 0, P_PLAYER)
 
 
 def schedule(pid: str, plan: dict[str, Any], dirty: list[int], *, playhead: float = 0.0) -> None:
     """Háttér-előtöltés az új verzióra (futó eseményhurokból hívandó): a 0. és az első piszkos szakasz (1), a lejátszófej
-    körüli néhány (2), aztán minden hiányzó elölről (3), a hang (1). Ugyanannak a felvételnek egy korábbi verzióra
+    körüli néhány (2), aztán minden hiányzó elölről (3), időrendben a hangdarabokkal együtt (a 0. darab és az első
+    piszkos szakaszé: 1, a lejátszófejé: 2). Ugyanannak a felvételnek egy korábbi verzióra
     sorba állított, még el nem kezdett előtöltése (2, 3) elmarad — amit az új is használ, azt az új állítja sorba."""
     try:
         _remember(pid, _stamp(pid), plan)
@@ -565,18 +666,16 @@ async def _fill(st: _State, pid: str, plan: dict[str, Any], dirty: list[int], pl
     segs = plan.get("segments") or []
     n = len(segs)
     for job in set(st.live.values()):        # a régi verzió előtöltése (2, 3): senki sem vár rá (a várók 0–1-re emelik)
-        if job.kind == "run" and not job.started and job.prio >= P_NEAR and job.pid != pid \
+        if job.kind in ("run", "achunk") and not job.started and job.prio >= P_NEAR and job.pid != pid \
                 and job.plan.get("source_id") == plan.get("source_id"):
             for key in job.keys:
                 if st.live.get(key) is job:
                     del st.live[key]
             job.fut.set_exception(_Superseded("superseded by a newer version"))
             job.fut.exception()
-    idx = _audio_index(plan)
-    if idx is not None and not idx.exists():
-        _enqueue_audio(st, pid, plan, P_EDIT)
     if not n:
         return
+    chunks = audio_chunks(plan)
 
     def missing(k: int) -> bool:
         h = segs[k]["hash"]
@@ -587,7 +686,10 @@ async def _fill(st: _State, pid: str, plan: dict[str, Any], dirty: list[int], pl
             _enqueue_run(st, pid, plan, k, P_EDIT)
         elif 0 <= k < n and segs[k]["hash"] in st.live:
             _bump(st, st.live[segs[k]["hash"]], P_EDIT)
+        if chunks and 0 <= k < n:
+            _prefetch_audio(st, pid, plan, k, k + 1, P_EDIT)
     j = kp = _seg_at(plan, playhead)
+    _prefetch_audio(st, pid, plan, kp, min(n, kp + 1 + prefetch_n()))
     while j < min(n, kp + 1 + prefetch_n()):
         if missing(j):
             j = max(_enqueue_run(st, pid, plan, j, P_NEAR).ks + [j]) + 1
@@ -600,10 +702,19 @@ async def _fill(st: _State, pid: str, plan: dict[str, Any], dirty: list[int], pl
         if h not in seen and missing(k):
             rest.append(k)
         seen.add(h)
+    todo: list[tuple[float, int, str, list[int]]] = []          # időrendben: kép és hang együtt nő elölről
     for run in _pc().runs(plan, rest) if rest else []:
         run = [k for k in run if missing(k)]
         if run:
-            _new_job(st, "run", pid, plan, run, [segs[k]["hash"] for k in run], P_FILL)
+            todo.append((float(segs[run[0]]["out_start"]), 0, "run", run))
+    for c in chunks:
+        if _chunk_missing(st, plan, int(c["k"])):
+            todo.append((float(c["out_start"]), 1, "achunk", [int(c["k"])]))
+    for _, _, kind, ks in sorted(todo, key=lambda x: (x[0], x[1])):
+        if kind == "run":
+            _new_job(st, "run", pid, plan, ks, [segs[k]["hash"] for k in ks], P_FILL)
+        else:
+            _enqueue_chunk(st, pid, plan, ks[0], P_FILL)
 
 
 # ---------- lejátszási listák ----------
@@ -623,15 +734,30 @@ def codecs(plan: dict[str, Any]) -> str:
     return f"{v},mp4a.40.2" if plan.get("audio_hash") else v
 
 
-def durations(plan: dict[str, Any]) -> list[float]:
-    """Szakaszonként frames/fps, a kumulált kockaszámból kerekítve: Σ = az összes kocka / fps (900 szakaszon sem csúszik)."""
+def durations(plan: dict[str, Any], items: Optional[list[dict[str, Any]]] = None) -> list[float]:
+    """Szakaszonként (vagy hangdarabonként) frames/fps, a kumulált kockaszámból kerekítve: Σ = az összes kocka / fps
+    (900 szakaszon sem csúszik)."""
     fps = float(plan["fps"])
     out, f = [], 0
-    for s in plan.get("segments") or []:
+    for s in plan.get("segments") or [] if items is None else items:
         a = round(f / fps, 6)
         f += int(s["frames"])
         out.append(round(round(f / fps, 6) - a, 6))
     return out
+
+
+def _media_m3u8(pid: str, plan: dict[str, Any], items: list[dict[str, Any]], path: str, independent: bool) -> str:
+    durs = durations(plan, items)
+    _, exp, uid = sign(pid)
+    lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{max([1] + [math.ceil(d) for d in durs])}",
+             "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD"] + (["#EXT-X-INDEPENDENT-SEGMENTS"] if independent else [])
+    for i, (s, d) in enumerate(zip(items, durs)):
+        if i:
+            lines.append("#EXT-X-DISCONTINUITY")
+        lines.append(f"#EXTINF:{d:.6f},")
+        lines.append(f"/api/video/preview/{path}/{s['hash']}.ts{_query(pid, s['hash'], exp, uid)}")
+    lines.append("#EXT-X-ENDLIST")
+    return "\n".join(lines) + "\n"
 
 
 def _known(pid: str, plan: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -642,8 +768,8 @@ def _known(pid: str, plan: Optional[dict[str, Any]]) -> dict[str, Any]:
 
 
 def master_m3u8(pid: str, plan: Optional[dict[str, Any]] = None) -> str:
-    """A master: a kép (video.m3u8) + a hang külön, folytonos renditionként (#EXT-X-MEDIA TYPE=AUDIO) — a 10-25-i
-    A1 prototípus alakja (hls.js 1.5.13 + Chrome: hézag nélkül, tekeréssel is). plan nélkül: a már ismert terv."""
+    """A master: a kép (video.m3u8) + a hang külön renditionként (#EXT-X-MEDIA TYPE=AUDIO), darabokban (audio.m3u8) —
+    a 10-25-i prototípus A1/A2 alakja (hls.js 1.5.13 + Chrome). plan nélkül: a már ismert terv."""
     plan = _known(pid, plan)
     q = signed(pid)
     audio = bool(plan.get("audio_hash"))
@@ -662,56 +788,18 @@ def master_m3u8(pid: str, plan: Optional[dict[str, Any]] = None) -> str:
 def video_m3u8(pid: str, plan: dict[str, Any]) -> str:
     """VOD-lista, benne MINDEN szakasz (kész vagy sem — a hiányzót a szakasz-végpont kérésre rendereli), mindegyik
     a saját EXTINF-jével, és mivel minden fájl 0-tól indul: szakaszonként #EXT-X-DISCONTINUITY."""
-    segs = plan.get("segments") or []
-    durs = durations(plan)
-    _, exp, uid = sign(pid)
-    lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{max([1] + [math.ceil(d) for d in durs])}",
-             "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-INDEPENDENT-SEGMENTS"]
-    for i, (s, d) in enumerate(zip(segs, durs)):
-        if i:
-            lines.append("#EXT-X-DISCONTINUITY")
-        lines.append(f"#EXTINF:{d:.6f},")
-        lines.append(f"/api/video/preview/seg/{s['hash']}.ts{_query(pid, s['hash'], exp, uid)}")
-    lines.append("#EXT-X-ENDLIST")
-    return "\n".join(lines) + "\n"
+    return _media_m3u8(pid, plan, plan.get("segments") or [], "seg", True)
 
 
 def audio_m3u8(pid: str, plan: dict[str, Any]) -> str:
-    """A hang-rendition (preview_cache.render_audio: audio_dir/index.m3u8, ffmpeg -f hls) — a darabok neve aláírt
-    végpont-címre cserélve. FileNotFoundError: még nem készült el (a végpont előbb request_audio()-t hív)."""
-    ah = plan.get("audio_hash")
-    idx = _audio_index(plan)
-    if idx is None:
+    """A hang-rendition: a darabok (preview_cache.audio_plan), mindegyik a saját EXTINF-jével (kocka / fps, a képpel
+    azonos rácson), aláírt címmel, és mivel minden darab 0-tól indul: köztük #EXT-X-DISCONTINUITY. Nem vár semmire (a
+    hiányzó darabot a végpont kérésre rendereli). VIDEO_PREVIEW_AUDIO_CHUNK=1: darab = képszakasz (a két lista
+    szakaszolása és discontinuity-sorszáma azonos — RFC 8216 6.2.4)."""
+    chunks = audio_chunks(plan)
+    if not chunks:
         raise LookupError("This preview has no sound track.")
-    text = idx.read_text("utf-8")
-    q = signed(pid, ah)
-
-    def url(name: str) -> str:
-        base = name.split("?", 1)[0].rsplit("/", 1)[-1]
-        if not NAME_RE.match(base):
-            raise ValueError(f"unexpected name in the audio playlist: {name!r}")
-        return f"/api/video/preview/aud/{ah}/{base}{q}"
-
-    out = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        out.append(re.sub(r'URI="([^"]+)"', lambda m: f'URI="{url(m.group(1))}"', s) if s.startswith("#") else url(s))
-    return "\n".join(out) + "\n"
-
-
-def audio_file(plan: dict[str, Any], name: str) -> Path:
-    """A hang-rendition egy darabja (a név a listából; csak egyszerű fájlnév)."""
-    if not NAME_RE.match(name) or name == AUDIO_INDEX:
-        raise FileNotFoundError(name)
-    idx = _audio_index(plan)
-    if idx is None:
-        raise FileNotFoundError(name)
-    return idx.parent / name
-
-
-AUDIO_TYPES = {".ts": MP2T, ".aac": "audio/aac", ".m4s": "audio/mp4", ".mp4": "audio/mp4", ".m4a": "audio/mp4"}
+    return _media_m3u8(pid, plan, chunks, "aud", False)
 
 
 # ---------- preview.json (a P4 lejátszója) ----------
