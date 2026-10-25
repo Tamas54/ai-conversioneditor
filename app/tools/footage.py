@@ -376,6 +376,28 @@ def donors(base: dict[str, Any]) -> list[tuple[Any, dict[str, Any]]]:
     return [(kp, hit) for _, kp, hit in sorted(out, key=lambda x: -x[0])]
 
 
+async def _grid(path: Path, pk: list[tuple[int, bool]]) -> Optional[float]:
+    """A munkamásolat kockarácsa (kocka/s), ha állandó: a sáv névleges sebessége, és minden kocka a k / fps idején
+    (0-tól, fél kockán belül). None: nem állandó — kockánként nem feleltethető meg az új idővonalnak. (A vágatlan
+    munkamásolat az iPhone-felvétel névleges 30-ján áll, a vágott idővonal a mért átlagán — 29,993 —: a kettő más rács.)"""
+    from fractions import Fraction
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=time_base,r_frame_rate",
+                       "-of", "json", str(path), timeout=60)
+    st = (json.loads(out.decode("utf-8", "replace") or "{}").get("streams") or [{}])[0]
+    try:
+        tb, rate = Fraction(st["time_base"]), Fraction(st["r_frame_rate"])
+    except (KeyError, ValueError, ZeroDivisionError):
+        return None
+    if rate <= 0 or not pk:
+        return None
+    ts = sorted(p for p, _ in pk)
+    half = Fraction(1, 2) / rate
+    if any(abs(p * tb - (ts[0] * tb + Fraction(k) / rate)) > half for k, p in enumerate(ts)) or abs(ts[0] * tb) > half:
+        return None
+    return float(rate)
+
+
 async def _packets(path: Path) -> list[tuple[int, bool]]:
     """A videósáv csomagjai dekódolási sorrendben: (pts, kulcskocka-e)."""
     from app.convert.engines import run
@@ -454,15 +476,18 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
         b["auto"] = donor["auto"]                           # ugyanaz a korrekció, ugyanaz az eredetin mért auto
     adj = b.get("adjust") or {}
     old = crafts.existing(donor["media_id"])
-    fps_v = float(b.get("fps") or m.get("fps") or 30)      # az idővonal kockarácsa (Timeline)
     fps = float(m.get("fps") or 30)                         # a kódoló GOP-ja (_build_proxy: -g round(fps))
+    pk = await _packets(old)
+    fps_v = await _grid(old, pk)                            # a régi munkamásolat rácsa: az új is ezen áll (lásd _grid)
+    if not fps_v:
+        log.info("smart cut: a régi munkamásolat kockarácsa nem állandó (%s)", old.name)
+        return None
     runs = reuse(old_keep, b["keep"], fps_v)
     work = Path(tempfile.mkdtemp(prefix="proxy-smart-", dir=str(temp_path("").parent)))
     try:
         tl = await timeline(b, src, W, H, fps_v, work, size=(pw, ph))
         dur = tl.length
         total = _frame(dur, fps_v)
-        pk = await _packets(old)
         ops = stitch(runs, clean_keys(pk), len(pk), total, piece=max(1, round(SMART_PIECE_S * fps_v)))
         enc_frames = sum(op[2] - op[1] for op in ops if op[0] == "enc")
         copied = sum(op[3] for op in ops if op[0] == "copy")
