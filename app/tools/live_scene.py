@@ -740,6 +740,11 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
     except Exception as e:                       # noqa: BLE001 — the rest of the scene plays without it
         log.warning("live scene: matte part (%s): %s", pid, e)
         scene["matte"] = None
+    try:                                         # a színpad háttere / hátsó panelei: a beszélő eléjük (stage_layer)
+        from app.tools import stage_layer
+        scene["matte"] = stage_layer.matte_part(spec, scene["layers"], total, scene["matte"])
+    except Exception as e:                       # noqa: BLE001
+        log.warning("live scene: stage matte part (%s): %s", pid, e)
     scene["rev"] = revision(scene)
     return scene
 
