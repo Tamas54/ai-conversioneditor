@@ -980,9 +980,9 @@ async def materialize(layers: list[dict[str, Any]], work: Path, W: int, H: int, 
                 None if p["kind"] == "video" else src, w, h, g["pad"], p["frame"], video=p["kind"] == "video"))
             card = {"file": put(png, f"stage-{png.stem[:20]}.png"), "aspect": aspect}
             if p["kind"] == "video":
-                ext = src.suffix.lower() or ".mp4"
-                card["video"] = put(src, f"stageclip-{sha[:20]}{ext}")
-                card["video_size"] = await asyncio.to_thread(_video_size, src)
+                cp = await clip_copy(src, sha, min(W, _even(g["w"] * 1.25)))
+                card["video"] = put(cp, f"stageclip-{cp.stem[5:25]}.mp4")
+                card["video_size"] = await asyncio.to_thread(_video_size, cp)
             art["cards"][k] = card
             art["aspects"][k] = aspect
         bg = ly.get("background") or {"kind": "none"}
@@ -1002,13 +1002,41 @@ async def materialize(layers: list[dict[str, Any]], work: Path, W: int, H: int, 
                 try:
                     src = crafts.existing(bg["file_id"])
                     sha = await asyncio.to_thread(_file_sha, src)
-                    art["bg"]["video"].update(file=put(src, f"stagebgclip-{sha[:20]}{src.suffix.lower() or '.mp4'}"),
-                                              size=await asyncio.to_thread(_video_size, src))
+                    cp = await clip_copy(src, sha, W)
+                    art["bg"]["video"].update(file=put(cp, f"stagebgclip-{cp.stem[5:25]}.mp4"),
+                                              size=await asyncio.to_thread(_video_size, cp))
                 except FileNotFoundError:
                     notes.append(f"⚠ Layer {ly['id']}: the background clip {bg['file_id']} isn't stored (any more) — left out.")
                     art.pop("bg", None)
         ly["_art"] = art
     return names
+
+
+CLIP_V = 1
+
+
+async def clip_copy(src: Path, sha: str, max_w: int) -> Path:
+    """A panel's / the background's clip as the engine draws it reliably: 8-bit H.264 BT.709 (an iPhone HDR / 10-bit / HEVC
+    clip tone-mapped as the working copies are — videonorm.tonemap_filters; measured 10-26: a 10-bit High-10 clip came
+    out transparent in the engine), at most max_w wide (a panel is a third of the frame), no sound. Cached by the clip's
+    content and the size (<cache>/_stage/clip-<key>.mp4)."""
+    from app.tools import mediaprobe, videonorm
+    key = _art_key({"clip": sha, "w": int(max_w), "v": CLIP_V})
+    dst = art_root() / f"clip-{key[:32]}.mp4"
+    if dst.exists():
+        return dst
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f"{dst.stem}.tmp-{uuid.uuid4().hex[:6]}.mp4")
+    vf = videonorm.tonemap_filters(await mediaprobe.info(src)) + [f"scale='min({int(max_w)},iw)':-2:flags=lanczos", "format=yuv420p"]
+    from app.convert.engines import run
+    try:
+        await run("ffmpeg", "-y", "-v", "error", "-i", str(src), "-an", "-vf", ",".join(vf), "-c:v", "libx264", "-preset", "veryfast",
+                  "-crf", "18", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+                  "-movflags", "+faststart", str(tmp), timeout=900)
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return dst
 
 
 def _file_sha(path: Path) -> str:
