@@ -510,6 +510,34 @@ function splitBase(Lb, ly, f) {   // f: a réteg alapnagyítása (a munkamásola
   P.setValueAtTime(a, p0); P.setValueAtTime(a + d, s.to); P.setValueAtTime(b - d, s.to); P.setValueAtTime(b, p0);
   ease(S); ease(P);
 }
+// a beszélő ablakban (app/tools/facecam.py): a felvétel a sarokba zsugorodik és vissza (kulcsok, mint az osztott képnél),
+// a „Facecam” maszk a felvétel SAJÁT pixeleiben (a mozgással együtt megy): lekerekített téglalap (cx, cy, hw, hh, r) 8
+// csúccsal — a teljes képnél nagyobb téglalapból az ablak alakjába (kör: hw = hh = r); a Python a nyugvó felvétel
+// kompozíció-pixeleiben adja, itt a réteg pixeleibe kerül (horgony + (p − közép) / alapnagyítás)
+function fcShape(p, A, C, k) {
+  var cx = A[0] + (p.cx - C[0]) / k, cy = A[1] + (p.cy - C[1]) / k, hw = p.hw / k, hh = p.hh / k;
+  var r = Math.max(0, Math.min(p.r / k, hw, hh)), q = 0.5523 * r, sh = new Shape();
+  sh.vertices = [[cx - hw + r, cy - hh], [cx + hw - r, cy - hh], [cx + hw, cy - hh + r], [cx + hw, cy + hh - r],
+    [cx + hw - r, cy + hh], [cx - hw + r, cy + hh], [cx - hw, cy + hh - r], [cx - hw, cy - hh + r]];
+  sh.inTangents = [[-q, 0], [0, 0], [0, -q], [0, 0], [q, 0], [0, 0], [0, q], [0, 0]];
+  sh.outTangents = [[0, 0], [q, 0], [0, 0], [0, q], [0, 0], [-q, 0], [0, 0], [0, -q]];
+  sh.closed = true;
+  return sh;
+}
+function facecamBase(fb, fc) {
+  var T = tp(fb), S = T.property("ADBE Scale"), P = T.property("ADBE Position");
+  var a = fc.at, b = fc.at + fc.dur, d = fc.move, k = fc.scale * BASE_K * 100, p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
+  S.setValueAtTime(a, s0); S.setValueAtTime(a + d, [k, k]); S.setValueAtTime(b - d, [k, k]); S.setValueAtTime(b, s0);
+  P.setValueAtTime(a, p0); P.setValueAtTime(a + d, fc.to); P.setValueAtTime(b - d, fc.to); P.setValueAtTime(b, p0);
+  ease(S); ease(P);
+  var A = T.property("ADBE Anchor Point").value, C = [D.W / 2, D.H / 2], mg = fb.property("ADBE Mask Parade"), M = null;
+  for (var i = 1; i <= mg.numProperties; i++) if (mg.property(i).name === "Facecam") M = mg.property(i);
+  if (!M) { M = mg.addProperty("ADBE Mask Atom"); M.name = "Facecam"; }
+  var MP = M.property("ADBE Mask Shape"), full = fcShape(fc.full, A, C, BASE_K), win = fcShape(fc.win, A, C, BASE_K);
+  MP.setValueAtTime(a, full); MP.setValueAtTime(a + d, win); MP.setValueAtTime(b - d, win); MP.setValueAtTime(b, full);
+  ease(MP);
+  M.property("ADBE Mask Feather").setValue([fc.feather / BASE_K, fc.feather / BASE_K]);
+}
 function waveLayer(c, ly) {    // hullámforma: a hangerő (a Python számolta, WAVE_STEP-enként) egy csúszkán, a sávok követik
   var wv = ly.wave, n = wv.bars, W = ly.w, H = ly.h, gap = W / n, bw = Math.max(3, Math.round(gap * 0.55)), col = wv.color;
   var nl = c.layers.addNull(); nl.name = "Audio Level";
@@ -552,6 +580,8 @@ function overlayLayers(main, base) {
     if (ao === "pop") { S.setValueAtTime(b - dq, [100, 100]); S.setValueAtTime(b, [86, 86]); }
     ease(O); ease(P); ease(S);
     if (ly.split) for (var j = 0; j < base.length; j++) splitBase(base[j], ly, BASE_F[j]);
+    if (ly.under && D.base && base.length) L.moveAfter(base[0]);     // a beszélő ablakban: a tartalom a felvétel alatt
+    if (ly.facecam && D.base && base.length) facecamBase(base[0], ly.facecam);
   }
 }
 

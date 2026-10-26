@@ -141,6 +141,16 @@ Types:
     (a video plays muted unless "sound" is given). In a vertical video the base becomes small — there use pip.
   Real video for a cut-in (free, Pexels): image={"stock_video": "pexels:<id>"} from video(action="stock", text="words"),
     or {"stock_video": "words"} (the first that fits the box) — in fullscreen, split or pip.
+  speaker window (the YouTube facecam layout) — on a fullscreen layer (image: a screen recording / any video of theirs,
+    {"stock_video": "words"}, an AI clip's file_id, a picture, a chart, a text) or a deck layer (placement front):
+    "speaker": {shape?: circle (default) | rounded | rect, size?: the window's height 0.12–0.7 of the frame (circle 0.36,
+    small | medium | large), corner?: bl (default) | br | tl | tr | [x, y] (its centre, 0–1), ring?: "accent" (default) |
+    "#hex" | false, ring_width?, shadow?: true, focus?: [x, y] (where the face is in the footage, 0–1; default
+    [0.5, 0.42]), zoom?: how close (circle 1.45, rect 1 = the whole picture), aspect?: "16:9" (rounded / rect), radius?,
+    move?: seconds of the shrink / grow (0.7), label?: "Coming Up..."}: the content fills the frame, the speaker shrinks
+    into the window at "at" and grows back at the end — his voice runs on (the content's own sound: "sound", default
+    off). type "facecam" = a fullscreen layer with the default window. E.g. {"type": "facecam", "at": "05:55", "until":
+    "06:15", "image": {"stock_video": "technology network"}, "speaker": {"corner": "bl", "label": "Coming Up..."}}.
   waveform {style: bars (default, around a centre line) | rise (growing from the bottom), bars?: 8–64 (28),
     color?: "#hex" (default the accent), position?: bottom (default) | center | top | [x, y, w, h]}: the footage's
     sound as moving bars — e.g. over a podcast or interview; dur = how long (whole video: "until" its end).

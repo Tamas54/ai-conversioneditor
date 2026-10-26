@@ -147,8 +147,17 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     if len(foot) != 1:
         return {"ok": False, "why": "the footage layer isn't the project's only base"}
     f = foot[0]
-    if f["i"] != max(x["i"] for x in vis):
-        return {"ok": False, "why": "something lies under the footage"}
+    dur_, fps_ = float(info["dur"]), float(info["fps"])
+    under = [x for x in vis if x["i"] > f["i"]]
+    if under:                       # a felvétel alatt csak ott lehet réteg, ahol a motor a felvétellel együtt rajzol (a felvétel
+        mv: list[list[float]] = []  # mozog: a beszélő ablakban — app/tools/facecam.py — a tartalom alatta)
+        for a, b in moved(f, dur_):
+            if mv and a <= mv[-1][1] + 1e-6:
+                mv[-1][1] = max(mv[-1][1], b)
+            else:
+                mv.append([a, b])
+        if not all(any(a - 1.5 / fps_ <= float(x["a"]) and float(x["b"]) <= b + 1.5 / fps_ for a, b in mv) for x in under):
+            return {"ok": False, "why": "something lies under the footage"}
     if f["fx"]:
         return {"ok": False, "why": "the footage has an effect on it in the project"}
     if retimed(f, float(info["dur"]), float(info["fps"])):
@@ -169,7 +178,7 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "why": f"“{x['name']}” uses a blend mode ({x.get('blend')})"}
         if x.get("matte"):
             return {"ok": False, "why": f"“{x['name']}” uses a track matte"}
-    pers = [x for x in gfx if min(dur, x["b"]) - max(0.0, x["a"]) >= PERSISTENT_S]
+    pers = [x for x in gfx if min(dur, x["b"]) - max(0.0, x["a"]) >= PERSISTENT_S and x not in under]
     short = [x for x in gfx if x not in pers]
     opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)] + lit   # a felvétel el van mozdítva
     return {"ok": True, "why": "", "footage": f, "captions": caps, "gfx": gfx, "persistent": pers, "short": short,
