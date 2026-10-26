@@ -729,7 +729,8 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
         "captions": None, "layers": [], "audio": {"music": _music(pid, spec.get("opts") or {}, meta)},
         "warnings": warnings}
     ctx = {"fps": fps, "W": pw, "H": ph, "total": total, "comp": (tr or {}).get("comp"), "meta": meta}
-    scene["captions"] = await _part(_live_captions, "captions_part", pid, spec, ctx)
+    scene["captions"] = await _part(_live_captions, "captions_part_async" if hasattr(_live_captions, "captions_part_async")
+                                    else "captions_part", pid, spec, ctx)
     scene["layers"] = await _part(_live_layers, "layers_part", pid, spec, ctx) or []
     scene["rev"] = revision(scene)
     return scene

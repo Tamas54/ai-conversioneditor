@@ -75,7 +75,7 @@ body {{ display: grid; place-items: center; min-height: 100vh; padding: 16px;
 </div>
 <script type="application/json" id="lp-cfg">{cfg}</script>
 {captions}<script src="/static/live-player.js?v={ver}"></script>
-<script>LivePlayer.page(document.getElementById("lp-cfg"));</script>
+<script type="module">LivePlayer.page(document.getElementById("lp-cfg"));</script>
 </body></html>"""
 
 
@@ -102,7 +102,7 @@ async def live_page(project_id: str):
             return int((_STATIC / name).stat().st_mtime)
         except OSError:
             return 0
-    caps = (f'<script src="/static/live-captions.js?v={ver("live-captions.js")}"></script>\n'
+    caps = (f'<script type="module" src="/static/live-captions.js?v={ver("live-captions.js")}"></script>\n'
             if (_STATIC / "live-captions.js").exists() else "")
     return HTMLResponse(_PAGE.format(name=escape(f"{stem} — live preview"), w=w, h=h, ar=f"{w / h:.5f}", total=f"{total:.3f}",
                                      ver=ver("live-player.js"), captions=caps,

@@ -460,7 +460,8 @@ void main() {
     _layerTime(spec, t) {             // the clip's own time at output t (+¼ frame: never ON a frame boundary)
       let lt = t - spec.t0;
       const lp = spec.loop;
-      if (lp && lp.period > 0 && lt >= lp.intro + lp.period) lt = lp.intro + ((lt - lp.intro) % lp.period);
+      if (lp && lp.still) lt = Math.min(lt, lp.intro);          // egy kockás „kör”: a beúszás után az utolsó kocka áll (L2)
+      else if (lp && lp.period > 0 && lt >= lp.intro + lp.period) lt = lp.intro + ((lt - lp.intro) % lp.period);
       return lt + 0.25 / this.fps;
     }
     _ensureLayer(spec) {
@@ -494,10 +495,11 @@ void main() {
         const on = t >= spec.t0 - 0.5 / fps && t < spec.t1 - 0.5 / fps;
         const cur = L.el.seeking ? null : L.el.currentTime;
         const lp = spec.loop;
-        if (this.playing && on && !this.hold) {
+        const held = lp && lp.still && t - spec.t0 >= lp.intro;  // (álló kocka: nem játszik, nem tekerget)
+        if (this.playing && on && !this.hold && !held) {
           if (L.el.paused) { L.el.currentTime = lt; L.el.play().catch(() => { }); }
           else if (cur != null && Math.abs(cur - lt) > 3 / fps) L.el.currentTime = lt;
-          else if (lp && lp.period > 0 && cur >= lp.intro + lp.period - 0.5 / fps) L.el.currentTime = lt;
+          else if (lp && !lp.still && lp.period > 0 && cur >= lp.intro + lp.period - 0.5 / fps) L.el.currentTime = lt;
           else if (L.mt != null) {        // slaved to the footage clock: its presented frame vs where it should be
             const lag = lt - (L.mt + (now() - (L.mtWall || now())) / 1000);
             L.el.playbackRate = Math.abs(lag) < 0.3 / fps ? 1 : Math.min(2, Math.max(0.5, 1 + lag / 0.2));
@@ -643,10 +645,17 @@ void main() {
     bar.addEventListener("input", () => { dragging = true; });
     bar.addEventListener("change", () => { dragging = false; p.seek(+bar.value); });
     document.addEventListener("keydown", e => { if (e.code === "Space" && e.target === document.body) { e.preventDefault(); btn.click(); } });
-    setInterval(async () => {                    // the version's scene changes (e.g. its own copy got ready): apply it
-      if (document.hidden || q.has("qa")) return;
-      try { const s = await get(); if (s.rev !== rev) { rev = s.rev; await p.update(s); } } catch (e) { }
-    }, 4000);
+    // the version's scene changes (its own copy got ready, a layer clip got rendered): apply it — every second while a
+    // layer is still being made (an edited graphic shows up as soon as it is ready), otherwise every 4 s
+    const waiting = sc => (sc.layers || []).some(l => !l.url && (l.status === "queued" || l.status === "rendering"));
+    let last = null;
+    const poll = async () => {
+      if (!document.hidden && !q.has("qa")) {
+        try { const s = await get(); last = s; if (s.rev !== rev) { rev = s.rev; await p.update(s); } } catch (e) { }
+      }
+      setTimeout(poll, last && waiting(last) ? 1000 : 4000);
+    };
+    setTimeout(poll, 1000);
   };
 
   LivePlayer.evalProp = evalProp;
