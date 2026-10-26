@@ -138,7 +138,7 @@ def test_long_video_gets_a_quick_preview_and_the_final_in_the_background(tmp_pat
         fin = res["final"]
         assert fin["job_id"] and fin["eta_s"] > 0 and fin["eta"].startswith("about") and "video" not in res
         assert any(x.startswith("Quick preview") for x in res["check"]["verified"])
-        assert any("rendering in the background" in x for x in res["check"]["verified"])
+        assert any("in the background" in x for x in res["check"]["verified"])
         st = await jobs.wait_status(fin["job_id"], 1)
         assert st["status"] in ("running", "done") and st.get("final") is True
         # az előnézet nem vár a futó végleges renderre: a render kapuját valaki fogja, a szerkesztés mégis visszajön
@@ -148,15 +148,16 @@ def test_long_video_gets_a_quick_preview_and_the_final_in_the_background(tmp_pat
             assert time.time() - t0 < 120 and ed["preview"]["parts"][0]["what"].startswith("L2")
             ed_job = ed["final"]["job_id"]
             assert (await jobs.wait_status(ed_job, 0.1))["status"] == "running"     # vár a kapura
-        for jid in (fin["job_id"], ed_job):
-            for _ in range(40):
-                st = await jobs.wait_status(jid, 15)
-                if st["status"] != "running":
-                    break
-            assert st["status"] == "done", st
-            out = output_path(st["result"]["file_id"])
-            assert float(_probe(out)["format"]["duration"]) == pytest.approx(8.0, abs=0.3)
-            assert {(s["width"], s["height"]) for s in _probe(out)["streams"] if s["codec_type"] == "video"} == {(1280, 720)}
+        old = await jobs.wait_status(fin["job_id"], 1)             # az új változat leváltotta: csak a legújabbé készül el
+        assert old["status"] == "superseded" and old["next_job"] == ed_job, old
+        for _ in range(40):
+            st = await jobs.wait_status(ed_job, 15)
+            if st["status"] != "running":
+                break
+        assert st["status"] == "done", st
+        out = output_path(st["result"]["file_id"])
+        assert float(_probe(out)["format"]["duration"]) == pytest.approx(8.0, abs=0.3)
+        assert {(s["width"], s["height"]) for s in _probe(out)["streams"] if s["codec_type"] == "video"} == {(1280, 720)}
     asyncio.run(main())
 
 

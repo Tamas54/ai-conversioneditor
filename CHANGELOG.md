@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-10-26 — Edits answer in under 2 s, one after another; the final video waits for a pause in editing
+
+On the 30-minute test project, six edits in a row answered in 2.4 → 2.3 → 2.4 → 4.7 → 5.1 → 4.8 s, with the load
+rising from 15 to 23. Every edit started its final video's first step at once (the captioned project, and after a cut or
+colour change a new working copy — the colour one a 39-minute re-encode of the HDR original), and the older versions'
+work kept running too. Now:
+
+- **The final video starts 20 s after your last change** (`VIDEO_FINAL_QUIET_S`), and the answer's ETA includes the
+  wait. A newer edit replaces the older version's final job: it stops at the start of the edit (its ffmpeg and engine
+  processes with it), and the old job says which job continues its work (`superseded`, `next_job`). If the edit
+  fails, the old one starts again. A/B variants and other branches never replace each other.
+- **No colour copy for the final video.** The final render takes its picture from your original with the colour
+  recipe; it only needs a working copy with the right cuts for the sound. After a colour change nothing is made;
+  after a cut and a colour change, a smart cut of the existing copy (33 s instead of 39 minutes). The editor download
+  makes the version's own copy only when that's quick.
+- **Background work pauses while an edit builds** (about 1.5 s): the background programs (another video's final render,
+  far layer clips) get stopped and continued, because `nice` alone didn't keep them from slowing the edit 2–3×
+  (`VIDEO_PAUSE_BACKGROUND=0` turns it off). Measured with another version's final render encoding in the
+  background (load 31–40): 4.8–5.7 s per edit without the pause, 2.1–2.8 s with it.
+- A version edited from a version whose copy was still pending can be built again (its full build used to fail
+  with "your original video is no longer stored").
+
+Measured on the 30-minute project, eight edits in a row (text, cut, colour, caption style, layer move, text, colour,
+cut): 1.95, 1.94, 1.70, 1.56, 1.65, 1.76, 1.77, 1.67 s (load 2–4), and the final's ETA in the answers stayed at
+32–35 minutes (it used to grow with every edit: 33 → 66 → 133 → 263 minutes). After the last edit the final job's
+first step took 58 s: a 33 s smart cut and the captioned project (it used to be minutes of engine work for every
+version, plus the 39-minute re-encode after every colour change).
+
 ## 2026-10-26 — The preview is live: the browser puts the video together, nothing is rendered for it
 
 The segment preview of the same day still rendered every preview frame on the server, so a 30-minute video took 7–14

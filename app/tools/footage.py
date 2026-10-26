@@ -114,6 +114,40 @@ def cached(base: dict[str, Any]) -> Optional[dict[str, Any]]:
         return None
 
 
+def timeline_id(keep: Any) -> Optional[str]:
+    """Az idővonal azonossága a HANG szempontjából (a darabok sorban: forrás, a, b, illesztés, hangerő, színillesztés);
+    None = az egész felvétel. Két munkamásolat hangja ugyanaz, ha ez egyezik — a színkorrekciójuk lehet más."""
+    if not keep:
+        return None
+    return json.dumps([[x["src"], round(float(x["a"]), 3), round(float(x["b"]), 3), x.get("join") or "cut", x.get("gain"),
+                        x.get("match") or {}] for x in segs(keep)], sort_keys=True)
+
+
+def registered(base: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """A felvétel kész munkamásolatai (az eredeti metájában: proxies), amelyek fájlja még megvan → [(a kulcs: adjust,
+    keep…, a bejegyzés: media_id, asset, proxy, auto…)]."""
+    from app.storage import read_meta
+    from app.tools import crafts
+    fid0 = str(base.get("file_id") or "")
+    out = []
+    for k, hit in (((read_meta(fid0) or {}).get("proxies") or {}).items() if fid0 else []):
+        try:
+            kd = json.loads(k)
+            crafts.existing(hit["media_id"])
+        except (ValueError, KeyError, FileNotFoundError, TypeError):
+            continue
+        if kd.get("v") != 2 or kd.get("side") != PROXY_SIDE or kd.get("budget") != PROXY_BUDGET_MB:
+            continue
+        out.append((kd, hit))
+    return out
+
+
+def same_timeline(base: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """A kész munkamásolatok, amelyek idővonala (hangja) a base-é — a színkorrekciójuk bármi lehet."""
+    want = timeline_id(base.get("keep"))
+    return [(kd, hit) for kd, hit in registered(base) if timeline_id(kd.get("keep")) == want]
+
+
 def ready_soon(base: dict[str, Any]) -> bool:
     """Másodpercek alatt meglesz-e a munkamásolat: már elkészült, vagy egy meglévőből vágható (smart cut — a vágás,
     a beszúrás csak a vágáspontok körül kódol)."""

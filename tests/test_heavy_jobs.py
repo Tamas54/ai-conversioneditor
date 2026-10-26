@@ -324,7 +324,8 @@ def _engine_ok() -> bool:
 @pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
 def test_previews_and_the_final_render_never_wait_for_a_place(tmp_path, put_file, monkeypatch):
     """Minden hely foglalt (valaki más videója kódol): a szerkesztés előnézete mégis visszajön (a munkamásolat a
-    gyorsítótárból, az előnézet a saját kapuján), és a háttérben futó végleges render is elkészül — egyik sem kér helyet."""
+    gyorsítótárból, az előnézet a saját kapuján), és a háttérben futó végleges render is elkészül — egyik sem kér helyet.
+    (A szerkesztett változat végleges renderjét az új változaté leváltja: csak a legújabbé készül el.)"""
     import json
     import subprocess
     from app import jobs
@@ -355,13 +356,15 @@ def test_previews_and_the_final_render_never_wait_for_a_place(tmp_path, put_file
             t0 = time.time()
             ed = await video.edit(res["file_id"], {"layers": [{"id": "L1", "text": "Forrás: második"}]}, final="background")
             assert time.time() - t0 < 120 and ed["preview"]["parts"][0]["what"].startswith("L1")
-            for jid in (res["final"]["job_id"], ed["final"]["job_id"]):
-                st = await until_done(jid)
-                assert st["status"] == "done", st
-                out = output_path(st["result"]["file_id"])
-                probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(out)],
-                                                  capture_output=True, text=True, check=True).stdout)
-                assert float(probe["format"]["duration"]) == pytest.approx(8.0, abs=0.3)
+            old = await until_done(res["final"]["job_id"])       # (az új változat leváltja a régi végleges renderjét)
+            assert old["status"] == "superseded" and old["superseded_by"] == ed["file_id"], old
+            assert old["next_job"] == ed["final"]["job_id"]
+            st = await until_done(ed["final"]["job_id"])
+            assert st["status"] == "done", st
+            out = output_path(st["result"]["file_id"])
+            probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(out)],
+                                              capture_output=True, text=True, check=True).stdout)
+            assert float(probe["format"]["duration"]) == pytest.approx(8.0, abs=0.3)
             assert jobs._heavy_running == 1 and not jobs._heavy_queue   # csak a másiké: senki nem kért, nem várt helyet
         assert jobs._heavy_running == 0
     asyncio.run(main())

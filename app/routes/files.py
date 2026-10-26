@@ -25,9 +25,9 @@ async def get_file(file_id: str, t: str = Query(..., description="signed token")
     tenancy.set_user(u)  # a link aláírása igazolja: ennek a munkaterületnek a fájlja
     if file_id.lower().endswith(".ecproj"):
         from app.tools import video
-        if video.full_pending(file_id):      # hosszú videó: a feliratos projekt a háttérben készül — a szerkesztő, a
-            try:                             # letöltés a teljeset kapja (most épül, ha még nem kész)
-                await video.ensure_full(file_id)
+        if video.full_pending(file_id) or video.copy_pending(file_id):   # hosszú videó: a feliratos projekt a háttérben
+            try:                             # készül — a szerkesztő, a letöltés a teljeset kapja (most épül, ha még nem kész);
+                await video.ensure_full(file_id, copy="soon")   # a saját munkamásolat, ha gyorsan megvan (nem 39 perc színre)
             except Exception as e:           # inkább a felirat nélküli projekt, mint semmi
                 log.warning("a teljes projekt nem épült meg (%s): %s", file_id, e)
     p = output_path(file_id)
