@@ -5719,7 +5719,8 @@ async def _preview_mp4(hls: tuple[Any, Any], pid: str, plan: dict[str, Any], lab
 
 
 # ---------- a végleges render egy szerkesztés után: csendre vár, és az újabb változat leváltja (N1, 10-26) ----------
-# Mérve (S4, 30 perc, 10-26): hat egymás utáni szerkesztés válasza 2,4 → 2,3 → 2,4 → 4,7 → 5,1 → 4,8 s, a terhelés 15 → 23:
+# Mérve (S4, 30 perc, 10-26): hat egymás utáni szerkesztés válasza 2,4 → 2,3 → 2,4 → 4,7 → 5,1 → 4,8 s, a terhelés 15 → 23
+# (utána nyolc egymás után: 1,6–2,0 s, load 2–4, a végleges becslése 32–35 perc maradt a 33 → 263 perc helyett):
 # minden szerkesztés AZONNAL elindította a saját végleges renderjének első lépését (a feliratos teljes projekt, 3–7 perc
 # motormunka; vágás / szín után a munkamásolat is — a színé a 30 perces HDR-eredeti teljes újrakódolása, 39 perc), és a
 # régi változatokéi is futottak tovább, pedig csak a legutolsó változat végleges videója kell. Most:
