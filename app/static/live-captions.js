@@ -57,6 +57,7 @@ export class LiveCaptions {
     this._repaint = false
     this._pump = null
     this._queue = Promise.resolve()
+    this._ms = []                                    // the last draws' round trips (perf())
     this.stats = { loads: 0, loadMs: null, firstLoadMs: null, draws: 0, skipped: 0, drawMs: null, drawAvgMs: null,
       drawMaxMs: 0, errors: 0 }
     const c = this.canvas = document.createElement('canvas')
@@ -180,12 +181,21 @@ export class LiveCaptions {
         s.drawMs = +ms.toFixed(2)
         s.drawAvgMs = +((s.drawAvgMs === null ? ms : s.drawAvgMs * 0.95 + ms * 0.05)).toFixed(2)
         s.drawMaxMs = Math.max(s.drawMaxMs, +ms.toFixed(2))
+        this._ms.push(ms)
+        if (this._ms.length > 1800) this._ms.splice(0, 600)
       }
     } catch (e) {
       this._fail(e)
     } finally {
       this._pump = null
     }
+  }
+
+  // the draw round trips (main → worker: libass + WebGL → back) over the last ≤ 1800 draws, in ms
+  perf () {
+    const xs = [...this._ms].sort((a, b) => a - b)
+    const q = f => xs.length ? +xs[Math.min(xs.length - 1, Math.floor(f * xs.length))].toFixed(2) : null
+    return { draws: xs.length, p50: q(0.5), p95: q(0.95), p99: q(0.99), max: q(1), over33: xs.filter(x => x > 33.3).length }
   }
 
   async resize (width, height) {
