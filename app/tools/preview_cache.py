@@ -476,11 +476,19 @@ def cycle_path(key: str) -> Path:
     return cache_root() / "_cycles" / f"{_safe(key)}.mov"
 
 
+def layer_path(h: str) -> Path:
+    """Egy grafikai réteg klipje az élő előnézethez (app/tools/live_layers.py: W × 2H, alul az alfa) — a nyilvántartásban
+    „v-<hash>”, ugyanazzal az LRU-val, mint a szakaszok."""
+    return cache_root() / "_layers" / f"{_safe(h)}.mp4"
+
+
 def _path_of(h: str, source_id: str) -> Path:
     if h.startswith("a-"):
         return audio_dir(source_id, h[2:])
     if h.startswith("c-"):
         return cycle_path(h[2:])
+    if h.startswith("v-"):
+        return layer_path(h[2:])
     return seg_path(source_id, h)
 
 
