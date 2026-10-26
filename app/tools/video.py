@@ -2086,6 +2086,8 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     if typ == "deck":                                    # a pakli kezdete az első diájából; az egész pakli eltolása
         from app.tools import deck_layer
         r = deck_layer.prepare(r, raw, base, what)
+    if r.get("at") is None and typ == "effect" and r.get("reveal") not in (None, ""):
+        r = {**r, "at": 0.0}                     # felfedés: az idejét a felfedett réteg adja (effect_layers.sync_reveals)
     if r.get("at") is None:
         raise ValueError(f"{what}: give at — when it starts (seconds, or a timecode such as \"01:24\"), e.g. {_LAYER_EXAMPLE}.")
     at = timecode(r["at"], f"{what} at")
@@ -5337,6 +5339,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         waves = [ly for ly in layers if ly["type"] == "waveform"]
         for ly in waves:                                      # a hullámforma a felvétel hangjából, a réteg idejére
             ly["_levels"] = await wave_levels(work / base["asset"], float(ly["at"]), float(ly["dur"])) if base.get("audio") else []
+        if any(ly.get("type") == "effect" and ly.get("reveal") for ly in layers):   # felfedés: az óra a felfedett réteg
+            from app.tools import effect_layers
+            effect_layers.sync_reveals(layers, layer_notes)
         D["layers"], rows, problems = layer_comps(all_layers, W, H, total, lang, acc, safe)
         if any(ly.get("type") == "deck" for ly in layers):
             from app.tools import deck_layer
@@ -5421,16 +5426,17 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
         if any(ly.get("type") == "effect" for ly in layers):   # effekt egy grafikai rétegen (on: "L17"): a cél alfájából
             from app.tools import effect_layers
-            fxl = effect_layers.on_layers(layers)
-            if fxl:
-                it2, nm2, v2, f2 = await effect_layers.prepare_on_layers(fxl, D, W=W, H=H, fps=fps, total=total, work=work,
-                                                                         step=step)
-                if it2:
-                    D["effects"] = (D.get("effects") or []) + it2
-                    gfx_names = gfx_names + nm2
-                    with foreground():
-                        out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
-                m_v, problems = m_v + v2, problems + f2
+            fxl, fxr = effect_layers.on_layers(layers), effect_layers.reveals(layers)
+            it2, nm2, v2, f2 = await effect_layers.prepare_on_layers(fxl, D, W=W, H=H, fps=fps, total=total, work=work,
+                                                                     step=step) if fxl else ([], [], [], [])
+            it3, nm3, v3, f3 = await effect_layers.prepare_reveals(fxr, D, base, W=W, H=H, fps=fps, total=total, work=work,
+                                                                   step=step) if fxr else ([], [], [], [])
+            if it2 or it3:
+                D["effects"] = (D.get("effects") or []) + it2 + it3
+                gfx_names = gfx_names + nm2 + nm3
+                with foreground():
+                    out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+            m_v, problems = m_v + v2 + v3, problems + f2 + f3
         problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
         problems, m_v = problems + lot_f, m_v + lot_v

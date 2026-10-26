@@ -42,6 +42,18 @@ A KÉPRE TÉTEL (blend)
     réteg-klip a szólóban NORMAL-lal készül, a bejegyzés blend: "screen", a lejátszó gl.blendFunc(ONE,
     ONE_MINUS_SRC_COLOR)-ral, előszorzott rgb·a-val keveri: out = 1 − (1 − base)(1 − rgb·a) (add: base + rgb·a).
 
+FELFEDÉS (reveal: "L5") — „a villám kirajzolja a grafikont”
+----------------------------------------------------------
+{"type": "effect", "effect": "lightning", "reveal": "L5", lead?: 0.5, build?: 1.2} — az effekt a kézből a réteg
+dobozába csap, és a becsapódásra a réteg kirajzolódik (a saját beúszásával), szikrákkal a kirajzolódó élén.
+Az óra a FELFEDETT RÉTEG: az at-ja a becsapódás kockája; az effekt at-ja = a réteg at-ja − lead, a hossza lead + build
+(effect_layers.sync_reveals — minden építéskor újraszámolva: a réteget mozgatva vagy átidőzítve a villám követi, a
+beszédhez a réteg at-ját kell kötni, pl. {"say": …}). Így a grafikon a saját animációjával, a saját rétegeként marad
+(szerkeszthető, az élő előnézet a saját klipjét rajzolja), az effekt csak a fényt teszi rá — nincs második óra, ami
+elcsúszhatna. A menet: fx/reveal.py (bármelyik effekt × bármelyik grafikai réteg; az effekt hookjai: Effect.strike — a
+dobozba csap —, Effect.crackle — szikrák a kirajzolódó élen; a villám felülírja mindkettőt). Két klip: a jelenet
+színezése a felvétel fölött (normál) + a fény a felfedett réteg fölött (screen).
+
 A „TÜZES GRAFIKON” (on: "L17") — így működik
 --------------------------------------------
   1. effect_layers.prepare_on_layers: a projekt első építése után a motor a cél-réteget EGYEDÜL, átlátszóan rendereli
@@ -67,7 +79,8 @@ REGISTRY: dict[str, tuple[str, str]] = {
     "flames": ("app.tools.fx.flames", "Flames"),
 }
 PLANNED = ("flame_jet", "energy_orb")
-COMMON_FIELDS = ("effect", "on", "blend", "after_said", "at_speech_end_after", "seed", "trigger")
+COMMON_FIELDS = ("effect", "on", "blend", "after_said", "at_speech_end_after", "seed", "trigger", "reveal", "lead", "build")
+REVEAL_LEAD, REVEAL_BUILD = 0.5, 1.2     # s: a becsapás a réteg előtt; a felépülés (szikrák a kirajzolódó élén)
 BLENDS = ("over", "screen")       # over: előre komponálva a felvétellel (a jelenet színezésével); screen: csak a fény
 
 

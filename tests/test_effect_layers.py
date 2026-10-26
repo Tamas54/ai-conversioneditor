@@ -277,6 +277,104 @@ def test_the_player_blend_factors_give_screen_and_add():
     assert np.allclose(src * 1.0 + base * 1.0, base + rgb * a)   # add: ONE, ONE
 
 
+# ---------- felfedés: a villám kirajzolja a grafikont ----------
+
+def test_a_reveal_takes_its_time_from_the_layer_it_draws_in():
+    notes: list[str] = []
+    ls = video.layers_from([{"id": "L5", "type": "column", "at": 11.0, "dur": 4, "title": "Erő",
+                             "items": [{"label": "A", "value": 40}, {"label": "B", "value": 95}]},
+                            {"type": "effect", "effect": "lightning", "reveal": "L5"}], "", [])
+    fxl = ls[1]
+    assert (fxl["reveal"], fxl["lead"], fxl["build"]) == ("L5", 0.5, 1.2) and el.reveals(ls) == [fxl]
+    assert el.on_layers(ls) == [] and video.layer_listing([fxl])[0]["text"] == "lightning drawing in L5"
+    el.sync_reveals(ls, notes)
+    assert (fxl["at"], fxl["dur"]) == (10.5, 1.7) and "strikes 0.5 s before L5" in notes[0]
+    ls[0]["at"] = 3.2                                            # a grafikont arrébb téve a villám követi
+    el.sync_reveals(ls)
+    assert fxl["at"] == 2.7
+    ls[0]["at"] = 0.3                                            # a videó elején: a becsapás rövidebb
+    el.sync_reveals(ls)
+    assert (fxl["at"], fxl["dur"]) == (0.0, 1.5)
+    with pytest.raises(ValueError, match="reveal = the id"):
+        video.layers_from([{"type": "effect", "reveal": "L 5!"}], "", [])
+
+
+def test_the_drawing_front_is_the_new_opaque_pixels():
+    from app.tools.fx import reveal
+    m0 = np.zeros((160, 90), np.uint8)
+    m1 = m0.copy()
+    m1[100:150, 20:40] = 255                                     # egy oszlop nőni kezd
+    m2 = m1.copy()
+    m2[80:150, 20:40] = 255                                      # tovább nő: csak a teteje új
+    f2 = reveal.front(m1, m2, W, H)
+    assert len(f2) > 0 and f2[:, 1].max() < 100 * H / 160 + 1 and f2[:, 1].min() >= 80 * H / 160 - 1
+    assert len(reveal.front(None, None, W, H)) == 0
+    still = reveal.front(m2, m2, W, H)                           # nem nő: a felső éle szikrázik
+    assert len(still) > 0 and abs(still[:, 1].mean() - 80 * H / 160) < 3
+
+
+def _bar_masks(n: int, start: int) -> list:
+    out = []
+    for i in range(n):
+        m = np.zeros((H // 2, W // 2), np.uint8)
+        k = i - start
+        if k >= 0:
+            top = max(30, 140 - 8 * k)                           # egy oszlop nő a doboz alján
+            m[top:150, 50:70] = 255
+        out.append(m)
+    return out
+
+
+def test_the_lightning_strikes_the_box_then_crackles_on_the_growing_bar():
+    from app.tools.fx import reveal
+    n, lead, build = 40, 8, 20
+    masks, tr = _bar_masks(n, lead), _track(n)
+    box = (90.0, 40.0, 170.0, 310.0)                             # a felfedett réteg doboza (jobbra)
+
+    def run():
+        eff = fx.get("lightning")(W, H, FPS, {"target": "arm", "strands": 6}, 7)
+        rv = reveal.Reveal(eff, box, lead, build)
+        prev, gs, ls_ = None, [], []
+        for i in range(n):
+            g, li = rv.frame(_frames(1)[0], tr[i], prev, masks[i], i)
+            prev = masks[i]
+            gs.append(g), ls_.append(li)
+        return gs, ls_
+    gs, lights = run()
+    gs2, lights2 = run()
+    assert _h(lights) == _h(lights2) and _h(gs) == _h(gs2)      # determinisztikus
+    inside = lambda f: float(f[40:310, 100:170].astype(float).sum())          # noqa: E731
+    assert inside(lights[4]) > 0                                 # becsapás: a szálak a dobozba érnek
+    assert lights[lead].max() > 200                              # becsapódás: villanás
+    k = lead + 6                                                 # felépülés: a szikrák az oszlop tetején
+    top = (140 - 8 * 6) * 2
+    near = float(lights[k][max(0, top - 30): top + 30, 95:145].astype(float).sum())
+    far = float(lights[k][:40, :20].astype(float).sum())          # a bal felső sarok: messze mindentől
+    assert near > 5 * far + 1
+    assert not lights[-1].any() or lights[-1].max() < 10        # utána lecseng
+    assert gs[lead + 4].astype(float).mean() < _frames(1)[0].astype(float).mean()   # a jelenet sötétebb
+
+
+def test_the_reveal_is_pluggable_a_fireball_lands_on_the_impact_frame():
+    """Ugyanaz a felfedő menet egy másik effekttel: a tűzgolyó a tenyérben formálódik, és a becsapódás kockájára ér a
+    doboz közepébe; utána parázs a kirajzolódó élen."""
+    from app.tools.fx import reveal
+    n, lead, build = 36, 12, 16
+    masks, tr = _bar_masks(n, lead), _track(n)
+    box = (20.0, 20.0, 100.0, 120.0)                             # bal fent: a kéztől (jobbra) messze
+    eff = fx.get("fireball")(W, H, FPS, {"target": "arm"}, 7)
+    rv = reveal.Reveal(eff, box, lead, build)
+    prev, lights = None, []
+    for i in range(n):
+        _, li = rv.frame(_frames(1)[0], tr[i], prev, masks[i], i)
+        prev = masks[i]
+        lights.append(li.astype(float).sum(2))
+    cy, cx = 70, 60
+    near = lambda f: f[cy - 25: cy + 25, cx - 25: cx + 25].sum()            # noqa: E731
+    assert near(lights[2]) < near(lights[lead - 1]) and near(lights[lead - 1]) > 1000   # odaér a becsapódásra
+    assert eff.pos is not None and np.linalg.norm(eff.pos - np.array([cx, cy])) < 3
+
+
 def test_no_sqlite():
     for p in (el.__file__, common.__file__, fx.__file__):
         assert "sqlite" not in Path(p).read_text("utf-8").lower()

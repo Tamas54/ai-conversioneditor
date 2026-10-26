@@ -43,6 +43,29 @@ Slides cross-fade in 0.45 s. In the live preview each slide segment is one still
 two segments again and nothing else. Measured on the 30-minute test project with the owner's deck: the first deck edit
 took 11.4 s, 8.1 s of it drawing the slides; retiming a switch took 2.75 s.
 
+## 2026-10-26 — The lightning draws a chart: an effect reveals a graphic layer
+
+`{"type": "effect", "effect": "lightning", "reveal": "L5"}`: the bolt leaves the raised hand and strikes the box of the
+chart L5; on the impact the chart draws itself in with its own animation, sparks running along its growing bars and
+lines, then it settles into the normal chart.
+
+- **One clock — the chart's.** The chart keeps its own `at`; the strike starts `lead` (0.5 s) before it, so the impact
+  is the chart's first frame, and the crackle runs `build` (1.2 s) while it draws in. Move or retime the chart and the
+  strike follows; the chart stays an ordinary, editable layer with its own live clip.
+- **Two clips:** the scene's darkening and tint over the footage (as before), and the light (strike, impact flash,
+  crackle) screen-blended just above the chart.
+- **Any effect reveals any layer** (`app/tools/fx/reveal.py`): an effect brings its own `strike` and `crackle`. The
+  lightning sends jagged discharges along the drawing front; the fireball forms in the palm and lands on the chart
+  exactly on the impact frame, with embers on the bars.
+
+Measured on IMG_9387 (1080×1920, a dark room), each with the real final render and the live page in Chrome:
+- lightning after "ifjú Skywalker": the sentence ends at 6.33 s (0.6 s pause, 10 ms steps; the prototype said 6.35);
+- the lightning drawing a bar chart: strike 10.5 s, impact 11.0 s = the chart's first frame, drawn in 21.7 s; the job
+  with its final render took 126 s at load 7.5–21.5;
+- the chart on fire (flames from the bars) and a screen-blended fireball: live matches the final at 38–39 dB, so the
+  player's screen blend draws what the engine's SCREEN does;
+- the test suites: 84 passed.
+
 ## 2026-10-26 — Effect layers: lightning from the hand, a fireball, a chart on fire
 
 The lightning prototype the owner tuned ("kurva jó") is now a layer type, the first of a family:
@@ -75,8 +98,7 @@ Measured on IMG_9387 (1080×1920, 24 fps, a dark room): the lightning (4 s + the
 the drawing alone went from ~380 to ~200 ms/frame. The final video starts the effect exactly on its frame and returns
 to the plain footage with no colour step (43–44 dB before and after). In Chrome, `/live/<pid>` shows the same strikes as
 the final video (36–40 dB through the effect, the live clip made by the layer pipeline in 21 s), first frame 0.57 s, no
-stall playing across it. The fireball and the chart on fire are covered by tests; their run on real footage is still to
-be measured.
+stall playing across it.
 
 ## 2026-10-26 — The preview is live: the browser puts the video together, nothing is rendered for it
 
