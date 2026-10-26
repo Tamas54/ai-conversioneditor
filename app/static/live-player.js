@@ -174,7 +174,7 @@ void main() {
       gl.bindVertexArray(this.vao);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-      this.lutTex = new Map();         // copy id → texture
+      this.lutTex = new Map();         // colour recipe → its table texture
       this.els = [this._mkVideo(), this._mkVideo()];
       this.active = 0;                 // index into els
       this.idx = 0;                    // the active range
@@ -245,15 +245,18 @@ void main() {
       this.end = +f.end || 0;
       this.tr = f.transform || null;
       this.byProp = groupKeys(this.tr);
-      const gl = this.gl;
-      for (const c of this.copies) {
-        if (this.lutTex.has(c.id + "|" + JSON.stringify(c.color || {}).length)) continue;
-        const t = tex(gl, gl.NEAREST);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 256, 4, 0, gl.RED, gl.FLOAT, lutData(c.color));
-        this.lutTex.set(c.id + "|" + JSON.stringify(c.color || {}).length, t);
-        c._lut = t;
+      const gl = this.gl, used = new Set();
+      for (const c of this.copies) {                 // one table texture per colour recipe (a colour edit: a new one)
+        const key = JSON.stringify([c.color && c.color.mode, c.color && c.color.pre, c.color && c.color.eq]);
+        if (!this.lutTex.has(key)) {
+          const t = tex(gl, gl.NEAREST);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 256, 4, 0, gl.RED, gl.FLOAT, lutData(c.color));
+          this.lutTex.set(key, t);
+        }
+        c._lut = this.lutTex.get(key);
+        used.add(key);
       }
-      for (const c of this.copies) c._lut = this.lutTex.get(c.id + "|" + JSON.stringify(c.color || {}).length);
+      for (const [k, t] of this.lutTex) if (!used.has(k)) { gl.deleteTexture(t); this.lutTex.delete(k); }
       this._layerSpecs = (scene.layers || []).filter(l => l && l.url).sort((a, b) => (a.z || 0) - (b.z || 0));
     }
 
@@ -293,9 +296,9 @@ void main() {
     }
 
     // ---------- the clock ----------
-    _rangeAt(t) {
+    _rangeAt(t) {                    // the range playing at output t (past the end: the last one)
       const rs = this.ranges;
-      for (let i = 0; i < rs.length; i++) if (t < rs[i].t1 - 1e-6) return t >= rs[i].t0 - 1e-6 ? rs[i] : rs[i];
+      for (let i = 0; i < rs.length; i++) if (t < rs[i].t1 - 1e-6) return rs[i];
       return rs[rs.length - 1] || null;
     }
     _clock() {
