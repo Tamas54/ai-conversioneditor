@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-10-26 — Long videos: a playable preview within seconds, and an edit re-renders only what changed
+
+Before, every change to a video project rebuilt the whole engine project from scratch and rendered a new preview
+of the whole video. On the 30-minute test project that took 61–770 s per edit. Almost all of it went into building the
+captions into the project (255 caption pieces, a cost that grows with the square of their number) and, for a cut, into
+re-encoding the whole working copy.
+
+Now the preview is a **segment playlist** (HLS) of the whole video. The picture is cut into 2-second segments on
+each part's own source time. Every segment has a fingerprint of everything that can be seen in it, and a segment is
+rendered only when somebody needs it and nobody has rendered the same thing before:
+- **The preview plays while it is being made.** The player asks for the segment at the playhead first; the rest fill
+  in behind it. A segment that isn't ready yet is rendered on demand, with the player waiting a few seconds.
+- **An edit re-renders only the segments it changes.** Moving or rewording a layer dirties only the segments under
+  it. A cut dirties the segments at the cut point and the ones where a caption was cut through; everything after the
+  cut is the same picture at a new time, and is reused. A change that touches every frame (accent colour, caption
+  style, colour correction) re-renders everything, but the segment at the playhead comes first.
+- **Segments are shared between versions.** The fingerprint is the content (source, colour recipe, the source range
+  in frames, every layer and caption visible in it), not the version, so two versions that look the same in a segment
+  share one file. Each request logs how many segments were reused.
+- **The sound is one continuous track**, rendered in 30-second chunks on demand, each moved to its exact place when it
+  is served. Measured against the engine's own mix: 0 ms offset.
+- **The player page** (`page_url` in the answer) shows the changed stretches on the timeline. You can jump to each one,
+  and switch to the final render when it is ready.
+- **What you wait for is built first.** The request builds the project without captions (about 1 s instead of
+  150 s), and the captioned project is built in the background as the first step of the final render. A colour
+  change or a cut on a long video no longer waits for a new working copy. The preview draws from the original, or
+  from the old copy at the new times, while the new copy is made in the background. A new working copy after a cut
+  is copied from the old one, with only the frames at the cut points re-encoded.
+- **The cache is on disk, indexed in Postgres** (`preview_segments`), and the least recently used segments are deleted
+  above `VIDEO_PREVIEW_CACHE_GB` (default 20).
+- A stopped preview job now also stops its ffmpeg or engine process.
+
+Measured on the 30-minute test project (iPhone HDR, 255 caption pieces; 911 segments) through the real API and
+renderer, played in Chrome with hls.js, on a 16-thread laptop. Load is the 1-minute load average while measuring.
+
+| Change | Segments re-rendered | First changed segment ready | Jump to the change in the player |
+|---|---|---|---|
+| Chapter card text | 3 of 911 | 4.4 s | 0.3 s |
+| Stat card value | 5 of 911 | 3.5 s | 0.3 s |
+| Stat card moved 10 s | 10 of 911 | 1.6 s | 0.4 s |
+| Stat card with a new graphic | 5 of 904 | 14.9 s (the engine draws the new card) | 0.3 s |
+| Cut 05:00–05:20 | 15 of 901 (651 before the caption-time fix below) | 12.0 s (the cut working copy is still being made) | 0.5 s |
+| Accent colour | 911 of 911 | 3.1–10.4 s | 3.7 s at 13:00 |
+| Caption style | 911 of 911 | 5.9 s | 6.0 s at 13:00 |
+| Colour correction | 911 of 911 | 16.1 s | 34.5 s at 13:00 (load 8–12) |
+
+- **Reuse between versions** is in the log, e.g. `911 szakasz, 3 új, 908 a szülőtől újrahasznált (100 %)`. A second
+  project with the same footage found 444 of 904 segments already rendered.
+- **Frame accuracy:** at 20 random segment boundaries, 2400 of 2400 frames are byte-identical to a render of the
+  whole stretch.
+- **Playback in Chrome:** 120 s from the start, 4 frames dropped. After a seek to 20:00 while playing, it plays again
+  after 0.2 s. Then 60 s with 0 frames dropped. iOS Safari was not tested on a device yet. For it,
+  `VIDEO_PREVIEW_CONTINUOUS=1` and `VIDEO_PREVIEW_AUDIO_CHUNK=1` serve one stream with no discontinuities.
+
+**Not reached yet, honestly:**
+- **Filling the whole playlist takes 7–14 minutes, not 3.** It takes 29 minutes while a colour change still draws
+  from the original HDR footage. Each run is one ffmpeg process with a single-threaded
+  filter graph, at about 40–75 frames per second, and two run at a time (`VIDEO_PREVIEW_WORKERS`). Three minutes
+  would need about 300 frames per second. Playback is not affected, because the segment at the playhead is always
+  rendered first.
+- **The first preview of a new project waits 15 s** before its first segment. The Studio renders the logo's
+  animation once to learn its loop, and keeps the result in Postgres (`preview_cycles`). After a new accent colour this
+  takes 7.7 s.
+- **While a 30-minute colour working copy is being re-encoded in the background** (39 minutes, at a load of 44),
+  on-demand segments take 20–35 s.
+
+Fixed along the way, found on the 30-minute project:
+- After a cut, the captions in the preview moved by one frame. The cut was 600 frames at 29.993 fps, which is not a
+  whole number of centiseconds. Their times are now snapped to the frame libass shows them on, so the segments after
+  a cut are reused (15 dirty instead of 651).
+- A split-screen layer left the footage scale at 199.99999999999994 instead of 200. The renderer then took ten
+  minutes of still footage for moving footage and drew it with the engine. Keyframes now compare without float
+  noise, in the final fast render too.
+- While a new working copy was still being made after a cut or a colour change, the stretches the engine draws
+  itself (zoom, split screen) came from the old copy. That copy has no new colour and the old cut times, and the
+  wrong segments stayed in the cache. Now the engine draws those stretches from the original with the new colour and
+  cut, and once the new copy is ready the preview uses it. Measured on the 2-minute project against the same segments
+  rendered from the finished copy: 19–38 dB before the fix, 37.5–50 dB after. Where it stays below 40 dB, the cause
+  is a one-frame offset in how the iPhone's variable frame rate maps onto the copy. Ordinary segments rendered while
+  the copy is pending show the same offset.
+
 ## 2026-10-25 — Trimming copies the video where it can: only the seconds at the cuts are re-encoded
 
 Before, `trim-video` re-encoded everything it kept (x264 CRF 17). Cutting one minute off a 30-minute video meant
