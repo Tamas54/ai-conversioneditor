@@ -28,18 +28,29 @@ A HORGONY (on)
 --------------
   · "hand" (alap): a felemelt kéz, az alkar irányával (követés); "body": a törzs (póz);
   · [x, y]: egy pont; [x, y, w, h]: egy téglalap (közép + méret, 0–1) — követés nélkül;
-  · "L17": egy másik grafikai réteg (a „tüzes grafikon”) — MÉG NEM KÉSZ, a séma már fogadja, a kérés világos hibát ad.
-    Hogyan épül be: a réteg saját alfája a sugárzó maszk. Az élő réteg-klip (live_layers, W × 2H: alul az alfa
-    luma-ként) kockánként megadja: a horgony (common.Anchors) az alfa-maszkból ad Caster-eket (pl. a maszk felső
-    élének pontjai — lángok a grafikon oszlopaiból, vagy a vonal kirajzolt végéből), a compose ugyanaz. A különbség a
-    képre tételben: a réteg FÖLÖTT kell lennie, ezért NEM előre komponált felvétel-klip, hanem csak-fény klip
-    (fekete alapon, a Grade nélkül vagy enyhén) screen keveréssel a réteg fölött. Ehhez kell (a közös darabok, egyszer):
-      – a builderben a klip-réteg blendingMode = SCREEN (az EffectCraft ismeri);
-      – fast_render: a nem normál keverésű réteg szakasza „átlátszatlan szakasz” (a motor a felvétellel együtt rajzolja,
-        ahogy a ráközelítésnél) — a classify most ezt elutasítja (a régi út fut);
-      – live_layers: a SCREEN-réteg a szólóban NORMAL-lal renderelve, a bejegyzésben blend: "screen"; a lejátszó
-        (live-player.js) a screen-t gl.blendFunc(ONE, ONE_MINUS_SRC_COLOR)-ral rajzolja, előszorzott rgb·a-val —
-        out = 1 − (1 − base)(1 − rgb·a).
+  · "L17": egy másik grafikai réteg (a „tüzes grafikon”) — MÉG NEM KÉSZ: a séma fogadja, a kérés világos hibát ad.
+
+A KÉPRE TÉTEL (blend)
+---------------------
+  · over (alap): a klip a verzió felvételéből, az effekttel ELŐRE KOMPONÁLVA (a Grade a felvétel fényességéből
+    sötétít és színez) — átlátszatlan felvétel-réteg a felvétel fölött, a grafika alatt, normál keveréssel; minden út
+    változtatás nélkül viszi (gyors végső render, élő előnézet, szakasz-előnézet, szerkesztő);
+  · screen: csak a fény (fekete alapon, Grade nélkül) — a builderben blendingMode = SCREEN; a gyors render a szakaszát
+    a motorral rajzolja a felvétellel együtt (fast_render.classify: „átlátszatlan szakasz”); az élő előnézetben a
+    réteg-klip a szólóban NORMAL-lal készül, a bejegyzés blend: "screen", a lejátszó gl.blendFunc(ONE,
+    ONE_MINUS_SRC_COLOR)-ral, előszorzott rgb·a-val keveri: out = 1 − (1 − base)(1 − rgb·a) (add: base + rgb·a).
+
+A „TÜZES GRAFIKON” (on: "L17") — így épül be
+--------------------------------------------
+A screen-út (fent) kész; ami hiányzik, az a horgony és a sorrend:
+  1. effect_layers.prepare: a cél-réteg alfája a hatás szakaszára — a projekt előbb effekt nélkül épül, a motor a
+     cél-réteget egyedül, átlátszóan rendereli (ugyanaz, mint live_layers._solo + preview_cache._engine alpha=True; az
+     élő réteg-klip alsó fele ugyanez luma-ként), a kockák alfája a rajzolóhoz megy (a követés helyett);
+  2. common.Anchors: on = réteg → a maszkból Caster-ek kockánként: a maszk felső éle oszloponként (lángok a grafikon
+     oszlopaiból felfelé), vagy a kirajzolódó vonal vége (az alfa új pixelei az előző kockához képest);
+  3. blend = screen kötelező (a fény a réteg FÖLÖTT); a builder a klipet a cél-réteg fölé teszi (Le.moveBefore), az élő
+     előnézet z-sorrendje a motor sorrendjéből jön (live_layers), így magától fölé kerül;
+  4. egy lángeffekt (fx/flame_jet.py: felfelé lobogó, a maszk pontjaiból induló, közös compose + narancs GLOW).
 """
 from __future__ import annotations
 
