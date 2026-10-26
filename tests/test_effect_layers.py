@@ -44,7 +44,7 @@ def test_defaults_bounds_and_the_effects_own_duration():
 @pytest.mark.parametrize("bad, words", [
     ({"effect": "laser"}, "lightning | fireball | flames"),
     ({"effect": "flame_jet"}, "planned"),
-    ({"target": "sideways"}, "arm (the forearm"),
+    ({"target": "sideways"}, "the forearm.s direction"),
     ({"on": "L 17!"}, "on = "),
     ({"strands": "many"}, "a number"),
 ])
@@ -67,6 +67,7 @@ def test_listing_comps_and_edits():
     assert video.layer_listing(ly)[0]["text"] == "lightning towards the right"
     comps, rows, probs = video.layer_comps(ly, 1080, 1920, 16.5, "en", [1, 0.5, 0], 1800)
     assert comps == [] and rows == [{"id": "L1", "start": 6.3, "end": 10.3, "type": "effect", "layer": True}] and not probs
+    assert el.pending({"id": "L1", "after_said": "now"}) and not el.pending({"id": "L2", "type": "title", "after_said": "x"})
     ly[0]["trigger"] = {"after_said": "now", "speech_end": 6.3}
     moved = video.apply_layer_changes(ly, {"layers": [{"id": "L1", "at": 3}]}, "", [])[0]
     kept = video.apply_layer_changes(ly, {"layers": [{"id": "L1", "target": "left"}]}, "", [])[0]

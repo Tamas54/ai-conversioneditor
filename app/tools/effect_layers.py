@@ -104,8 +104,10 @@ def is_effect(ly: Any) -> bool:
 
 
 def pending(ly: Any) -> bool:
-    """A réteg ideje még a hangból jön (after_said / at_speech_end_after)."""
-    return is_effect(ly) and (ly.get("after_said") not in (None, "") or ly.get("at_speech_end_after") not in (None, ""))
+    """A réteg ideje még a hangból jön (after_said / at_speech_end_after). Típus nélkül is: a szerkesztés változása
+    ({"id": "L1", "after_said": …}) a meglévő effekt-rétegé — a típusát a _layer_from a régi rétegből veszi."""
+    return isinstance(ly, dict) and (is_effect(ly) or not ly.get("type")) and \
+        (ly.get("after_said") not in (None, "") or ly.get("at_speech_end_after") not in (None, ""))
 
 
 def placeholder(ly: dict[str, Any]) -> dict[str, Any]:
