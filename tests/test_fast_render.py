@@ -97,6 +97,39 @@ def test_ass_has_the_bar_the_font_and_word_highlights():
     assert "Dialogue: 0," not in bold and "REMÉLHETŐEN" in bold
 
 
+def test_ass_times_snap_to_frames_for_the_segment_preview():
+    """fps-sel (a szakasz-előnézet): az ASS-idő a t utáni első kockára igazodik — a libass (az ffmpeg ass-szűrője a kocka
+    idejét egész ms-ra csonkolja) pontosan attól a kockától mutatja. Egy egész kockás vágás-eltolás így a felirat kockáit
+    is pontosan annyival tolja; centiszekundumra kerekítve 29,993 fps-en (600 kocka = 20,0047 s) sok szó egy kockával
+    odébb került (10-26, a 30 perces próba: a 05:00-s vágás után a szakaszok 72 %-a lett piszkos)."""
+    import math
+    import random
+    fps = 29.993
+
+    def first_frame(ass_t: str) -> int:              # libass: látszik, ha start_ms <= int(kocka * 1000 / fps)
+        h, m, rest = ass_t.split(":")
+        sec, cs = rest.split(".")
+        ms = (int(h) * 3600 + int(m) * 60 + int(sec)) * 1000 + int(cs) * 10
+        f = math.ceil(ms * fps / 1000 - 1e-9)
+        while int(f * 1000 / fps) < ms:
+            f += 1
+        while f > 0 and int((f - 1) * 1000 / fps) >= ms:
+            f -= 1
+        return f
+    rnd = random.Random(7)
+    shift = 600 / fps
+    snapped = moved = rounded = 0
+    for _ in range(2000):
+        t = round(rnd.uniform(320, 1800), 2)
+        snapped += first_frame(fr._ass_time(t, fps)) != math.ceil(t * fps - 1e-6)
+        moved += first_frame(fr._ass_time(round(t - shift, 4), fps)) != first_frame(fr._ass_time(t, fps)) - 600
+        rounded += first_frame(fr._ass_time(round(t - shift, 4))) != first_frame(fr._ass_time(t)) - 600
+    assert snapped == 0                       # = preview_cache._on(t): a fingerprint ugyanazt a kockát látja
+    assert moved <= 4                         # (csak ha a 4 tizedesre kerekített idő épp egy kockahatárra esik)
+    assert rounded > 100                      # a régi, centiszekundumos kerekítés (a végleges út így marad)
+    assert fr._ass_time(12.346) == "0:00:12.35" and fr._ass_time(300.0, fps) == "0:05:00.00"
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not Path(fr.INTER_DIR, "Inter-SemiBold.otf").exists(),
                     reason="ffmpeg with libass and the Inter font needed")
 def test_libass_really_draws_inter_at_the_builder_size(tmp_path):
