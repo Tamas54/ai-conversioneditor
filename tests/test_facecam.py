@@ -237,3 +237,41 @@ def test_fm_sigma_matches_the_measured_engine_edge():
     sig = lambda f, s: math.hypot(0.5 * f, 0.51 / s)                 # noqa: E731 — = fmSigma in live-player.js
     for f, want in ((0.0, 0.491), (3.0, 1.506), (10.0, 4.962)):
         assert sig(f, 1.044) == pytest.approx(want, abs=0.12)
+
+
+def test_deck_front_with_a_speaker_window():
+    deck = "0123456789abcdef0123456789abcdef.pptx"
+    [ly] = video.layers_from([{"at": 150, "dur": 60, "type": "deck", "file_id": deck, "placement": "front",
+                               "slides": [{"at": 150, "slide": 1}, {"at": 172, "slide": 4}],
+                               "speaker": {"shape": "rounded", "corner": "br"}}], "", [])
+    assert ly["speaker"]["shape"] == "rounded" and ly["placement"] == "front"
+    ly["_files"] = {1: "deck-aa-001.png", 4: "deck-aa-004.png"}
+    ly["_aspect"] = 16 / 9
+    items, rows, problems = video.layer_comps([ly], W, H, 1800.0, "hu", [0.9, 0.3, 0.2], 1000)
+    deck_items = [it for it in items if "facecam" not in it["name"]]
+    assert deck_items and all(it.get("under") for it in deck_items)          # the carrier and every slide under the footage
+    assert deck_items[0]["facecam"]["window"]["r"] > 0 and not any(it.get("facecam") for it in deck_items[1:])
+    with pytest.raises(ValueError, match="placement"):
+        video.layers_from([{"at": 150, "dur": 60, "type": "deck", "file_id": deck, "placement": "window",
+                            "slides": [{"at": 150, "slide": 1}], "speaker": {}}], "", [])
+
+
+def test_ring_shadow_label_are_still_clips_in_the_live_preview():
+    # after their fade-in they don't change: the live preview's clip is the fade-in + one frame (like a deck's slide)
+    for n in ("ring", "shadow", "label"):
+        assert live_layers._STATIC.match(f"Layer L29.{n} – facecam {n}")
+    assert not live_layers._STATIC.match("Layer L29 – picture")
+
+
+def test_window_and_split_at_once_is_named():
+    ly = video.layers_from([{"type": "fullscreen", "at": 10, "until": 30, "image": "clip.mp4", "speaker": {}},
+                            {"type": "split", "at": 25, "dur": 8, "text": "Hi"}], "", [])
+    _, _, problems = video.layer_comps(ly, W, H, 120.0, "en", [0.2, 0.6, 0.95], 883)
+    assert any("both move the footage" in p for p in problems)
+
+
+def test_a_window_on_an_existing_cut_in_mutes_its_sound():
+    [ly] = video.layers_from([{"type": "fullscreen", "at": 10, "dur": 8, "image": "clip.mp4"}], "", [])
+    assert ly["chart"]["elements"][0]["sound"] == "replace"
+    out = video.apply_layer_changes([ly], {"layers": [{"id": ly["id"], "speaker": {"corner": "tr"}}]}, "", [])[0]
+    assert out["chart"]["elements"][0]["sound"] == "off" and ly["chart"]["elements"][0]["sound"] == "replace"
