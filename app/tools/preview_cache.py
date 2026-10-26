@@ -708,6 +708,13 @@ def _stage_file(src: Path, assets: dict[str, str], work: Path, out_name: str) ->
     return out
 
 
+def _footage_items(project: Path) -> list[str]:
+    """A projekt felvétel-elemeinek fájlnevei."""
+    data = json.loads(project.read_text("utf-8"))
+    return [Path(str(it["kind"]["path"]).replace("\\", "/")).name for it in (data.get("items") or {}).values()
+            if (it.get("kind") or {}).get("type") == "Footage" and (it.get("kind") or {}).get("path")]
+
+
 def _engine_index(info: dict[str, Any], lid: str) -> Optional[int]:
     """A spec rétegének párja a motor projektjében (a builder neve: „Layer <id> – …”)."""
     for x in info["layers"]:
@@ -869,6 +876,7 @@ async def _build(pid: str, spec: dict[str, Any], meta: dict[str, Any], key: str,
             if not fast_render.captions_match(kind["captions"], rows):
                 kind = {"ok": False, "why": "the subtitles were changed by hand in the editor"}
         ctx["path"] = "fast" if kind["ok"] else "engine"
+        ctx["foot_asset"] = (kind.get("footage") or {}).get("file") or base.get("asset")   # (pending: ide kerül az új alapkép)
         ctx["why"] = kind.get("why") or ""
         extra = {"project": hashlib.sha256(project.read_bytes()).hexdigest()} if (hand or not kind["ok"]) else None
         cycles: dict[str, dict[str, int]] = {}
@@ -923,6 +931,18 @@ async def _build(pid: str, spec: dict[str, Any], meta: dict[str, Any], key: str,
                 except FileNotFoundError:
                     raise Unavailable("Neither the editor's copy nor the original footage is stored any more — upload it again.")
         ctx.update(pending=pending, media=media, src=src, tl=None, tl_items=[])
+        cur = base.get("asset")
+        if not pending and cur and (work / cur).exists():
+            # a felirat nélküli előnézet-projekt a szerkesztéskor készült, amikor a munkamásolat még készült: a felvétel-
+            # rétegén a SZÜLŐ másolata áll (a régi vágással, az új korrekció nélkül) — a motor ott, ahol a felvételt is
+            # rajzolja, abból rajzolna. Most, hogy a verzió saját másolata kész, az kerül a helyére.
+            olds = [ctx["foot_asset"]] if kind["ok"] else [n for n in _footage_items(project) if n.startswith("footage-")]
+            olds = [n for n in olds if n and n != cur]
+            if len(olds) == 1:
+                name = await footage.swap(project, ctx["comp"], olds[0], cur, "pc-relink")
+                project = work / name
+                ctx["project"], ctx["foot_asset"], ctx["opaque_proj"] = name, cur, None
+                notes.append("The preview project now uses this version's own copy of the footage.")
         if pending:
             m = await mediaprobe.info(src)
             if base.get("keep"):                                 # vágott / beszúrt: forrásonként a saját láncával
@@ -969,49 +989,77 @@ async def _opaque_proj(ctx: dict[str, Any]) -> str:
     return ctx["opaque_proj"]
 
 
+def _base(ctx: dict[str, Any], F0: int, F1: int) -> tuple[list[str], list[str], str, int]:
+    """A gyors út alapképe a kimenet [F0, F1) kockáira: a munkamásolatból, vagy amíg az új recepté készül (pending), az
+    eredetiből a lánccal / az új idővonallal (+ áttűnések). → (ffmpeg-bemenetek, a gráf sorai, a címke, a következő bemenet)"""
+    fps, q, N = ctx["fps"], ctx["fps_q"], F1 - F0
+    args: list[str] = []
+    chain: list[str] = []
+    hold_f = frame(ctx["plan"]["plain"], fps)            # az első kimerevített kocka (a felvétel vége után)
+    lead = max(1, round(LEAD_S * fps))
+    Sf = max(0, (hold_f if F0 >= hold_f else F0) - lead)
+    L, stop = F0 - Sf, max(0, hold_f - Sf)
+    pad = (F1 - hold_f) / fps + 1.0 if F1 > hold_f else 1.0
+    span_end = min(F1, hold_f)
+    if ctx.get("tl") is not None:                            # proxy_pending + vágás / beszúrás: az eredetikből
+        ins, prefix, lab = ctx["tl"].inputs(Sf / fps, max(span_end, Sf + 1) / fps)
+        args += ins
+        head = prefix + lab
+        k = ins.count("-i")
+    else:
+        args += ["-ss", f"{Sf / fps:.6f}", "-t", f"{(span_end - Sf) / fps + 1.0:.6f}", "-i", str(ctx["media"] or ctx["src"])]
+        head, k = "[0:v]", 1
+    pre = list(ctx.get("pre") or [])
+    chain.append(head + ",".join(pre + [f"fps={q}", f"trim=end_pts={stop}", f"tpad=stop_mode=clone:stop_duration={pad:.4f}",
+                                        f"trim=start_pts={L}:end_pts={L + N}", f"setpts=PTS+{Sf}"]) + "[b0]")
+    cur = "[b0]"
+    for it in ctx.get("tl_items") or []:                    # áttűnés (az eredetiből, a munkamásolat méretén)
+        if it["b"] <= F0 / fps or it["a"] >= F1 / fps:
+            continue
+        if it["a"] >= F0 / fps - 1e-9:
+            args += ["-itsoffset", f"{it['a']:.6f}", "-i", it["name"]]
+        else:
+            args += ["-ss", f"{F0 / fps - it['a']:.6f}", "-itsoffset", f"{(F0 - 0.25) / fps:.6f}", "-i", it["name"]]
+        chain.append(f"{cur}[{k}:v]overlay=0:0:eof_action=pass:enable='{it['enable']}'[o{k}]")
+        cur, k = f"[o{k}]", k + 1
+    return args, chain, cur, k
+
+
+async def _pending_footage(ctx: dict[str, Any], project: str, fa: int, fb: int, tag: str, tmp: list[str]) -> str:
+    """Amíg az új recept munkamásolata készül (proxy_pending), a projektben a SZÜLŐ munkamásolata áll a helyén: az új
+    korrekció nélkül, a régi vágással. Ahol a motor a felvételt is rajzolja (ráközelítés, osztott kép, motoros út), abból
+    rossz kép lenne — és a hash-e a kész munkamásolat után sem változik, úgyhogy úgy is maradna (10-26, a 30 perces
+    bemutatón: színkorrekció nélküli percek, a vágás után 6 s-mal elcsúszott felvétel). Helyette: a [fa, fb) kockák
+    alapképe ugyanúgy, mint a gyors úton (az eredetiből a lánccal / az új idővonallal, a munkamásolat méretén), egy
+    ProRes HQ klipbe, és az a projekt felvétel-rétegére a [fa, …) időre (footage.swap, mint a fast_render teljes méretű
+    darabjai). → a változat projektfájlja (a munkamappában)."""
+    from app.tools import footage
+    args, chain, cur, _ = _base(ctx, fa, fb)
+    clip = f"{tag}-foot.mov"
+    tmp.append(clip)
+    await _ffmpeg(*args, "-filter_complex", ";".join(chain + [f"{cur}setpts=PTS-STARTPTS,format=yuv420p[vout]"]), "-map", "[vout]",
+                  "-an", "-frames:v", str(fb - fa), "-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le",
+                  "-r", ctx["fps_q"], clip, cwd=ctx["work"])
+    name = await footage.swap(ctx["work"] / project, ctx["comp"], ctx["foot_asset"], clip, f"{tag}-sw", start=fa / ctx["fps"])
+    tmp += [name, f"{tag}-sw.jsx"]
+    return name
+
+
 async def _compose(ctx: dict[str, Any], F0: int, F1: int, tag: str) -> tuple[list[str], str, list[str]]:
     """A kimenet [F0, F1) kockái: ffmpeg-bemenetek, szűrőgráf ([vout], 0-tól), a futam ideiglenes fájljai. A gráfban az
     időbélyegek ABSZOLÚTAK (a kockaszám / fps), mint egy egymenetes rendernél — a rétegek enable-je, a felirat, a kör
     fázisa ugyanaz, akárhol kezdődik a futam (ezért egyezik kockára a szakaszonkénti és az egymenetes render)."""
     from app.tools import fast_render
-    fps, q, N = ctx["fps"], ctx["fps_q"], F1 - F0
-    args: list[str] = []
-    chain: list[str] = []
+    fps, q = ctx["fps"], ctx["fps_q"]
     tmp: list[str] = []
     if ctx["path"] == "engine":                                # a motor rajzol mindent (vázlatminőség), a felirat ha kell
-        name = await _engine(ctx, ctx["project"], F0, F1, f"{tag}-eng.mov", alpha=False)
+        proj = await _pending_footage(ctx, ctx["project"], F0, F1, f"{tag}-e", tmp) if ctx.get("pending") else ctx["project"]
+        name = await _engine(ctx, proj, F0, F1, f"{tag}-eng.mov", alpha=False)
         tmp.append(name)
-        args += ["-i", name]
-        chain.append(f"[0:v]fps={q},setpts=PTS-STARTPTS+{F0}[b0]")
+        args, chain = ["-i", name], [f"[0:v]fps={q},setpts=PTS-STARTPTS+{F0}[b0]"]
         cur, k = "[b0]", 1
     else:
-        hold_f = frame(ctx["plan"]["plain"], fps)            # az első kimerevített kocka (a felvétel vége után)
-        lead = max(1, round(LEAD_S * fps))
-        Sf = max(0, (hold_f if F0 >= hold_f else F0) - lead)
-        L, stop = F0 - Sf, max(0, hold_f - Sf)
-        pad = (F1 - hold_f) / fps + 1.0 if F1 > hold_f else 1.0
-        span_end = min(F1, hold_f)
-        if ctx.get("tl") is not None:                            # proxy_pending + vágás / beszúrás: az eredetikből
-            ins, prefix, lab = ctx["tl"].inputs(Sf / fps, max(span_end, Sf + 1) / fps)
-            args += ins
-            head = prefix + lab
-            k = ins.count("-i")
-        else:
-            args += ["-ss", f"{Sf / fps:.6f}", "-t", f"{(span_end - Sf) / fps + 1.0:.6f}", "-i", str(ctx["media"] or ctx["src"])]
-            head, k = "[0:v]", 1
-        pre = list(ctx.get("pre") or [])
-        chain.append(head + ",".join(pre + [f"fps={q}", f"trim=end_pts={stop}", f"tpad=stop_mode=clone:stop_duration={pad:.4f}",
-                                            f"trim=start_pts={L}:end_pts={L + N}", f"setpts=PTS+{Sf}"]) + "[b0]")
-        cur = "[b0]"
-        for it in ctx.get("tl_items") or []:                    # áttűnés (az eredetiből, a munkamásolat méretén)
-            if it["b"] <= F0 / fps or it["a"] >= F1 / fps:
-                continue
-            if it["a"] >= F0 / fps - 1e-9:
-                args += ["-itsoffset", f"{it['a']:.6f}", "-i", it["name"]]
-            else:
-                args += ["-ss", f"{F0 / fps - it['a']:.6f}", "-itsoffset", f"{(F0 - 0.25) / fps:.6f}", "-i", it["name"]]
-            chain.append(f"{cur}[{k}:v]overlay=0:0:eof_action=pass:enable='{it['enable']}'[o{k}]")
-            cur, k = f"[o{k}]", k + 1
+        args, chain, cur, k = _base(ctx, F0, F1)
         # a motorral rajzolt darabok: rövid rétegek, a végig láthatók be- / kivezetése (vagy körük nélkül az egészük)
         eng: list[tuple[int, int]] = [(_on(a, fps), _on(b, fps)) for a, b in ctx["short"]]
         loops = []
@@ -1040,6 +1088,8 @@ async def _compose(ctx: dict[str, Any], F0: int, F1: int, tag: str) -> tuple[lis
         spans = [(a, b, False) for a, b in opq] + [(a, b, True) for a, b in alpha]
         for j, (a, b, is_alpha) in enumerate(sorted(spans)):
             proj = ctx["alpha_proj"] if is_alpha else await _opaque_proj(ctx)
+            if not is_alpha and ctx.get("pending"):           # a motor a felvételt is rajzolja: az új recept szerint
+                proj = await _pending_footage(ctx, proj, a, b, f"{tag}-p{j:02d}", tmp)
             name = await _engine(ctx, proj, a, b, f"{tag}-{'g' if is_alpha else 'f'}{j:02d}.mov", alpha=is_alpha)
             tmp.append(name)
             args += ["-itsoffset", f"{(a - 0.25) / fps:.6f}", "-i", name]

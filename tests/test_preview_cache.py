@@ -209,6 +209,50 @@ def test_a_cut_on_a_phone_frame_rate_keeps_the_caption_segments_after_it():
     assert len(dirty_after) <= 0.12 * len(after), (len(dirty_after), len(after))
 
 
+def test_while_the_working_copy_is_pending_the_engine_draws_footage_from_the_original(tmp_path, monkeypatch):
+    """proxy_pending: a projektben még a SZÜLŐ munkamásolata áll (az új korrekció és vágás nélkül). Ahol a motor a
+    felvételt is rajzolja (ráközelítés, osztott kép; a motoros úton mindenhol), a futam az eredetiből a lánccal készült
+    alapképet teszi a projekt felvétel-rétegére (footage.swap a [fa, …) időre), és a motor azt rajzolja. 10-26, a 30
+    perces bemutatón e nélkül színkorrekció nélküli percek és egy 6 s-mal elcsúszott felvétel maradt a gyorsítótárban
+    (a hash a kész munkamásolat után sem változik)."""
+    calls: dict = {"engine": [], "swap": [], "ffmpeg": []}
+
+    async def engine(ctx, project, fa, fb, name, alpha):
+        calls["engine"].append((project, fa, fb, alpha))
+        return name
+
+    async def ffmpeg(*args, cwd, capture=False):
+        calls["ffmpeg"].append(args)
+        return b""
+
+    async def swap(project, comp, asset, file, name, start=None):
+        calls["swap"].append((Path(project).name, comp, asset, file, start))
+        return f"{name}.ecproj"
+    monkeypatch.setattr(pc, "_engine", engine)
+    monkeypatch.setattr(pc, "_ffmpeg", ffmpeg)
+    monkeypatch.setattr(footage, "swap", swap)
+    fps = 30.0
+    ctx = {"key": "k", "path": "fast", "fps": fps, "fps_q": "30/1", "plan": {"plain": 100.0}, "work": tmp_path,
+           "project": "preview.ecproj", "comp": "Main", "foot_asset": "footage-a.mp4", "pending": True, "media": None,
+           "src": Path("/orig/IMG.MOV"), "pre": ["scale=960:540", "eq=saturation=1.35"], "tl": None, "tl_items": [],
+           "short": [], "persist": [], "opaque": [(72.0, 78.6)], "alpha_proj": None, "opaque_proj": "pc-opaque.ecproj", "ass": None}
+    asyncio.run(pc._compose(ctx, 2130, 2190, "t"))                                # 71–73 s: a ráközelítés 72 s-kor indul
+    assert [c[:3] for c in calls["swap"]] == [("pc-opaque.ecproj", "Main", "footage-a.mp4")]
+    assert calls["swap"][0][4] == pytest.approx(2160 / fps)
+    assert calls["engine"] == [("t-p00-sw.ecproj", 2160, 2190, False)]             # a motor a cserélt projektet rajzolja
+    clip = calls["ffmpeg"][0]
+    assert "/orig/IMG.MOV" in clip and "eq=saturation=1.35" in " ".join(clip) and clip[-1] == calls["swap"][0][3]
+    for c in calls.values():
+        c.clear()
+    asyncio.run(pc._compose({**ctx, "pending": False, "media": Path("/proxy.mp4")}, 2130, 2190, "u"))   # kész munkamásolat
+    assert calls["swap"] == [] and calls["engine"] == [("pc-opaque.ecproj", 2160, 2190, False)]
+    for c in calls.values():
+        c.clear()
+    asyncio.run(pc._compose({**ctx, "path": "engine"}, 2130, 2190, "v"))          # motoros út: az egész futam
+    assert [(c[0], c[4]) for c in calls["swap"]] == [("preview.ecproj", pytest.approx(2130 / fps))]
+    assert calls["engine"] == [("v-e-sw.ecproj", 2130, 2190, False)]
+
+
 def test_a_camera_move_after_a_cut_keeps_its_segments():
     """A ráközelítés szakaszai egy előtte lévő vágás után ugyanazok: a videó eleji nyugalmi kulcs (t = 0) ideje nem
     számít (10-25, valós anyagon: a mozgás első szakasza a vágás miatt piszkos lett)."""
