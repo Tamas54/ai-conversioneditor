@@ -148,6 +148,15 @@ Types:
     of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
     off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a
     framed window in a corner.
+  deck {file_id: a .pptx, placement: window (default — beside the speaker; side: right (default) | left | top |
+    bottom) | front (over the footage, the sound goes on) | background (the slide behind the speaker: the live preview
+    cuts the speaker out; the final video doesn't yet — there it shows like front), slides: [{"at": time, "slide": n}]
+    (n from 1) OR follow: [{"slide": n, "said": "the words that bring it"}] (the switch when they are spoken — from the
+    video's subtitles, or the footage transcript without them), transition?: fade (default) | cut}: a talk's slides over
+    time in one layer, e.g. {"type": "deck", "file_id": "<pptx>", "placement": "window", "at": "02:30", "until":
+    "04:00", "slides": [{"at": "02:30", "slide": 1}, {"at": "02:52", "slide": 4}]}. at defaults to the first slide's
+    time, dur to 20 s after the last switch. Edit: a new "slides" list replaces the old; a new "at" alone moves the
+    deck with its switches.
 A lower third or source caption without position goes where nothing else is (other layers, a made video's headlines and
 charts). Overlaps that remain, a layer past the end, a dropped number, a text that collides or runs out of its box all
 come back in the check's findings. Edit by id: changes={"layers": [{"id": "L2", …only the fields that change} | {"id":
