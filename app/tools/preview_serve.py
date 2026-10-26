@@ -379,13 +379,17 @@ def _push(st: _State, job: _Job, prio: int) -> None:
     st.wake.set()
 
 
+def _player_active(st: _State) -> bool:
+    return time.monotonic() - st.player_seen < PLAYER_ACTIVE_S
+
+
 def _bg_limit(st: _State) -> int:
     """Egyszerre ennyi előtöltés / feltöltés (2–3) futhat. Amíg egy lejátszó játszik (PLAYER_ACTIVE_S-on belül kért), egy
     dolgozó — és vele a video_preview.gate() egy helye — szabadon marad a 0–1-nek: mérve (10-26, 10 perc, load 10–14) két
     8 szakaszos előtöltő futam (10–15 s) mögött a lejátszó hangdarabja 20 s után 503-at kapott, és a hls.js a tekerés után
     már nem kért hangot. Lejátszó nélkül minden dolgozó tölt."""
     n = n_workers()
-    return n - 1 if n > 1 and time.monotonic() - st.player_seen < PLAYER_ACTIVE_S else n
+    return n - 1 if n > 1 and _player_active(st) else n
 
 
 def _new_job(st: _State, kind: str, pid: str, plan: dict[str, Any], ks: list[int], keys: list[str], prio: int,
@@ -422,6 +426,23 @@ def _split(st: _State, job: _Job, k: int, prio: int) -> _Job:
         if part:
             _new_job(st, "run", job.pid, job.plan, part, [segs[x]["hash"] for x in part], job.prio, like=job)
     return _new_job(st, "run", job.pid, job.plan, now, [segs[x]["hash"] for x in now], prio, like=job)
+
+
+def _trim(st: _State, job: _Job, prio: int, seq: int) -> None:
+    """Egy induló előtöltő / feltöltő futamból (2–3) csak az első urgent_run() szakasz készül most; a maradék új munka
+    ugyanazon a helyen (ugyanaz az elsőbbség és sorszám). Mérve (10-26, 10 perc, load 12): a lejátszó alatt futó 8 szakaszos
+    feltöltő futam (14 s, nice 10) mellett a tekerés utáni sürgős munkák egyetlen dolgozón sorban vártak (19 s)."""
+    segs = job.plan["segments"]
+    rest = job.ks[urgent_run():]
+    job.ks = job.ks[:urgent_run()]
+    job.keys = [segs[x]["hash"] for x in job.ks]
+    nj = _Job(st, "run", job.pid, job.plan, rest, [segs[x]["hash"] for x in rest], prio)
+    nj.uid, nj.shared = job.uid, job.shared
+    for key in nj.keys:
+        if st.live.get(key) is job:
+            st.live[key] = nj
+    st.queue.put_nowait((prio, seq, nj))
+    st.wake.set()
 
 
 def _enqueue_run(st: _State, pid: str, plan: dict[str, Any], k: int, prio: int) -> _Job:
@@ -484,11 +505,12 @@ def _prefetch_audio(st: _State, pid: str, plan: dict[str, Any], k0: int, k1: int
 
 
 def _prefetch(st: _State, pid: str, plan: dict[str, Any], k: int) -> None:
-    """A lejátszó k-t kérte: a következő néhány képszakasz és a k körüli hangdarab(ok) (elsőbbség 2), ami még nincs
-    kész és nem készül (a hangdarabot a lejátszó maga is kéri — így az előbb indul, vagy már kész, mire kéri)."""
+    """A lejátszó k-t kérte: a k alatti hangdarab (0 — a lejátszó nélküle nem indul, és a hls.js a hangot sorban, egyenként
+    kéri), a következő néhány képszakasz és hangdarab (2), ami még nincs kész és nem készül."""
     segs = plan["segments"]
     j, end = k + 1, min(len(segs), k + 1 + prefetch_n())
-    _prefetch_audio(st, pid, plan, k, end)
+    _prefetch_audio(st, pid, plan, k, k + 1, P_PLAYER)      # a k alatti hang ugyanolyan sürgős (a hls.js nélküle nem játszik)
+    _prefetch_audio(st, pid, plan, k + 1, end)
     while j < end:
         h = segs[j]["hash"]
         if h in st.live or _have(plan, h):
@@ -531,6 +553,8 @@ async def _worker(st: _State) -> None:
             except asyncio.TimeoutError:
                 pass
             continue
+        if bg and job.kind == "run" and len(job.ks) > urgent_run() and _player_active(st):
+            _trim(st, job, prio, seq)                # játszik valaki: a háttér egy futama is rövid (a sürgős ne várjon rá)
         job.started = True
         st.bg_running += bg
         t0 = time.monotonic()

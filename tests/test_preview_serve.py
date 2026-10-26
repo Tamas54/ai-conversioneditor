@@ -724,7 +724,7 @@ async def test_player_hits_are_touched_and_prefetch_ahead(aq, pc, project, monke
     assert pc.calls == [[0, 1, 2]]
     await ps.request(PID, 2, plan=plan)                          # találat a lejátszótól: a touch + előtöltés (3–)
     await _drain()
-    assert pc.calls[1] == [3, 4, 5, 6] and sorted(k for ks in pc.calls for k in ks) == list(range(7))
+    assert pc.calls[1] == [3, 4, 5] and sorted(k for ks in pc.calls for k in ks) == list(range(7))   # játszik: rövid futam
     await asyncio.sleep(0.15)
     assert plan["segments"][2]["hash"] in pc.touched
 
@@ -811,16 +811,20 @@ def test_context_failures_are_404_when_final_503_when_transient(client, pc, proj
 
 
 async def test_urgent_runs_are_short_prefetch_runs_full(aq, pc, project, monkeypatch):
-    """A várt szakasz (0–1) futama rövid (az első kocka hamar kint van), az előtöltésé a teljes RUN_MAX."""
+    """A várt szakasz (0–1) futama rövid (az első kocka hamar kint van); az előtöltés a teljes RUN_MAX-szal áll sorba, és
+    lejátszó nélkül egészben készül (játszó lejátszó mellett induláskor rövidül — lásd lent)."""
     from app.tools import preview_serve as ps
     monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "6")
     monkeypatch.setenv("VIDEO_PREVIEW_URGENT_RUN", "2")
     plan = make_plan(parts=((None, 0.0, 40.0),), hold_s=0)
     pc._plan = plan
-    await ps.request(PID, 10, plan=plan)
+    await ps.request(PID, 10, plan=plan, priority=ps.P_EDIT)    # nem a lejátszó: nincs „játszik”, nincs előtöltés
+    assert pc.calls == [[10, 11]]                               # a várt: 2 szakasz
+    st = ps._state()
+    ps._prefetch(st, PID, plan, 11)                             # az előtöltés sorba áll (12–17-ben induló futamok)
+    assert sorted({tuple(j.ks) for j in st.live.values() if j.kind == "run"}) == [(12, 13, 14, 15), (16, 17, 18, 19)]
     await _drain()
-    assert pc.calls[0] == [10, 11]                              # a várt: 2 szakasz
-    assert sorted(pc.calls[1:]) == [[12, 13, 14, 15], [16, 17, 18, 19]]   # az előtöltés (12–17-ben induló) futamai: teljesek
+    assert sorted(pc.calls[1:]) == [[12, 13, 14, 15], [16, 17, 18, 19]]   # lejátszó nélkül: egészben
 
 
 async def test_a_segment_request_prefetches_the_sound_around_it(aq, pc, project, monkeypatch):
@@ -1006,3 +1010,45 @@ async def test_prefetch_and_fill_render_niced_what_is_waited_for_not(aq, pc, pro
     seen = {tuple(s["what"]) if isinstance(s["what"], list) else s["what"]: s["background"] for s in pc.seen}
     assert seen[(0, 1, 2)] is False
     assert any(isinstance(k, tuple) and k[0] == 3 and v is True for k, v in seen.items())
+
+
+async def test_while_a_player_plays_a_long_background_run_starts_short(aq, pc, project, monkeypatch):
+    """Játszik valaki: a feltöltés induló futamából csak urgent_run() szakasz készül, a maradék a helyén marad a sorban —
+    egy sürgős munka legfeljebb egy rövid futamot vár. Lejátszó nélkül a futam egészben megy."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_WORKERS", "1")
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "0")
+    monkeypatch.setenv("VIDEO_PREVIEW_URGENT_RUN", "2")
+    plan = make_plan(parts=((None, 0.0, 40.0),), hold_s=0)
+    pc._plan = plan
+    st = ps._state()
+    st.player_seen = time.monotonic()
+    ps.schedule(PID, plan, dirty=[], playhead=0.0)
+    await asyncio.sleep(0.05)
+    await _drain()
+    assert all(len(ks) <= 2 for ks in pc.calls) and sorted(k for ks in pc.calls for k in ks) == list(range(20))
+    pc.calls.clear()
+    plan2 = make_plan(parts=((None, 0.0, 40.0),), hold_s=0, salt="b")
+    pc._plan = plan2
+    st.player_seen = -1e9
+    from app.storage import output_path
+    output_path("22222222222222222222222222222222.ecproj").write_text("{}", "utf-8")
+    ps.schedule("22222222222222222222222222222222.ecproj", plan2, dirty=[], playhead=0.0)
+    await asyncio.sleep(0.05)
+    await _drain()
+    assert max(len(ks) for ks in pc.calls) == 4                               # lejátszó nélkül: teljes futamok
+
+
+async def test_the_sound_under_a_requested_segment_is_as_urgent(aq, pc, project, monkeypatch):
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "0")
+    plan = make_plan(parts=((None, 0.0, 80.0),), hold_s=0)
+    pc._plan = plan
+    pc.gate = asyncio.Event()
+    late = asyncio.create_task(ps.request(PID, 20, plan=plan))
+    await asyncio.sleep(0.05)
+    st = ps._state()
+    ch = REAL.audio_plan(plan)[ps.chunk_at(plan, 20)]
+    assert ch["hash"] in pc.chunk_calls or st.live[ch["hash"]].prio == ps.P_PLAYER
+    pc.gate.set()
+    await late
