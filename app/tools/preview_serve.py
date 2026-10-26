@@ -107,6 +107,11 @@ def _pc():
     return preview_cache
 
 
+def _engines():
+    from app.convert import engines
+    return engines
+
+
 def _run_max() -> int:
     return max(1, int(getattr(_pc(), "RUN_MAX", 5)))
 
@@ -383,8 +388,11 @@ def _bg_limit(st: _State) -> int:
     return n - 1 if n > 1 and time.monotonic() - st.player_seen < PLAYER_ACTIVE_S else n
 
 
-def _new_job(st: _State, kind: str, pid: str, plan: dict[str, Any], ks: list[int], keys: list[str], prio: int) -> _Job:
+def _new_job(st: _State, kind: str, pid: str, plan: dict[str, Any], ks: list[int], keys: list[str], prio: int,
+             like: Optional[_Job] = None) -> _Job:
     job = _Job(st, kind, pid, plan, ks, keys, prio)
+    if like is not None:                             # egy szétvágott munka darabja: az eredeti munkaterületén
+        job.uid, job.shared = like.uid, like.shared
     for key in keys:
         st.live[key] = job
     _push(st, job, prio)
@@ -398,13 +406,34 @@ def _bump(st: _State, job: _Job, prio: int) -> None:
         _push(st, job, prio)                       # a régi bejegyzést a dolgozó eldobja (started / más elsőbbség)
 
 
+def _split(st: _State, job: _Job, k: int, prio: int) -> _Job:
+    """Egy még el nem kezdett, hosszú előtöltő futamba (2–3) eső sürgős kérés (0–1): a futam szétválik — k-tól egy rövid
+    (urgent_run) sürgős futam, előtte és utána a maradék a régi elsőbbségén. Mérve (10-26): a lejátszó által kért szakaszt
+    tartalmazó 8 szakaszos előtöltő futam elsőbbség 0-ra emelve 20,9 s-ig készült."""
+    for key in job.keys:
+        if st.live.get(key) is job:
+            del st.live[key]
+    job.fut.set_exception(_Superseded("split for a request someone waits for"))
+    job.fut.exception()
+    segs = job.plan["segments"]
+    i = job.ks.index(k)
+    before, now, after = job.ks[:i], job.ks[i:i + urgent_run()], job.ks[i + urgent_run():]
+    for part in (before, after):
+        if part:
+            _new_job(st, "run", job.pid, job.plan, part, [segs[x]["hash"] for x in part], job.prio, like=job)
+    return _new_job(st, "run", job.pid, job.plan, now, [segs[x]["hash"] for x in now], prio, like=job)
+
+
 def _enqueue_run(st: _State, pid: str, plan: dict[str, Any], k: int, prio: int) -> _Job:
     """A k. szakasz futama (k-tól előre, ami még nincs kész és nem készül, legfeljebb RUN_MAX — sürgősen urgent_run() —,
-    egy részen belül: preview_cache.runs dönt). Ha k már készül: arra a munkára vár (és előrébb kerül)."""
+    egy részen belül: preview_cache.runs dönt). Ha k már készül: arra a munkára vár (és előrébb kerül; egy hosszú, még
+    sorban álló előtöltő futam sürgős kérésre szétválik)."""
     segs = plan["segments"]
     h = segs[k]["hash"]
     job = st.live.get(h)
     if job is not None:
+        if prio <= P_EDIT and job.kind == "run" and not job.started and job.prio >= P_NEAR and len(job.ks) > urgent_run():
+            return _split(st, job, k, prio)
         _bump(st, job, prio)
         return job
     ks, seen = [k], {h}
@@ -510,12 +539,16 @@ async def _worker(st: _State) -> None:
                 # a context verziónként egyszer épül (P1: gyorsítótár + zár); a render a video_preview.gate()-et maga
                 # kéri — itt NEM tartjuk (nem újrabelépő: két dolgozó mellett a belső kérés örökre várna), és nem heavy()
                 ctx = await _pc().context(job.pid)
-                if job.kind == "achunk":
-                    await _pc().render_audio_chunk(ctx, job.ks[0])
-                elif job.kind == "audio":
-                    await _pc().render_audio(ctx)
-                else:
-                    await _pc().render_run(ctx, list(job.ks))
+                # az előtöltés / feltöltés (2–3) nice 10-zel (engines.background, mint a végleges render): a CPU-t az
+                # kapja, amire várnak — mérve (10-26, load 12–15) egy 3 szakaszos sürgős futam 9–11 s volt egy párhuzamos
+                # 8 szakaszos előtöltő mellett
+                with (_engines().background() if bg else contextlib.nullcontext()):
+                    if job.kind == "achunk":
+                        await _pc().render_audio_chunk(ctx, job.ks[0])
+                    elif job.kind == "audio":
+                        await _pc().render_audio(ctx)
+                    else:
+                        await _pc().render_run(ctx, list(job.ks))
             if not _done_ok(job):
                 raise RuntimeError("the preview renderer finished without writing "
                                    + {"audio": "the audio track", "achunk": f"audio part {job.ks}"}.get(job.kind,

@@ -608,8 +608,8 @@ async def test_player_request_overtakes_background_fill(aq, pc, project, monkeyp
     await asyncio.sleep(0.05)
     pc.gate.set()
     await late
-    assert pc.calls[1] == [31, 32, 33, 34]                     # rögtön a 0. futam után, a sorban várók előtt: a 33.-at már
-    #                                                             a feltöltés egy futama tartalmazta — az került előre
+    assert pc.calls[1] == [33, 34]                             # rögtön a 0. futam után, a sorban várók előtt: a 33.-at már
+    #                                                             a feltöltés egy futama (31–34) tartalmazta — az szétvált
     await _drain()
     done = sorted(k for ks in pc.calls for k in ks)
     assert done == list(range(40))                             # mind elkészült, mindegyik egyszer
@@ -959,3 +959,50 @@ def test_continuous_picture_option(client, pc, project, monkeypatch):
     for k in (1, 30, 63):
         r = client.get(_seg_url(PID, plan["segments"][k]["hash"]))
         assert ps.first_pts(r.content) == 126000 + round(plan["segments"][k]["f0"] * 90000 / plan["fps"]), k
+
+
+async def test_a_request_inside_a_long_queued_prefetch_run_splits_it(aq, pc, project, monkeypatch):
+    """A lejátszó egy még sorban álló, 4 szakaszos előtöltő futam közepét kéri: k-tól egy rövid sürgős futam (2 szakasz)
+    indul elsőként, a futam többi része a régi elsőbbségén marad — semmi sem készül kétszer, semmi sem marad ki."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_WORKERS", "1")
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "0")
+    monkeypatch.setenv("VIDEO_PREVIEW_URGENT_RUN", "2")
+    plan = make_plan(parts=((None, 0.0, 80.0),), hold_s=0)
+    pc._plan = plan
+    pc.gate = asyncio.Event()
+    ps.schedule(PID, plan, dirty=[], playhead=0.0)
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if pc.calls:
+            break
+    st = ps._state()
+    old = st.live[plan["segments"][20]["hash"]]                               # a feltöltés egy futama (3)
+    assert old.prio == ps.P_FILL and len(old.ks) == 4
+    k = old.ks[1]                                                             # a futam belsejéből kér a lejátszó
+    late = asyncio.create_task(ps.request(PID, k, plan=plan))
+    await asyncio.sleep(0.05)
+    now = st.live[plan["segments"][k]["hash"]]
+    assert now.ks == [k, k + 1] and now.prio == ps.P_PLAYER and old.fut.done()
+    assert st.live[plan["segments"][k - 1]["hash"]].ks == [k - 1]             # előtte és utána: a régi elsőbbségen
+    assert st.live[plan["segments"][k + 2]["hash"]].ks == [k + 2]
+    assert all(st.live[plan["segments"][x]["hash"]].prio == ps.P_FILL for x in (k - 1, k + 2))
+    pc.gate.set()
+    await late
+    assert pc.calls[1] == [k, k + 1]                                          # rögtön a futó után
+    await _drain()
+    assert sorted(k for ks in pc.calls for k in ks) == list(range(40))
+
+
+async def test_prefetch_and_fill_render_niced_what_is_waited_for_not(aq, pc, project, monkeypatch):
+    """A várt munka (0–1) teljes CPU-val, az előtöltés / feltöltés (2–3) nice 10-zel (engines.background, mint a végleges
+    render) — a hívó háttér-állapota egyikre sem öröklődik."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "4")
+    plan = make_plan(parts=((None, 0.0, 40.0),), hold_s=0)
+    pc._plan = plan
+    await ps.request(PID, 0, plan=plan)                                      # 0: a lejátszó; az előtöltés (3–) 2-es
+    await _drain()
+    seen = {tuple(s["what"]) if isinstance(s["what"], list) else s["what"]: s["background"] for s in pc.seen}
+    assert seen[(0, 1, 2)] is False
+    assert any(isinstance(k, tuple) and k[0] == 3 and v is True for k, v in seen.items())
