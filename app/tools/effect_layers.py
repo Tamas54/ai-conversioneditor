@@ -308,12 +308,12 @@ def _decode_args(src: str, W: int, H: int, fps: float, vf: list[str], ss: Option
 
 def _encode_args(dst: str, W: int, H: int, fps: float) -> list[str]:
     from app.convert.engines import niced
-    from app.tools import live_layers
+    from app.tools import encoding, live_layers
     gop = max(1, math.floor(fps))
     return niced(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}",
                   "-r", live_layers._fps_q(fps), "-i", "-",
                   "-vf", "scale=out_color_matrix=bt709:out_range=tv:in_range=full:flags=bicubic,format=yuv420p",
-                  "-c:v", "libx264", "-preset", "medium", "-crf", str(clip_crf()), "-pix_fmt", "yuv420p", "-g", str(gop),
+                  "-c:v", "libx264", "-preset", encoding.preset(), "-crf", str(clip_crf()), "-pix_fmt", "yuv420p", "-g", str(gop),
                   "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
                   "-movflags", "+faststart", "-an", dst])
 

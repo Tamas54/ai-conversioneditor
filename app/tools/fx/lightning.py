@@ -12,7 +12,7 @@ import numpy as np
 
 from app.tools.fx import common
 
-VERSION = 1                 # a rajz változásakor emelni (a gyorsítótár kulcsában van)
+VERSION = 2                 # a rajz változásakor emelni (a gyorsítótár kulcsában van)
 
 
 class Lightning(common.Effect):

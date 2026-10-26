@@ -11,7 +11,7 @@ import numpy as np
 
 from app.tools.fx import common
 
-VERSION = 1
+VERSION = 2
 
 
 def _smooth(x: float) -> float:
