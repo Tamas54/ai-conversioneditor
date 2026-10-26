@@ -818,9 +818,21 @@ function mul(p, f) {        // a forrás pixeleiben mért érték (horgonypont) 
   if (p.numKeys) { for (var j = 1; j <= p.numKeys; j++) p.setValueAtKey(j, m(p.keyValue(j))); }
   else p.setValue(m(p.value));
 }
+function shp(s, f) {         // egy maszk alakja a forrás pixeleiben (a beszélő ablak maszkja, facecam.py) × f
+  function m(a) { var o = []; for (var q = 0; q < a.length; q++) o.push([a[q][0] * f, a[q][1] * f]); return o; }
+  var n = new Shape(); n.vertices = m(s.vertices); n.inTangents = m(s.inTangents); n.outTangents = m(s.outTangents);
+  n.closed = s.closed; return n;
+}
 function convert(L, k) {
   var T = L.property("ADBE Transform Group");
   mul(T.property("ADBE Anchor Point"), k); mul(T.property("ADBE Scale"), 1 / k);
+  var MG = L.property("ADBE Mask Parade");
+  for (var i = 1; MG && i <= MG.numProperties; i++) {
+    var M = MG.property(i), P = M.property("ADBE Mask Shape"), F = M.property("ADBE Mask Feather");
+    if (P.numKeys) { for (var j = 1; j <= P.numKeys; j++) P.setValueAtKey(j, shp(P.keyValue(j), k)); }
+    else P.setValue(shp(P.value, k));
+    var fv = F.value; F.setValue([fv[0] * k, fv[1] * k]);
+  }
 }
 function same(L) { try { return !!L.source && L.source.id === item.id; } catch (e) { return false; } }   // (=== a burkolón hamis)
 var w0 = item.width, n = 0, users = [];
