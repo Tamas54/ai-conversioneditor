@@ -80,6 +80,14 @@ Fixed along the way, found on the 30-minute project:
   rendered from the finished copy: 19–38 dB before the fix, 37.5–50 dB after. Where it stays below 40 dB, the cause
   is a one-frame offset in how the iPhone's variable frame rate maps onto the copy. Ordinary segments rendered while
   the copy is pending show the same offset.
+- The sound was also mixed from the old copy while a cut's new working copy was being made, so after the cut it
+  played the cut-out stretch: on the 30-minute project, 6.0 s behind the picture from 05:00 to the end. The sound
+  is cached by content, so the wrong parts stayed in the cache and later versions (accent, colour) reused them. Now,
+  while a cut or an insert is pending, the footage's sound comes from the new timeline, built from the originals with
+  the same fades, crossfades and gains as the working copy. The engine then mixes it with the music and the sounding
+  layers. Measured by content (the served sound against the original's, the frames against the original's frames):
+  3.0 s off before the fix after a 3 s cut on the 2-minute project, 0 ms after it; on the 30-minute project, 0–47 ms
+  at 12 points.
 
 ## 2026-10-25 — Trimming copies the video where it can: only the seconds at the cuts are re-encoded
 
