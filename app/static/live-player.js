@@ -146,6 +146,9 @@ void main() {
   }
   const modeOf = c => !c || c.mode === "none" ? 0 : c.mode === "diff" ? 2 : 1;
   const now = () => performance.now();
+  // the next range's video starts this much (source seconds) before the joint, muted and unseen, its rate slaved to the
+  // active clock — so at the cut it is already running (a cold play() takes ~100–150 ms to show its 2nd frame)
+  const LEAD = 1.0;
 
   // ---------- the player ----------
   class LivePlayer extends EventTarget {
@@ -180,6 +183,7 @@ void main() {
       this.layers = new Map();         // layer hash → {el, tex, spec}
       this.captions = null;
       this.stats = { drawn: 0, footFrames: 0, stalls: 0, waitMs: 0, seeks: [], switches: [], firstFrame: null, errors: [] };
+      this.startLat = 0.15;           // s: a cold play() until its frames run (measured per lead, smoothed)
       this.trace = opts.trace ? [] : null;   // QA: every presented footage frame {w, ed, mt, t, el}
       this._t = 0;
       this._raf = 0;
@@ -194,7 +198,8 @@ void main() {
       const gl = this.gl, t = tex(gl, gl.LINEAR);
       const s = { el: v, tex: t, url: null, copy: null, fresh: false, mt: null, wait0: null, uploaded: false };
       const onFrame = (_n, md) => {
-        s.mt = md.mediaTime; s.fresh = true;
+        s.mt = md.mediaTime; s.mtWall = now(); s.fresh = true;
+        if (s !== this.els[this.active]) this._slave(s, md);
         if (s === this.els[this.active]) {
           this.stats.footFrames++;
           if (this.trace) {
@@ -305,8 +310,23 @@ void main() {
       if (!this.playing || this.hold) return;
       const r = this.ranges[this.idx];
       if (!r) return;
-      const endSrc = r.src + (r.t1 - r.t0);
+      const endSrc = r.src + (r.t1 - r.t0), L = this._lead, o = this.els[1 - this.active];
+      if (L && L.early && !L.started && endSrc - md.mediaTime <= L.nx.src - L.at + this.startLat && o.el.readyState >= 2 && !o.el.seeking) {
+        L.started = true; L.startedAt = now();          // early by the measured start latency of a play()
+        o.el.muted = true; o.el.playbackRate = 1;
+        o.el.play().catch(e => this.stats.errors.push("lead: " + e));
+      }
       if (md.mediaTime >= endSrc - 0.5 / this.fps) this._advance();
+    }
+
+    _slave(s, md) {                  // the leading standby: where it should be now, by the active clock → its rate
+      const L = this._lead, a = this.els[this.active], r = this.ranges[this.idx];
+      if (!L || !L.started || !this.playing || !r || a.mt == null || s.el.paused) return;
+      if (L.first == null) { L.first = now() - L.startedAt; this.startLat = 0.7 * this.startLat + 0.3 * Math.min(0.4, L.first / 1000); }
+      const aNow = a.mt + (now() - (a.mtWall || now())) / 1000, endSrc = r.src + (r.t1 - r.t0);
+      const lag = (L.nx.src - (endSrc - aNow)) - md.mediaTime;          // + = behind
+      L.lag = lag;
+      s.el.playbackRate = Math.abs(lag) < 0.3 / this.fps ? 1 : Math.min(2, Math.max(0.5, 1 + lag / 0.2));
     }
 
     _advance() {                     // the active range ends: the pre-rolled one takes over (or the hold)
@@ -315,18 +335,23 @@ void main() {
       const w0 = now(), o = this.els[1 - this.active];
       this.idx = i + 1;
       if (!nx.copyObj) { this._enterHold(nx.t0, true); s.el.pause(); return; }
-      const ready = o.copy === nx.copyObj.id && Math.abs(o.el.currentTime - nx.src) < 1 / this.fps && o.el.readyState >= 2;
+      const L = this._lead, om = o.mt != null ? o.mt : o.el.currentTime;
+      const running = !!(L && L.started && !o.el.paused && o.copy === nx.copyObj.id && Math.abs(om - nx.src) < 1.5 / this.fps);
+      const ready = running || (o.copy === nx.copyObj.id && Math.abs(o.el.currentTime - nx.src) < 1 / this.fps && o.el.readyState >= 2);
       if (!ready) this._load(o, nx.copyObj, nx.src);
+      this._lead = null;
       this.active = 1 - this.active;
-      o.mt = nx.src; o.el.muted = false; o.el.volume = 1;
+      if (!running) o.mt = nx.src;
+      o.el.muted = false; o.el.volume = 1; o.el.playbackRate = 1;
       const fade = nx.xfade || nx.afade;
       if (fade) {                    // smooth / dissolve: the previous source plays on under the joint, then stops
         this._fade = { from: s, t0: nx.t0, d: nx.xfade || 0, a: nx.afade || 0 };
         setTimeout(() => { if (this.els[this.active] !== s) { s.el.pause(); s.el.muted = true; } this._fade = null; this._preroll(); },
           1000 * Math.max(nx.xfade || 0, nx.afade || 0) + 30);
       } else { s.el.pause(); s.el.muted = true; }
-      o.el.play().catch(e => this.stats.errors.push("play: " + e));
-      this.stats.switches.push({ t: nx.t0, at: w0, ready, copy: nx.copyObj.id, src: nx.src });
+      if (!running) o.el.play().catch(e => this.stats.errors.push("play: " + e));
+      this.stats.switches.push({ t: nx.t0, at: w0, ready, running, lag: L && L.lag != null ? +(L.lag * 1000).toFixed(1) : null,
+        copy: nx.copyObj.id, src: nx.src, off_ms: +((om - nx.src) * 1000).toFixed(1) });
       this._emit("switch", { t: nx.t0, ready });
       if (!fade) this._preroll();
     }
@@ -337,11 +362,14 @@ void main() {
       this.hold = { t: Math.max(t, this._t), wall: now(), gap: !!gap };
     }
 
-    _preroll() {                     // the other element: on the next range's file, at its start, paused
-      const nx = this.ranges[this.idx + 1], o = this.els[1 - this.active];
-      if (!nx || !nx.copyObj || this._fade) return;
-      if (o.copy === nx.copyObj.id && Math.abs(o.el.currentTime - nx.src) < 0.5 / this.fps) return;
-      this._load(o, nx.copyObj, nx.src);
+    _preroll() {                     // the other element: on the next range's file, paused LEAD before its start
+      const nx = this.ranges[this.idx + 1], o = this.els[1 - this.active], r = this.ranges[this.idx], s = this.els[this.active];
+      if (!nx || !nx.copyObj || this._fade) { this._lead = null; return; }
+      const left = r ? r.src + (r.t1 - r.t0) - (s.el.currentTime || 0) : 0;
+      const at = left > LEAD + 0.3 && nx.src - LEAD >= 0 ? nx.src - LEAD : nx.src;
+      this._lead = { nx, at, early: at < nx.src - 1e-6, started: false };
+      if (o.copy === nx.copyObj.id && o.el.paused && Math.abs(o.el.currentTime - at) < 0.5 / this.fps) return;
+      this._load(o, nx.copyObj, at);
     }
 
     _load(s, copy, at) {
@@ -409,12 +437,14 @@ void main() {
         s.el.muted = true;                       // no user gesture yet: play muted (the page's Play button unmutes)
         try { await s.el.play(); } catch (e2) { this.stats.errors.push("play: " + e2); }
       }
+      this._preroll();
     }
 
     pause() {
       if (this.hold) this.hold = { t: this._clock(), wall: now(), gap: this.hold.gap };
       this.playing = false;
-      for (const s of this.els) s.el.pause();
+      this._lead = null;
+      for (const s of this.els) { s.el.pause(); s.el.playbackRate = 1; }
       for (const [, L] of this.layers) L.el.pause();
       this._emit("pause", {});
     }
