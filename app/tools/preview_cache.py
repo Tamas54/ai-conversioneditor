@@ -338,13 +338,14 @@ def fingerprint(spec: dict[str, Any], seg: dict[str, Any], plan_ctx: dict[str, A
         lys.append(_layer_fp(c, e, o, f0, f1))
     fp["layers"] = lys
     subs = []
-    cs = lambda t: round(t * 100) / 100                                              # noqa: E731  (az ASS centiszekundumai)
+    # a feliratsorok és a szavak kockája: az ASS a kockára igazított időket kapja (fast_render.ass_subtitles(fps=…)), a
+    # libass pontosan _on(t)-től mutat — egy nem egész centiszekundumos vágás-eltolás nem tol el egy szót egy kockával
     for r in c["rows"]:
-        if _on(cs(r["t1"]), fps) <= f0 or _on(cs(r["t0"]), fps) >= f1:
+        if _on(r["t1"], fps) <= f0 or _on(r["t0"], fps) >= f1:
             continue
         ws = [min(max(float(w), r["t0"]), r["t1"]) for w in r.get("words") or []]
         subs.append({"text": r["text"], "lines": r.get("lines"), "size": r.get("size"), "words": len(ws),
-                     "fr": [_on(cs(r["t0"]), fps) - f0, _on(cs(r["t1"]), fps) - f0] + [_on(cs(w), fps) - f0 for w in ws]})
+                     "fr": [_on(r["t0"], fps) - f0, _on(r["t1"], fps) - f0] + [_on(w, fps) - f0 for w in ws]})
     fp["subs"] = subs
     fp["camera"] = _camera_fp(c["camera"], fps, f0, f1)
     dis = [{"j0": d["F"] - f0, "n": d["n"], "prev": d["prev"], "next": d["next"]} for d in c["dissolves"]
@@ -900,8 +901,8 @@ async def _build(pid: str, spec: dict[str, Any], meta: dict[str, Any], key: str,
         has_caps = any(fast_render._CAPTION.match(str(x["name"])) for x in info["layers"] if x["on"])
         ctx["ass"] = None
         if subs and (kind["ok"] or not has_caps):           # a felirat libass-szal (a projekt feliratrétegei helyett)
-            (work / "pc-subs.ass").write_text(fast_render.ass_subtitles(subs, style, W, H, total, video._rgb(opts.get("accent"))),
-                                              "utf-8")
+            (work / "pc-subs.ass").write_text(fast_render.ass_subtitles(subs, style, W, H, total, video._rgb(opts.get("accent")),
+                                                                        fps=fps), "utf-8")
             ctx["ass"] = "pc-subs.ass"
         # az alapkép: a munkamásolat (kimeneti idő = a munkamásolat ideje), vagy amíg az új recept munkamásolata készül
         # (proxy_pending), az eredeti a lánccal, a munkamásolat méretére

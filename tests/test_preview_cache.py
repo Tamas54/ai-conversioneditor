@@ -185,6 +185,30 @@ def test_moving_everything_by_a_cut_keeps_the_later_segments_with_captions_layer
     assert l4["at"] == pytest.approx(380.033, abs=1e-3)                           # (a réteg valóban odébb került)
 
 
+def test_a_cut_on_a_phone_frame_rate_keeps_the_caption_segments_after_it():
+    """Valós eset (10-26, a 30 perces iPhone-próba): 29,993 fps-en a 05:00–05:20 vágás 600 kocka = 20,0047 s, nem egész
+    centiszekundum. Az ujjlenyomat a felirat idejét centiszekundumra kerekítve számolta (az ASS-é), így a vágás utáni
+    feliratos szakaszok zöme egy-egy szó egy kockás elcsúszása miatt piszkos lett (651 a 901-ből). A kockára igazított
+    ASS-idővel (fast_render.ass_subtitles(fps=…)) csak a vágás feje az."""
+    fps = 29.993
+    subs = []
+    for k in range(115):                                                          # 2 tizedes, szabálytalan idők (mint az átirat)
+        a = round(5.2 * k + 0.37 + (k % 7) * 0.13, 2)
+        subs.append({"start": a, "end": round(a + 3.71, 2), "text": f"mondat {k} egy kettő három négy öt hat hét"})
+    v1 = _spec(fps=fps, subs=subs, layers=[], style="highlight")
+    v2 = _cut(v1, 300.0, 320.0)
+    shift = v2["base"]["keep"][1][0] - v2["base"]["keep"][0][1]
+    assert round(shift * fps) == 600 and abs(shift * 100 - round(shift * 100)) > 0.1    # (nem egész centiszekundum)
+    p1, p2 = _plan(v1), _plan(v2)
+    d = pc.diff(p1, p2)
+    after = [s for s in p2["segments"] if s["part"] == 1 and not s["hold"]]
+    dirty_after = [s for s in after if s["k"] in d["dirty"]]
+    # a vágás feje, és ahol egy szó 4 tizedesre kerekített ideje épp átlép egy kockahatárt (a kép tényleg más; ~8 %) —
+    # a centiszekundumos kerekítéssel ugyanitt a szakaszok zöme volt piszkos
+    assert after[0]["k"] in d["dirty"]
+    assert len(dirty_after) <= 0.12 * len(after), (len(dirty_after), len(after))
+
+
 def test_a_camera_move_after_a_cut_keeps_its_segments():
     """A ráközelítés szakaszai egy előtte lévő vágás után ugyanazok: a videó eleji nyugalmi kulcs (t = 0) ideje nem
     számít (10-25, valós anyagon: a mozgás első szakasza a vágás miatt piszkos lett)."""
