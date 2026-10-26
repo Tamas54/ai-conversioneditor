@@ -84,8 +84,12 @@ def normalize(r: dict[str, Any], what: str) -> dict[str, Any]:
         seed = int(r["seed"]) if r.get("seed") not in (None, "") else None
     except (TypeError, ValueError):
         raise ValueError(f"{what} (effect): seed = a whole number.") from None
+    blend = str(r.get("blend") or "over").strip().lower()
+    if blend not in fx.BLENDS:
+        raise ValueError(f"{what} (effect): blend {r.get('blend')!r} — over (default: drawn into the footage, the scene darkens "
+                         "and takes the effect's colour) | screen (only the light, screen-blended — no darkening).")
     out: dict[str, Any] = {"effect": eff, **({"on": fx.anchor(r["on"], what)} if r.get("on") not in (None, "", "hand") else {}),
-                           **fx.params(eff, r, what)}
+                           **({"blend": "screen"} if blend == "screen" else {}), **fx.params(eff, r, what)}
     if seed is not None:
         out["seed"] = seed
     if isinstance(r.get("trigger"), dict):
@@ -238,7 +242,7 @@ def fx_params(ly: dict[str, Any]) -> dict[str, Any]:
     """Ami a rajzot meghatározza: az effekt, a horgony, a saját mezői, a mag (az id, az idő, a kiváltó NEM)."""
     from app.tools import fx
     eff = ly.get("effect") or "lightning"
-    return {"effect": eff, "on": ly.get("on") or "hand", "seed": ly.get("seed"),
+    return {"effect": eff, "on": ly.get("on") or "hand", "seed": ly.get("seed"), "blend": ly.get("blend") or "over",
             **{k: ly.get(k) for k in fx.get(eff).PARAMS}}
 
 
@@ -463,7 +467,8 @@ async def prepare(layers: list[dict[str, Any]], base: dict[str, Any], *, W: int,
             shutil.copyfile(path, work / name)
         names.append(name)
         items.append({"id": ly["id"], "name": f"Layer {ly['id']} – {ly.get('effect', 'lightning')} effect", "file": name,
-                      "at": round(f0 / fps, 6), "dur": round((f1 - f0) / fps, 6), "k": 1.0})       # (a klip a kompozíció méretében)
+                      "at": round(f0 / fps, 6), "dur": round((f1 - f0) / fps, 6), "k": 1.0,        # (a klip a kompozíció méretében)
+                      **({"blend": "screen"} if ly.get("blend") == "screen" else {})})
         casting = st.get("casting")
         verified.append(f"Layer {ly['id']}: {label(ly)} — {video._tc(f0 / fps)}–{video._tc((f1) / fps)}"
                         + (" (drawn before, from the cache)" if st.get("cached") else

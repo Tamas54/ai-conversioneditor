@@ -73,6 +73,9 @@ TOUCH_EVERY_S = 2.0
 _CAPTION = re.compile(r"^Caption (box )?\d+$")
 _LID = re.compile(r"^Layer (\S+)")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
+# a motor keverési módjai, amelyeket a lejátszó maga is tud (live-player.js): a réteg saját pixelei (a szólóban NORMAL-lal
+# renderelve) + blend a bejegyzésben — screen: out = 1 − (1 − base)(1 − rgb·a); add: out = base + rgb·a (egy effekt fénye)
+BLENDS = {"Screen": "screen", "Add": "add", "LinearDodge": "add"}
 
 
 def _env_num(name: str, default: float, lo: float) -> float:
@@ -382,9 +385,11 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
         if src.get("type") in ("Null",) or x.get("null"):
             continue
         why = None
+        bm = str(x.get("blend_mode") or "Normal")
+        blend = BLENDS.get(bm)                                            # screen / add: a lejátszó keveri (out = …)
         if sw.get("adjustment"):
             why = "an adjustment layer (it changes the picture under it)"
-        elif str(x.get("blend_mode") or "Normal") != "Normal":
+        elif bm != "Normal" and blend is None:
             why = f"a blend mode ({x.get('blend_mode')})"
         elif x.get("track_matte"):
             why = "a track matte"
@@ -410,7 +415,7 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
         late = max([late] + [float(k["time"]) / TPS * fps for k in _keys_of(x.get("props"))
                              if float(k["time"]) / TPS * fps < N - fast_render.OUTRO_S * fps - 1])
         out.append({"id": m.group(1) if m else name, "name": name, "i": pos + 1, "pos": pos, "Fa": Fa, "Fb": Fb, "N": N,
-                    "hash": _sha({"g": gh, "layer": rel}), "unsupported": why, "late": late,
+                    "hash": _sha({"g": gh, "layer": rel}), "unsupported": why, "late": late, "blend": blend or "normal",
                     "persist": min(frames / fps, b) - max(0.0, a) >= fast_render.PERSISTENT_S})
     out.reverse()                                                          # alulról fölfelé
     for z, e in enumerate(out):
@@ -546,7 +551,7 @@ async def layers_part(pid: str, spec: Optional[dict[str, Any]] = None, *, playhe
                 _bump(st, job, pr, force=True)
         y = {"id": x["id"], "name": x["name"], "z": x["z"], "t0": round(x["f0"] / fps, 6), "t1": round(x["f1"] / fps, 6),
              "hash": h, "url": clip_url(pid, h) if status == "ready" else None, "status": status, "loop": x["loop"],
-             "f0": x["f0"], "frames": x["f1"] - x["f0"], "kind": x["kind"]}
+             "f0": x["f0"], "frames": x["f1"] - x["f0"], "kind": x["kind"], "blend": x["layer"].get("blend", "normal")}
         if x["kind"] == "loop" and x["loop"]:
             y["clip_frames"] = x["loop"]["intro_frames"] + x["loop"]["period_frames"]
         if status == "unsupported":
@@ -605,7 +610,8 @@ async def _solo(ctx: dict[str, Any], sc: dict[str, Any], e: dict[str, Any], tag:
     """A projekt egy változata: csak ez a réteg látszik (a felvétel, a felirat, a többi réteg ki)."""
     from app.tools import fast_render
     off = [k for k in range(1, sc["n_main"] + 1) if k != e["i"]]
-    return await fast_render.variant(ctx["work"] / ctx["project"], {"comp": ctx["comp"]}, off, tag)
+    return await fast_render.variant(ctx["work"] / ctx["project"], {"comp": ctx["comp"]}, off, tag,
+                                     normal=[e["i"]] if e.get("blend", "normal") != "normal" else None)
 
 
 def stack_args(src: str, dst: str, fps_q: str, first: int = 0, count: Optional[int] = None) -> list[str]:

@@ -311,6 +311,9 @@ class Effect:
         self.target = params.get("target") or "arm"
         self.intensity = float(params.get("intensity") or 1.0)
         self.rng = np.random.default_rng(int(seed))
+        # blend "screen": csak a fény (fekete alapon, a jelenet színezése nélkül) — a képre screen keveréssel kerül, egy
+        # grafikai réteg fölé is (lásd fx/__init__.py, A HORGONY); alap: előre komponálva a felvétellel
+        self.light_only = params.get("blend") == "screen"
         self.anchors = Anchors(self.W, self.H, params.get("on") or "hand")
         self.grade = Grade(self.TINT, *self.GRADE)
         self.flash = 0.0
@@ -339,9 +342,15 @@ class Effect:
         self.flash = FLASH_K * self.flash + (1 - FLASH_K) * (power * self.rng.uniform(0.55, 1.0))
         self.grade.step(power > 0)
         self.powers.append(round(power, 2))
-        if not (power > 0 or self.flash > 0.02 or self.grade.k > 0.02):
+        if self.light_only:
+            img, grade = np.zeros_like(img), Grade(self.TINT, 0.0, 0.0, self.GRADE[2])
+            if not (power > 0 or self.flash > 0.02):
+                return img
+        elif not (power > 0 or self.flash > 0.02 or self.grade.k > 0.02):
             return img
+        else:
+            grade = self.grade
         gi = self.intensity
-        return compose(img, layer, core if power > 0 else None, lights, self.grade, self.flash, glow_color=self.GLOW,
+        return compose(img, layer, core if power > 0 else None, lights, grade, self.flash, glow_color=self.GLOW,
                        g1=(self.G1[0], self.G1[1] * gi), g2=(self.G2[0], self.G2[1] * gi), lit=(self.LIT[0], self.LIT[1] * gi),
                        core_gain=self.CORE_GAIN, grid=self._grid)

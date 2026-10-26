@@ -144,15 +144,18 @@ Types:
   waveform {style: bars (default, around a centre line) | rise (growing from the bottom), bars?: 8–64 (28),
     color?: "#hex" (default the accent), position?: bottom (default) | center | top | [x, y, w, h]}: the footage's
     sound as moving bars — e.g. over a podcast or interview; dur = how long (whole video: "until" its end).
-  effect {effect: "lightning" (Palpatine-style lightning from the speaker's raised hand — your own footage only), when:
-    at | after_said: "words" (it starts at the end of the sentence those words are said in: the transcript's word times,
-    then the voice's end to 10 ms) | at_speech_end_after: seconds (the first end of speech after it), dur?: how long it
-    strikes (4 s; the scene's darkening fades for ~1 s after), target?: arm (the forearm's direction, default) | right |
-    left | up (towards that edge) | [x, y] (a point, 0–1 of the frame), strands?: 1–16 (6), intensity?: 0.3–2 (1, the
-    glow)}: drawn by the server on your footage (hand + pose tracking; the scene darkens and turns blue, the glow is
-    screen-blended), under the graphics and captions; it moves with the footage (camera, split). E.g. {"type": "effect",
-    "effect": "lightning", "after_said": "now you will die", "target": "right"}. Drawing costs ~10–20 s per second of
-    effect the first time; edits that don't touch it reuse it.
+  effect {effect: lightning (Palpatine-style lightning from the raised hand) | fireball (forms in the palm, flies along the
+    forearm) — your own footage only; when: at | after_said: "words" (it starts at the end of the sentence those words
+    are said in: the transcript's word times, then the voice's end to 10 ms) | at_speech_end_after: seconds (the first end
+    of speech after it); dur?: how long (lightning 4 s, fireball 2 s; the scene's tint fades ~1 s after); on?: hand
+    (default: the raised hand, tracked) | body | [x, y] (a point) | [x, y, w, h] (a rectangle, 0–1 of the frame);
+    target?: arm (the forearm's direction, default) | right | left | up | down (towards that edge) | [x, y] (a point);
+    blend?: over (default: drawn into the footage — the scene darkens and takes the effect's colour) | screen (only the
+    light, screen-blended); lightning: strands?: 1–16 (6), intensity?: 0.3–2 (1); fireball: size?: 0.4–2.5 (1),
+    form?: seconds it grows in the palm (0.6), speed?: frame diagonals per second (1.4), intensity?}: drawn by the server
+    on your footage (hand + pose tracking), under the graphics and captions; it moves with the footage (camera, split).
+    E.g. {"type": "effect", "effect": "lightning", "after_said": "now you will die", "target": "right"}. The first
+    drawing costs ~9 s per second of effect (1080×1920); edits that don't touch it reuse it.
   pip {image (a video or picture — a see-through video, e.g. from action="cutout", shows without the frame), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
     of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
     off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a

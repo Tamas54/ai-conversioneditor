@@ -60,7 +60,8 @@ var tprops = ["ADBE Anchor Point", "ADBE Position", "ADBE Scale", "ADBE Rotate Z
 for (var j = 1; j <= c.numLayers; j++) {
   var L = c.layer(j), o = {i: j, name: L.name, a: L.inPoint, b: L.outPoint, on: !!L.enabled, video: !!L.hasVideo,
                            nul: !!L.nullLayer, adj: !!L.adjustmentLayer, keys: [], fx: 0};
-  try { o.blend = String(L.blendingMode); o.normal = L.blendingMode == BlendingMode.NORMAL; } catch (e) { o.normal = true; }
+  try { o.blend = String(L.blendingMode); o.normal = L.blendingMode == BlendingMode.NORMAL;
+        o.light = L.blendingMode == BlendingMode.SCREEN || L.blendingMode == BlendingMode.ADD; } catch (e) { o.normal = true; }
   try { o.matte = !!L.trackMatteType && L.trackMatteType != TrackMatteType.NO_TRACK_MATTE; } catch (e) { o.matte = false; }
   try { if (L.source && L.source.file) o.file = L.source.file.name; } catch (e) {}
   try { o.st = L.startTime; if (L.timeRemapEnabled) { var R = L.property("ADBE Time Remapping"); o.tr = [];
@@ -82,8 +83,9 @@ writeLn("@@" + JSON.stringify(out));
 _SWITCH = r"""
 var c = null;
 for (var i = 1; i <= app.project.numItems; i++) { var it = app.project.item(i); if (it instanceof CompItem && it.name == __COMP__) c = it; }
-var off = __OFF__;
+var off = __OFF__, normal = __NORMAL__;
 for (var j = 1; j <= c.numLayers; j++) if (off.indexOf(j) >= 0) c.layer(j).enabled = false;
+for (var k = 1; k <= c.numLayers; k++) if (normal.indexOf(k) >= 0) c.layer(k).blendingMode = BlendingMode.NORMAL;
 writeLn("ok");
 """
 
@@ -107,10 +109,12 @@ async def inspect(project: Path) -> dict[str, Any]:
     return d
 
 
-async def variant(project: Path, info: dict[str, Any], off: list[int], name: str) -> str:
-    """A projekt egy változata, a megadott rétegek kikapcsolva (a fő kompozícióban) → a fájl neve a munkamappában."""
+async def variant(project: Path, info: dict[str, Any], off: list[int], name: str, normal: Optional[list[int]] = None) -> str:
+    """A projekt egy változata, a megadott rétegek kikapcsolva (a fő kompozícióban) → a fájl neve a munkamappában.
+    normal: ezeknek a rétegeknek a keverése NORMAL lesz (egy screen-réteg saját pixelei, a lejátszó keveri — live_layers)."""
     await _script(project.parent, f"fr-{name}.jsx",
-                  _SWITCH.replace("__COMP__", json.dumps(info["comp"])).replace("__OFF__", json.dumps(sorted(set(off)))),
+                  _SWITCH.replace("__COMP__", json.dumps(info["comp"])).replace("__OFF__", json.dumps(sorted(set(off))))
+                  .replace("__NORMAL__", json.dumps(sorted(set(normal or [])))),
                   project.name, save_as=f"{name}.ecproj")
     return f"{name}.ecproj"
 
@@ -151,17 +155,23 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "why": "the footage was cut or moved in time in the editor"}
     caps = [x for x in vis if _CAPTION.match(x["name"])]
     gfx = [x for x in vis if x is not f and x not in caps]
+    dur, fps = float(info["dur"]), float(info["fps"])
+    lit: list[tuple[float, float]] = []
     for x in gfx + caps:
         if x["adj"]:
             return {"ok": False, "why": f"“{x['name']}” is an adjustment layer"}
+        if not x.get("normal", True) and x.get("light") and x in gfx and not x["adj"]:
+            # screen / add (egy effekt fénye): a szakaszán a motor a felvétellel együtt rajzol (átlátszatlan szakasz) —
+            # az átlátszó grafika-klip nem vinné a keverést
+            lit.append((max(0.0, float(x["a"]) - 1 / fps), min(dur, float(x["b"]) + 1 / fps)))
+            continue
         if not x.get("normal", True):
             return {"ok": False, "why": f"“{x['name']}” uses a blend mode ({x.get('blend')})"}
         if x.get("matte"):
             return {"ok": False, "why": f"“{x['name']}” uses a track matte"}
-    dur, fps = float(info["dur"]), float(info["fps"])
     pers = [x for x in gfx if min(dur, x["b"]) - max(0.0, x["a"]) >= PERSISTENT_S]
     short = [x for x in gfx if x not in pers]
-    opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)]   # a felvétel el van mozdítva
+    opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)] + lit   # a felvétel el van mozdítva
     return {"ok": True, "why": "", "footage": f, "captions": caps, "gfx": gfx, "persistent": pers, "short": short,
             "opaque": opaque}
 

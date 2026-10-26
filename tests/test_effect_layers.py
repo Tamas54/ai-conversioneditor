@@ -210,6 +210,36 @@ def test_the_clip_key_follows_the_content():
     assert (f0, active, f1 - f0 - active) == (141, 96, fx.get("lightning").tail())
 
 
+def test_blend_screen_draws_only_the_light():
+    """blend "screen": a fény fekete alapon (a jelenet színezése nélkül) — a lejátszó / a motor screen keveréssel teszi a
+    képre; ahol nincs fény, a klip fekete (a screen ott nem változtat)."""
+    ly = video.layers_from([{"type": "effect", "at": 1, "blend": "screen", "target": "right"}], "", [])[0]
+    assert ly["blend"] == "screen" and el.fx_params(ly)["blend"] == "screen"
+    with pytest.raises(ValueError, match="over .* screen"):
+        video.layers_from([{"type": "effect", "at": 1, "blend": "multiply"}], "", [])
+    light, src = _run("lightning", {"target": "right", "blend": "screen"}), _frames(40)
+    over = _run("lightning", {"target": "right"})
+    assert all(not x.any() for x in light[:4])                   # a kezdete előtt: fekete (a screen semmit sem változtat)
+    f = light[20].astype(float)
+    assert f.max() > 200 and (f.sum(2) < 6).mean() > 0.3         # erős fény, a kép nagy része fekete
+    # screen(kép, fény) ≈ az over-rajz fénye a színezés nélkül: a fény helyén világosabb a képnél
+    scr = 255 - (255 - src[20].astype(float)) * (255 - f) / 255
+    assert (scr >= src[20] - 0.5).all() and _h(light) != _h(over)
+
+
+def test_the_player_blend_factors_give_screen_and_add():
+    """A lejátszó GL-keverése (live-player.js blendOf: src·Fs + dst·Fd, előszorzott rgb·a): screen = 1 − (1 − base)(1 − rgb·a)."""
+    js = Path(__file__).resolve().parents[1] / "app" / "static" / "live-player.js"
+    t = js.read_text("utf-8")
+    assert 'b === "screen") return { src: "ONE", dst: "ONE_MINUS_SRC_COLOR", premul: 1 }' in t
+    assert "uPremul == 1 ? vec4(rgb * a, 1.0) : vec4(rgb, a)" in t and "gl.blendFunc(gl[bf.src], gl[bf.dst])" in t
+    base, rgb, a = np.array([0.6, 0.3, 0.1]), np.array([0.2, 0.4, 0.8]), 0.75
+    src = rgb * a                                                # a shader kimenete (előszorzott)
+    gl_screen = src * 1.0 + base * (1 - src)                     # ONE, ONE_MINUS_SRC_COLOR
+    assert np.allclose(gl_screen, 1 - (1 - base) * (1 - rgb * a))
+    assert np.allclose(src * 1.0 + base * 1.0, base + rgb * a)   # add: ONE, ONE
+
+
 def test_no_sqlite():
     for p in (el.__file__, common.__file__, fx.__file__):
         assert "sqlite" not in Path(p).read_text("utf-8").lower()

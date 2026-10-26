@@ -51,7 +51,8 @@ REGISTRY: dict[str, tuple[str, str]] = {
     "fireball": ("app.tools.fx.fireball", "Fireball"),
 }
 PLANNED = ("flame_jet", "energy_orb")
-COMMON_FIELDS = ("effect", "on", "after_said", "at_speech_end_after", "seed", "trigger")
+COMMON_FIELDS = ("effect", "on", "blend", "after_said", "at_speech_end_after", "seed", "trigger")
+BLENDS = ("over", "screen")       # over: előre komponálva a felvétellel (a jelenet színezésével); screen: csak a fény
 
 
 def names() -> tuple[str, ...]:

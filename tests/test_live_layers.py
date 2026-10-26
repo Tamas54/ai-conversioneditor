@@ -124,9 +124,19 @@ def test_the_picture_counts_by_its_content_not_its_file_id(put_file, tmp_path):
 
 def test_unsupported_layers_are_named():
     d = _project([("L1", 100, 90, "Első"), ("L2", 400, 120, "Második")])
-    d["items"]["1"]["kind"]["layers"][0]["blend_mode"] = "Screen"
+    d["items"]["1"]["kind"]["layers"][0]["blend_mode"] = "Multiply"
     e = _by_id(_sc(d))
     assert "blend mode" in (e["L2"]["unsupported"] or "") and e["L1"]["unsupported"] is None
+
+
+def test_a_screen_layer_is_drawn_by_the_player_with_its_blend():
+    """Egy effekt fénye (screen / add): a szólóban NORMAL-lal készül, a lejátszó keveri (live-player.js blendOf)."""
+    d = _project([("L1", 100, 90, "Első"), ("L2", 400, 120, "Második")])
+    d["items"]["1"]["kind"]["layers"][0]["blend_mode"] = "Screen"
+    e = _by_id(_sc(d))
+    assert e["L2"]["unsupported"] is None and (e["L2"]["blend"], e["L1"]["blend"]) == ("screen", "normal")
+    xs = ll.entries(_sc(d), {})
+    assert {x["id"]: x["layer"]["blend"] for x in xs} == {"L1": "normal", "L2": "screen"}
 
 
 # ---------- a bejegyzések ----------

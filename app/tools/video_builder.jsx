@@ -581,6 +581,7 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
       Le.startTime = ef.at; Le.inPoint = ef.at; Le.outPoint = Math.min(D.total, ef.at + ef.dur);
       if (ef.k !== 1) tp(Le).property("ADBE Scale").setValue([ef.k * 100, ef.k * 100]);
       try { Le.property("ADBE Audio Group").property("ADBE Audio Levels").setValue([-192, -192]); } catch (e) {}
+      if (ef.blend === "screen") Le.blendingMode = BlendingMode.SCREEN;   // csak a fény: screen keveréssel
       if (D.camera) camera(Le, D.camera, 0, ef.k);          // a felvétel mozgásával együtt
       baseLayers.push(Le); BASE_F.push(ef.k);
     }
