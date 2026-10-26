@@ -414,6 +414,8 @@ def test_face_oval_mask_and_the_full_size_piece_alignment():
     copy = src[10:18]                                              # the working copy starts at source frame 10
     for start in (4, 6, 8):                                        # the piece starts 6 / 4 / 2 frames before it
         assert footage.frame_offset(src[start:start + 16], copy, 4) == 10 - start
+    still = np.repeat(src[:1], 30, axis=0) + rng.normal(scale=0.05, size=(30, 9, 16)).astype(np.float32)
+    assert footage.frame_offset(still[2:18], still[6:14], 4) == 4          # ambiguous (a still picture): no shift
 
 
 def test_live_clips_say_why_there_is_no_cut_out(monkeypatch):
@@ -426,3 +428,11 @@ def test_live_clips_say_why_there_is_no_cut_out(monkeypatch):
     monkeypatch.setattr(dm, "available", lambda: "MediaPipe isn't installed on this server")
     [c] = asyncio.run(dm.live_clips("x.ecproj", {**spec, "base": {**spec["base"], "proxy_pending": False}}))
     assert c["status"] == "unavailable" and "MediaPipe" in c["reason"]
+
+
+def test_constant_rate_footage_is_never_shifted(tmp_path):
+    from app.tools import footage
+    cfr = tmp_path / "cfr.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10", "-t", "1", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", str(cfr)], check=True)
+    assert footage.variable_rate(cfr) is False

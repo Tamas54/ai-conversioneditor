@@ -710,19 +710,45 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
 ALIGN_PAD = 4            # frames: the full-size piece starts this much earlier, the content match picks the right one
 
 
+ALIGN_GAIN = 0.6         # a shift only when its match is clearly better than the unshifted one (distance × 0.6)
+
+
 def frame_offset(clip_frames: Any, copy_frames: Any, pad: int) -> int:
     """Which frame of the full-size piece is the working copy's first frame (by picture content: normalised small luma,
-    the mean squared difference over the next frames) → 0 … 2·pad."""
+    the mean squared difference over the next frames) → 0 … 2·pad. pad (no shift) unless another frame matches CLEARLY
+    better (ALIGN_GAIN): an ambiguous match — a still picture, a pattern — never moves the piece."""
     import numpy as np
-    best, best_j = None, pad
     m = min(len(copy_frames), max(1, len(clip_frames) - 2 * pad))
+    ds = {}
     for j in range(0, 2 * pad + 1):
         if j + m > len(clip_frames):
             break
-        d = float(np.mean([(clip_frames[j + i] - copy_frames[i]) ** 2 for i in range(m)]))
-        if best is None or d < best - 1e-9:
-            best, best_j = d, j
-    return best_j
+        ds[j] = float(np.mean([(clip_frames[j + i] - copy_frames[i]) ** 2 for i in range(m)]))
+    if not ds or pad not in ds:
+        return pad
+    best = min(ds, key=lambda j: (ds[j], abs(j - pad)))
+    return best if best != pad and ds[best] < ALIGN_GAIN * ds[pad] else pad
+
+
+_VFR: dict[str, bool] = {}
+
+
+def variable_rate(path: Path) -> bool:
+    """A forrás változó kockasebességű-e (a telefonfelvétel: r_frame_rate 30/1, avg 29,993) — csak ott csúszhat a darab."""
+    import json as _json
+    import subprocess
+    key = f"{path}:{path.stat().st_size}"
+    if key not in _VFR:
+        try:
+            v = _json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                            "stream=r_frame_rate,avg_frame_rate", "-of", "json", str(path)],
+                                           capture_output=True, text=True, check=True).stdout)["streams"][0]
+            fr = lambda x: (lambda a, b: float(a) / float(b) if float(b) else 0.0)(*str(x).split("/")) if "/" in str(x) else float(x or 0)  # noqa: E731
+            r, a = fr(v.get("r_frame_rate")), fr(v.get("avg_frame_rate"))
+            _VFR[key] = bool(r and a and abs(r - a) / r > 1e-5)       # (S4: 30 vs 29.993 — a 0.02 % difference)
+        except Exception:                                   # noqa: BLE001 — unknown: treated as constant (no shift)
+            _VFR[key] = False
+    return _VFR[key]
 
 
 def _small_frames(path: Path, n: int, ss: Optional[float] = None) -> Any:
@@ -740,11 +766,12 @@ async def clip(base: dict[str, Any], src: Path, dst: Path, a: float, b: float, p
     """A videó [a, b) szakasza teljes méretben (vágott felvételnél a megtartott részekből), a lánccal (és b > plain
     esetén a kimerevített véggel) — a motor ezt rajzolja ott, ahol a felvétel maga mozog. Köztes fájl: a végső kódolás
     előtti minőségen (VIDEO_CRF_INTERMEDIATE). → hány másodperccel a darab eleje UTÁN van az a (0, ha nincs igazítás).
-    align_to: a munkamásolat — a darab kockái TARTALOM szerint igazodnak hozzá (10-26, S4: egy változó kockasebességű
+    align_to: a munkamásolat — VÁLTOZÓ kockasebességű forrásnál a darab kockái TARTALOM szerint igazodnak hozzá (állandónál
+    semmi sem változik; és csak egyértelmű egyezésre tolódik — frame_offset) (10-26, S4: egy változó kockasebességű
     telefonfelvételből a darab a kezdőpontjától függően 1–2 kockával előbbre vagy hátrébb járt, mint a munkamásolat — a
     rétegek, a beszélő maszkja elcsúszott rajta): a darab ALIGN_PAD kockával korábban indul, és a munkamásolat a-beli
     kockájának megfelelő kocka a kezdete (a hívó az időtérképpel innen indítja: swap(skip=…))."""
-    if align_to is not None:
+    if align_to is not None and await asyncio.to_thread(variable_rate, src):     # (a constant rate: exactly as before)
         from app.tools import mediaprobe
         mc = await mediaprobe.info(align_to)
         fps_c = float(mc.get("fps") or base.get("fps") or 30)
