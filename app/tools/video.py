@@ -4577,6 +4577,9 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         from app.tools import deck_layer                       # pakli: a diaváltás egy mondathoz kötve (follow)
         raw = await deck_layer.resolve(raw, notes, cues=subtitle_cues(body["subtitles"]) if isinstance(body.get("subtitles"), list) else None,
                                        footage=crafts.existing(fid), language=body.get("language"), topts=topts, step=step)
+        from app.tools import stage_layer                       # színpad: a stock-videó háttér letöltve (Pexels)
+        if stage_layer.has_stock(raw):
+            raw = await stage_layer.resolve(raw, notes)
         layers = layers_from(raw, body.get("text") or "", notes)
         subs = await _auto_subtitles(fid, body.get("language"), step, topts, notes) if body.get("subtitles") == "auto" \
             else subtitle_cues(body.get("subtitles"))
@@ -7011,6 +7014,10 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
               "existing": (spec.get("story") or {}).get("layers") or [], "step": step}
         changes = {**changes, "layers": await deck_layer.resolve(changes.get("layers"), notes, **kw),
                    "add_layers": await deck_layer.resolve(changes.get("add_layers"), notes, **kw)}
+    from app.tools import stage_layer                          # színpad: a stock-videó háttér letöltve (Pexels)
+    if stage_layer.has_stock(changes.get("layers")) or stage_layer.has_stock(changes.get("add_layers")):
+        changes = {**changes, "layers": await stage_layer.resolve(changes.get("layers"), notes),
+                   "add_layers": await stage_layer.resolve(changes.get("add_layers"), notes)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
     base = dict(spec["base"])
     card = base.get("end_card")
