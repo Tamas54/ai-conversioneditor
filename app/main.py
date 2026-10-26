@@ -155,6 +155,7 @@ from app.routes import formkit_web  # noqa: E402  (aláírások, adatprofil — 
 app.include_router(formkit_web.router)
 from app.routes import share as share_routes  # noqa: E402  (megosztás: meghívás, link, megosztva velem, ütközés)
 app.include_router(share_routes.router)
+from app.routes import live_captions as live_captions_routes; app.include_router(live_captions_routes.router)  # noqa: E402,E702  (élő előnézet: felirat — L3)
 from app.site.routes import build_router as _site_router  # noqa: E402  (nyilvános, többnyelvű oldalak)
 app.include_router(_site_router())
 from app.api_v1.app import v1 as _api_v1  # noqa: E402  (nyilvános REST API, saját OpenAPI-val)
