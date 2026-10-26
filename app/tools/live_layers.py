@@ -28,7 +28,7 @@ ott nincs abszolút függés. Ami 1,5 kockánál többel eltér (kézzel átidő
 
 Tárolás: a klipek a preview-cache gyökere alatt (<DATA_DIR>/preview-cache/_layers/<hash>.mp4), a nyilvántartás a
 Postgres preview_segments táblájában („v-<hash>”, a szakasz-előnézet LRU-ja: register / touch / sweep); a végig látható
-réteg köre a preview_cycles táblában. SQLite soha.
+réteg köre a preview_cycles táblában (Postgres; más tárolót nem használunk).
 
 Sor: elsőbbség a lejátszófejtől mért távolság szerint (ami a fej alatt van: 0; előtte: a távolság; mögötte: háromszoros
 távolság; akire a klip-végpont vár: −1). Saját, kicsi dolgozókészlet: LIVE_LAYERS_WORKERS (alap 2) = egyszerre ennyi
@@ -287,12 +287,10 @@ def _frames(ticks: Any, fps: float) -> int:
 
 
 def scene(pid: str) -> dict[str, Any]:
-    """A verzió grafikai rétegei a motor projektjéből (I/O: a projektfájl és a médiafájlok olvasása; motor nélkül) →
-    {fps, W, H, pw, ph, scale, frames, project, project_name, stamp, layers: [...]}; a rétegek a fő kompozíció
-    sorrendjében, alulról fölfelé (z = 0 a legalsó). Réteg: {id, name, i (a motor sorszáma, 1 = legfelső), z, Fa, Fb, N,
-    hash, persist, unsupported, late}."""
+    """A verzió grafikai rétegei a motor projektjéből (I/O: a meta, a projektfájl és a médiafájlok olvasása; motor
+    nélkül), a projektfájl idejéhez kötve gyorsítótárban → scene_from(…) + {pid, project, project_name, stamp}."""
     from app.storage import read_meta
-    from app.tools import fast_render, footage, video
+    from app.tools import footage, video
     meta = read_meta(pid) or {}
     spec = meta.get("spec") or {}
     base = spec.get("base") or {}
@@ -304,19 +302,44 @@ def scene(pid: str) -> dict[str, Any]:
     if key in _SCENES:
         _SCENES.move_to_end(key)
         return _SCENES[key]
+    W, H = int(base.get("width") or 0), int(base.get("height") or 0)
+    proxy = (int(base["proxy"]["w"]), int(base["proxy"]["h"])) if base.get("proxy") else footage.size(W, H) if W and H else None
+    sc = scene_from(d, proxy=proxy, assets=video.assets_of(pid))
+    sc.update(pid=pid, project=str(path), project_name=pname, stamp=stamp)
+    _SCENES[key] = sc
+    while len(_SCENES) > 16:
+        _SCENES.popitem(last=False)
+    return sc
+
+
+def _main_comp_of(d: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+    """A fő kompozíció (= video._main_comp: „Video”, különben a legtöbb rétegű / leghosszabb) → (elem-azonosító, elem)."""
+    comps = [(k, it) for k, it in (d.get("items") or {}).items() if (it.get("kind") or {}).get("type") == "Comp"]
+    hit = [c for c in comps if c[1].get("name") == "Video"]
+    if hit:
+        return hit[0]
+    if not comps:
+        return None, None
+    return max(comps, key=lambda c: (len(c[1]["kind"].get("layers") or []), c[1]["kind"].get("duration") or 0))
+
+
+def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: dict[str, str]) -> dict[str, Any]:
+    """Egy motor-projekt (.ecproj JSON) grafikai rétegei → {fps, fps_q, W, H, pw, ph, scale, frames, comp, main_id,
+    n_main, layers}; a rétegek a fő kompozíció sorrendjében, alulról fölfelé (z = 0 a legalsó). Réteg: {id, name, i (a
+    motor sorszáma, 1 = legfelső), z, Fa, Fb, N, hash, persist, unsupported, late}. assets: a projekt médiafájljai (név →
+    file_id) — a képek / klipek tartalma kerül a hash-be. proxy: a munkamásolat mérete (ebben a méretben rajzol a motor)."""
+    from app.tools import fast_render
     items = d.get("items") or {}
-    comp_name = video._main_comp(path)
-    main_id, main = next(((k, it) for k, it in items.items()
-                          if (it.get("kind") or {}).get("type") == "Comp" and it.get("name") == comp_name), (None, None))
+    main_id, main = _main_comp_of(d)
     if main is None:
         raise LookupError("the project has no main composition")
+    comp_name = main.get("name")
     mk = main["kind"]
     W, H = int(mk["width"]), int(mk["height"])
     fr = mk.get("frame_rate") or {}
     fps = float(fr.get("num", 30)) / float(fr.get("den", 1) or 1)
     frames = _frames(mk.get("duration"), fps)
-    pw, ph = (int(base["proxy"]["w"]), int(base["proxy"]["h"])) if base.get("proxy") else footage.size(W, H)
-    assets = video.assets_of(pid)
+    pw, ph = proxy or (W, H)
     canon = _Canon(items, assets)
     glob = {"v": LIVE_LAYERS_VERSION, "engine": _pc().engine_version(), "settings": d.get("settings"),
             "main": canon.value({k: v for k, v in mk.items() if k not in ("layers", "duration", "work_area", "markers",
@@ -371,13 +394,8 @@ def scene(pid: str) -> dict[str, Any]:
     out.reverse()                                                          # alulról fölfelé
     for z, e in enumerate(out):
         e["z"] = z
-    sc = {"pid": pid, "fps": fps, "fps_q": _fps_q(fps), "W": W, "H": H, "pw": pw, "ph": ph, "scale": pw / W,
-          "frames": frames, "project": str(path), "project_name": pname, "comp": comp_name, "main_id": main_id,
-          "stamp": stamp, "layers": out, "n_main": len(L)}
-    _SCENES[key] = sc
-    while len(_SCENES) > 16:
-        _SCENES.popitem(last=False)
-    return sc
+    return {"fps": fps, "fps_q": _fps_q(fps), "W": W, "H": H, "pw": pw, "ph": ph, "scale": pw / W, "frames": frames,
+            "comp": comp_name, "main_id": main_id, "layers": out, "n_main": len(L)}
 
 
 def _keys_of(o: Any) -> list[dict[str, Any]]:
