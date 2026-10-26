@@ -450,11 +450,11 @@ void main() {
     }
 
     // ---------- layers (stacked alpha) ----------
-    _layerTime(spec, t) {
+    _layerTime(spec, t) {             // the clip's own time at output t (+¼ frame: never ON a frame boundary)
       let lt = t - spec.t0;
       const lp = spec.loop;
       if (lp && lp.period > 0 && lt >= lp.intro + lp.period) lt = lp.intro + ((lt - lp.intro) % lp.period);
-      return lt;
+      return lt + 0.25 / this.fps;
     }
     _ensureLayer(spec) {
       let L = this.layers.get(spec.hash);
@@ -464,7 +464,7 @@ void main() {
       v.src = spec.url;
       this.stage.append(v);
       L = { el: v, tex: tex(this.gl, this.gl.LINEAR), spec, mt: null, ok: false };
-      const f = (_n, md) => { L.mt = md.mediaTime; L.ok = true; v.requestVideoFrameCallback(f); };
+      const f = (_n, md) => { L.mt = md.mediaTime; L.mtWall = now(); L.ok = true; v.requestVideoFrameCallback(f); };
       if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(f);
       v.addEventListener("seeked", () => { L.ok = true; L.mt = v.currentTime; });
       this.layers.set(spec.hash, L);
@@ -489,9 +489,14 @@ void main() {
         const lp = spec.loop;
         if (this.playing && on && !this.hold) {
           if (L.el.paused) { L.el.currentTime = lt; L.el.play().catch(() => { }); }
-          else if (cur != null && Math.abs(cur - lt) > 1.5 / fps) L.el.currentTime = lt;
+          else if (cur != null && Math.abs(cur - lt) > 3 / fps) L.el.currentTime = lt;
           else if (lp && lp.period > 0 && cur >= lp.intro + lp.period - 0.5 / fps) L.el.currentTime = lt;
+          else if (L.mt != null) {        // slaved to the footage clock: its presented frame vs where it should be
+            const lag = lt - (L.mt + (now() - (L.mtWall || now())) / 1000);
+            L.el.playbackRate = Math.abs(lag) < 0.3 / fps ? 1 : Math.min(2, Math.max(0.5, 1 + lag / 0.2));
+          }
         } else {
+          L.el.playbackRate = 1;
           if (!L.el.paused) L.el.pause();
           if (cur != null && Math.abs(cur - lt) > 0.5 / fps && !L.el.seeking) L.el.currentTime = lt;
         }
