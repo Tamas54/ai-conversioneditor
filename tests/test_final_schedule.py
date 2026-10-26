@@ -377,3 +377,84 @@ def test_background_programs_stop_while_an_edit_builds_and_go_on_after(monkeypat
             await task
         assert not engines._BG_PIDS
     asyncio.run(main())
+
+
+# ---------- végigfuttatva (motorral): vágás + szín után a végleges videó helyes, a színes munkamásolat nem készül ----------
+
+def _engine_ok() -> bool:
+    import shutil
+    from app.tools import video
+    return video.available() and bool(shutil.which("ffmpeg"))
+
+
+def _frame(path, t: float, vf: str = "null"):
+    import subprocess
+    import numpy as np
+    out = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1", "-vf",
+                          f"{vf},scale=320:180:flags=area,format=rgb24", "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+    return np.frombuffer(out, np.uint8).reshape(180, 320, 3).astype(float)[20:110, 60:260]   # (a feliratsáv és a sarkok nélkül)
+
+
+def _psnr(a, b) -> float:
+    import numpy as np
+    mse = float(np.mean((a - b) ** 2))
+    return 99.0 if mse < 1e-9 else 10 * float(np.log10(255 ** 2 / mse))
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_after_a_cut_and_a_colour_change_the_final_is_right_without_the_colour_copy(tmp_path, put_file, monkeypatch):
+    import subprocess
+    from app import jobs
+    from app.storage import output_path, read_meta
+    from app.tools import footage, video
+    pytest.importorskip("numpy")
+    monkeypatch.setenv("VIDEO_PREVIEW_LIVE", "1")                 # élő előnézet: a vágás / szín munkamásolata halasztható
+    monkeypatch.setenv("VIDEO_FINAL_QUIET_S", "0")
+    for name in ("_gate", "_bgate"):
+        monkeypatch.setattr(video, name, None)
+    clip = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=10", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "8", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(clip)], check=True)
+    fid = put_file(clip)
+    adj = {"brightness": 0.1, "saturation": 1.4}
+
+    async def until_done(jid: str) -> dict:
+        for _ in range(24):
+            st = await jobs.wait_status(jid, 15)
+            if st["status"] not in ("running", "queued"):
+                break
+        return st
+
+    async def main():
+        res = await video.overlay({"file_id": fid, "brand": "none", "final": "background",
+                                   "layers": [{"at": 6, "dur": 1.5, "type": "source", "text": "Forrás: teszt"}]})
+        ed = await video.edit(res["file_id"], {"adjust": adj, "cut": [{"from": 2, "to": 3}]}, final="background")
+        pid = ed["file_id"]
+        base = read_meta(pid)["spec"]["base"]
+        assert base.get("proxy_pending") and base["adjust"] == adj       # a szerkesztés nem várt munkamásolatra
+        assert (await jobs.wait_status(res["final"]["job_id"], 1))["status"] == "superseded"
+        st = await until_done(ed["final"]["job_id"])
+        assert st["status"] == "done", st
+        out = output_path(st["result"]["file_id"])
+        dur = float(json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(out)],
+                                              capture_output=True, text=True, check=True).stdout)["format"]["duration"])
+        assert dur == pytest.approx(7.0, abs=0.3)                       # a vágás benne van
+        made = [json.loads(k).get("adjust") or {} for k in (read_meta(fid) or {}).get("proxies") or {}]
+        assert adj not in made                                          # a színes munkamásolat nem készült el
+        m = read_meta(pid)
+        assert m["spec"]["base"].get("proxy_pending") and m.get("full_footage")
+        # a kép: a végleges videó 1,0 s-a = az eredeti 1,0 s-a a recepttel (a vágás 2–3 s között), 4,0 s = az eredeti 5,0 s;
+        # a szín: a végleges kép az új recept felé tolódott (a helyén álló másolat semleges — ha onnan jönne, ~0 lenne;
+        # a pontos szín a referencia színtér-átalakítása miatt itt nem mérhető, az S4-mérés nézte), a hely: a PSNR
+        eq = "eq=brightness=0.100:contrast=1.000:saturation=1.400"
+        for t_out, t_src in ((1.0, 1.0), (4.0, 5.0)):
+            fin = _frame(out, t_out)
+            own_f, plain_f = _frame(clip, t_src, eq), _frame(clip, t_src)
+            shift, want = float(fin.mean() - plain_f.mean()), float(own_f.mean() - plain_f.mean())
+            assert want > 3 and shift > 0.5 * want, (t_out, shift, want)    # a recept rajta van
+            here = max(_psnr(fin, _frame(clip, t_src + k / 10, eq)) for k in (-1, 0, 1))
+            other = max(_psnr(fin, _frame(clip, t_src + 1.0 + k / 10, eq)) for k in (-1, 0, 1))
+            assert here > other, (t_out, here, other)                   # és a vágás szerinti kocka
+    asyncio.run(main())
