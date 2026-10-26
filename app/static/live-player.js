@@ -180,6 +180,7 @@ void main() {
       this.layers = new Map();         // layer hash → {el, tex, spec}
       this.captions = null;
       this.stats = { drawn: 0, footFrames: 0, stalls: 0, waitMs: 0, seeks: [], switches: [], firstFrame: null, errors: [] };
+      this.trace = opts.trace ? [] : null;   // QA: every presented footage frame {w, ed, mt, t, el}
       this._t = 0;
       this._raf = 0;
       this._loop = this._loop.bind(this);
@@ -194,7 +195,16 @@ void main() {
       const s = { el: v, tex: t, url: null, copy: null, fresh: false, mt: null, wait0: null, uploaded: false };
       const onFrame = (_n, md) => {
         s.mt = md.mediaTime; s.fresh = true;
-        if (s === this.els[this.active]) { this.stats.footFrames++; this._onFootFrame(s, md); }
+        if (s === this.els[this.active]) {
+          this.stats.footFrames++;
+          if (this.trace) {
+            const r = this.ranges && this.ranges[this.idx];
+            this.trace.push({ w: +now().toFixed(2), ed: +(md.expectedDisplayTime || 0).toFixed(2), mt: md.mediaTime,
+              t: r ? +(r.t0 + md.mediaTime - r.src).toFixed(4) : null, el: this.active, idx: this.idx });
+            if (this.trace.length > 20000) this.trace.splice(0, 5000);
+          }
+          this._onFootFrame(s, md);
+        }
         v.requestVideoFrameCallback(onFrame);
       };
       if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(onFrame);
@@ -566,7 +576,7 @@ void main() {
     const cfg = JSON.parse(cfgEl.textContent), q = new URLSearchParams(location.search);
     const stage = document.getElementById("lp-stage"), btn = document.getElementById("lp-play"),
       bar = document.getElementById("lp-seek"), time = document.getElementById("lp-time"), msg = document.getElementById("lp-msg");
-    const p = new LivePlayer(stage, { preserve: q.has("qa") });
+    const p = new LivePlayer(stage, { preserve: q.has("qa"), trace: q.has("qa") });
     root.lp = p;
     let rev = null, dragging = false;
     const get = async () => { const r = await fetch(cfg.scene, { cache: "no-store" }); if (!r.ok) throw new Error(r.status + " " + (await r.text()).slice(0, 200)); return r.json(); };

@@ -132,6 +132,15 @@ def test_the_most_covering_copy_wins_and_cut_back_material_comes_from_another():
     assert [r["copy"] for r in fp2["ranges"]] == [0, None, 0] and fp2["missing"] == [[300.0, 320.0, None]]
 
 
+def test_the_copy_with_the_fewest_joints_wins_a_tie():
+    """Two neutral copies hold all of the new timeline: the parent's (one joint) beats an older, less cut one (two)."""
+    older = [[0.0, 1815.974]]
+    parent = [[0.0, 300.0], [306.0, 1815.974]]
+    new = [[0.0, 300.0], [306.0, 600.0], [606.0, 1815.974]]
+    fp = ls.footage_plan(base(keep=new), [copy("older.mp4", older), copy("parent.mp4", parent)])
+    assert fp["copies"][0]["id"] == "parent.mp4" and len(fp["ranges"]) == 2
+
+
 def test_inserted_clip_without_a_copy_is_missing_and_one_with_its_match_is_used():
     keep = [[0.0, 100.0], {"a": 2.0, "b": 12.0, "src": CLIP, "join": "dissolve", "match": {"gamma": 1.1}},
             {"a": 100.0, "b": 1815.974, "join": "dissolve"}]

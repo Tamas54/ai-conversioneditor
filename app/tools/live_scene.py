@@ -226,9 +226,20 @@ def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: 
     # piece by piece: the copies in order of how much of the new timeline they hold (then the colour preference)
     pieces = [(x["src"], _mkey(x), x["a"], x["b"], o) for o, x in _offsets(keep, dur)] if keep else [(None, "{}", 0.0, end, 0.0)]
 
-    def held(c: dict[str, Any]) -> float:
-        return sum(hi - lo for src, mk, a, b, _o in pieces for lo, hi, _s in _covers(c, src, mk, a, b, dur))
-    order = sorted(copies, key=lambda c: (-round(held(c), 3), rank(c)))
+    def alone(c: dict[str, Any]) -> tuple[float, int]:
+        """How much of the new timeline this copy holds, and in how many runs (each run = one range; fewer = fewer
+        switches between the two video elements)."""
+        got, runs, last = 0.0, 0, None
+        for src, mk, a, b, o in pieces:
+            for lo, hi, cs in _covers(c, src, mk, a, b, dur):
+                got += hi - lo
+                t0 = o + lo - a
+                if last is None or abs(last[0] - t0) > 1e-4 or abs(last[1] - cs) > 1e-4:
+                    runs += 1
+                last = (o + hi - a, cs + hi - lo)
+        return round(got, 3), runs
+    score = {id(c): alone(c) for c in copies}
+    order = sorted(copies, key=lambda c: (-score[id(c)][0], score[id(c)][1], rank(c)))
     used: list[dict[str, Any]] = []
     raw: list[dict[str, Any]] = []
     missing: list[list[Any]] = []
