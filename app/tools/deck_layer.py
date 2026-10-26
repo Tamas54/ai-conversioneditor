@@ -38,8 +38,12 @@ costs a few short clips.
 Background placement (the speaker in front of the slide): the slides are built full-frame like `front`; the speaker
 is put back over them from a person matte. Live preview: the browser segments the footage (MediaPipe Tasks Vision
 ImageSegmenter, Apache-2.0) during `matte_part`'s spans and draws the footage again through the mask over the
-"behind" layers (app/static/live-player.js). Final render: not wired yet (see the N2 report) — there the slides cover
-the speaker, and the check says so (`final_notes`).
+"behind" layers (app/static/live-player.js). Final render: not wired yet — there the slides cover the speaker, and
+the check says so (`final_notes`). The plan (prototype and numbers: .claude/qa/nx-deck/matte_final.py): a background
+step before the final render mattes ONLY the background spans (the browser's recipe: confidence → EMA 0.5 →
+smoothstep(0.35, 0.75), the multiclass model for steadier edges, guided-filter refine to the output size), caches the
+gray matte clip by (footage content, span, recipe) in the preview cache (Postgres-registered, LRU), and the builder puts
+a copy of the footage layer with that clip as its luma track matte above the deck's layers for each span.
 """
 from __future__ import annotations
 

@@ -251,6 +251,11 @@ def test_deck_in_the_engine_project_and_a_retime_changes_only_two_segment_clips(
     foot = next(L for it in proj["items"].values() if it.get("name") == "Video" for L in it["kind"]["layers"]
                 if L.get("name") == "Footage")
     assert "keys" in json.dumps(foot.get("props") or foot)                          # the footage moved aside (split)
+    sc = live_layers.scene_from(json.loads(output_path(res["file_id"]).read_text("utf-8")), proxy=None,
+                                assets=video.assets_of(res["file_id"]))
+    kinds = {(x["id"], x["kind"]) for x in live_layers.entries(sc, {})}
+    assert kinds == {(i, k) for i in ("L1", "L1.1", "L1.2", "L1.3") for k in ("loop", "outro")}   # stills: a short probe
+    assert all(x["probe"] == round(live_layers.STATIC_PROBE_S * 25) for x in live_layers.entries(sc, {}) if x["kind"] == "loop")
     ed = asyncio.run(video.edit(res["file_id"], {"layers": [{"id": "L1", "slides": [{"at": 2, "slide": 1}, {"at": 8, "slide": 2},
                                                                                    {"at": 12, "slide": 3}]}]},
                                 render=False))

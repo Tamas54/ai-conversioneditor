@@ -106,9 +106,12 @@ void main() {
   o = vec4(c, uAlpha);
 }`;
   // the speaker pass: the footage shader, its alpha from the person mask (in the copy's texture space) through levels
-  const FS_SPEAKER = FS_FOOT.replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform sampler2D uMask; uniform vec2 uLv;")
+  // (the mask is small — 256×144: five bilinear taps ±0.6 texel round its stair-steps before the levels cut them)
+  const FS_SPEAKER = FS_FOOT.replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform sampler2D uMask; uniform vec2 uLv, uMpx;\n" +
+      "float maskAt(vec2 p) { vec2 d = 0.6 * uMpx; return (2.0 * texture(uMask, p).r + texture(uMask, p + d).r + texture(uMask, p - d).r + " +
+      "texture(uMask, p + vec2(d.x, -d.y)).r + texture(uMask, p + vec2(-d.x, d.y)).r) / 6.0; }")
     .replace("o = vec4(c, uAlpha);", "float mk = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? " +
-      "smoothstep(uLv.x, uLv.y, texture(uMask, tc).r) : 0.0;\n  o = vec4(c, mk * uAlpha);");
+      "smoothstep(uLv.x, uLv.y, maskAt(tc)) : 0.0;\n  o = vec4(c, mk * uAlpha);");
   const MP_VER = "1.0.1";
   const MP_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@" + MP_VER;
   const MP_MODEL = "/static/vendor/mediapipe/selfie_segmenter_landscape.tflite";
@@ -409,6 +412,7 @@ void main() {
       gl.uniformMatrix3fv(P.u.uM, false, [m[0], m[3], 0, m[1], m[4], 0, m[2], m[5], 1]);
       gl.uniform1f(P.u.uAlpha, 1); gl.uniform1f(P.u.uOpacity, fm.opacity);
       gl.uniform2f(P.u.uLv, lv[0], lv[1]);
+      gl.uniform2f(P.u.uMpx, 1 / Math.max(1, mk.w), 1 / Math.max(1, mk.h));
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       this.stats.speaker = (this.stats.speaker || 0) + 1;
