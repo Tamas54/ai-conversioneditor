@@ -829,19 +829,21 @@ for (var i = 1; i <= app.project.numItems; i++) {
   if (!(c instanceof CompItem)) continue;
   for (var j = 1; j <= c.numLayers; j++) if (same(c.layer(j))) users.push([c, c.layer(j)]);
 }
-if (start !== null && (users.length !== 1 || users[0][0].id !== comp.id))   // (replaceSource-ot a motor még nem tud)
-  throw new Error("the footage is used by " + users.length + " layer(s), not only the base");
+var others = 0;              // (replaceSource-ot a motor még nem tud: egy darabnál minden használója a fő kompozícióban legyen —
+for (var u = 0; u < users.length; u++) if (users[u][0].id !== comp.id) others++;   // a felvétel és a pakli beszélője)
+if (start !== null && (users.length < 1 || others))
+  throw new Error("the footage is used by " + others + " layer(s) outside the main composition");
 item.replace(new File(file));
 var k = item.width / w0;
 for (var u = 0; u < users.length; u++) {
   var L = users[u][1];
   if (start !== null) {   // egy szakasz darabja a [start, …) időre: időtérképpel (a startTime a kulcsokat is eltolná)
-    var d = item.duration - 1 / comp.frameRate;
+    var d = item.duration - 1 / comp.frameRate, i0 = L.inPoint, o0 = L.outPoint;   // (a beszélő: csak a pakli idejére)
     L.timeRemapEnabled = true;
     var TR = L.property("ADBE Time Remapping");
     while (TR.numKeys > 0) TR.removeKey(1);
     TR.setValueAtTime(start, 0); TR.setValueAtTime(start + d, d);
-    L.inPoint = start; L.outPoint = Math.min(comp.duration, start + item.duration);
+    L.inPoint = Math.max(start, i0); L.outPoint = Math.min(comp.duration, start + item.duration, o0);
   }
   convert(L, k); n++;
 }

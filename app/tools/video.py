@@ -3212,7 +3212,7 @@ def _holders(D: dict[str, Any]) -> list[tuple[str, tuple[float, float], tuple[fl
     saját kompozíciójukkal, a jelenetek a teljes képkockán (a jelenetek egymással nem „egyszerre látszók”)."""
     out = [(f"Layer {ly['id']}", (ly["pos"][0] - ly["w"] / 2, ly["pos"][1] - ly["h"] / 2),
             (float(ly["at"]), float(ly["at"]) + float(ly["dur"])), ly["w"], ly["h"], ly.get("elements") or [])
-           for ly in D.get("layers") or []]
+           for ly in D.get("layers") or [] if not ly.get("speaker")]       # (a pakli beszélője: felvétel, nem grafika)
     return out + [("", (0.0, 0.0), (-9.0 - k, -9.0 - k), D["W"], D["H"], (sc.get("chart") or {}).get("elements") or [])
                   for k, sc in enumerate(D.get("scenes") or [])]
 
@@ -3971,9 +3971,18 @@ async def ensure_full(pid: str, *, background: bool = False, copy: Any = True) -
                                                                 if b.get("proxy") else {})}
         work = Path(tempfile.mkdtemp(prefix="video-full-", dir=str(temp_path("").parent)))
         try:
-            _link_assets(pid, work)
+            assets = _link_assets(pid, work)
+            spk_names: list[str] = []
+            from app.tools import deck_matte
+            if deck_matte.spans_of(D):                        # a háttérbe tett pakli: a beszélő a dia elé (deck_matte)
+                spk_names, spk_notes = await deck_matte.add_speakers(D, work, D["base"]["file"],
+                                                                      str(assets.get(D["base"]["file"]) or D["base"]["file"]))
+                for n_ in spk_notes:
+                    log.warning("teljes projekt %s: %s", pid, n_)
             await _build(D, work, [(str(a), str(b_)) for a, b_ in fb.get("lotties") or []], out_name="full.ecproj",
                          gate=_full_gate() if background else None)
+            for n_ in spk_names:                              # a maszk a projekt médiafájlja (render, szerkesztő)
+                add_asset(pid, n_, work / n_)
             dst = output_path(pid)
             tmp = dst.with_name(dst.name + ".full-tmp")
             shutil.copyfile(work / "full.ecproj", tmp)
@@ -5415,6 +5424,15 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             from app.tools import render_eta
             bg_eta = float((await render_eta.final(spec))["seconds"])
         deferred = bg_eta is not None and bool(D["captions"] or base.get("proxy_pending"))
+        spk_findings: list[str] = []
+        if not deferred and any(ly.get("type") == "deck" and ly.get("placement") == "background" for ly in layers):
+            # a háttérbe tett pakli: a beszélő a dia elé (a szerver maszkja, az élő előnézet receptjével) — ez a projekt a
+            # végleges; halasztott teljes projektnél az ensure_full teszi bele
+            from app.tools import deck_matte
+            step(2, 4, "cutting you out in front of the slides")
+            spk_names, spk_findings = await deck_matte.add_speakers(D, work, base["asset"],
+                                                                    str(shared or base.get("media_id") or base["file_id"]))
+            gfx_names = gfx_names + spk_names
         step(2, 4, "building the timeline")
         from app.convert.engines import foreground
         with foreground():                                    # a háttérmunka (más végleges render…) addig áll
@@ -5431,7 +5449,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                     with foreground():
                         out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
                 m_v, problems = m_v + v2, problems + f2
-        problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
+        problems = problems + spk_findings + _text_report(out, D)   # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
         problems, m_v = problems + lot_f, m_v + lot_v
         scripted = any((ly.get("chart") or {}).get("type") == "script" for ly in layers)

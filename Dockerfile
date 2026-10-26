@@ -298,6 +298,10 @@ ENV MEDIAPIPE_MODELS=/opt/models
 
 # --- App code ---
 COPY app /app/app
+# A háttérbe tett pakli beszélő-maszkja (app/tools/deck_matte.py) és az élő előnézet ugyanazzal a modellel dolgozik:
+# MediaPipe Selfie Segmenter landscape (Apache-2.0), a repóban (app/static/vendor/mediapipe/) — a sha256 rögzítve.
+ARG SELFIE_SEG_SHA256=490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e
+RUN echo "${SELFIE_SEG_SHA256}  /app/app/static/vendor/mediapipe/selfie_segmenter_landscape.tflite" | sha256sum -c -
 
 # --- Data dir for Railway Volume mount ---
 RUN mkdir -p /data/inputs /data/outputs /data/temp

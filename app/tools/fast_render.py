@@ -40,6 +40,7 @@ MAX_SPANS = 60               # ennyi szakasznál több: a közelebbieket összev
 INTER_DIR = "/usr/share/fonts/opentype/inter"
 _CAPTION = re.compile(r"^Caption (box )?(\d+)$")
 NOT_OVERLAY = "not a project on your own footage"
+SPEAKER = "Speaker "            # = deck_matte.SPEAKER: a háttérbe tett pakli beszélő-rétegének neve
 
 
 def enabled() -> bool:
@@ -154,7 +155,11 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     if retimed(f, float(info["dur"]), float(info["fps"])):
         return {"ok": False, "why": "the footage was cut or moved in time in the editor"}
     caps = [x for x in vis if _CAPTION.match(x["name"])]
-    gfx = [x for x in vis if x is not f and x not in caps]
+    # a háttérbe tett pakli beszélője (app/tools/deck_matte.py): a felvétel eleme még egyszer, a maszk-klip a track
+    # matte-ja — a szakaszán a motor a felvétellel együtt rajzol (átlátszatlan szakasz, a teljes méretű felvétellel)
+    spk = [x for x in vis if x is not f and x.get("matte") and x.get("file") == f.get("file")
+           and str(x["name"]).startswith(SPEAKER)]
+    gfx = [x for x in vis if x is not f and x not in caps and x not in spk]
     dur, fps = float(info["dur"]), float(info["fps"])
     lit: list[tuple[float, float]] = []
     for x in gfx + caps:
@@ -171,6 +176,7 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "why": f"“{x['name']}” uses a track matte"}
     pers = [x for x in gfx if min(dur, x["b"]) - max(0.0, x["a"]) >= PERSISTENT_S]
     short = [x for x in gfx if x not in pers]
+    lit += [(max(0.0, float(x["a"]) - 1 / fps), min(dur, float(x["b"]) + 1 / fps)) for x in spk]
     opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)] + lit   # a felvétel el van mozdítva
     return {"ok": True, "why": "", "footage": f, "captions": caps, "gfx": gfx, "persistent": pers, "short": short,
             "opaque": opaque}
