@@ -253,6 +253,62 @@ def test_while_the_working_copy_is_pending_the_engine_draws_footage_from_the_ori
     assert calls["engine"] == [("v-e-sw.ecproj", 2130, 2190, False)]
 
 
+def test_while_a_cut_is_pending_the_audio_chunk_is_mixed_from_the_new_timeline(tmp_path, monkeypatch):
+    """Vágás után, amíg az új munkamásolat készül, a projekt felvétel-rétegén a szülő másolata áll (a régi idővonallal).
+    A hangdarab keveréséhez a felvétel hangja az ÚJ idővonalból jön (footage.tl_audio az ablakra), egy klipben a
+    felvétel-rétegre cserélve. 10-26, a 30 perces bemutatón e nélkül 05:00-tól a hang 6,0 s-mal a kép mögött szólt (és a
+    tartalom szerinti hang-hash miatt a hibás darabok a gyorsítótárban maradtak)."""
+    from app.tools import video
+    calls: dict = {"engine": [], "tl_audio": [], "swap": []}
+
+    def made(path):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(b"x" * 2048)
+
+    async def run(*args, cwd=None, **k):
+        calls["engine"].append(args[args.index("--project") + 1])
+        made(Path(cwd) / args[args.index("--out") + 1])
+        return ""
+
+    async def ffmpeg(*args, cwd, capture=False):
+        out = Path(args[-1])
+        made(out if out.is_absolute() else Path(cwd) / out)
+        return b""
+
+    async def tl_audio(tl, dst, cwd):
+        calls["tl_audio"].append([(x.get("src"), x["a"], x["b"]) for x in tl.ss])
+        made(dst)
+
+    async def swap(project, asset, file, name, start):
+        calls["swap"].append((Path(project).name, asset, file, start))
+        return f"{name}.ecproj"
+
+    async def register(*a, **k):
+        return None
+    monkeypatch.setattr(video, "_run", run)
+    monkeypatch.setattr(pc, "_ffmpeg", ffmpeg)
+    monkeypatch.setattr(pc, "register", register)
+    monkeypatch.setattr(pc, "cache_root", lambda: tmp_path / "pc")
+    monkeypatch.setattr(footage, "tl_audio", tl_audio)
+    monkeypatch.setattr(pc, "_audio_swap", swap, raising=False)
+    tl = footage.Timeline([[0.0, 30.0], [33.0, 120.0]], {None: Path("/orig/IMG.MOV")}, {None: {"duration": 121.0, "audio_stream": 0}},
+                          {None: lambda tag: "null"}, (960, 540), 30.0)
+    ctx = {"source_id": "src.mov", "fps": 30.0, "fps_q": "30/1", "work": tmp_path, "project": "preview.ecproj", "comp": "Main",
+           "foot_asset": "footage-a.mp4", "pending": True, "tl": tl, "pw": 960, "ph": 540, "total": 117.0,
+           "audio_plan": [{"hash": "h1", "f0": 1200, "samples": 96000}]}                # 40–42 s (a vágás után)
+    asyncio.run(pc.render_audio_chunk(ctx, 0))
+    (w,) = calls["tl_audio"]
+    wa = math.floor((40.0 - 0.55) * 30) / 30                                     # (a kompozíció kockáján)
+    assert len(w) == 1 and w[0][0] is None and w[0][1] == pytest.approx(wa + 3.0, abs=1e-3)   # forrás = kimenet + 3 s
+    assert w[0][2] == pytest.approx(45.0 + 0.05 + 0.5, abs=1e-3)
+    assert [(c[0], c[1], c[3]) for c in calls["swap"]] == [("preview.ecproj", "footage-a.mp4", pytest.approx(wa, abs=1e-6))]
+    assert calls["engine"] == [calls["swap"][0][2].replace(".mov", "-sw.ecproj")]
+    for c in calls.values():
+        c.clear()
+    asyncio.run(pc.render_audio_chunk({**ctx, "pending": False, "audio_plan": [{"hash": "h2", "f0": 1200, "samples": 96000}]}, 0))
+    assert calls["engine"] == ["preview.ecproj"] and calls["swap"] == [] and calls["tl_audio"] == []
+
+
 def test_a_camera_move_after_a_cut_keeps_its_segments():
     """A ráközelítés szakaszai egy előtte lévő vágás után ugyanazok: a videó eleji nyugalmi kulcs (t = 0) ideje nem
     számít (10-25, valós anyagon: a mozgás első szakasza a vágás miatt piszkos lett)."""

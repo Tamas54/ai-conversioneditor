@@ -1174,9 +1174,16 @@ async def render_audio(ctx: dict[str, Any]) -> Path:
         if _done(d):
             return d
         async with video_preview.gate():
-            name = f"pc-audio-{uuid.uuid4().hex[:6]}.wav"
-            await video._run("render", "--project", ctx["project"], "--comp", ctx["comp"], "--out", name, "--format", "wav",
-                             "--json", cwd=ctx["work"])
+            tag = uuid.uuid4().hex[:6]
+            name = f"pc-audio-{tag}.wav"
+            extra: list[str] = []
+            proj = await _pending_audio(ctx, 0.0, float(ctx["total"]), f"pc-aw-{tag}", extra)
+            try:
+                await video._run("render", "--project", proj, "--comp", ctx["comp"], "--out", name, "--format", "wav",
+                                 "--json", cwd=ctx["work"])
+            finally:
+                for n in extra:
+                    (ctx["work"] / n).unlink(missing_ok=True)
             wav = ctx["work"] / name
             tmp = d.with_name(f"{d.name}.tmp-{uuid.uuid4().hex[:6]}")
             tmp.mkdir(parents=True)
@@ -1206,6 +1213,77 @@ async def render_audio(ctx: dict[str, Any]) -> Path:
 # lista szerinti helyén indul); a darab vége legfeljebb ~21 ms-mal hosszabb (az utolsó AAC-keret), a következő darab
 # ráíródik. VIDEO_PREVIEW_AUDIO_CHUNK=1: szakaszonként egy darab (a kép discontinuity-szerkezete pontosan; a prototípus
 # A2-je), ha egy lejátszó (iOS Safari) az eltérő szakaszolást nem viselné.
+
+PENDING_AUDIO_PAD_S = 0.5     # a vágott hang ablaka ennyivel bővebb (az ablak széle — ott úszik ki — a keverésen kívül esik)
+
+
+async def _pending_audio(ctx: dict[str, Any], a: float, b: float, tag: str, tmp: list[str]) -> str:
+    """A hang keveréséhez a projekt: amíg egy vágás / beszúrás munkamásolata készül (pending + idővonal), a projekt
+    felvétel-rétegén a SZÜLŐ másolata áll, a régi idővonallal — a motor abból keverné a felvétel hangját, a vágás után
+    eltolva (10-26, a 30 perces bemutatón: 05:00-tól a hang 6,0 s-mal a kép mögött), és a hang-hash (tartalom szerinti)
+    a kész másolat után sem változik, úgyhogy úgy is maradna. Ilyenkor a felvétel hangja az ÚJ idővonalból (az
+    eredetikből, a szakaszok úsztatásával, áttűnésével, hangerejével: footage.tl_audio) az [a, b] ablakra (+ tartalék),
+    egy fekete képű klipben a felvétel-rétegre kerül az ablak kezdetétől (_audio_swap), és a motor azt keveri a zenével
+    és a hangos rétegekkel, mint máskor. Különben (nincs idővonal-változás) a projekt maga. → a projektfájl neve."""
+    from app.tools import footage
+    tl = ctx.get("tl")
+    if not ctx.get("pending") or tl is None:
+        return ctx["project"]
+    fq = float(Fraction(ctx["fps_q"]))                       # a motor a réteg kezdőidejét a kompozíció kockájára teszi (mérve:
+    wa = math.floor(max(0.0, a - PENDING_AUDIO_PAD_S) * fq + 1e-6) / fq    # kockán kívül −16 ms) → az ablak kockán indul
+    wb = min(tl.length, b + PENDING_AUDIO_PAD_S)
+    if wb - wa < 0.05:                                       # (az ablak a zárókártyán: ott nincs felvétel-hang)
+        return ctx["project"]
+    sub = [{**tl.ss[i], "a": sa, "b": sb} for i, _src, sa, sb in footage.pieces(tl.ss, wa, wb)]
+    sub[0].pop("join", None)
+    aud, clip = f"{tag}.m4a", f"{tag}.mov"
+    tmp += [aud, clip]
+    await footage.tl_audio(footage.Timeline(sub, tl.paths, tl.infos, tl.chains, tl.size, tl.fps), ctx["work"] / aud, ctx["work"])
+    await _ffmpeg("-f", "lavfi", "-t", f"{wb - wa:.6f}", "-i", f"color=c=black:s={ctx['pw']}x{ctx['ph']}:r={ctx['fps_q']}",
+                  "-i", aud, "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                  "-c:a", "pcm_s16le", "-ar", str(AUDIO_SR), "-t", f"{wb - wa:.6f}", clip, cwd=ctx["work"])
+    name = await _audio_swap(ctx["work"] / ctx["project"], ctx["foot_asset"], clip, f"{tag}-sw", wa)
+    tmp += [name, f"{tag}-sw.jsx"]
+    return name
+
+
+# A hanghoz a felvétel-réteg a klipre, a klip 0-ja az ablak elejére: a réteg kezdőideje (startTime) tolódik. Az időtérkép
+# (footage.swap start-tal) a képre jó, de a motor a réteg HANGJÁT nem az időtérkép szerint keveri (mérve, 10-26: a
+# 0-tól induló ablak szólt, a későbbi csend lett) — a kezdőidő tolása a kulcsokat is viszi, ami a hangnak mindegy.
+_AUDIO_SWAP = r"""
+var asset = __ASSET__, file = __FILE__, start = __START__, item = null;
+for (var i = 1; i <= app.project.numItems; i++) {
+  var it = app.project.item(i);
+  if (it instanceof FootageItem && it.file && it.file.name == asset) item = it;
+}
+if (!item) throw new Error("the footage " + asset + " isn't in the project");
+item.replace(new File(file));
+var n = 0;
+for (var i = 1; i <= app.project.numItems; i++) {
+  var c = app.project.item(i);
+  if (!(c instanceof CompItem)) continue;
+  for (var j = 1; j <= c.numLayers; j++) {
+    var L = c.layer(j), mine = false;
+    try { mine = !!L.source && L.source.id === item.id; } catch (e) {}
+    if (!mine) continue;
+    if (L.timeRemapEnabled) L.timeRemapEnabled = false;
+    L.startTime = start; n++;
+  }
+}
+writeLn("swapped " + n);
+"""
+
+
+async def _audio_swap(project: Path, asset: str, file: str, name: str, start: float) -> str:
+    from app.tools import video
+    code = (_AUDIO_SWAP.replace("__ASSET__", json.dumps(asset)).replace("__FILE__", json.dumps(file))
+            .replace("__START__", f"{start:.6f}"))
+    (project.parent / f"{name}.jsx").write_text(code, "utf-8")
+    out = await video._run("script", f"{name}.jsx", project.name, "--save-as", f"{name}.ecproj", cwd=project.parent)
+    if "swapped" not in out or "swapped 0" in out:
+        raise RuntimeError(f"the footage's sound for the new cut couldn't be put in the project ({out.strip()[-200:]})")
+    return f"{name}.ecproj"
+
 
 AUDIO_CHUNK = max(1, int(os.getenv("VIDEO_PREVIEW_AUDIO_CHUNK", "15") or 15))
 AUDIO_SR = 48000
@@ -1255,9 +1333,11 @@ async def render_audio_chunk(ctx: dict[str, Any], k: int) -> str:
         first = math.floor(float(sa) * AUDIO_SR + 1e-6)           # a motor keverésének első mintája (mérve: a start lefelé)
         tag = uuid.uuid4().hex[:6]
         wav, tmp = ctx["work"] / f"pc-a{ch['f0']}-{tag}.wav", dst.with_name(f"{h}.tmp-{tag}.ts")
+        extra: list[str] = []
         async with video_preview.gate():
             try:
-                await video._run("render", "--project", ctx["project"], "--comp", ctx["comp"], "--out", wav.name, "--format", "wav",
+                proj = await _pending_audio(ctx, a, b, f"pc-a{ch['f0']}-{tag}-p", extra)
+                await video._run("render", "--project", proj, "--comp", ctx["comp"], "--out", wav.name, "--format", "wav",
                                  "--start", sa, "--end", sb, "--json", cwd=ctx["work"])
                 ins = ["-i", str(wav)] if wav.exists() and wav.stat().st_size > 1024 else \
                     ["-f", "lavfi", "-t", f"{b - a:.6f}", "-i", f"anullsrc=r={AUDIO_SR}:cl=stereo"]   # néma projekt: csend
@@ -1270,6 +1350,8 @@ async def render_audio_chunk(ctx: dict[str, Any], k: int) -> str:
             finally:
                 wav.unlink(missing_ok=True)
                 tmp.unlink(missing_ok=True)
+                for n in extra:
+                    (ctx["work"] / n).unlink(missing_ok=True)
         await register(h, sid, dst.stat().st_size)
     return h
 
