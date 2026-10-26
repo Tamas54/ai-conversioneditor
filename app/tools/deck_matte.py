@@ -42,18 +42,23 @@ log = logging.getLogger("aice.deck_matte")
 # shoulders half see-through; the browser runs the landscape model per frame and this one as its semantic gate
 MODEL_NAME = "selfie_multiclass_256x256.tflite"
 MODEL_SHA256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
-RECIPE = {"v": 2, "model": "selfie_multiclass_256x256", "live_model": "selfie_segmenter_landscape", "size": [256, 256],
-          "invert": True, "ema": 0.5, "motion": [0.03, 0.1], "levels": [0.35, 0.75], "blur": 0.6}
+# + the landscape model's CONFIDENT person (>= 0.9) within 4 texels of the multiclass person fills its holes: on a blown-out
+# cheek against the bright window the multiclass model cut a hole into the face (S4 25:03, 3.6 % of the person) — with
+# the fill: holes 0.58 -> 0.19 %, loss 2.3 -> 1.4 %, leak 0.14 -> 0.23 % (of the frame)
+LIVE_MODEL = "selfie_segmenter_landscape.tflite"
+LIVE_SHA256 = "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e"
+RECIPE = {"v": 3, "model": "selfie_multiclass_256x256", "live_model": "selfie_segmenter_landscape", "size": [256, 256],
+          "invert": True, "ema": 0.5, "motion": [0.03, 0.1], "levels": [0.35, 0.75], "blur": 0.6,
+          "fill": {"size": [256, 144], "min": 0.9, "r": 4}}
 SPEAKER = "Speaker "                       # the builder layer's name prefix (fast_render.classify reads it)
 VENDORED = Path(__file__).resolve().parent.parent / "static" / "vendor" / "mediapipe" / MODEL_NAME
 _CHECKED: dict[str, bool] = {}
 
 
-def model_path() -> Path:
-    """The model: MEDIAPIPE_MODELS/<name> when the image has it there, else the vendored copy (the one the browser uses)."""
-    d = os.getenv("MEDIAPIPE_MODELS", "/opt/models")
-    p = Path(d) / MODEL_NAME
-    return p if p.exists() else VENDORED
+def model_path(name: str = MODEL_NAME) -> Path:
+    """A model: MEDIAPIPE_MODELS/<name> when the image has it there, else the vendored copy (the one the browser uses)."""
+    p = Path(os.getenv("MEDIAPIPE_MODELS", "/opt/models")) / name
+    return p if p.exists() else VENDORED.with_name(name)
 
 
 def available() -> Optional[str]:
@@ -62,13 +67,16 @@ def available() -> Optional[str]:
         from mediapipe.tasks.python import vision  # noqa: F401
     except Exception:  # noqa: BLE001
         return "MediaPipe isn't installed on this server"
-    p = model_path()
-    if not p.exists():
-        return f"the person-matte model ({MODEL_NAME}) isn't installed on this server"
-    key = f"{p}:{p.stat().st_size}:{p.stat().st_mtime_ns}"
-    if key not in _CHECKED:
-        _CHECKED[key] = hashlib.sha256(p.read_bytes()).hexdigest() == MODEL_SHA256
-    return None if _CHECKED[key] else f"the person-matte model at {p} isn't the pinned one (sha256)"
+    for name, sha in ((MODEL_NAME, MODEL_SHA256), (LIVE_MODEL, LIVE_SHA256)):
+        p = model_path(name)
+        if not p.exists():
+            return f"the person-matte model ({name}) isn't installed on this server"
+        key = f"{p}:{p.stat().st_size}:{p.stat().st_mtime_ns}"
+        if key not in _CHECKED:
+            _CHECKED[key] = hashlib.sha256(p.read_bytes()).hexdigest() == sha
+        if not _CHECKED[key]:
+            return f"the person-matte model at {p} isn't the pinned one (sha256)"
+    return None
 
 
 # ---------- the recipe (numpy; = live-player.js emaStep + the speaker shader) ----------
@@ -93,6 +101,19 @@ def kernel(d: float = 0.6):
     edge = 2 * d * (1 - d) / 6.0
     corner = d * d / 6.0
     return np.array([[corner, edge, corner], [edge, c, edge], [corner, edge, corner]], dtype=np.float32)
+
+
+def fill_holes(m, l, recipe: dict[str, Any] = RECIPE):
+    """The multiclass mask m (0-1) + the landscape mask l where it is confident, near m's person (holes in a blown-out face)."""
+    import cv2
+    import numpy as np
+    f = recipe.get("fill")
+    if not f or l is None:
+        return m
+    r = int(f["r"])
+    lu = cv2.resize(l.astype(np.float32), (m.shape[1], m.shape[0]), interpolation=cv2.INTER_LINEAR)
+    near = cv2.dilate((m > 0.5).astype(np.uint8), np.ones((2 * r + 1, 2 * r + 1), np.uint8)) > 0
+    return np.maximum(m, np.where(near & (lu >= float(f["min"])), lu, 0.0)).astype(np.float32)
 
 
 def alpha_of(e, W: int, H: int, recipe: dict[str, Any] = RECIPE):
@@ -128,13 +149,16 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
                             "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-pix_fmt", "yuv420p",
                             "-g", str(max(1, int(fps))), "-color_range", "tv", "-movflags", "+faststart", str(dst)],
                            stdin=subprocess.PIPE)
-    opts = vision.ImageSegmenterOptions(base_options=BaseOptions(model_asset_path=str(model_path())),
-                                        running_mode=vision.RunningMode.VIDEO, output_confidence_masks=True,
-                                        output_category_mask=False)
-    e, k, done, t_seg = None, float(recipe["ema"]), 0, 0.0
+    def options(name: str):
+        return vision.ImageSegmenterOptions(base_options=BaseOptions(model_asset_path=str(model_path(name))),
+                                            running_mode=vision.RunningMode.VIDEO, output_confidence_masks=True,
+                                            output_category_mask=False)
+    fill = recipe.get("fill")
+    e, el, k, done, t_seg = None, None, float(recipe["ema"]), 0, 0.0
     last = None
     try:
-        with vision.ImageSegmenter.create_from_options(opts) as seg:
+        with vision.ImageSegmenter.create_from_options(options(MODEL_NAME)) as seg, \
+                vision.ImageSegmenter.create_from_options(options(LIVE_MODEL)) as seg_l:
             while done < n:
                 buf = dec.stdout.read(W * H * 3)
                 if len(buf) < W * H * 3:
@@ -149,7 +173,16 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
                     a = 1.0 - a
                 t_seg += time.time() - a_
                 e = a.copy() if e is None else ema_step(e, a, k, recipe.get("motion"))
-                last = alpha_of(e, W, H, recipe)
+                m = e
+                if fill:                                      # the landscape model's confident person fills the holes
+                    fw, fh = (int(v) for v in fill["size"])
+                    sl = cv2.resize(fr, (fw, fh), interpolation=cv2.INTER_AREA)
+                    rl = seg_l.segment_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(sl)),
+                                                 int(round(done * 1000 / fps)))
+                    al = rl.confidence_masks[0].numpy_view().astype(np.float32).reshape(fh, fw)
+                    el = al.copy() if el is None else ema_step(el, al, k, recipe.get("motion"))
+                    m = fill_holes(e, el, recipe)
+                last = alpha_of(m, W, H, recipe)
                 enc.stdin.write(last.tobytes())
                 done += 1
             while done < n and last is not None:              # (the copy ended early: its last frame stands, as in the project)

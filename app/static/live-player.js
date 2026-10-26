@@ -121,6 +121,7 @@ void main() {
   const SEM_FRESH_S = 1.0;           // an older semantic answer isn't used
   const SEM_GATE_R = 2;
   const SEM_FAST_MS = 110;
+  const SEM_FILL_MIN = 0.9, SEM_FILL_R = 3;   // (= deck_matte RECIPE.fill: 0.9, 4 texels of 256² ≈ 3 of 256×144)
   const SEM_EVERY_MS = 100;              // texels (of 256×144) around its person: the per-frame mask decides there
   function dilate(src, w, h, r, out, tmp) {   // binary (0/1) square max filter (2r+1), separable
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -443,10 +444,15 @@ void main() {
         for (let x = 0; x < w; x++) {
           const fx = Math.min(sw - 1, Math.max(0, (x + 0.5) * sw / w - 0.5)), x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), tx = fx - x0;
           const v = (sd[y0 * sw + x0] * (1 - tx) + sd[y0 * sw + x1] * tx) * (1 - ty) + (sd[y1 * sw + x0] * (1 - tx) + sd[y1 * sw + x1] * tx) * ty;
-          if (exact) u[y * w + x] = v; else mk.semBin[y * w + x] = v > 127 ? 1 : 0;
+          if (exact) u[y * w + x] = v;
+          mk.semBin[y * w + x] = v > 127 ? 1 : 0;
         }
       }
-      if (exact) return "exact";
+      if (exact) {                       // + this frame's landscape mask where it is sure, near the person (a blown-out
+        const near = dilate(mk.semBin, w, h, SEM_FILL_R, mk.semDil, mk.semTmp);       // cheek: = deck_matte.fill_holes)
+        for (let i = 0; i < n; i++) if (near[i] && e[i] >= SEM_FILL_MIN && e[i] * 255 > u[i]) u[i] = e[i] * 255;
+        return "exact";
+      }
       const r = SEM_GATE_R, bin = mk.semBin, dil = dilate(bin, w, h, r, mk.semDil, mk.semTmp);
       for (let i = 0; i < n; i++) mk.semTmp[i] = 1 - bin[i];
       const bgd = dilate(mk.semTmp, w, h, r, mk.semEro, new Uint8Array(n));     // the background grown: its complement is the

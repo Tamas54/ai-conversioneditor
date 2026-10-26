@@ -386,3 +386,20 @@ def test_background_deck_puts_the_speaker_over_the_slides_in_the_project(tmp_pat
                                        str(output_path(video.assets_of(res["file_id"])[mname]))],
                                       capture_output=True, text=True, check=True).stdout)["streams"][0]
     assert (probe["width"], probe["height"]) == (640, 360) and int(probe["nb_read_frames"]) == 7 * 25
+
+
+def test_hole_fill_takes_the_landscape_mask_only_where_it_is_sure_and_near_the_person():
+    import numpy as np
+    from app.tools import deck_matte as dm
+    m = np.zeros((256, 256), np.float32)
+    m[60:200, 80:180] = 1.0
+    m[100:140, 121:129] = 0.0                     # a hole in the person (the blown-out cheek)
+    l = np.zeros((144, 256), np.float32)
+    l[30:115, 80:180] = 0.95                      # the landscape model is sure there
+    l[5:20, 5:30] = 0.95                          # … and wrong far away (the wall picture)
+    l[60:80, 190:200] = 0.6                       # unsure next to the person
+    out = dm.fill_holes(m, l)
+    assert out[120, 125] > 0.9                    # the hole is filled
+    assert out[20, 20] == 0                       # far from the person: not added
+    assert out[120, 196] < 0.5                    # an unsure landscape edge: not added
+    assert dm.RECIPE["fill"] == {"size": [256, 144], "min": 0.9, "r": 4} and dm.RECIPE["model"] == "selfie_multiclass_256x256"
