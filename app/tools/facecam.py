@@ -344,6 +344,21 @@ def items(ly: dict[str, Any], fc: dict[str, Any], W: int, H: int, acc: list[floa
     return out
 
 
+def conflicts(layers: list[dict[str, Any]]) -> list[str]:
+    """Two things moving the footage at the same time (a speaker window and a split screen, or two windows) fight over
+    its keys → the check says so."""
+    movers = sorted(((float(ly["at"]), float(ly["at"]) + float(ly["dur"]), ly) for ly in layers
+                     if ly.get("speaker") or ly.get("type") == "split" or (ly.get("type") == "deck" and ly.get("placement") == "window")),
+                    key=lambda x: x[0])
+    out = []
+    for i, (a0, a1, la) in enumerate(movers):
+        for b0, b1, lb in movers[i + 1:]:
+            if b0 < a1 - 1e-3 and (la.get("speaker") or lb.get("speaker")):
+                out.append(f"Layers {la['id']} and {lb['id']} both move the footage from {b0:.1f} s to {min(a1, b1):.1f} s (a speaker "
+                           "window and a split / another window) — move one of them in time.")
+    return out
+
+
 def no_speaker(layers: list[dict[str, Any]]) -> None:
     """A video made from text has no speaker footage to put in a window."""
     hit = [ly["id"] for ly in layers if ly.get("speaker")]

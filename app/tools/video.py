@@ -2088,7 +2088,7 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         raise ValueError(f"{what} (effect): after_said / at_speech_end_after come from the footage's sound — they work on your "
                          "own footage (overlay, or editing such a video); give at instead.")
     if typ not in LAYER_TYPES:
-        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} | pip (or a chart type such as \"column\"), "
+        raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} | pip | facecam (or a chart type such as \"column\"), "
                          f"e.g. {_LAYER_EXAMPLE} — the full list: video(action=\"schema\", topic=\"layers\").")
     if typ == "deck":                                    # a pakli kezdete az első diájából; az egész pakli eltolása
         from app.tools import deck_layer
@@ -2261,6 +2261,11 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
                              "\"front\" (or leave placement out).")
         if sp:
             ly["speaker"] = sp
+            if not (base or {}).get("speaker") and raw.get("sound") is None and ly.get("chart"):
+                ly["chart"] = json.loads(json.dumps(ly["chart"]))       # a meglévő bevágásra tett ablak: a hangja ne
+                for e_ in ly["chart"].get("elements") or []:            # nyomja el a beszélőt (ha nem kérték)
+                    if e_.get("shape") == "image" and e_.get("sound") in ("replace", "mix"):
+                        e_["sound"] = "off"
     notes += [f"⚠ {what}: {n_[2:]}" if n_.startswith("⚠ ") else f"{what}: {n_}" for n_ in cnotes]
     fields = (_LAYER_FIELDS[f"fullscreen:{ly['kind']}"] + (("side",) if typ == "split" else ()) if typ in ("fullscreen", "split")
               else _LAYER_FIELDS[typ]) + _LAYER_COMMON + (_PIP_FIELDS if pip or asked_type in ("pip", "picture_in_picture", "inset") else ())
@@ -2857,6 +2862,9 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
                 span[0], span[1] = min(span[0], max(a0, z0)), max(span[1], min(a1, z1))
         problems += [f"Layer {ly['id']} ({ly['type']}) covers {what} from {_tc(sp[0])} to {_tc(sp[1])} — move it (position) or "
                      "change its time." for what, sp in hit.items()]
+    if any(ly.get("speaker") for ly in layers):
+        from app.tools import facecam
+        problems += facecam.conflicts(layers)
     return out, rows, problems + _overlaps(placed)
 
 
