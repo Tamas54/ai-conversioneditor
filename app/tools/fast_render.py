@@ -535,8 +535,10 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
                 return await footage.swap(work / opaque_proj, info["comp"], foot["file"], whole.name, "fr-opaque-full")
             name = f"fr-foot-{k:03d}.mp4"
             async with gate:
-                await footage.clip(base, src, work / name, a, b, plain, work)
-            return await footage.swap(work / opaque_proj, info["comp"], foot["file"], name, f"fr-opaque-{k:03d}", start=a)
+                # (frame-identical with the working copy by content: the layers and the speaker's matte were made on it)
+                skip = await footage.clip(base, src, work / name, a, b, plain, work, align_to=work / foot["file"])
+            return await footage.swap(work / opaque_proj, info["comp"], foot["file"], name, f"fr-opaque-{k:03d}", start=a,
+                                      skip=skip or 0.0)
         ops = [j for j in jobs if not j[4]]
         if whole is not None:
             p_full = await own(0, 0.0, dur)

@@ -737,6 +737,16 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
     try:                                         # a háttérbe tett pakli: a beszélő a dia elé (a böngésző maszkjával)
         from app.tools import deck_layer
         scene["matte"] = deck_layer.matte_part(spec, scene["layers"], total)
+        if scene["matte"]:                       # the speaker's matte clips (made once on the server, frame-locked)
+            from app.tools import deck_matte
+            scene["matte"]["clips"] = await deck_matte.live_clips(pid, spec)
+            for c in scene["matte"]["clips"]:
+                if c["status"] != "ready":
+                    mmss = lambda x: f"{int(round(x)) // 60}:{int(round(x)) % 60:02d}"    # noqa: E731
+                    scene["warnings"].append(
+                        f"the cut-out of you in front of the slides ({mmss(c['t0'])}–{mmss(c['t1'])}) is "
+                        + ("being made — until it is ready the slides show in front" + (f" (about {c['eta_s']} s)" if c.get("eta_s") else "")
+                           if c["status"] == "making" else f"not available ({c.get('reason') or c['status']}) — the slides show in front"))
     except Exception as e:                       # noqa: BLE001 — the rest of the scene plays without it
         log.warning("live scene: matte part (%s): %s", pid, e)
         scene["matte"] = None

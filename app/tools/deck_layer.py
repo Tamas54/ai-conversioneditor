@@ -595,6 +595,6 @@ def matte_part(spec: dict[str, Any], scene_layers: list[dict[str, Any]], total: 
         if lid in decks or lid.split(".")[0] in decks:
             e["behind"] = True
     spans.sort()
-    from app.tools.deck_matte import RECIPE           # the same recipe as the final render's matte
-    return {"spans": spans, "model": RECIPE["live_model"], "semantic": RECIPE["model"], "levels": RECIPE["levels"],
-            "ema": RECIPE["ema"], "motion": RECIPE["motion"]} if spans else None
+    # the matte itself is a clip made once on the server (deck_matte.live_clips → scene.matte.clips, live_scene.build):
+    # the player draws the speaker through it — no segmentation in the browser
+    return {"spans": spans, "clips": []} if spans else None
