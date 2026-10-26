@@ -185,6 +185,7 @@ void main() {
       this.stats = { drawn: 0, footFrames: 0, stalls: 0, waitMs: 0, seeks: [], switches: [], firstFrame: null, errors: [] };
       this.startLat = 0.15;           // s: a cold play() until its frames run (measured per lead, smoothed)
       this.trace = opts.trace ? [] : null;   // QA: every presented footage frame {w, ed, mt, t, el}
+      this.drawLog = opts.trace ? [] : null; // QA: every footage frame drawn on the canvas {w, el, mt, t}
       this._t = 0;
       this._raf = 0;
       this._loop = this._loop.bind(this);
@@ -553,6 +554,11 @@ void main() {
           this._drawFoot(fd.from, fr && fr.copyObj, t, 1);
           this._drawFoot(s, r && r.copyObj, t, Math.max(0, Math.min(1, (t - fd.t0) / fd.d)));
         } else this._drawFoot(s, r && r.copyObj, t, 1);
+        if (this.drawLog && s.mt !== this._lastDrawn) {   // QA: each new footage frame that reached the canvas
+          this._lastDrawn = s.mt;
+          this.drawLog.push({ w: +now().toFixed(2), el: this.active, mt: s.mt, t: r ? +(r.t0 + s.mt - r.src).toFixed(4) : null });
+          if (this.drawLog.length > 20000) this.drawLog.splice(0, 5000);
+        }
         if (fd && fd.a > 0) {                                   // the sound crosses over (tri: linear)
           const k = Math.max(0, Math.min(1, (t - fd.t0) / fd.a));
           fd.from.el.volume = 1 - k; s.el.volume = k;
