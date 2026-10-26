@@ -179,7 +179,8 @@ def test_matte_part_flags_the_background_deck_clips():
     m = deck_layer.matte_part(spec, scene, 1797.0)
     assert m["spans"] == [[1500, 1560]] and m["model"] == "selfie_segmenter_landscape"
     from app.tools.deck_matte import RECIPE                                         # the browser gets the server's recipe
-    assert (m["levels"], m["ema"], m["motion"], m["size"]) == (RECIPE["levels"], RECIPE["ema"], RECIPE["motion"], RECIPE["size"])
+    assert (m["levels"], m["ema"], m["motion"]) == (RECIPE["levels"], RECIPE["ema"], RECIPE["motion"])
+    assert m["semantic"] == "selfie_multiclass_256x256" and m["model"] == "selfie_segmenter_landscape"
     assert [bool(x.get("behind")) for x in scene] == [True, True, True, False, False, False]
     assert deck_layer.matte_part({"story": {"layers": []}}, [], 10) is None
 

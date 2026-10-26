@@ -2,8 +2,9 @@
 background decks' spans, with the live preview's recipe — so the export looks like what the owner saw in the browser.
 
 Recipe (RECIPE; app/static/live-player.js does the same per frame, app/tools/deck_layer.matte_part sends it):
-  · the working copy's frame scaled to 256×144 → MediaPipe Selfie Segmenter landscape (the vendored model,
-    app/static/vendor/mediapipe/, sha256 pinned) → the person confidence;
+  · the working copy's frame scaled to 256×256 → MediaPipe Selfie Segmenter MULTICLASS (the vendored model,
+    app/static/vendor/mediapipe/, sha256 pinned) → person = 1 − its background confidence (round 3; the browser makes
+    the same mask for a still frame and uses it as the gate of its per-frame landscape mask while playing);
   · motion-aware time smoothing: e = w·e + (1 − w)·a, w = k·(1 − smoothstep(m0, m1, |a − e|)) — where the mask moves
     (a turning head) the new outline is taken at once, a still edge stays calm;
   · the five-tap softening of the live shader (centre ×2 + four diagonal bilinear taps at ±0.6 texel = a 3×3 kernel on the
@@ -36,10 +37,13 @@ from typing import Any, Optional
 
 log = logging.getLogger("aice.deck_matte")
 
-MODEL_NAME = "selfie_segmenter_landscape.tflite"
-MODEL_SHA256 = "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e"
-RECIPE = {"v": 1, "model": "selfie_segmenter_landscape", "size": [256, 144], "ema": 0.5, "motion": [0.03, 0.1],
-          "levels": [0.35, 0.75], "blur": 0.6}
+# round 3 (measured on S4 against a BiRefNet-portrait reference, .claude/qa/nx-deck/r3): the MULTICLASS segmenter (person =
+# 1 − its background class) — the landscape model took the framed picture beside the head for a person and left the light
+# shoulders half see-through; the browser runs the landscape model per frame and this one as its semantic gate
+MODEL_NAME = "selfie_multiclass_256x256.tflite"
+MODEL_SHA256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
+RECIPE = {"v": 2, "model": "selfie_multiclass_256x256", "live_model": "selfie_segmenter_landscape", "size": [256, 256],
+          "invert": True, "ema": 0.5, "motion": [0.03, 0.1], "levels": [0.35, 0.75], "blur": 0.6}
 SPEAKER = "Speaker "                       # the builder layer's name prefix (fast_render.classify reads it)
 VENDORED = Path(__file__).resolve().parent.parent / "static" / "vendor" / "mediapipe" / MODEL_NAME
 _CHECKED: dict[str, bool] = {}
@@ -141,6 +145,8 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
                 res = seg.segment_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(small)),
                                             int(round(done * 1000 / fps)))
                 a = res.confidence_masks[0].numpy_view().astype(np.float32).reshape(sh, sw)
+                if recipe.get("invert"):                      # the multiclass model: person = 1 − background
+                    a = 1.0 - a
                 t_seg += time.time() - a_
                 e = a.copy() if e is None else ema_step(e, a, k, recipe.get("motion"))
                 last = alpha_of(e, W, H, recipe)

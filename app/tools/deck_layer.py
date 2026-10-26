@@ -596,5 +596,5 @@ def matte_part(spec: dict[str, Any], scene_layers: list[dict[str, Any]], total: 
             e["behind"] = True
     spans.sort()
     from app.tools.deck_matte import RECIPE           # the same recipe as the final render's matte
-    return {"spans": spans, "model": RECIPE["model"], "levels": RECIPE["levels"], "ema": RECIPE["ema"],
-            "motion": RECIPE["motion"], "size": RECIPE["size"]} if spans else None
+    return {"spans": spans, "model": RECIPE["live_model"], "semantic": RECIPE["model"], "levels": RECIPE["levels"],
+            "ema": RECIPE["ema"], "motion": RECIPE["motion"]} if spans else None

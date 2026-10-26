@@ -117,6 +117,24 @@ void main() {
   const MP_VER = "1.0.1";
   const MP_CDN = "/static/vendor/mediapipe/tasks-vision";      // self-hosted @mediapipe/tasks-vision@1.0.1 (Apache-2.0)
   const SLOW_MS = 30;
+  const MP_SEM = "/static/vendor/mediapipe/selfie_multiclass_256x256.tflite";
+  const SEM_FRESH_S = 1.0;           // an older semantic answer isn't used
+  const SEM_GATE_R = 2;
+  const SEM_FAST_MS = 110;
+  const SEM_EVERY_MS = 100;              // texels (of 256×144) around its person: the per-frame mask decides there
+  function dilate(src, w, h, r, out, tmp) {   // binary (0/1) square max filter (2r+1), separable
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let v = 0; const row = y * w;
+      for (let d = -r; d <= r; d++) { const xx = x + d; if (xx >= 0 && xx < w && src[row + xx]) { v = 1; break; } }
+      tmp[row + x] = v;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let v = 0;
+      for (let d = -r; d <= r; d++) { const yy = y + d; if (yy >= 0 && yy < h && tmp[yy * w + x]) { v = 1; break; } }
+      out[y * w + x] = v;
+    }
+    return out;
+  }
   // the WASM fileset for the page: the bundle would load the ES-module loader with a classic <script> (a syntax error
   // there) — so the loader is imported here, and the fileset gets no loader path (the bundle then takes ModuleFactory)
   // (set again before every task: the bundle deletes the global after use, and a second import() doesn't re-run the module)
@@ -222,7 +240,8 @@ void main() {
       // stalled the page to 6–7 fps; the mask is upscaled by the texture's linear filter and sharpened by the levels
       this.matteOpts = { mode: opts.matteMode || "sync", auto: opts.matteAuto !== false, delegate: opts.matteDelegate || "CPU",
         cdn: opts.matteCdn || LivePlayer.MP_CDN || MP_CDN, w: opts.matteW || 256, h: opts.matteH || 144,
-        motion: opts.matteMotion, levels: opts.matteLevels };
+        motion: opts.matteMotion, levels: opts.matteLevels, semantic: opts.matteSemantic !== false,
+        semDelegate: opts.matteSemDelegate, semEvery: opts.matteSemEvery };
       this.matteLog = null;            // QA: [] → every drawn speaker frame with its mask
       const vb = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, vb);
@@ -347,6 +366,92 @@ void main() {
         catch (e) { mk.seg = await make("CPU"); mk.delegate = "CPU"; }
         mk.loadMs = +(now() - t0).toFixed(1);
       } catch (e) { mk.err = String(e && e.message || e); this.stats.errors.push("matte: " + mk.err); }
+      if (o.semantic && (this.matte || {}).semantic) this._startSem(mk);
+    }
+    // the semantic matte (round 3, measured on S4 against a BiRefNet-portrait reference): the multiclass model (hair, face,
+    // body, clothes vs background) doesn't take the framed picture beside the head for a person and keeps the light
+    // shoulders opaque — but it costs ~380 ms a frame on a CPU (headless Chrome), so it runs in a worker on the newest
+    // frame; when its answer is for the drawn frame (paused, or a fast GPU) it IS the matte, otherwise it gates the
+    // per-frame landscape mask: nothing outside its person (+2 texels), all of its person's core (−2 texels)
+    async _startSem(mk) {
+      const t0 = now(), gl = document.createElement("canvas").getContext("webgl2");
+      let soft = false;
+      try { const d = gl && gl.getExtension("WEBGL_debug_renderer_info"); soft = !!(d && /swiftshader|llvmpipe|software/i.test(gl.getParameter(d.UNMASKED_RENDERER_WEBGL))); } catch (e) { }
+      const S = mk.sem = { worker: null, busy: false, data: null, w: 0, h: 0, mt: null, copy: null, n: 0, ms: [], loadMs: null, err: null,
+        delegate: this.matteOpts.semDelegate || (soft ? "CPU" : "GPU") };
+      try {
+        const w = new Worker("/static/live-matte-worker.js?v=" + MP_VER + "s2", { type: "module" });
+        await new Promise((res, rej) => {
+          const tm = setTimeout(() => rej(new Error("the semantic matte worker didn't start in 30 s")), 30000);
+          w.onmessage = ev => { const d = ev.data || {};
+            if (d.type === "ready") { clearTimeout(tm); S.delegate = d.delegate; S.loadMs = +(now() - t0).toFixed(1); res(); }
+            else if (d.type === "error") { clearTimeout(tm); rej(new Error(d.error)); } };
+          w.onerror = e => { clearTimeout(tm); rej(new Error(e.message || "worker error")); };
+          w.postMessage({ type: "init", cdn: this.matteOpts.cdn, model: MP_SEM, delegate: S.delegate, invert: true });
+        });
+        w.onmessage = ev => { const d = ev.data || {};
+          S.busy = false;
+          if (d.type === "error") { S.err = d.error; return; }
+          if (d.type !== "mask" || !d.data) return;
+          S.data = d.data; S.w = d.w; S.h = d.h; S.mt = d.mt; S.copy = d.copy; S.n++; S.ms.push(d.ms);
+          if (S.ms.length > 300) S.ms.splice(0, 150);
+          if (this.mk !== mk) return;
+          if (this._semFast()) {                             // a fast semantic answer IS the matte (no per-frame model)
+            this._maskTex(d.data, d.w, d.h);
+            mk.u8 = d.data; mk.texMt = d.mt; mk.how = "semantic";
+            mk.hows = mk.hows || {}; mk.hows.semantic = (mk.hows.semantic || 0) + 1;
+          } else mk.mt = null;                               // re-combine the drawn frame with the new answer
+        };
+        S.worker = w;
+      } catch (e) { S.err = String(e && e.message || e); this.stats.errors.push("semantic matte: " + S.err); }
+    }
+    // the semantic model answers within SEM_FAST_MS (a GPU: measured 63–82 ms on an Intel UHD iGPU in Chrome, against
+    // ~380–780 ms on a CPU): its answer alone is the matte, 2–3 frames behind — measured on S4 0.35–0.46 % leak, 3.0–3.4 %
+    // loss, better than the per-frame landscape mask gated by it, and the main thread runs no model at all
+    _semFast() {
+      const S = this.mk && this.mk.sem;
+      if (!S || !S.worker || S.ms.length < 5) return false;
+      const a = S.ms.slice(-10).sort((x, y) => x - y), med = a[Math.floor(a.length / 2)];
+      S.fast = S.fast ? med <= 2 * SEM_FAST_MS : med <= SEM_FAST_MS;   // (sticky: a slow moment doesn't flip the mode back)
+      return S.fast;
+    }
+    _feedSem(s, fmt) {
+      const S = this.mk && this.mk.sem;
+      if (!S || !S.worker || S.busy || (S.mt === fmt && S.copy === s.copy)) return;
+      // while playing, at most one request per SEM_EVERY_MS: on a weak GPU the model and the page's own drawing share it
+      // (measured, Intel UHD: back to back the footage fell to 18 fps; paused, at once)
+      if (this.playing && S.sentAt && now() - S.sentAt < (this.matteOpts.semEvery != null ? this.matteOpts.semEvery : SEM_EVERY_MS)) return;
+      S.busy = true; S.sentAt = now();
+      const R = this._recipe(), id = Date.now();
+      createImageBitmap(s.el, { resizeWidth: 256, resizeHeight: 256, resizeQuality: "medium" })
+        .then(bm => S.worker.postMessage({ type: "frame", id, mt: fmt, copy: s.copy, bitmap: bm, ema: R.k, motion: R.motion }, [bm]))
+        .catch(e => { S.busy = false; S.err = String(e && e.message || e); });
+    }
+    // the per-frame mask (e, w×h, 0–1) with the semantic answer → u (0–255); → how ("exact" | "gate" | "plain")
+    _combine(e, w, h, u, fmt, copy) {
+      const S = this.mk && this.mk.sem;
+      const n = w * h;
+      if (!S || !S.data || S.copy !== copy || S.mt == null || Math.abs(S.mt - fmt) > SEM_FRESH_S) {
+        for (let i = 0; i < n; i++) u[i] = e[i] * 255;
+        return "plain";
+      }
+      const sw = S.w, sh = S.h, sd = S.data, mk = this.mk;
+      if (!mk.semBin || mk.semBin.length !== n) { mk.semBin = new Uint8Array(n); mk.semDil = new Uint8Array(n); mk.semEro = new Uint8Array(n); mk.semTmp = new Uint8Array(n); }
+      const exact = Math.abs(S.mt - fmt) < 0.5 / this.fps;
+      for (let y = 0; y < h; y++) {                       // the semantic mask on this grid (bilinear)
+        const fy = Math.min(sh - 1, Math.max(0, (y + 0.5) * sh / h - 0.5)), y0 = Math.floor(fy), y1 = Math.min(sh - 1, y0 + 1), ty = fy - y0;
+        for (let x = 0; x < w; x++) {
+          const fx = Math.min(sw - 1, Math.max(0, (x + 0.5) * sw / w - 0.5)), x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), tx = fx - x0;
+          const v = (sd[y0 * sw + x0] * (1 - tx) + sd[y0 * sw + x1] * tx) * (1 - ty) + (sd[y1 * sw + x0] * (1 - tx) + sd[y1 * sw + x1] * tx) * ty;
+          if (exact) u[y * w + x] = v; else mk.semBin[y * w + x] = v > 127 ? 1 : 0;
+        }
+      }
+      if (exact) return "exact";
+      const r = SEM_GATE_R, bin = mk.semBin, dil = dilate(bin, w, h, r, mk.semDil, mk.semTmp);
+      for (let i = 0; i < n; i++) mk.semTmp[i] = 1 - bin[i];
+      const bgd = dilate(mk.semTmp, w, h, r, mk.semEro, new Uint8Array(n));     // the background grown: its complement is the
+      for (let i = 0; i < n; i++) u[i] = !bgd[i] ? 255 : dil[i] ? e[i] * 255 : 0;  // person's core (eroded) — opaque
+      return "gate";
     }
     async _startWorker(mk, t0) {
       let w = null;
@@ -381,8 +486,14 @@ void main() {
       mk.busy = false;
       if (d.type === "error") { mk.err = d.error; return; }
       if (d.type !== "mask" || !d.data) return;
-      this._maskTex(d.data, d.w, d.h);
-      mk.texMt = d.mt; mk.u8 = d.data; mk.n = (mk.n || 0) + 1;
+      const n = d.w * d.h;                     // the semantic gate here too (the worker's mask is the per-frame one)
+      if (!mk.wf || mk.wf.length !== n) mk.wf = new Float32Array(n);
+      for (let i = 0; i < n; i++) mk.wf[i] = d.data[i] / 255;
+      const u = new Uint8Array(n);
+      mk.how = this._combine(mk.wf, d.w, d.h, u, d.mt, d.copy);
+      mk.hows = mk.hows || {}; mk.hows[mk.how] = (mk.hows[mk.how] || 0) + 1;
+      this._maskTex(u, d.w, d.h);
+      mk.texMt = d.mt; mk.u8 = u; mk.n = (mk.n || 0) + 1;
       mk.ms.push(d.ms); mk.flick.push(d.flick); mk.soft.push(d.soft); mk.lag.push(now() - mk.sent);
       if (mk.ms.length > 600) for (const a of [mk.ms, mk.flick, mk.soft, mk.lag]) a.splice(0, 300);
     }
@@ -399,14 +510,16 @@ void main() {
       if (!mk || !mk.seg || s.el.readyState < 2 || s.el.seeking) return;
       const fmt = s.mt != null ? s.mt : s.el.currentTime, key = s.copy + "@" + fmt;
       if (key === mk.mt) return;
+      if (this._semFast()) { mk.mt = key; this._feedSem(s, fmt); return; }      // (the semantic answer is the matte)
       const R = this._recipe();
       if (mk.worker) {                         // one frame in flight; the next new frame goes when it answers
+        this._feedSem(s, fmt);
         if (mk.busy) return;
         mk.mt = key; mk.busy = true; mk.sent = now();
         if (mk.jump) { mk.worker.postMessage({ type: "reset" }); mk.jump = false; }
         const id = ++mk.id;
         createImageBitmap(s.el, { resizeWidth: this.matteOpts.w, resizeHeight: this.matteOpts.h, resizeQuality: "medium" })
-          .then(bm => mk.worker.postMessage({ type: "frame", id, mt: fmt, bitmap: bm, ema: R.k, motion: R.motion }, [bm]))
+          .then(bm => mk.worker.postMessage({ type: "frame", id, mt: fmt, copy: s.copy, bitmap: bm, ema: R.k, motion: R.motion }, [bm]))
           .catch(e => { mk.busy = false; mk.err = String(e && e.message || e); });
         return;
       }
@@ -423,6 +536,8 @@ void main() {
           const a = m.getAsFloat32Array(), w = m.width, h = m.height, n = w * h;
           if (!mk.ema || mk.ema.length !== n || mk.jump) { mk.ema = new Float32Array(a); mk.u8 = new Uint8Array(n); mk.jump = false; }
           const st = emaStep(mk.ema, a, mk.u8, R.k, R.motion);
+          mk.how = this._combine(mk.ema, w, h, mk.u8, fmt, s.copy);
+          mk.hows = mk.hows || {}; mk.hows[mk.how] = (mk.hows[mk.how] || 0) + 1;
           this._maskTex(mk.u8, w, h);
           mk.texMt = fmt;
           mk.flick.push(st.fl); mk.soft.push(st.soft);
@@ -432,8 +547,10 @@ void main() {
       mk.ms.push(now() - t0);
       if (mk.ms.length > 600) mk.ms.splice(0, 300);
       mk.n = (mk.n || 0) + 1;
-      if (this.matteOpts.auto && mk.ms.length >= 30 && !mk.switching) {        // too slow here: off the main thread
-        const recent = mk.ms.slice(-30), avg = recent.reduce((x, y) => x + y, 0) / recent.length;
+      this._feedSem(s, fmt);
+      if (this.playing) { mk.playMs = mk.playMs || []; mk.playMs.push(now() - t0); if (mk.playMs.length > 60) mk.playMs.shift(); }
+      if (this.matteOpts.auto && (mk.playMs || []).length >= 30 && !mk.switching) {   // too slow here (while playing): off the main thread
+        const recent = mk.playMs.slice(-30), avg = recent.reduce((x, y) => x + y, 0) / recent.length;
         if (avg > SLOW_MS && typeof Worker !== "undefined") {
           mk.switching = true;
           this._startWorker(mk, now()).then(ok => { mk.switching = !ok ? "failed" : false; if (ok) this.stats.matteSwitched = +avg.toFixed(1); });
@@ -473,7 +590,9 @@ void main() {
       if (!mk) return null;
       const q = xs => { const a = [...xs].sort((x, y) => x - y); return a.length ? +a[Math.min(a.length - 1, Math.floor(a.length * 0.95))].toFixed(2) : null; };
       const mean = xs => xs.length ? +(xs.reduce((x, y) => x + y, 0) / xs.length).toFixed(3) : null;
-      return { worker: !!mk.worker, switched_at_ms: this.stats.matteSwitched || null, delegate: mk.delegate, load_ms: mk.loadMs, err: mk.err, frames: mk.n || 0, ms_mean: mean(mk.ms),
+      const S = mk.sem;
+      return { sem: S ? { delegate: S.delegate, load_ms: S.loadMs, answers: S.n, ms_mean: mean(S.ms), ms_p95: q(S.ms), err: S.err } : null,
+        hows: mk.hows || null, worker: !!mk.worker, switched_at_ms: this.stats.matteSwitched || null, delegate: mk.delegate, load_ms: mk.loadMs, err: mk.err, frames: mk.n || 0, ms_mean: mean(mk.ms),
         ms_p95: q(mk.ms), lag_mean: mean(mk.lag), lag_p95: q(mk.lag),
         w: mk.w, h: mk.h, flicker_mean: mean(mk.flick.slice(1)), soft_frac: mean(mk.soft), speaker_draws: this.stats.speaker || 0 };
     }
