@@ -2063,6 +2063,13 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     if pip and any(k in raw for k in ("corner", "size", "aspect")):        # … a sarka / mérete / aránya változhat
         pip = _pip_opts(raw, what, pip)
     asked_type = typ
+    if typ in ("facecam", "speaker_window", "screen_recording"):   # = fullscreen + a speaker window (app/tools/facecam.py)
+        typ = "fullscreen"
+        if "speaker" not in raw and not (base or {}).get("speaker"):
+            raw = {**raw, "speaker": {}}
+            r = {**r, "speaker": {}}
+    want_sp = typ in ("fullscreen", "deck") and ("speaker" in raw or bool((base or {}).get("speaker"))) and \
+        raw.get("speaker", True) not in (False, "off", "none", "no")
     if typ in ("pip", "picture_in_picture", "inset"):
         r, pip = _pip_layer(r, what)
         raw, typ = {**raw, "chart": r["chart"]}, "chart"
@@ -2230,7 +2237,7 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
                                                                       "x": 0.5, "y": 0.5, "w": 1, "h": 1, "anim": "none",
                                                                       **({"clip": r["clip"]} if r.get("clip") else {}),
                                                                       "sound": r.get("sound") if r.get("sound") in ("replace", "mix", "off")
-                                                                      else ("replace" if typ == "fullscreen" else "off")}]}
+                                                                      else ("replace" if typ == "fullscreen" and not want_sp else "off")}]}
             else:                                     # szerkesztés: a már letöltött kép marad (asset), nem jön le újra
                 ly["image"], cc = base.get("image"), base["chart"]
             ly["chart"] = chart_of(cc, quiet=True)
@@ -2242,11 +2249,25 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
             ly["kicker"] = _clean(r.get("kicker"), 30, "Kicker")
         if typ == "split" and str(r.get("side") or "").lower() in ("left", "right", "top", "bottom"):
             ly["side"] = str(r["side"]).lower()
+    if typ in ("fullscreen", "deck") and ("speaker" in raw or (base or {}).get("speaker")):
+        from app.tools import facecam                  # a beszélő ablakban, a tartalom teljes képen (10-26)
+        sp_raw = raw["speaker"] if "speaker" in raw else base["speaker"]
+        if want_sp and raw.get("label") is not None:
+            sp_raw = {**(sp_raw if isinstance(sp_raw, dict) else {} if sp_raw in (None, True, "") else {"shape": sp_raw}),
+                      "label": raw["label"]}
+        sp = facecam.opts(sp_raw, what, (base or {}).get("speaker") if "speaker" in raw else None)
+        if sp and typ == "deck" and ly.get("placement") not in (None, "front"):
+            raise ValueError(f"{what} (deck): the speaker window goes with the slides on the whole frame — placement "
+                             "\"front\" (or leave placement out).")
+        if sp:
+            ly["speaker"] = sp
     notes += [f"⚠ {what}: {n_[2:]}" if n_.startswith("⚠ ") else f"{what}: {n_}" for n_ in cnotes]
     fields = (_LAYER_FIELDS[f"fullscreen:{ly['kind']}"] + (("side",) if typ == "split" else ()) if typ in ("fullscreen", "split")
               else _LAYER_FIELDS[typ]) + _LAYER_COMMON + (_PIP_FIELDS if pip or asked_type in ("pip", "picture_in_picture", "inset") else ())
     if typ == "chart" and asked_type in _CHART_TYPES:
         fields += ("type",)
+    if typ in ("fullscreen", "deck"):
+        fields += ("speaker",) + (("label",) if want_sp else ())
     if typ == "effect":
         from app.tools import effect_layers
         fields += effect_layers.fields()
@@ -2751,6 +2772,19 @@ def _scene_zones(D: dict[str, Any]) -> list[tuple[float, float, tuple[float, flo
     return out
 
 
+def _speaker_items(ly: dict[str, Any], items: list[dict[str, Any]], W: int, H: int, acc: list[float],
+                   safe: float) -> list[dict[str, Any]]:
+    """A beszélő ablakban (app/tools/facecam.py): a tartalom elemei a felvétel alá (under), az első viszi a felvétel kulcsait
+    és a maszkot (facecam), utánuk a gyűrű, az árnyék (az is a felvétel alá) és a felirat."""
+    if not ly.get("speaker") or not items:
+        return items
+    from app.tools import facecam
+    fc = facecam.plan(ly["speaker"], float(ly["at"]), float(ly["dur"]), W, H, safe)
+    items = [{**it, "under": True} for it in items]
+    items[0]["facecam"] = {**fc, "at": float(ly["at"]), "dur": float(ly["dur"])}
+    return items + facecam.items(ly, fc, W, H, acc, _tx)
+
+
 def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang: str, acc: list[float],
                 safe: float, zones: Optional[list] = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """A rétegek a builder-nek (D.layers), az idővonal-soraik (előnézet, render scene=L2), és ami nem stimmel
@@ -2769,7 +2803,7 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             dur = round(total - at, 3)
         if ly["type"] == "deck":                       # pakli: hordozó + diánként egy réteg (deck_layer.items)
             from app.tools import deck_layer
-            out += deck_layer.items({**ly, "dur": dur}, W, H, total)
+            out += _speaker_items({**ly, "dur": dur}, deck_layer.items({**ly, "dur": dur}, W, H, total), W, H, acc, safe)
             rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "deck", "layer": True})
             placed.append((ly, at, at + dur, deck_layer.box(ly, W, H)))
             continue
@@ -2800,6 +2834,15 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
                             "shape": _wave_shape(ly.get("bars", 28), ly["id"]), "color": _rgb(ly.get("color")) if ly.get("color") else acc}
         if (ly.get("chart") or {}).get("type") == "graphic":
             _probe_texts(item["elements"], ly["id"])
+        if ly.get("speaker"):                          # a tartalom a felvétel ALÁ, a felvétel az ablakba (facecam.py)
+            if not (ly.get("anim") or {}).get("in"):
+                item["anim"]["in"] = "none"            # a zsugorodó felvétel fedi fel (nem úszik be)
+            if not (ly.get("anim") or {}).get("out"):
+                item["anim"]["out"] = "none"
+            out += _speaker_items({**ly, "dur": dur}, [item], W, H, acc, safe)
+            rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": ly["type"], "layer": True})
+            placed.append((ly, at, at + dur, b))
+            continue
         out.append(item)
         rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": ly["type"], "layer": True})
         placed.append((ly, at, at + dur, b))
@@ -3021,6 +3064,8 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
     lnotes: list[str] = []
     layers = layers_from(body.get("layers"), text, lnotes)      # időkódos rétegek a fő idővonalon (a forrás számaival)
     _no_effects(layers)
+    from app.tools import facecam
+    facecam.no_speaker(layers)
     if body.get("scenes"):                  # a kliens jelenetterve: nem tervezünk újra, pontosan ez lesz
         return await _make_from_scenes(body, step, fmt, text, title_hint, site, pictures, layers, lnotes)
     if len(text) < 20:
@@ -6725,6 +6770,8 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     lnotes: list[str] = []
     story["layers"] = apply_layer_changes(story.get("layers") or [], changes, layer_src, lnotes)
     _no_effects(story["layers"])
+    from app.tools import facecam
+    facecam.no_speaker(story["layers"])
     if isinstance(changes.get("music"), dict):           # {"file_id"?, "mood"?} → a régi két kulcs
         mm = _make_music(changes["music"], changes.get("music_file_id"))
         changes = {**{k: v for k, v in changes.items() if k != "music"},
