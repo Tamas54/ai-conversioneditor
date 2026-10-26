@@ -36,13 +36,15 @@ motor-render; a video_preview.gate()-et NEM kérjük. Miért (mérve, 10-26, S4)
 szerkesztés után a szakasz-előnézet (#44) háttér-feltöltése 7–9 s-os futamokkal tartja mindkét helyét — a megváltozott
 réteg klipje mögéjük állna. A feltöltés nice 10-zel fut (engines.background), ezek a renderek nem: a CPU-t a réteg-klip
 kapja. Kettőnél több dolgozó nem ér semmit: egy motor-render ~10 magot visz el a 16-ból, két egyidejű render együtt csak
-~5 %-kal gyorsabb, mint egymás után — több csak a terhelést emelné. A dolgozók üres kontextusban indulnak (a hívó nice-a,
-heavy-helye nem öröklődik), a munka tenancyje a sorba álláskor rögzül.
+~5 %-kal gyorsabb, mint egymás után — több csak a terhelést emelné. A fejtől LIVE_LAYERS_NEAR_S-nél (20 s) messzebbi
+klip nice 10-zel készül, így a fej alatti / várt klip kapja a CPU-t. A dolgozók üres kontextusban indulnak (a hívó
+nice-a, heavy-helye nem öröklődik), a munka tenancyje a sorba álláskor rögzül.
 """
 from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import contextvars
 import hashlib
 import json
@@ -51,6 +53,7 @@ import math
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 from fractions import Fraction
@@ -81,6 +84,16 @@ def _env_num(name: str, default: float, lo: float) -> float:
 
 def n_workers() -> int:
     return int(_env_num("LIVE_LAYERS_WORKERS", 2, 1))
+
+
+def near_s() -> float:
+    """Ennél messzebb a lejátszófejtől a klip a háttérben (nice 10) készül."""
+    return _env_num("LIVE_LAYERS_NEAR_S", 20.0, 0.0)
+
+
+def _engines():
+    from app.convert import engines
+    return engines
 
 
 def wait_s() -> float:
@@ -286,9 +299,17 @@ def _frames(ticks: Any, fps: float) -> int:
     return round(float(ticks or 0) / TPS * fps)
 
 
+_SCENE_LOCK = threading.Lock()          # a scene() szálból is fut (asyncio.to_thread): a gyorsítótárak egy zár alatt
+
+
 def scene(pid: str) -> dict[str, Any]:
     """A verzió grafikai rétegei a motor projektjéből (I/O: a meta, a projektfájl és a médiafájlok olvasása; motor
     nélkül), a projektfájl idejéhez kötve gyorsítótárban → scene_from(…) + {pid, project, project_name, stamp}."""
+    with _SCENE_LOCK:
+        return _scene(pid)
+
+
+def _scene(pid: str) -> dict[str, Any]:
     from app.storage import read_meta
     from app.tools import footage, video
     meta = read_meta(pid) or {}
@@ -344,7 +365,7 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
     glob = {"v": LIVE_LAYERS_VERSION, "engine": _pc().engine_version(), "settings": d.get("settings"),
             "main": canon.value({k: v for k, v in mk.items() if k not in ("layers", "duration", "work_area", "markers",
                                                                           "poster_time")}),
-            "size": [pw, ph], "quality": QUALITY, "enc": [CRF, PRESET, "stacked-alpha-709-tv"]}
+            "size": [pw, ph], "quality": QUALITY, "enc": [CRF, PRESET, "stacked-alpha-709-tv-planar"]}
     gh = _sha(glob)
     L = mk.get("layers") or []
     out: list[dict[str, Any]] = []
@@ -592,11 +613,12 @@ def stack_args(src: str, dst: str, fps_q: str, first: int = 0, count: Optional[i
     alul az alfa luma-ként 16–235 között, Cb = Cr = 128), H.264 yuv420p BT.709 tv, GOP ≤ 1 s, +faststart."""
     fps = float(Fraction(fps_q))
     trim = f"trim=start_frame={first}" + (f":end_frame={first + count}" if count is not None else "") + ",setpts=PTS-STARTPTS,"
-    graph = (f"[0:v]{trim}scale=flags=accurate_rnd+full_chroma_int:sws_dither=none,format=yuva444p,split=2[c][a];"
-             "[c]format=yuv444p[top];"
-             "[a]extractplanes=a,lut=c0='16+val*219/255',split=3[y][u0][v0];[u0]lut=c0=128[u];[v0]lut=c0=128[v];"
-             "[y][u][v]mergeplanes=0x001020:yuv444p[bot];"
-             "[top][bot]vstack,scale=flags=accurate_rnd:sws_dither=none,format=yuv420p[out]")
+    # egyetlen swscale-lépés (12 → 8 bit, 4:4:4 → 4:2:0, az alfa teljes felbontásban), a többi síkmásolás: mérve (10-26,
+    # 300 kocka, load 16) 3,1 s helyett 1,8 s, a kép 56 dB-re ugyanaz
+    graph = (f"[0:v]{trim}scale=flags=accurate_rnd:sws_dither=none,format=yuva420p,extractplanes=y+u+v+a[y][u][v][a];"
+             "[u]split=2[u1][u2];[v]split=2[v1][v2];[y][u1][v1]mergeplanes=0x001020:yuv420p[top];"
+             "[a]lut=c0='16+val*219/255'[ya];[u2]lut=c0=128[uu];[v2]lut=c0=128[vv];[ya][uu][vv]mergeplanes=0x001020:yuv420p[bot];"
+             "[top][bot]vstack[out]")
     gop = max(1, math.floor(fps))
     return ["-i", src, "-filter_complex", graph, "-map", "[out]", "-an", "-r", fps_q,
             "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF), "-pix_fmt", "yuv420p", "-g", str(gop),
@@ -782,7 +804,10 @@ async def _worker(st: _State) -> None:
         t_user = tenancy.set_user(job.uid)
         t_sh = tenancy.enter_shared(job.shared)
         try:
-            res = await render(job.pid, job.sc, job.x)
+            # a fejtől távoli klip nice 10-zel (engines.background, mint a szakasz-előnézet feltöltése): a fej alatti /
+            # várt klip a CPU-t kapja (mérve, hidegen: a két dolgozó egyidejű renderje egymást lassította, 300 kocka 6,5 s)
+            with (_engines().background() if job.prio > near_s() else contextlib.nullcontext()):
+                res = await render(job.pid, job.sc, job.x)
             res.update(wall_s=round(time.monotonic() - t0, 3), waited_s=round(t0 - job.t_enq, 3), prio=round(job.prio, 2),
                        load=round(os.getloadavg()[0], 2))
             st.stats["renders"] += 1
