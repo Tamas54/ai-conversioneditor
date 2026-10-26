@@ -278,6 +278,23 @@ ENV MUSIC_DIR=/opt/music
 # --- Python deps ---
 COPY requirements.txt constraints.txt /app/
 RUN pip install --no-cache-dir -r /app/requirements.txt -c /app/constraints.txt
+# Effekt-rétegek (villám a kézből, app/tools/fx): MediaPipe Hand + Pose Landmarker (Apache-2.0, a modellek is), CPU.
+# --no-deps: a MediaPipe az opencv-contrib-python-t húzná (ütközne az opencv-python-headless-szel, ugyanaz a cv2 modul);
+# a Tasks API-nak a már telepített numpy / flatbuffers / matplotlib + absl-py, sounddevice kell (10-26, py3.10-en mérve).
+# A pózmodell a „latest” (a próba ezzel készült; a /1/ más fájl) — a sha256 megfogja, ha a Google kicseréli.
+ARG MEDIAPIPE_VERSION=1.1.1
+ARG HAND_TASK_SHA256=fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1
+ARG POSE_TASK_SHA256=4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad
+RUN set -eux; pip install --no-cache-dir --no-deps "mediapipe==${MEDIAPIPE_VERSION}" "absl-py~=2.3" "sounddevice~=0.5"; \
+    mkdir -p /opt/models; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/hand_landmarker.task \
+        https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task; \
+    echo "${HAND_TASK_SHA256}  /opt/models/hand_landmarker.task" | sha256sum -c -; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/pose_landmarker_full.task \
+        https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task; \
+    echo "${POSE_TASK_SHA256}  /opt/models/pose_landmarker_full.task" | sha256sum -c -; \
+    python3 -c "from mediapipe.tasks.python import vision"
+ENV MEDIAPIPE_MODELS=/opt/models
 
 # --- App code ---
 COPY app /app/app
