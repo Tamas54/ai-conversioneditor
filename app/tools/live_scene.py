@@ -195,7 +195,7 @@ def _covers(copy: dict[str, Any], src: Optional[str], match: str, a: float, b: f
     return sorted(out)
 
 
-def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: str = "neutral") -> dict[str, Any]:
+def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: str = "own") -> dict[str, Any]:
     """The footage ranges of a version, from the copies that exist (pure).
 
     base: spec.base (keep, adjust, auto, plain, duration); copies: [{"id": file id, "keep", "adjust", "auto", "w", "h",
@@ -203,8 +203,11 @@ def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: 
     "copies": [the copies used, in index order], "end": the footage's end in output time, "missing": [[t0, t1, src]] (no
     copy holds it — e.g. an inserted clip while its copy is pending)}.
 
-    One range when a copy of exactly this timeline exists (preference: `neutral` — adjust {} so the shader can colour
-    it; else the one baked with the version's own recipe; else any). Otherwise piece by piece from the copies that hold
+    One range when a copy of exactly this timeline exists (preference `own`, the default: the one baked with the
+    version's own recipe — the server's own picture, exact colour and timing; else a neutral one (adjust {}) the shader
+    colours; else any (the shader undoes its recipe). prefer="neutral" puts the neutral copy first. Measured 10-26 on
+    S4: the neutral copy there — a smart cut of the 30 fps uncut copy — runs 54–85 ms EARLY against the original
+    (by content), the version's own copy +13…+45 ms; so the own copy is the default). Otherwise piece by piece from the copies that hold
     the most of the new timeline (the parent's copy after a pending cut), adjacent pieces of one copy merged."""
     from app.tools import footage
     dur = float((base.get("plain") or {}).get("duration") or base.get("duration") or 0)
@@ -564,7 +567,7 @@ def _music(pid: str, opts: dict[str, Any], meta: dict[str, Any]) -> Optional[dic
     return {"url": _rel(public_url(fid)), "start": float(opts.get("music_start") or 0), "level": opts.get("music_level")}
 
 
-async def build(pid: str, *, prefer: str = "neutral") -> dict[str, Any]:
+async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
     """The version's scene JSON (see the module docstring and the plan). Raises LookupError for a project that isn't on
     the user's own footage, FileNotFoundError for a missing one."""
     from app.storage import output_path, public_url, read_meta

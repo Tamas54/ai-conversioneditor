@@ -91,12 +91,14 @@ def test_auto_recipe_counts_with_its_measurement():
 
 # ---------- the footage ranges ----------
 
-def test_one_range_on_the_copy_of_this_timeline_neutral_preferred():
+def test_one_range_on_the_copy_of_this_timeline_own_recipe_first():
     b = base(adjust=EQ)
-    cs = [copy("baked.mp4", None, EQ, own=True), copy("neutral.mp4", None, {})]
+    cs = [copy("neutral.mp4", None, {}), copy("baked.mp4", None, EQ, own=True)]
     fp = ls.footage_plan(b, cs)
-    assert fp["ranges"] == [{"t0": 0.0, "t1": 1815.974, "copy": 0, "src": 0.0}] and fp["copies"][0]["id"] == "neutral.mp4"
-    assert ls.footage_plan(b, cs, prefer="own")["copies"][0]["id"] == "baked.mp4"
+    assert fp["ranges"] == [{"t0": 0.0, "t1": 1815.974, "copy": 0, "src": 0.0}] and fp["copies"][0]["id"] == "baked.mp4"
+    assert ls.footage_plan(b, cs, prefer="neutral")["copies"][0]["id"] == "neutral.mp4"
+    # a new colour (pending): no copy has it — the neutral one, coloured by the shader, before undoing another recipe
+    assert ls.footage_plan(base(adjust={"contrast": 1.3}), cs)["copies"][0]["id"] == "neutral.mp4"
     assert ls.footage_plan(b, [copy("other.mp4", None, {"contrast": 1.5})])["copies"][0]["id"] == "other.mp4"   # any: diff
 
 

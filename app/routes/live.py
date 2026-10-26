@@ -31,13 +31,13 @@ _STATIC = Path(__file__).resolve().parent.parent / "static"
 @router.get("/api/video/{project_id}/live.json")
 async def live_scene(project_id: str, t: str = Query(..., description="signed token (as preview.json)"),
                      u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)"),
-                     prefer: str = Query("neutral", description="neutral | own: which copy of the same timeline")):
+                     prefer: str = Query("own", description="own | neutral: which copy of the same timeline")):
     from app.tools import live_scene as ls, preview_serve as ps
     if not ps.verify(project_id, None, t, u):
         raise HTTPException(403, "invalid or expired token")
     tenancy.set_user(u)
     try:
-        scene = await ls.build(project_id, prefer="own" if prefer == "own" else "neutral")
+        scene = await ls.build(project_id, prefer="neutral" if prefer == "neutral" else "own")
     except FileNotFoundError:
         raise HTTPException(404, "no such video project") from None
     except LookupError as e:
