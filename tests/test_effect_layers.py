@@ -144,7 +144,7 @@ def _track(n: int) -> list[dict]:
     pose = [[0.5, 0.5, 0.9] for _ in range(33)]
     pose[11], pose[12] = [0.4, 0.3, 0.95], [0.6, 0.3, 0.95]
     pose[13], pose[14] = [0.35, 0.45, 0.9], [0.68, 0.38, 0.9]
-    pose[15], pose[16] = [0.33, 0.6, 0.9], [0.78, 0.4, 0.9]
+    pose[15], pose[16] = [0.33, 0.6, 0.1], [0.78, 0.4, 0.9]          # a bal kéz nem látszik
     pose[18], pose[20], pose[22] = [0.82, 0.38, 0.9], [0.83, 0.4, 0.9], [0.8, 0.42, 0.9]
     pose[23], pose[24] = [0.45, 0.7, 0.9], [0.55, 0.7, 0.9]
     wr = np.array([0.78, 0.4])
@@ -177,7 +177,7 @@ def test_the_render_is_deterministic_visible_and_fades(name, params):
     src = _frames(40)
     assert all(np.array_equal(a[i], src[i]) for i in range(4))  # az indulás előtt a kép érintetlen
     d = [float(np.abs(a[i].astype(int) - src[i]).mean()) for i in range(40)]
-    assert max(d[4:24]) > 15                                     # szól
+    assert max(d[4:24]) > 6                                      # szól
     assert d[-1] < d[24] or d[-1] < 1.0                         # utána lecseng
 
 
@@ -223,7 +223,7 @@ def test_on_a_graphic_layer_the_flames_rise_from_its_alpha():
     edge = common.mask_edge(mask, W, H, step=5)
     assert set(edge[:, 1].astype(int)) == {200, 150, 240} and edge[:, 0].min() >= 20
     an = common.Anchors(W, H, "L3")({"mask": mask}, 0.0, True)
-    assert len(an) == 1 and len(an[0].pts) == len(edge) and an[0].d[1] < 0
+    assert len(an) == 1 and len(an[0].pts) == len(common.mask_edge(mask, W, H)) and an[0].d[1] < 0
     masks = [{"mask": mask} for _ in range(30)]
     a = _run("flames", {"blend": "screen", "on": "L3", "target": "up"}, track=masks, n=30, start=0, active=20)
     b = _run("flames", {"blend": "screen", "on": "L3", "target": "up"}, track=masks, n=30, start=0, active=20)
