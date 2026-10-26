@@ -58,10 +58,18 @@ def _cdiv(a: int, b: int) -> int:
     return q if (a >= 0) == (b > 0) else -q
 
 
+def _f32(x: float) -> float:
+    """The value as ffmpeg's eq holds it: the parameters arrive in single precision (measured: brightness −0.2 gives
+    int(100·b + 100) = 79 in ffmpeg 4.4, which only the float −0.2f does — the double would give 80)."""
+    import struct
+    return struct.unpack("f", struct.pack("f", float(x)))[0]
+
+
 def eq_plane_lut(contrast: float = 1.0, brightness: float = 0.0, gamma: float = 1.0, weight: float = 1.0) -> list[int]:
     """ffmpeg vf_eq on one 8-bit plane, as a 256-entry table: check_values picks the path — identity, process_c (gamma 1,
     |contrast| < 7.9: integer multiply-add on the code value) or apply_lut (create_lut: contrast, brightness, gamma
     with gamma_weight, in 0…1 with the 0.5 pivot)."""
+    contrast, brightness, gamma, weight = _f32(contrast), _f32(brightness), _f32(gamma), _f32(weight)
     if contrast == 1.0 and brightness == 0.0 and gamma == 1.0:
         return list(range(256))
     if gamma == 1.0 and abs(contrast) < 7.9:
@@ -141,13 +149,12 @@ def color_params(target: Optional[dict[str, Any]], baked: Optional[dict[str, Any
 
 
 def _clips(recipe: dict[str, Any]) -> bool:
-    """Does the baked eq throw codes away (several inputs → one output at the ends of the video range)? Then its undo
-    isn't exact there."""
+    """Does the baked eq clip (a code of the video range — luma 16…235, chroma 16…240 — pushed to 0 or 255)? There the
+    undo can't bring the picture back; elsewhere it is within half a code."""
     lb = eq_luts(recipe)
     if not lb:
         return False
-    y = lb["y"]
-    return len(set(y[16:236])) < 220 or len(set(lb["c"][16:241])) < 225
+    return any(v in (0, 255) for v in lb["y"][16:236]) or any(v in (0, 255) for v in lb["c"][16:241])
 
 
 # ---------- the copies and the ranges ----------
@@ -615,5 +622,5 @@ def revision(scene: dict[str, Any]) -> str:
     import hashlib
     import re as _re
     s = json.dumps({k: v for k, v in scene.items() if k != "rev"}, sort_keys=True, ensure_ascii=False)
-    s = _re.sub(r"([?&](t|u)=)[^\"&]*", r"\1", s)
+    s = _re.sub(r"\?(p=[^\"&]*&)?t=[^\"]*", "", s)
     return hashlib.sha256(s.encode()).hexdigest()[:16]
