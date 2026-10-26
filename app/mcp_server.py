@@ -2154,7 +2154,7 @@ async def video(
       AI NARRATION IS ON BY DEFAULT (narration="none" = off); music_file_id = their song.
     action="overlay": file_id = their mp4|mov|webm|m4v (kept as is) + layers=[{"at", "dur"|"until", "type", …}]
       and/or subtitles=[{start, end, text}] | "auto". Types: lower_third · title · chapter · source · stat · quote ·
-      chart · graphic · fullscreen · split · pip. text = the source: numbers and quotes
+      chart · graphic · fullscreen · split · pip · deck (a .pptx's slides over time). text = the source: numbers and quotes
       are checked against it (else "not checked against a source").
     action="edit": file_id + changes={scenes, add, layers: [{"id": "L2", …}], add_layers, …} → a new version.
     action="render": a project again; scene="s3" | "L2": just that scene / layer.

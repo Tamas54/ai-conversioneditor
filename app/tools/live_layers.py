@@ -409,9 +409,14 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
         late = _late_key(canon, src["item"], fps) if src.get("type") == "Comp" and "item" in src else 0.0
         late = max([late] + [float(k["time"]) / TPS * fps for k in _keys_of(x.get("props"))
                              if float(k["time"]) / TPS * fps < N - fast_render.OUTRO_S * fps - 1])
-        out.append({"id": m.group(1) if m else name, "name": name, "i": pos + 1, "pos": pos, "Fa": Fa, "Fb": Fb, "N": N,
-                    "hash": _sha({"g": gh, "layer": rel}), "unsupported": why, "late": late,
-                    "persist": min(frames / fps, b) - max(0.0, a) >= fast_render.PERSISTENT_S})
+        span_s = min(frames / fps, b) - max(0.0, a)
+        e = {"id": m.group(1) if m else name, "name": name, "i": pos + 1, "pos": pos, "Fa": Fa, "Fb": Fb, "N": N,
+             "hash": _sha({"g": gh, "layer": rel}), "unsupported": why, "late": late,
+             "persist": span_s >= fast_render.PERSISTENT_S}
+        if _STATIC.match(name):         # a pakli hordozója / diája: álló kép a beúszás után — rövid minta, egy kocka
+            e["probe"] = max(2, round(STATIC_PROBE_S * fps))
+            e["persist"] = e["persist"] or N - _outro_frames(fps) >= e["probe"]
+        out.append(e)
     out.reverse()                                                          # alulról fölfelé
     for z, e in enumerate(out):
         e["z"] = z
@@ -440,6 +445,14 @@ def _outro_frames(fps: float) -> int:
     return max(1, round(fast_render.OUTRO_S * fps))
 
 
+# A builder által állónak ismert rétegek (app/tools/deck_layer.py: „Layer L30 – deck (…)”, „Layer L30.2 – slide 4”):
+# a beúszás (≤ 0,45 s) után minden kockájuk ugyanaz. Ezek hosszuktól függetlenül a kör-úton mennek, rövid mintával:
+# a klip a beúszás + egy kocka, a böngésző azt tartja (nem dekódol, nem tölt fel kockánként) — mérve (10-26, S4,
+# fej nélküli Chrome): az ablakos pakli alatt a lap 22 kocka/s-re esett, amíg a dia-szakaszok végig játszottak.
+_STATIC = re.compile(r"^Layer \S+ – (deck \((window|front|background)\)|slide \d+)$")
+STATIC_PROBE_S = 1.2
+
+
 def _probe_frames(fps: float) -> int:
     from app.tools import fast_render
     return max(2, round(fast_render.PROBE_S * fps))
@@ -456,7 +469,8 @@ def entries(sc: dict[str, Any], cycles: dict[str, Optional[dict[str, int]]]) -> 
             out.append({**base, "kind": "clip", "hash": e["hash"], "a": 0, "b": e["N"], "loop": None})
             continue
         N, lb = e["N"], max(1, e["N"] - _outro_frames(fps))
-        hl = _sha({"of": e["hash"], "kind": "loop", "probe": _probe_frames(fps)})
+        probe = int(e.get("probe") or _probe_frames(fps))
+        hl = _sha({"of": e["hash"], "kind": "loop", "probe": probe})
         cyc = cycles.get(hl)
         if cyc is not None and int(cyc.get("period") or 0) == 0:            # nem ismétlődik: darabokban, végig
             step = max(1, round(PART_S * fps))
@@ -470,7 +484,7 @@ def entries(sc: dict[str, Any], cycles: dict[str, Optional[dict[str, int]]]) -> 
                 i, P = int(cyc["intro"]), int(cyc["period"])
                 loop = {"intro": round(i / fps, 6), "period": round(P / fps, 6), "intro_frames": i, "period_frames": P,
                         "still": P == 1}
-            out.append({**base, "kind": "loop", "hash": hl, "a": 0, "b": lb, "loop": loop, "probe": min(lb, _probe_frames(fps))})
+            out.append({**base, "kind": "loop", "hash": hl, "a": 0, "b": lb, "loop": loop, "probe": min(lb, probe)})
         out.append({**base, "kind": "outro", "hash": _sha({"of": e["hash"], "kind": "outro", "a": lb, "b": N}), "a": lb, "b": N,
                     "loop": None})
     for x in out:

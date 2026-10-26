@@ -10,7 +10,11 @@
      · hold: after footage.hold_from the last frame stands (end card), the clock runs on the wall clock;
      · layers (lane L2): stacked-alpha clips (W×2H H.264: top half straight RGB, bottom half alpha as luma; frame 0 at
        t0; loop {intro, period} in seconds), drawn as out = mix(base, rgb, a), only within a window around the playhead;
-     · captions (lane L3): window.LiveCaptions on a transparent element above the canvas, setTime(t) every frame.
+     · captions (lane L3): window.LiveCaptions on a transparent element above the canvas, setTime(t) every frame;
+     · matte (deck layer, placement background — app/tools/deck_layer.py): inside scene.matte.spans the footage is drawn
+       AGAIN over the layers flagged `behind` (the deck's backdrop and slides), through a person mask — MediaPipe Tasks
+       Vision ImageSegmenter (Apache-2.0, selfie segmenter landscape), loaded on demand, run on each new footage frame,
+       smoothed over time (EMA) and sharpened with levels (smoothstep) in the shader. p.stats.matte has its timings.
 
    API: const p = new LivePlayer(stageEl, {preserve}); await p.load(scene); p.update(scene[, {time}]); p.play();
    p.pause(); await p.seek(t); p.currentTime; p.duration; p.paused; p.addEventListener("firstframe" | "time" | "seeked" |
@@ -101,6 +105,13 @@ void main() {
   }
   o = vec4(c, uAlpha);
 }`;
+  // the speaker pass: the footage shader, its alpha from the person mask (in the copy's texture space) through levels
+  const FS_SPEAKER = FS_FOOT.replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform sampler2D uMask; uniform vec2 uLv;")
+    .replace("o = vec4(c, uAlpha);", "float mk = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? " +
+      "smoothstep(uLv.x, uLv.y, texture(uMask, tc).r) : 0.0;\n  o = vec4(c, mk * uAlpha);");
+  const MP_VER = "1.0.1";
+  const MP_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@" + MP_VER;
+  const MP_MODEL = "/static/vendor/mediapipe/selfie_segmenter_landscape.tflite";
   const FS_LAYER = `#version 300 es
 precision highp float;
 in vec2 vUv; out vec4 o;
@@ -167,6 +178,13 @@ void main() {
       if (!gl) throw new Error("WebGL2 isn't available in this browser");
       this.pf = compile(gl, VS, FS_FOOT);
       this.pl = compile(gl, VS, FS_LAYER);
+      this.ps = compile(gl, VS, FS_SPEAKER);
+      this.mk = null;                  // the person matte (background decks): {seg, tex, ema, w, h, mt, …}
+      // the segmenter sees a small copy of the frame (the model's own input is 256×144): measured in headless Chrome on
+      // the 960×540 working copy, the full frame cost ~95 ms a frame (the 960×540 mask read back from the GPU), which
+      // stalled the page to 6–7 fps; the mask is upscaled by the texture's linear filter and sharpened by the levels
+      this.matteOpts = { delegate: opts.matteDelegate || "CPU", cdn: opts.matteCdn || LivePlayer.MP_CDN || MP_CDN,
+        w: opts.matteW || 256, h: opts.matteH || 144 };
       const vb = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, vb);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -259,6 +277,151 @@ void main() {
       }
       for (const [k, t] of this.lutTex) if (!used.has(k)) { gl.deleteTexture(t); this.lutTex.delete(k); }
       this._layerSpecs = (scene.layers || []).filter(l => l && l.url).sort((a, b) => (a.z || 0) - (b.z || 0));
+      this.matte = scene.matte && (scene.matte.spans || []).length ? scene.matte : null;
+      if (this.matte && !this.mk) this._initMatte();
+    }
+
+    // ---------- the person matte (deck placement "background") ----------
+    _matteAt(t) {
+      if (!this.matte) return false;
+      for (const sp of this.matte.spans) if (t >= sp[0] && t < sp[1]) return true;
+      return false;
+    }
+    async _initMatte() {
+      const gl = this.gl, t0 = now();
+      const mk = this.mk = { seg: null, tex: tex(gl, gl.LINEAR), ema: null, w: 0, h: 0, mt: null, ready: false, ms: [], err: null,
+        delegate: null, flick: [], soft: [], loadMs: null, worker: null, busy: false, id: 0, lag: [] };
+      // off the main thread first (app/static/live-matte-worker.js): the page draws at its own rate, the mask follows
+      if (this.matteOpts.worker !== false && typeof Worker !== "undefined" && typeof createImageBitmap === "function") {
+        let w = null;
+        try {
+          w = new Worker("/static/live-matte-worker.js?v=" + MP_VER, { type: "module" });
+          await new Promise((res, rej) => {
+            const tm = setTimeout(() => rej(new Error("the matte worker didn't start in 30 s")), 30000);
+            w.onmessage = ev => { const d = ev.data || {};
+              if (d.type === "ready") { clearTimeout(tm); mk.delegate = d.delegate; mk.loadMs = +(now() - t0).toFixed(1); res(); }
+              else if (d.type === "error") { clearTimeout(tm); rej(new Error(d.error)); } };
+            w.onerror = e => { clearTimeout(tm); rej(new Error(e.message || "worker error")); };
+            w.postMessage({ type: "init", cdn: this.matteOpts.cdn, model: MP_MODEL, delegate: this.matteOpts.delegate });
+          });
+          w.onmessage = ev => this._onMask(ev.data || {});
+          mk.worker = w; mk.seg = true;
+          return;
+        } catch (e) {
+          if (w) w.terminate();
+          this.stats.errors.push("matte worker: " + (e && e.message || e) + " — on the main thread");
+        }
+      }
+      try {
+        const vision = await import(this.matteOpts.cdn + "/vision_bundle.mjs");
+        const files = await vision.FilesetResolver.forVisionTasks(this.matteOpts.cdn + "/wasm");
+        const make = delegate => vision.ImageSegmenter.createFromOptions(files, {
+          baseOptions: { modelAssetPath: MP_MODEL, delegate }, runningMode: "VIDEO",
+          outputCategoryMask: false, outputConfidenceMasks: true });
+        try { mk.seg = await make(this.matteOpts.delegate); mk.delegate = this.matteOpts.delegate; }
+        catch (e) { mk.seg = await make("CPU"); mk.delegate = "CPU"; }
+        mk.loadMs = +(now() - t0).toFixed(1);
+      } catch (e) { mk.err = String(e && e.message || e); this.stats.errors.push("matte: " + mk.err); }
+    }
+    _onMask(d) {                     // the worker's answer → the mask texture
+      const mk = this.mk;
+      if (!mk) return;
+      mk.busy = false;
+      if (d.type === "error") { mk.err = d.error; return; }
+      if (d.type !== "mask" || !d.data) return;
+      const gl = this.gl;
+      gl.bindTexture(gl.TEXTURE_2D, mk.tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, d.w, d.h, 0, gl.RED, gl.UNSIGNED_BYTE, d.data);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      mk.w = d.w; mk.h = d.h; mk.ready = true; mk.n = (mk.n || 0) + 1;
+      mk.ms.push(d.ms); mk.flick.push(d.flick); mk.soft.push(d.soft); mk.lag.push(now() - mk.sent);
+      if (mk.ms.length > 600) for (const a of [mk.ms, mk.flick, mk.soft, mk.lag]) a.splice(0, 300);
+    }
+    _updateMask(s) {                 // a new footage frame → the segmenter → EMA → the mask texture
+      const mk = this.mk;
+      if (!mk || !mk.seg || s.el.readyState < 2 || s.el.seeking) return;
+      const key = s.copy + "@" + (s.mt != null ? s.mt : s.el.currentTime);
+      if (key === mk.mt) return;
+      if (mk.worker) {                         // one frame in flight; the next new frame goes when it answers
+        if (mk.busy) return;
+        mk.mt = key; mk.busy = true; mk.sent = now();
+        if (mk.jump) { mk.worker.postMessage({ type: "reset" }); mk.jump = false; }
+        const id = ++mk.id, ema = this.matte && this.matte.ema != null ? +this.matte.ema : 0.5;
+        createImageBitmap(s.el, { resizeWidth: this.matteOpts.w || 256, resizeHeight: this.matteOpts.h || 144, resizeQuality: "medium" })
+          .then(bm => mk.worker.postMessage({ type: "frame", id, bitmap: bm, ema }, [bm]))
+          .catch(e => { mk.busy = false; mk.err = String(e && e.message || e); });
+        return;
+      }
+      mk.mt = key;
+      const t0 = now(), k = this.matte && this.matte.ema != null ? +this.matte.ema : 0.5;
+      try {
+        let src = s.el;
+        if (this.matteOpts.w) {                  // a small copy of the frame (see matteOpts)
+          if (!mk.cv) { mk.cv = document.createElement("canvas"); mk.cv.width = this.matteOpts.w; mk.cv.height = this.matteOpts.h;
+            mk.cx = mk.cv.getContext("2d", { willReadFrequently: false }); }
+          mk.cx.drawImage(s.el, 0, 0, mk.cv.width, mk.cv.height);
+          src = mk.cv;
+        }
+        mk.seg.segmentForVideo(src, Math.max(mk.ts ? mk.ts + 1 : 0, now()), res => {
+          mk.ts = now();
+          const m = res.confidenceMasks && res.confidenceMasks[0];
+          if (!m) return;
+          const a = m.getAsFloat32Array(), w = m.width, h = m.height, n = w * h;
+          if (!mk.ema || mk.w !== w || mk.h !== h || mk.jump) { mk.ema = new Float32Array(a); mk.u8 = new Uint8Array(n); mk.w = w; mk.h = h; mk.jump = false; }
+          let fl = 0, soft = 0;
+          const e = mk.ema, u = mk.u8;
+          for (let i = 0; i < n; i++) {
+            const v = k * e[i] + (1 - k) * a[i];
+            fl += Math.abs(v - e[i]); e[i] = v;
+            if (v > 0.05 && v < 0.95) soft++;
+            u[i] = v * 255;
+          }
+          const gl = this.gl;
+          gl.bindTexture(gl.TEXTURE_2D, mk.tex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, u);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+          mk.ready = true;
+          mk.flick.push(255 * fl / n); mk.soft.push(soft / n);
+          if (mk.flick.length > 600) { mk.flick.splice(0, 300); mk.soft.splice(0, 300); }
+        });
+      } catch (e) { mk.err = String(e && e.message || e); }
+      mk.ms.push(now() - t0);
+      if (mk.ms.length > 600) mk.ms.splice(0, 300);
+      mk.n = (mk.n || 0) + 1;
+    }
+    _drawSpeaker(s, r, t) {
+      const mk = this.mk;
+      if (!mk || !mk.seg) return false;
+      this._updateMask(s);
+      if (!mk.ready || !r || !r.copyObj || !s.uploaded) return false;
+      const gl = this.gl, P = this.ps, copy = r.copyObj;
+      const fm = footageMatrix(this.tr, this.byProp, t, copy.w, copy.h), m = fm.m, lv = (this.matte && this.matte.levels) || [0.35, 0.75];
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, s.tex); gl.uniform1i(P.u.uVid, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, copy._lut); gl.uniform1i(P.u.uLut, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mk.tex); gl.uniform1i(P.u.uMask, 2);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(P.u.uMode, r.nocolor ? 0 : modeOf(copy.color));
+      const bg = (this.tr && this.tr.bg) || [0, 0, 0];
+      gl.uniform3f(P.u.uBg, bg[0], bg[1], bg[2]);
+      gl.uniformMatrix3fv(P.u.uM, false, [m[0], m[3], 0, m[1], m[4], 0, m[2], m[5], 1]);
+      gl.uniform1f(P.u.uAlpha, 1); gl.uniform1f(P.u.uOpacity, fm.opacity);
+      gl.uniform2f(P.u.uLv, lv[0], lv[1]);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      this.stats.speaker = (this.stats.speaker || 0) + 1;
+      return true;
+    }
+    matteStats() {                   // QA: the segmenter's cost and the matte's steadiness
+      const mk = this.mk;
+      if (!mk) return null;
+      const q = xs => { const a = [...xs].sort((x, y) => x - y); return a.length ? +a[Math.min(a.length - 1, Math.floor(a.length * 0.95))].toFixed(2) : null; };
+      const mean = xs => xs.length ? +(xs.reduce((x, y) => x + y, 0) / xs.length).toFixed(3) : null;
+      return { worker: !!mk.worker, delegate: mk.delegate, load_ms: mk.loadMs, err: mk.err, frames: mk.n || 0, ms_mean: mean(mk.ms),
+        ms_p95: q(mk.ms), lag_mean: mean(mk.lag), lag_p95: q(mk.lag),
+        w: mk.w, h: mk.h, flicker_mean: mean(mk.flick.slice(1)), soft_frac: mean(mk.soft), speaker_draws: this.stats.speaker || 0 };
     }
 
     _setupCaptions(scene, old) {
@@ -400,6 +563,7 @@ void main() {
       t = Math.max(0, Math.min(+t || 0, this.duration));
       this._t = t;
       this.hold = null; this._fade = null;
+      if (this.mk) this.mk.jump = true;          // the matte's time smoothing starts over after a jump
       if (t >= this.holdFrom - 1e-6) {            // the end card: the last frame of the footage, the clock on the wall
         const r = this.ranges[this.ranges.length - 1];
         this.idx = this.ranges.length - 1;
@@ -571,11 +735,18 @@ void main() {
           fd.from.el.volume = 1 - k; s.el.volume = k;
         }
       }
-      const P = this.pl;
+      const P = this.pl, matteOn = this._matteAt(t) && !(this.hold && this.hold.gap);
+      let behind = false, spoke = false;
       for (const L of this._syncLayers(t)) {
+        if (matteOn && behind && !spoke && !L.spec.behind) { this._drawSpeaker(s, r, t); spoke = true; }
+        if (L.spec.behind) behind = true;
         gl.bindTexture(gl.TEXTURE_2D, L.tex);
         if (L.el.readyState >= 2 && !L.el.seeking) {
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, L.el);
+          // a paused clip on the same frame (a still: the logo, a deck's slide after its fade) is not uploaded again
+          if (!(L.uploaded && L.el.paused && L.upAt === L.el.currentTime)) {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, L.el);
+            L.upAt = L.el.paused ? L.el.currentTime : null;
+          }
           L.uploaded = true;
         } else this.stats.layerStale = (this.stats.layerStale || 0) + 1;
         if (!L.uploaded) continue;                               // (még egy kockája sincs: üres textúrát ne)
@@ -585,6 +756,7 @@ void main() {
         gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
+      if (matteOn && behind && !spoke) this._drawSpeaker(s, r, t);
       gl.disable(gl.BLEND);
       if (this.captions) { try { this.captions.setTime(t); } catch (e) { } }
       this.stats.drawn++;
@@ -664,6 +836,7 @@ void main() {
     setTimeout(poll, 1000);
   };
 
+  LivePlayer.MP_CDN = MP_CDN;
   LivePlayer.evalProp = evalProp;
   LivePlayer.footageMatrix = footageMatrix;
   LivePlayer.groupKeys = groupKeys;

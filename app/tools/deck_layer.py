@@ -236,7 +236,7 @@ def follow_to_slides(ly: dict[str, Any], tr: dict[str, Any], notes: list[str], *
     """One deck layer's follow → slides: each phrase after the previous switch; a phrase that isn't heard is left out
     (the note says what the machine heard closest). Explicit entries (with at) stay as they are."""
     from app.tools import transcript
-    name = ly.get("id") or "the deck"
+    who = f"Layer {ly['id']}" if ly.get("id") else f"The deck at {_tc(after)}"
     out = [dict(s) for s in ly.get("slides") or [] if isinstance(s, dict)]
     cur = after
     for f in ly.get("follow") or []:
@@ -247,18 +247,18 @@ def follow_to_slides(ly: dict[str, Any], tr: dict[str, Any], notes: list[str], *
             continue
         phrase = str(f.get("said") or f.get("say") or "").strip()
         if not phrase:
-            raise ValueError(f"Layer {name} (deck): each follow[] item is {{\"slide\": 3, \"said\": \"the words that bring it\"}}.")
+            raise ValueError(f"{who}: each follow[] item is {{\"slide\": 3, \"said\": \"the words that bring it\"}}.")
         hit = transcript.find(tr, phrase, after=cur)
         if hit is None:
             close = transcript.nearest(tr, phrase)
-            notes.append(f"⚠ Layer {name}: slide {f.get('slide')} — “{phrase}” is not said after {_tc(cur)}"
+            notes.append(f"⚠ {who}: slide {f.get('slide')} — “{phrase}” is not said after {_tc(cur)}"
                          + (f" (closest: “{close[:90]}”)" if close else "") + " — that switch is left out. Give its time "
                          "instead ({\"at\": \"12:34\", \"slide\": n}), or quote what is said.")
             continue
         t = round(max(0.0, hit["start"] - SAID_LEAD), 3)
         out.append({"at": t, "slide": f.get("slide"), "said": phrase})
         heard = f", heard as “{hit['said']}”" if hit.get("said") and transcript._norm(hit["said"]) != transcript._norm(phrase) else ""
-        notes.append(f"Layer {name}: slide {f.get('slide')} at {_tc(t)} — when “{phrase}” is said ({source}{heard}).")
+        notes.append(f"{who}: slide {f.get('slide')} at {_tc(t)} — when “{phrase}” is said ({source}{heard}).")
         cur = hit["end"]
     new = {k: v for k, v in ly.items() if k != "follow"}
     new["slides"] = out
