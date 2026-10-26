@@ -545,6 +545,16 @@ function speakerLayer(main, base, ly) {
   S.inPoint = sp.at; S.outPoint = sp.at + sp.dur;
   var M = main.layers.add(app.project.importFile(new ImportOptions(new File(sp.file)))); M.name = ly.name + " matte";
   M.startTime = sp.at;
+  // a maszk kockája fél kockával a kocka ideje UTÁN: a motor a forrás-időből lefelé kerekítve vesz kockát, és a lebegőpontos
+  // zaj miatt a k. kompozíció-kockán hol a maszk k., hol a k−1. kockája jött (mérve 10-26, S4, a gyors kéz: 112 / 266 kockán
+  // az előző — a fal látszott ott, ahol a kéz egy kockával előbb volt); a réteg kezdetét a motor a kockarácsra igazítja,
+  // ezért az időtérkép viszi a fél kockát
+  try {
+    M.timeRemapEnabled = true;
+    var MR = M.property("ADBE Time Remapping"), hf = 0.5 / D.fps;
+    while (MR.numKeys > 0) MR.removeKey(1);
+    MR.setValueAtTime(sp.at, hf); MR.setValueAtTime(sp.at + sp.dur, sp.dur + hf);
+  } catch (e) { writeLn("speaker matte remap: " + e); }
   var k = BASE_K * (fb.source.width / M.source.width) * 100;
   tp(M).property("ADBE Scale").setValue([k, k]);
   if (D.camera) camera(M, D.camera, 0, BASE_K * fb.source.width / M.source.width);
