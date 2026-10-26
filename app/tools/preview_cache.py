@@ -482,7 +482,15 @@ def layer_path(h: str) -> Path:
     return cache_root() / "_layers" / f"{_safe(h)}.mp4"
 
 
+def effect_path(h: str) -> Path:
+    """Egy effekt-réteg előre komponált klipje (app/tools/effect_layers.py: a felvétel szakasza a villámmal) — a
+    nyilvántartásban „e-<hash>”, ugyanazzal az LRU-val (a verzió a saját fájljaként is őrzi, ez csak az újrahasználat)."""
+    return cache_root() / "_effects" / f"{_safe(h)}.mp4"
+
+
 def _path_of(h: str, source_id: str) -> Path:
+    if h.startswith("e-"):
+        return effect_path(h[2:])
     if h.startswith("a-"):
         return audio_dir(source_id, h[2:])
     if h.startswith("c-"):
