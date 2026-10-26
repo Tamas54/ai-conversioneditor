@@ -279,6 +279,8 @@ def test_the_clips_are_registered_in_postgres_and_swept(pg_url, monkeypatch):
             assert not ll.clip_path(old).exists() and ll.clip_path(h).exists()
             assert await pc.ready(["v-" + h, "v-" + old], "_layers") == {"v-" + h}
         finally:
+            await db.preview_seg_delete(["v-" + h, "v-" + old])              # (a munkamenet közös adatbázisa: tisztán hagyjuk)
+            ll.clip_path(h).unlink(missing_ok=True)
             await db.stop()
             settings.DATABASE_URL = ""
     asyncio.run(main())
