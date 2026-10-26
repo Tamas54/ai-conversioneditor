@@ -196,9 +196,13 @@ def test_font_route(client):
     from app.tools import live_captions as lc
     p = lc.captions_part(_project(spec()))
     f = next(x for x in p["fonts"] if x["file"] == "Inter-SemiBold.otf")
-    r = client.get(f["url"].replace("http://testserver", ""))
+    url = f["url"].replace("http://testserver", "")
+    raw = (lc.font_dir() / "Inter-SemiBold.otf").read_bytes()
+    r = client.get(url, headers={"Accept-Encoding": "identity"})
     assert r.status_code == 200 and r.headers["content-type"] == "font/otf" and "immutable" in r.headers["cache-control"]
-    assert r.content == (lc.font_dir() / "Inter-SemiBold.otf").read_bytes()
+    assert r.content == raw and "content-encoding" not in r.headers
+    rz = client.get(url, headers={"Accept-Encoding": "gzip"})
+    assert rz.headers.get("content-encoding") == "gzip" and rz.content == raw
     key = f["url"].split("/font/")[1].split("?")[0]
     assert client.get(f"/api/video/live/font/{key}?t=1.abc").status_code == 403
     from app import tenancy

@@ -1,8 +1,10 @@
 // Live preview, captions (lane L3, plan20261026_live_preview.md): the server's ASS drawn live by libass in WASM.
 //
 //   import { LiveCaptions } from '/static/live-captions.js'        (an ES module; also window.LiveCaptions)
-//   const cap = new LiveCaptions(containerEl, { width: 960, height: 540 })   // the canvas's pixel size
+//   const cap = new LiveCaptions(containerEl, { width: 960, height: 540,     // the canvas's pixel size (the part's
+//                                               colors: 'server', onerror })  // frame = the server's pixels)
 //   await cap.load(scene.captions)        // the scene's captions part (app/tools/live_captions.py), or null: none
+//                                         // (→ true when drawn; false on an error, see onerror)
 //   cap.setTime(t)                        // output seconds, from the player clock, every frame (cheap; returns a
 //                                         // promise that resolves when that frame's captions are drawn)
 //   cap.resize(w, h); await cap.destroy()
@@ -24,7 +26,18 @@
 import JASSUB from './vendor/jassub/jassub.js'
 
 const VENDOR = new URL('./vendor/jassub/', import.meta.url)
+const EMPTY = '[Script Info]\nScriptType: v4.00+\n'   // the worker starts on this while the real ASS downloads
 const abs = u => new URL(u, location.href).href
+
+async function get (url, kind) {
+  const r = await fetch(abs(url))
+  if (!r.ok) {
+    const e = new Error(`LiveCaptions: ${kind} ${r.status}${r.status === 404 ? ' (the captions changed: fetch the scene again)' : ''}`)
+    e.status = r.status
+    throw e
+  }
+  return kind === 'font' ? new Uint8Array(await r.arrayBuffer()) : r.text()
+}
 
 export class LiveCaptions {
   constructor (containerEl, opts = {}) {
@@ -59,10 +72,34 @@ export class LiveCaptions {
   get ready () { return this._queue }
 
   // the scene's captions part ({hash, ass_url, fonts, fps, …}) or null. Calls are queued in order; the same hash
-  // again only refreshes the URLs (no reload). Resolves when the new track is drawn at the current time.
+  // again only refreshes the URLs (no reload). Resolves true when the new track is drawn at the current time, false
+  // on an error (onerror gets it, e.status = the HTTP status; 404: the captions changed — fetch the scene again; the
+  // previous track stays on).
   load (part) {
-    this._queue = this._queue.then(() => this._load(part)).catch(e => this._fail(e))
-    return this._queue
+    const run = this._queue.then(() => this._load(part)).then(() => true, e => { this._fail(e); return false })
+    this._queue = run
+    return run
+  }
+
+  _start () {
+    const j = new JASSUB({
+      canvas: this.canvas,
+      subContent: EMPTY,
+      fonts: [],
+      availableFonts: {},
+      defaultFont: 'inter',
+      queryFonts: false,                             // no local / Google font lookups: the fonts come with the part
+      workerUrl: new URL('jassub-worker.js', VENDOR).href,
+      wasmUrl: new URL('jassub-worker.wasm', VENDOR).href,
+      modernWasmUrl: new URL('jassub-worker-modern.wasm', VENDOR).href
+    })
+    j._ro.disconnect()                               // our size, not the element's CSS box × devicePixelRatio
+    j._videoWidth = this.width
+    j._videoHeight = this.height
+    this._j = j
+    // storage size = frame size, as ffmpeg's ass filter sets it
+    this._started = j.ready.then(() => j.renderer._resizeCanvas(this.width, this.height, this.width, this.height))
+    return j
   }
 
   async _load (part) {
@@ -79,29 +116,13 @@ export class LiveCaptions {
     }
     const fonts = part.fonts || []
     const fresh = fonts.filter(f => !this._fonts.has(f.file))
-    if (!this._j) {
-      const j = new JASSUB({
-        canvas: this.canvas,
-        subUrl: abs(part.ass_url),
-        fonts: fresh.map(f => abs(f.url)),
-        availableFonts: Object.fromEntries(fonts.map(f => [f.name.toLowerCase(), abs(f.url)])),
-        defaultFont: (fonts[0] && fonts[0].name) || 'inter',
-        queryFonts: false,
-        workerUrl: new URL('jassub-worker.js', VENDOR).href,
-        wasmUrl: new URL('jassub-worker.wasm', VENDOR).href,
-        modernWasmUrl: new URL('jassub-worker-modern.wasm', VENDOR).href
-      })
-      j._ro.disconnect()                             // our size, not the element's CSS box × devicePixelRatio
-      j._videoWidth = this.width
-      j._videoHeight = this.height
-      this._j = j
-      await j.ready
-      await j.renderer._resizeCanvas(this.width, this.height, this.width, this.height)
-    } else {
-      if (fresh.length) await this._j.renderer.addFonts(fresh.map(f => abs(f.url)))
-      await this._j.renderer.setTrackByUrl(abs(part.ass_url))
-    }
+    const j = this._j || this._start()               // the worker and the WASM start while the ASS and fonts download
+    const [text, bins] = await Promise.all([get(part.ass_url, 'ASS'), Promise.all(fresh.map(f => get(f.url, 'font')))])
+    await this._started
+    if (this._j !== j) return                        // destroyed meanwhile
+    if (bins.length) await j.renderer.addFonts(bins)
     fresh.forEach(f => this._fonts.add(f.file))
+    await j.renderer.setTrack(text)
     await this._setColors()
     this.part = part
     this.stats.loads++
@@ -172,6 +193,7 @@ export class LiveCaptions {
     this.height = Math.max(2, Math.round(height))
     if (!this._j) return
     await this._queue
+    if (!this._j) return
     this._j._videoWidth = this.width
     this._j._videoHeight = this.height
     await this._j.renderer._resizeCanvas(this.width, this.height, this.width, this.height)

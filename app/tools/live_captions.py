@@ -240,6 +240,16 @@ def font_file_of(key: str) -> Optional[Path]:
     return p if _FONT_KEYS[name] == key else None
 
 
+_FONT_GZ: dict[str, bytes] = {}
+
+
+def font_gzip(path: Path) -> bytes:
+    """The font file gzipped once (an OTF shrinks to ~57 %: 289 → 165 KB for Inter Semi Bold)."""
+    if path.name not in _FONT_GZ:
+        _FONT_GZ[path.name] = gzip.compress(path.read_bytes(), 6, mtime=0)
+    return _FONT_GZ[path.name]
+
+
 def _font_url(base: str, name: str, exp: int) -> str:
     from app import tenancy
     from app.tools import preview_serve as ps

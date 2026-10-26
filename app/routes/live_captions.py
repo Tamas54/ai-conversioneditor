@@ -48,7 +48,7 @@ async def live_captions_ass(request: Request, ass_hash: str, p: str = Query(...,
 
 
 @router.get("/api/video/live/font/{key}")
-async def live_captions_font(key: str, t: str = Query(..., description="signed token")):
+async def live_captions_font(request: Request, key: str, t: str = Query(..., description="signed token")):
     from app.tools import live_captions as lc
     from app.tools import preview_serve as ps
     if not ps.verify(lc.FONT_PID, lc.font_token_h(key), t, tenancy.ADMIN_ID):
@@ -56,4 +56,7 @@ async def live_captions_font(key: str, t: str = Query(..., description="signed t
     path = lc.font_file_of(key)
     if path is None:
         raise HTTPException(404, "no such font")
-    return FileResponse(path, media_type=lc.FONT_MEDIA, headers={"Cache-Control": lc.IMMUTABLE})
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(lc.font_gzip(path), media_type=lc.FONT_MEDIA,
+                        headers={"Cache-Control": lc.IMMUTABLE, "Vary": "Accept-Encoding", "Content-Encoding": "gzip"})
+    return FileResponse(path, media_type=lc.FONT_MEDIA, headers={"Cache-Control": lc.IMMUTABLE, "Vary": "Accept-Encoding"})
