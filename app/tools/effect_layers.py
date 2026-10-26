@@ -96,6 +96,19 @@ def normalize(r: dict[str, Any], what: str) -> dict[str, Any]:
         out["seed"] = seed
     if isinstance(r.get("trigger"), dict):
         out["trigger"] = r["trigger"]
+    if r.get("reveal") not in (None, ""):                # felfedés: az óra a felfedett réteg (sync_reveals)
+        import re as _re
+        rv = str(r["reveal"]).strip()
+        if not _re.fullmatch(r"[A-Za-z][\w.-]{0,19}", rv):
+            raise ValueError(f"{what} (effect): reveal = the id of the graphic layer it draws in (\"L5\").")
+        try:
+            lead = float(r.get("lead") if r.get("lead") not in (None, "") else fx.REVEAL_LEAD)
+            build = float(r.get("build") if r.get("build") not in (None, "") else fx.REVEAL_BUILD)
+        except (TypeError, ValueError):
+            raise ValueError(f"{what} (effect): lead = 0.2–2 s (the strike before the layer), build = 0.3–4 s (the "
+                             "crackle while it draws in).") from None
+        out.update(reveal=rv, lead=round(max(0.2, min(2.0, lead)), 3), build=round(max(0.3, min(4.0, build)), 3))
+        out.pop("trigger", None)
     return out
 
 
@@ -123,6 +136,8 @@ def label(ly: dict[str, Any]) -> str:
     frm = f" from [{', '.join(f'{v:g}' for v in on)}]" if isinstance(on, list) else " from the body" if on == "body" else ""
     trig = ly.get("trigger") or {}
     said = f", after “{trig['after_said']}”" if trig.get("after_said") else ""
+    if ly.get("reveal"):
+        return f"{str(ly.get('effect', 'lightning')).replace('_', ' ')}{frm} drawing in {ly['reveal']}"
     return f"{str(ly.get('effect', 'lightning')).replace('_', ' ')}{frm}{where}{said}"
 
 
@@ -392,29 +407,9 @@ async def render(ly: dict[str, Any], base: dict[str, Any], *, fps: float, total:
     lead = min(f0, int(round(LEAD_S * fps)))
     a = f0 - lead
     n = f1 - a
-    tkey = track_key(base, fps, a, f1, from_proxy)
     from app.tools.fx import common
-    track = await _track_get(tkey) if common.needs_tracking(ly.get("on")) else [{"h": [], "p": None}] * n
-    if track is not None and len(track) < n:
-        track = None
-    if track is None:
-        why = common.available()
-        if why:
-            raise RuntimeError(why)
-    t_a, t_b = a / fps, f1 / fps
-    plain = float((base.get("plain") or {}).get("duration") or base.get("duration") or total)
-    tmp_src = None
-    from app.tools import fast_render, crafts
-    if from_proxy:                                    # az eredeti lejárt: a munkamásolatból (a check megmondja)
-        p = crafts.existing(base.get("media_id"))
-        dec = _decode_args(str(p), W, H, fps, [], t_a, t_b - t_a)
-    elif base.get("keep") or t_b > plain:             # vágott / beszúrt / a kimerevített végbe lóg: a köztes darab
-        tmp_src = work / f"fx-src-{key[:10]}.mp4"
-        await footage.clip(base, src, tmp_src, t_a, t_b, plain, work)
-        dec = _decode_args(str(tmp_src), W, H, fps, [], None, None)
-    else:                                             # a lánc egyenesen az eredetiből (nincs köztes kódolás)
-        m_vf = footage.chain(base, await _info(src), work) + await fast_render.base_filters(src)
-        dec = _decode_args(str(src), W, H, fps, m_vf, t_a, t_b - t_a)
+    track, tkey = await _track_load(ly, base, fps, a, f1, from_proxy)
+    dec, tmp_src = await _source(base, src, work, a / fps, f1 / fps, W, H, fps, total, key)
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(f"{key}.tmp-{uuid.uuid4().hex[:6]}.mp4")
     enc = _encode_args(str(tmp), W, H, fps)
@@ -437,16 +432,80 @@ async def render(ly: dict[str, Any], base: dict[str, Any], *, fps: float, total:
     return dst, stat
 
 
+async def _track_load(ly: dict[str, Any], base: dict[str, Any], fps: float, a: int, b: int,
+                      from_proxy: bool) -> tuple[Optional[list[dict[str, Any]]], str]:
+    """A követés a felvétel [a, b) kockáira: Postgresből, ha volt (különben None — a rajzoló most követ); rögzített
+    horgonynál üres. RuntimeError: kéne követni, de a követő nincs telepítve."""
+    from app.tools.fx import common
+    n = b - a
+    tkey = track_key(base, fps, a, b, from_proxy)
+    track = await _track_get(tkey) if common.needs_tracking(ly.get("on")) else [{"h": [], "p": None}] * n
+    if track is not None and len(track) < n:
+        track = None
+    if track is None:
+        why = common.available()
+        if why:
+            raise RuntimeError(why)
+    return track, tkey
+
+
+async def _source(base: dict[str, Any], src: Optional[Path], work: Path, t_a: float, t_b: float, W: int, H: int, fps: float,
+                  total: float, key: str) -> tuple[list[str], Optional[Path]]:
+    """A verzió felvételének [t_a, t_b) szakasza BGR-kockákként (ffmpeg-parancs) → (parancs, köztes fájl | None)."""
+    from app.tools import crafts, fast_render, footage
+    plain = float((base.get("plain") or {}).get("duration") or base.get("duration") or total)
+    if src is None:                                   # az eredeti lejárt: a munkamásolatból (a check megmondja)
+        p = crafts.existing(base.get("media_id"))
+        return _decode_args(str(p), W, H, fps, [], t_a, t_b - t_a), None
+    if base.get("keep") or t_b > plain:               # vágott / beszúrt / a kimerevített végbe lóg: a köztes darab
+        tmp_src = work / f"fx-src-{key[:10]}.mp4"
+        await footage.clip(base, src, tmp_src, t_a, t_b, plain, work)
+        return _decode_args(str(tmp_src), W, H, fps, [], None, None), tmp_src
+    m_vf = footage.chain(base, await _info(src), work) + await fast_render.base_filters(src)   # egyenesen az eredetiből
+    return _decode_args(str(src), W, H, fps, m_vf, t_a, t_b - t_a), None
+
+
 async def _info(src: Path) -> dict[str, Any]:
     from app.tools import mediaprobe
     return await mediaprobe.info(src)
+
+
+async def _layer_alpha(work: Path, project: str, name: str, f0: int, f1: int, fps: float, tag: str) -> list[Any]:
+    """Egy grafikai réteg alfája a kimenet [f0, f1) kockáira: a motor a réteget EGYEDÜL, átlátszóan rendereli (fél
+    méretben, vázlatminőségben — mint live_layers._solo) → [H/2 × W/2 uint8] kockánként (a réteg előtt: üres)."""
+    import numpy as np
+    from app.tools import fast_render, video
+    info = await fast_render.inspect(work / project)
+    me = next((x for x in info["layers"] if x["name"] == name), None)
+    if me is None:
+        raise RuntimeError(f"“{name}” isn't in the project")
+    off = [x["i"] for x in info["layers"] if x["i"] != me["i"]]
+    solo = await fast_render.variant(work / project, info, off, f"{tag}-solo")
+    mov = f"{tag}-alpha.mov"
+    try:
+        await video._run("render", "--project", solo, "--comp", info["comp"], "--out", mov,
+                         "--start", f"{max(0.0, (f0 - 0.5) / fps):.6f}", "--end", f"{(f1 - 0.5) / fps:.6f}",
+                         "--format", "prores", "--prores", "4444", "--channels", "rgba", "--audio", "off",
+                         "--resolution", "0.5", "--quality", "draft", cwd=work)
+        raw = await asyncio.to_thread(lambda: subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(work / mov), "-vf", "alphaextract", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+            capture_output=True, timeout=600).stdout)
+        mi = await _info(work / mov)
+        mw, mh = int(mi.get("display_width") or mi["width"]), int(mi.get("display_height") or mi["height"])
+    finally:
+        for f_ in (mov, solo):
+            (work / f_).unlink(missing_ok=True)
+    n = len(raw) // (mw * mh)
+    masks = [np.frombuffer(raw, np.uint8, mw * mh, k * mw * mh).reshape(mh, mw) for k in range(n)]
+    masks += [masks[-1]] * max(0, (f1 - f0) - n) if masks else [np.zeros((mh, mw), np.uint8)] * (f1 - f0)
+    return masks[: f1 - f0]
 
 
 def on_layers(layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Az egy másik grafikai rétegen ülő effektek (on: "L17" — a „tüzes grafikon”): a projekt első építése UTÁN készülnek
     (a cél-réteg alfáját a motor rajzolja), lásd prepare_on_layers."""
     from app.tools import fx
-    return [ly for ly in layers if is_effect(ly) and fx.is_layer(ly.get("on"))]
+    return [ly for ly in layers if is_effect(ly) and fx.is_layer(ly.get("on")) and not ly.get("reveal")]
 
 
 def _run_light(frames_alpha: list[Any], enc: list[str], W: int, H: int, fps: float, ly: dict[str, Any], active: int,
@@ -502,25 +561,7 @@ async def prepare_on_layers(fxs: list[dict[str, Any]], D: dict[str, Any], *, W: 
                 stat["cached"] = True
             else:
                 t0 = time.monotonic()
-                info = await fast_render.inspect(work / project)
-                me = next((x for x in info["layers"] if x["name"] == tgt["name"]), None)
-                if me is None:
-                    raise RuntimeError(f"{ly['on']} isn't in the project")
-                off = [x["i"] for x in info["layers"] if x["i"] != me["i"]]
-                solo = await fast_render.variant(work / project, info, off, f"fx-solo-{ly['id']}")
-                mov = f"fx-alpha-{ly['id']}.mov"
-                await video._run("render", "--project", solo, "--comp", info["comp"], "--out", mov,
-                                 "--start", f"{max(0.0, (f0 - 0.5) / fps):.6f}", "--end", f"{(f1 - 0.5) / fps:.6f}",
-                                 "--format", "prores", "--prores", "4444", "--channels", "rgba", "--audio", "off",
-                                 "--resolution", "0.5", "--quality", "draft", cwd=work)
-                raw = await asyncio.to_thread(lambda: subprocess.run(
-                    ["ffmpeg", "-v", "error", "-i", str(work / mov), "-vf", "alphaextract", "-f", "rawvideo", "-pix_fmt", "gray",
-                     "-"], capture_output=True, timeout=600).stdout)
-                mi = await _info(work / mov)
-                mw, mh = int(mi.get("display_width") or mi["width"]), int(mi.get("display_height") or mi["height"])
-                n = len(raw) // (mw * mh)
-                masks = [np.frombuffer(raw, np.uint8, mw * mh, k * mw * mh).reshape(mh, mw) for k in range(n)]
-                masks += [masks[-1]] * max(0, (f1 - f0) - n) if masks else [np.zeros((mh, mw), np.uint8)] * (f1 - f0)
+                masks = await _layer_alpha(work, project, tgt["name"], f0, f1, fps, f"fx-{ly['id']}")
                 t1 = time.monotonic()
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 tmp = dst.with_name(f"{key}.tmp-{uuid.uuid4().hex[:6]}.mp4")
@@ -530,8 +571,6 @@ async def prepare_on_layers(fxs: list[dict[str, Any]], D: dict[str, Any], *, W: 
                     os.replace(tmp, dst)
                 finally:
                     tmp.unlink(missing_ok=True)
-                    for f_ in (mov, solo):
-                        (work / f_).unlink(missing_ok=True)
                 await preview_cache.register("e-" + key, "_effects", dst.stat().st_size)
                 stat.update(alpha_s=round(t1 - t0, 2), seconds=round(time.monotonic() - t0, 2), load=round(os.getloadavg()[0], 2))
                 log.info("effekt-klip %s (%s, on %s): %s", ly["id"], ly.get("effect"), ly["on"], stat)
@@ -561,7 +600,8 @@ async def prepare(layers: list[dict[str, Any]], base: dict[str, Any], *, W: int,
                                                                                          list[str], list[str]]:
     """A verzió effekt-rétegei → (a builder D.effects-e, a munkamappába tett fájlok nevei, verified, findings)."""
     from app.tools import fx as fxreg, video
-    fx = [ly for ly in layers if is_effect(ly) and not fxreg.is_layer(ly.get("on"))]     # (a rétegen ülők: on_layers)
+    fx = [ly for ly in layers if is_effect(ly) and not fxreg.is_layer(ly.get("on")) and not ly.get("reveal")]
+    # (a rétegen ülők: on_layers; a felfedők: reveals — azok a projekt első építése után)
     items: list[dict[str, Any]] = []
     names: list[str] = []
     verified: list[str] = []
@@ -595,4 +635,183 @@ async def prepare(layers: list[dict[str, Any]], base: dict[str, Any], *, W: int,
             findings.append(f"Layer {ly['id']} (effect, {ly.get('effect')}): no raised hand was found in its time — it doesn't "
                             "show. Move it (at) to where a hand is raised towards the camera or the side, or anchor it "
                             "(on: [x, y]).")
+    return items, names, verified, findings
+
+
+# ---------- felfedés: az effekt egy grafikai réteget fed fel (fx/reveal.py) ----------
+
+def reveals(layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [ly for ly in layers if is_effect(ly) and ly.get("reveal")]
+
+
+def sync_reveals(layers: list[dict[str, Any]], notes: Optional[list[str]] = None) -> None:
+    """A felfedő effekt ideje a felfedett rétegéből (az óra a réteg): at = a réteg at-ja − lead (a becsapás), dur =
+    lead + build (a felépülés legfeljebb a réteg hossza). Helyben írja a rétegeket; minden építéskor fut, így a réteg
+    mozgatását / átidőzítését a villám követi."""
+    by = {ly["id"]: ly for ly in layers if not is_effect(ly)}
+    for ly in reveals(layers):
+        tgt = by.get(ly["reveal"])
+        if tgt is None:
+            continue
+        lead = min(float(ly.get("lead") or 0.5), float(tgt["at"]))
+        build = min(float(ly.get("build") or 1.2), float(tgt["dur"]))
+        at, dur = round(float(tgt["at"]) - lead, 3), round(lead + build, 3)
+        if notes is not None and (abs(float(ly.get("at") or 0) - at) > 1e-3 or abs(float(ly.get("dur") or 0) - dur) > 1e-3):
+            notes.append(f"Layer {ly['id']} ({ly.get('effect')}) draws in {ly['reveal']}: it strikes {lead:g} s before "
+                         f"{ly['reveal']} appears ({float(tgt['at']):.2f} s) and crackles {build:g} s while it draws in.")
+        ly["at"], ly["dur"] = at, dur
+
+
+def _run_reveal(dec: list[str], enc_g: list[str], enc_l: list[str], W: int, H: int, fps: float, ly: dict[str, Any],
+                start: int, lead: int, build: int, n: int, track: Optional[list[dict[str, Any]]], masks: list[Any],
+                box: tuple[float, float, float, float], stat: dict[str, Any]) -> list[dict[str, Any]]:
+    """A szálban: a felvétel (követés) + a réteg alfája → Reveal → két kódoló (a színezett felvétel, a fény)."""
+    import numpy as np
+    from app.tools import fx
+    from app.tools.fx import common, reveal
+    fsz = W * H * 3
+    pd = subprocess.Popen(dec, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    pg = subprocess.Popen(enc_g, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    pl = subprocess.Popen(enc_l, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    tk = common.Tracker() if track is None and common.needs_tracking(ly.get("on")) else None
+    eff = fx.get(ly.get("effect") or "lightning")(W, H, fps, fx_params(ly), _seed(ly))
+    rv = reveal.Reveal(eff, box, lead, build)
+    out_track: list[dict[str, Any]] = []
+    last, prev = None, None
+    t_track = t_draw = 0.0
+    try:
+        for i in range(n):
+            buf = pd.stdout.read(fsz)
+            if len(buf) < fsz:
+                if last is None:
+                    raise RuntimeError("the footage couldn't be read for the effect")
+                img = last
+            else:
+                img = last = np.frombuffer(buf, np.uint8).reshape(H, W, 3)
+            t0 = time.monotonic()
+            tr = track[i] if track is not None and i < len(track) else (tk(img, int(round(i / fps * 1000))) if tk else {"h": [], "p": None})
+            out_track.append(tr)
+            t1 = time.monotonic()
+            if i < start:                                   # a követés bemelegszik (a horgony simítása is)
+                eff.anchors(tr, (i - start) / fps, False)
+                continue
+            k = i - start
+            m = masks[k] if k < len(masks) else None
+            g, li = rv.frame(img, tr, prev, m, k)
+            prev = m
+            pg.stdin.write(np.ascontiguousarray(g).tobytes())
+            pl.stdin.write(np.ascontiguousarray(li).tobytes())
+            t_draw += time.monotonic() - t1
+            t_track += t1 - t0
+        for p in (pg, pl):
+            p.stdin.close()
+            if p.wait(timeout=600) != 0:
+                raise RuntimeError("the effect clip couldn't be encoded: " + p.stderr.read().decode("utf-8", "replace")[-300:])
+    finally:
+        if tk is not None:
+            tk.close()
+        for p in (pd, pg, pl):
+            if p.poll() is None:
+                p.kill()
+        pd.wait()
+    stat.update(track_s=round(t_track, 2), draw_s=round(t_draw, 2), frames=n - start, lead=start,
+                casting=sum(1 for x in eff.powers if x > 0), tracked=track is None)
+    return out_track
+
+
+async def prepare_reveals(fxs: list[dict[str, Any]], D: dict[str, Any], base: dict[str, Any], *, W: int, H: int, fps: float,
+                          total: float, work: Path, project: str = "project.ecproj",
+                          step: Callable[..., None] = lambda *a, **k: None) -> tuple[list[dict[str, Any]], list[str],
+                                                                                   list[str], list[str]]:
+    """A felfedő effektek (reveal: "L5"): a projekt első építése után — a felvétel (követés) + a felfedett réteg alfája
+    (a motorból) → két klip: a jelenet színezése a felvétel fölött (normál, a felvétel mozgásával) és a fény a réteg
+    FÖLÖTT (screen). → (D.effects-elemek, fájlnevek, verified, findings); a hívó újraépíti a projektet."""
+    from app.tools import footage, fx as fxreg, preview_cache, video
+    from app.tools.fx import reveal
+    items, names, verified, findings = [], [], [], []
+    by_id = {x["id"]: x for x in D.get("layers") or []}
+    frames = int(math.floor(total * fps + 1e-6))
+    for ly in fxs:
+        tgt = by_id.get(ly["reveal"])
+        if tgt is None:
+            findings.append(f"Layer {ly['id']} (effect, {ly.get('effect')}): reveal {ly['reveal']!r} — there is no such "
+                            "graphic layer on the timeline; it was left out.")
+            continue
+        f_imp = int(round(float(tgt["at"]) * fps))
+        lead_f = min(f_imp, max(1, int(round(float(ly.get("lead") or 0.5) * fps))))
+        build_f = max(1, int(round(float(ly.get("build") or 1.2) * fps)))
+        f0 = f_imp - lead_f
+        f1 = min(frames, f0 + lead_f + build_f + fxreg.get(ly.get("effect") or "lightning").tail())
+        if f1 - f0 < 2:
+            continue
+        cx, cy = tgt["pos"]
+        box = (cx - tgt["w"] / 2, cy - tgt["h"] / 2, cx + tgt["w"] / 2, cy + tgt["h"] / 2)
+        src = footage.original(base)
+        from_proxy = src is None
+        key = _sha({"v": [fxreg.version(ly.get("effect") or "lightning"), reveal.VERSION], "src": source_id(base),
+                    "proxy": base.get("media_id") if from_proxy else None, "fps": round(float(fps), 6),
+                    "span": [f0, lead_f, build_f, f1], "reveal": {k: v for k, v in tgt.items() if k != "name"}, "size": [W, H],
+                    "crf": clip_crf(), "lead_s": LEAD_S, "fx": fx_params(ly)})
+        key_l = _sha({"light": key})
+        dst_g, dst_l = clip_path(key), clip_path(key_l)
+        stat: dict[str, Any] = {"key": key, "f0": f0, "f1": f1, "impact": f_imp, "reveal": ly["reveal"]}
+        step(3, 4, f"rendering the {ly.get('effect')} that draws in {ly['reveal']} ({ly['id']})")
+        try:
+            async with video._render_gate():
+                if dst_g.exists() and dst_l.exists():
+                    await preview_cache.touch(["e-" + key, "e-" + key_l], "_effects")
+                    stat["cached"] = True
+                else:
+                    t0 = time.monotonic()
+                    masks = await _layer_alpha(work, project, tgt["name"], f0, f1, fps, f"fx-{ly['id']}")
+                    t1 = time.monotonic()
+                    lead = min(f0, int(round(LEAD_S * fps)))
+                    a = f0 - lead
+                    track, tkey = await _track_load(ly, base, fps, a, f1, from_proxy)
+                    dec, tmp_src = await _source(base, src, work, a / fps, f1 / fps, W, H, fps, total, key)
+                    dst_g.parent.mkdir(parents=True, exist_ok=True)
+                    tg = dst_g.with_name(f"{key}.tmp-{uuid.uuid4().hex[:6]}.mp4")
+                    tl = dst_l.with_name(f"{key_l}.tmp-{uuid.uuid4().hex[:6]}.mp4")
+                    try:
+                        got = await asyncio.to_thread(_run_reveal, dec, _encode_args(str(tg), W, H, fps),
+                                                      _encode_args(str(tl), W, H, fps), W, H, fps, ly, f0 - a, lead_f, build_f,
+                                                      f1 - a, track, masks, box, stat)
+                        os.replace(tg, dst_g)
+                        os.replace(tl, dst_l)
+                    finally:
+                        tg.unlink(missing_ok=True)
+                        tl.unlink(missing_ok=True)
+                        if tmp_src is not None:
+                            tmp_src.unlink(missing_ok=True)
+                    if track is None:
+                        await _track_put(tkey, got)
+                    for k_, d_ in ((key, dst_g), (key_l, dst_l)):
+                        await preview_cache.register("e-" + k_, "_effects", d_.stat().st_size)
+                    secs = time.monotonic() - t0
+                    stat.update(alpha_s=round(t1 - t0, 2), seconds=round(secs, 2), load=round(os.getloadavg()[0], 2),
+                                s_per_effect_s=round(secs / max(1e-6, (f1 - f0) / fps), 2), size=[W, H])
+                    log.info("felfedő effekt %s (%s → %s): %s", ly["id"], ly.get("effect"), ly["reveal"], stat)
+        except Exception as e:  # noqa: BLE001
+            log.warning("felfedő effekt %s: %s", ly.get("id"), e)
+            findings.append(f"Layer {ly['id']} (effect, {ly.get('effect')} → {ly['reveal']}): it couldn't be drawn — "
+                            f"{str(e)[:200]}.")
+            continue
+        n_g, n_l = f"effect-{ly['id']}-{key[:12]}.mp4", f"effect-{ly['id']}-light-{key_l[:12]}.mp4"
+        for nm, d_ in ((n_g, dst_g), (n_l, dst_l)):
+            try:
+                os.link(d_, work / nm)
+            except OSError:
+                shutil.copyfile(d_, work / nm)
+        names += [n_g, n_l]
+        a_s, d_s = round(f0 / fps, 6), round((f1 - f0) / fps, 6)
+        items.append({"id": ly["id"], "name": f"Layer {ly['id']} – {ly.get('effect')} effect", "file": n_g, "at": a_s,
+                      "dur": d_s, "k": 1.0})
+        items.append({"id": ly["id"] + ".light", "name": f"Layer {ly['id']}.light – {ly.get('effect')} light", "file": n_l,
+                      "at": a_s, "dur": d_s, "k": 1.0, "blend": "screen", "above": tgt["name"]})
+        verified.append(f"Layer {ly['id']}: {ly.get('effect')} from the hand draws in {ly['reveal']} — strike "
+                        f"{video._tc(f0 / fps)}, impact {video._tc(f_imp / fps)} (= {ly['reveal']}'s start), crackle until "
+                        f"{video._tc((f_imp + build_f) / fps)}" + (" (drawn before, from the cache)" if stat.get("cached") else
+                                                                  f"; drawn in {stat.get('seconds')} s") + ".")
+        if stat.get("casting") == 0:
+            findings.append(f"Layer {ly['id']} (effect): nothing was drawn — no raised hand and no {ly['reveal']} in its time.")
     return items, names, verified, findings

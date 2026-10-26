@@ -300,6 +300,24 @@ def _blur(x: np.ndarray, sigma: float) -> np.ndarray:
     return cv2.resize(cv2.GaussianBlur(small, (0, 0), sigma / 2), (w, h), interpolation=cv2.INTER_LINEAR)
 
 
+def glow_of(layer: np.ndarray, lights: list[np.ndarray], flash: float, W: int, H: int, *, glow_color: np.ndarray,
+            g1: tuple[float, float], g2: tuple[float, float], lit: tuple[float, float],
+            grid: Optional[tuple[np.ndarray, np.ndarray]] = None) -> np.ndarray:
+    """Az izzás (0–1, teljes méret): a fél felbontású réteg két homállyal + Gauss-fény a fénypontokon."""
+    h2, w2 = layer.shape[:2]
+    a = _blur(layer, h2 * g1[0])
+    b = _blur(layer, h2 * g2[0])
+    g = np.clip(a * g1[1] + b * (g2[1] * (0.7 + 0.3 * flash)), 0, 255)
+    if lights:
+        yy, xx = grid if grid is not None else [x.astype(np.float32) for x in np.mgrid[0:h2, 0:w2]]
+        spot = np.zeros((h2, w2), np.float32)
+        s2 = 2 * (h2 * lit[0]) ** 2
+        for cx, cy in lights:
+            spot += np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / s2)
+        g += spot[..., None] * (np.asarray(glow_color, np.float32) * (lit[1] * (0.6 + 0.4 * flash)))
+    return cv2.resize(np.clip(g, 0, 255), (W, H)) * (1 / 255.0)
+
+
 def compose(img: np.ndarray, layer: np.ndarray, core: Optional[np.ndarray], lights: list[np.ndarray], grade: Grade,
             flash: float, *, glow_color: np.ndarray, g1: tuple[float, float], g2: tuple[float, float], lit: tuple[float, float],
             core_gain: float = 0.9, grid: Optional[tuple[np.ndarray, np.ndarray]] = None) -> np.ndarray:
@@ -389,3 +407,50 @@ class Effect:
         return compose(img, layer, core if power > 0 else None, lights, grade, self.flash, glow_color=self.GLOW,
                        g1=(self.G1[0], self.G1[1] * gi), g2=(self.G2[0], self.G2[1] * gi), lit=(self.LIT[0], self.LIT[1] * gi),
                        core_gain=self.CORE_GAIN, grid=self._grid)
+
+    # ---------- két kimenet: a jelenet színezése (a felvétel fölött) + csak a fény (screen, egy réteg fölött) ----------
+
+    def step_light(self, power: float) -> None:
+        """A villanás és a színezés állapota egy kockával tovább (a frame() is így lép)."""
+        self.flash = FLASH_K * self.flash + (1 - FLASH_K) * (power * self.rng.uniform(0.55, 1.0))
+        self.grade.step(power > 0)
+        self.powers.append(round(power, 2))
+
+    def split(self, img: np.ndarray, layer: np.ndarray, core: np.ndarray, lights: list[np.ndarray],
+              power: float) -> tuple[np.ndarray, np.ndarray]:
+        """(a felvétel a jelenet színezésével, csak a fény fekete alapon) — screen(színezett, fény) = a frame() képe
+        (a mag itt screen-nel kerül rá, ott hozzáadva: a fehér-cián mag mindkét úton ~fehér)."""
+        gi = self.intensity
+        graded = img if not (self.flash > 0.02 or self.grade.k > 0.02) else \
+            np.clip(cv2.transform(img.astype(np.float32), self.grade.matrix(self.flash)), 0, 255).astype(np.uint8)
+        if not (power > 0 or self.flash > 0.02):
+            return graded, np.zeros_like(img)
+        glow = glow_of(layer, lights, self.flash, self.W, self.H, glow_color=self.GLOW, g1=(self.G1[0], self.G1[1] * gi),
+                       g2=(self.G2[0], self.G2[1] * gi), lit=(self.LIT[0], self.LIT[1] * gi), grid=self._grid)
+        light = glow * 255.0
+        if power > 0:
+            light += core * self.CORE_GAIN
+        return graded, np.clip(light, 0, 255).astype(np.uint8)
+
+    def strike(self, layer: np.ndarray, core: np.ndarray, casters: list[Caster], t: float, lights: list[np.ndarray],
+               box: tuple[float, float, float, float], amount: float) -> float:
+        """Felfedés, 1. szakasz: az effekt a horgonytól a doboz (x0, y0, x1, y1 px) felé — alapból a saját rajza a doboz
+        közepére céloz. amount: 0–1 (a betáplálás erőssége; a felépülés alatt lecseng)."""
+        keep = self.target
+        self.target = [((box[0] + box[2]) / 2) / self.W, ((box[1] + box[3]) / 2) / self.H]
+        try:
+            return self.draw(layer, core, casters, t, True, lights) * amount
+        finally:
+            self.target = keep
+
+    def crackle(self, layer: np.ndarray, core: np.ndarray, pts: np.ndarray, t: float, lights: list[np.ndarray],
+                amount: float) -> float:
+        """Felfedés, 2. szakasz: szikrák a felfedett réteg kirajzolódó élén (pts px) — alapból izzó pontok; az effekt
+        felülírhatja (a villám: rövid, szaggatott kisülések)."""
+        if not len(pts):
+            return 0.0
+        rng = self.rng
+        for p in pts[rng.choice(len(pts), size=min(len(pts), 60), replace=False)]:
+            cv2.circle(layer, (int(p[0]) // 2, int(p[1]) // 2), max(1, int(self.h2 * 0.006)), self.GLOW.tolist(), -1, cv2.LINE_AA)
+        lights.append(pts.mean(0) / 2)
+        return amount

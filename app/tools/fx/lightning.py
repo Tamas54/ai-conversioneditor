@@ -29,6 +29,7 @@ class Lightning(common.Effect):
         super().__init__(W, H, fps, params, seed)
         self.strands = int(params.get("strands") or 6)
         self.glow_w, self.core_w = max(4, int(self.h2 * 0.022)), max(1, int(self.H * 0.0028))
+        self.end_box: Any = None              # felfedésnél: a szálak a felfedett réteg dobozába csapnak (nem a cél köré)
 
     def draw(self, layer, core, casters, t, active, lights) -> float:
         rng, power = self.rng, 0.0
@@ -40,7 +41,12 @@ class Lightning(common.Effect):
             side = np.array([-d[1], d[0]], np.float32)
             for _ in range(max(1, round(self.strands * ramp))):     # irányított köteg: vékony, szaggatott szálak a cél felé
                 st = c.pts[int(rng.integers(len(c.pts)))]
-                end = target + side * rng.normal(0, self.diag * 0.08)
+                if self.end_box is not None:                       # a doboz belső 80 %-ába
+                    x0, y0, x1, y1 = self.end_box
+                    end = np.array([rng.uniform(x0 + 0.1 * (x1 - x0), x1 - 0.1 * (x1 - x0)),
+                                    rng.uniform(y0 + 0.1 * (y1 - y0), y1 - 0.1 * (y1 - y0))], np.float32)
+                else:
+                    end = target + side * rng.normal(0, self.diag * 0.08)
                 main_ = common.bolt(st, end, 0.17, 7, rng)
                 strands = [(main_, 1.0)]
                 for _b in range(int(rng.integers(0, 2))):           # rövid elágazás
@@ -55,3 +61,31 @@ class Lightning(common.Effect):
             cc = tuple(int(x) // 2 for x in c.center)                # izzás a tenyér körül
             cv2.circle(layer, cc, int(self.h2 * 0.05), self.GLOW.tolist(), -1, cv2.LINE_AA)
         return power
+
+    def strike(self, layer, core, casters, t, lights, box, amount) -> float:
+        self.end_box = box
+        keep = self.strands
+        self.strands = max(1, round(self.strands * amount))
+        try:
+            return super().strike(layer, core, casters, t, lights, box, 1.0) * amount
+        finally:
+            self.end_box, self.strands = None, keep
+
+    def crackle(self, layer, core, pts, t, lights, amount) -> float:
+        """Rövid, szaggatott kisülések a felfedett réteg kirajzolódó élén (egy pontból egy közeli pontjába), + szikrák."""
+        if not len(pts):
+            return 0.0
+        rng, L = self.rng, self.H * 0.035
+        for _ in range(max(2, int(round(12 * amount)))):
+            p = pts[int(rng.integers(len(pts)))]
+            cand = pts[rng.integers(len(pts), size=min(8, len(pts)))]
+            dist = np.linalg.norm(cand - p, axis=1)
+            ok = cand[(dist > L * 0.3) & (dist < L * 3)]
+            q = ok[0] if len(ok) else p + rng.normal(0, L, 2).astype(np.float32)
+            qq = np.round(common.bolt(p, q, 0.3, 4, rng)).astype(np.int32)
+            cv2.polylines(layer, [qq // 2], False, self.GLOW.tolist(), max(2, int(self.glow_w * 0.5)), cv2.LINE_AA)
+            cv2.polylines(core, [qq], False, self.CORE.tolist(), max(1, self.core_w - 1), cv2.LINE_AA)
+        for p in pts[rng.choice(len(pts), size=min(len(pts), 30), replace=False)]:     # szikrák
+            cv2.circle(core, (int(p[0]), int(p[1])), max(1, self.core_w - 1), (self.CORE * 0.8).tolist(), -1, cv2.LINE_AA)
+        lights.append(pts.mean(0) / 2)
+        return amount
