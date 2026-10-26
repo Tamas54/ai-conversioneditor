@@ -458,7 +458,7 @@ def _outro_frames(fps: float) -> int:
 # a beúszás (≤ 0,45 s) után minden kockájuk ugyanaz. Ezek hosszuktól függetlenül a kör-úton mennek, rövid mintával:
 # a klip a beúszás + egy kocka, a böngésző azt tartja (nem dekódol, nem tölt fel kockánként) — mérve (10-26, S4,
 # fej nélküli Chrome): az ablakos pakli alatt a lap 22 kocka/s-re esett, amíg a dia-szakaszok végig játszottak.
-_STATIC = re.compile(r"^Layer \S+ – (deck \((window|front|background)\)|slide \d+)$")
+_STATIC = re.compile(r"^Layer \S+ – (deck \((window|front|background)\)|slide \d+|facecam (ring|shadow|label))$")   # + a beszélő ablak gyűrűje / árnyéka / felirata (facecam.py)
 STATIC_PROBE_S = 1.2
 
 
