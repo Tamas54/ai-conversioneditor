@@ -175,6 +175,11 @@ async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: 
         proc.kill()
         await proc.wait()
         raise RuntimeError(f"effectcraft-cli {args[0]}: timed out")
+    except asyncio.CancelledError:          # a hívót leállították → a motor se fusson tovább
+        if proc.returncode is None:
+            proc.kill()
+        await asyncio.shield(proc.wait())
+        raise
     if proc.returncode != 0:
         msg = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip()
         raise RuntimeError(f"effectcraft-cli {args[0]}: {msg[-600:] or f'exit code {proc.returncode}'}")

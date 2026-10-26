@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import shutil
 import threading
 import time
@@ -147,6 +148,24 @@ async def test_the_gate_is_per_job_not_per_ffmpeg(monkeypatch):
                       "-threads", "3", "-i", "a.mp4", "-threads", "3", "-i", "b.srt", "-c:v", "libx264",
                       "-threads", "16", "-threads", "3", "out.mp4")
     assert jobs._heavy_running == 0 and not jobs._heavy_queue
+
+
+async def test_a_stopped_caller_stops_its_program(tmp_path):
+    """Egy leállított hívás (pl. egy előnézeti futam, amit egy sürgős kérés megelőz) a programot is leállítja —
+    nem fut tovább a háttérben a gépidőt fogyasztva."""
+    from app.convert import engines
+    pidfile = tmp_path / "pid"
+    task = asyncio.ensure_future(engines.run("sh", "-c", f"echo $$ > {pidfile}; exec sleep 30", timeout=60))
+    for _ in range(200):
+        if pidfile.exists() and pidfile.read_text().strip():
+            break
+        await asyncio.sleep(0.02)
+    pid = int(pidfile.read_text())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg needed")
