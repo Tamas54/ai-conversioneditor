@@ -372,6 +372,8 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
     gh = _sha(glob)
     L = mk.get("layers") or []
     out: list[dict[str, Any]] = []
+    foot_pos = next((p for p, x in enumerate(L) if (x.get("source") or {}).get("type") == "Footage" and x.get("name") == "Footage"),
+                    None)                                                 # a felvétel alatti réteg (facecam: a tartalom)
     for pos, x in enumerate(L):
         sw = x.get("switches") or {}
         src = x.get("source") or {}
@@ -418,6 +420,8 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
         e = {"id": m.group(1) if m else name, "name": name, "i": pos + 1, "pos": pos, "Fa": Fa, "Fb": Fb, "N": N,
              "hash": _sha({"g": gh, "layer": rel}), "unsupported": why, "late": late, "blend": blend or "normal",
              "persist": span_s >= fast_render.PERSISTENT_S}
+        if foot_pos is not None and pos > foot_pos:
+            e["under"] = True           # a felvétel ALATT (a beszélő ablakban, app/tools/facecam.py): előbb rajzolandó
         if _STATIC.match(name):         # a pakli hordozója / diája: álló kép a beúszás után — rövid minta, egy kocka
             e["probe"] = max(2, round(STATIC_PROBE_S * fps))
             e["persist"] = e["persist"] or N - _outro_frames(fps) >= e["probe"]
@@ -566,6 +570,8 @@ async def layers_part(pid: str, spec: Optional[dict[str, Any]] = None, *, playhe
         y = {"id": x["id"], "name": x["name"], "z": x["z"], "t0": round(x["f0"] / fps, 6), "t1": round(x["f1"] / fps, 6),
              "hash": h, "url": clip_url(pid, h) if status == "ready" else None, "status": status, "loop": x["loop"],
              "f0": x["f0"], "frames": x["f1"] - x["f0"], "kind": x["kind"], "blend": x["layer"].get("blend", "normal")}
+        if x["layer"].get("under"):
+            y["under"] = True
         if x["kind"] == "loop" and x["loop"]:
             y["clip_frames"] = x["loop"]["intro_frames"] + x["loop"]["period_frames"]
         if status == "unsupported":
