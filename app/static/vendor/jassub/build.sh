@@ -2,8 +2,8 @@
 # How the files in this folder were made (JASSUB 2.5.20, libass in WASM, for app/static/live-captions.js).
 #   bash build.sh <work dir> [<esbuild binary>]
 # Downloads the exact npm tarballs (integrity checked), bundles JASSUB's main module and its worker with esbuild into
-# two self-contained ES modules (no bare imports: a module worker cannot use an import map), and copies the WASM and
-# JASSUB's own LICENSE here. Nothing is changed in JASSUB's code; three of its npm dependencies are replaced by stubs:
+# two self-contained ES modules (no bare imports: a module worker cannot use an import map), with JASSUB's own MIT
+# licence text in each file's header (no separate notices file in the repo), and copies the WASM here. Nothing is changed in JASSUB's code; three of its npm dependencies are replaced by stubs:
 #   rvfc-polyfill (GPL-3.0)  → empty: only for its <video> mode; we draw on a canvas with our own clock, and Chrome,
 #                              Safari and Firefox have requestVideoFrameCallback natively
 #   lfa-ponyfill (MIT)       → a stub that finds nothing: only for queryFonts 'localandremote' (Google Fonts), which
@@ -34,15 +34,24 @@ stub lfa-ponyfill  'export async function queryRemoteFonts () { return [] } // s
 stub throughput    'export default function throughput () { return () => 0 } // stub: debug mode only'
 J="$W/pkgs/jassub/package"
 rm -rf "$W/jassub" && cp -r "$J" "$W/jassub"
-HEAD="/*! JASSUB 2.5.20 (MIT, github.com/ThaUnknown/jassub, LICENSE in this folder) bundled with abslink 1.3.1 (Apache-2.0,
- github.com/ThaUnknown/abslink, a Comlink derivative). Made by build.sh in this folder. */"
+LIC="$(sed 's/^/ /' "$J/LICENSE")"
+HEAD="/*! JASSUB 2.5.20 (MIT, github.com/ThaUnknown/jassub) bundled with abslink 1.3.1 (Apache-2.0,
+ github.com/ThaUnknown/abslink, a Comlink derivative). Made by build.sh in this folder.
+
+ JASSUB licence:
+$LIC
+*/"
 WHEAD="/*! JASSUB 2.5.20 worker (MIT) + abslink 1.3.1 (Apache-2.0). jassub-worker*.wasm is libass (ISC) with FreeType
  (FTL: portions of this software are copyright The FreeType Project, www.freetype.org), FriBidi (LGPL-2.1-or-later,
  source: github.com/fribidi/fribidi), HarfBuzz (MIT, old), Brotli (MIT) and expat (MIT), compiled with Emscripten by
- JASSUB (source and build: github.com/ThaUnknown/jassub, commit dea3d2d398 = npm 2.5.20). */"
+ JASSUB (source and build: github.com/ThaUnknown/jassub, commit dea3d2d398 = npm 2.5.20).
+
+ JASSUB licence:
+$LIC
+*/"
 "$ESB" "$W/jassub/dist/jassub.js" --bundle --format=esm --target=es2022 --legal-comments=inline \
   --banner:js="$HEAD" --outfile="$OUT/jassub.js"
 "$ESB" "$W/jassub/dist/worker/worker.js" --bundle --format=esm --target=es2022 --legal-comments=inline \
   --banner:js="$WHEAD" --outfile="$OUT/jassub-worker.js"
-cp "$J/dist/wasm/jassub-worker.wasm" "$J/dist/wasm/jassub-worker-modern.wasm" "$J/LICENSE" "$OUT/"
+cp "$J/dist/wasm/jassub-worker.wasm" "$J/dist/wasm/jassub-worker-modern.wasm" "$OUT/"
 sha256sum "$OUT"/jassub.js "$OUT"/jassub-worker.js "$OUT"/*.wasm

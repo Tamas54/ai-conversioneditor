@@ -221,7 +221,9 @@ def test_vendored_jassub_is_self_contained_and_licensed(client):
     for src in (js, worker):                     # no bare imports (a module worker has no import map)
         assert not re.search(r"""^\s*import\b[^'"]*['"](?![./])""", src, re.M)
         assert not re.search(r"""\bfrom\s*['"](?![./])""", src)
-    assert "MIT License" in (VENDOR / "LICENSE").read_text("utf-8")
+    for src in (js, worker):                     # the MIT text in each file's header (no notices file in the repo)
+        head = src[:src.index("*/")]
+        assert "MIT License" in head and "JASSUB contributors" in head and "Permission is hereby granted" in head
     assert "FriBidi (LGPL-2.1-or-later" in worker and "FreeType" in worker
     r = client.get("/static/vendor/jassub/jassub-worker.wasm")
     assert r.status_code == 200 and r.headers["content-type"] == "application/wasm" and r.content[:4] == b"\0asm"
