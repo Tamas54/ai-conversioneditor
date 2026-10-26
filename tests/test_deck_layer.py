@@ -157,7 +157,12 @@ def test_front_and_background_decks_cover_the_frame_and_cut_has_no_crossfade():
     ly, items, _, problems = _built("background")
     assert items[0]["deck"]["placement"] == "background" and items[1]["elements"][0]["size"] == [1920, 1080]
     from app.tools import deck_layer
-    assert any("background" in p and "doesn't cut you out yet" in p for p in deck_layer.final_notes([ly]))
+    from app.tools import deck_matte
+    notes = deck_layer.final_notes([ly])
+    if deck_matte.available() is None:                 # the server cuts the speaker out: nothing to warn about
+        assert notes == []
+    else:
+        assert any("background" in p and "can't cut you out" in p for p in notes)
 
 
 def test_deck_is_clipped_by_the_end_of_the_video():
@@ -173,6 +178,9 @@ def test_matte_part_flags_the_background_deck_clips():
     scene = [{"id": "L5"}, {"id": "L5.1"}, {"id": "L5.2"}, {"id": "L6"}, {"id": "L6.1"}, {"id": "L50"}]
     m = deck_layer.matte_part(spec, scene, 1797.0)
     assert m["spans"] == [[1500, 1560]] and m["model"] == "selfie_segmenter_landscape"
+    from app.tools.deck_matte import RECIPE                                         # the browser gets the server's recipe
+    assert (m["levels"], m["ema"], m["motion"]) == (RECIPE["levels"], RECIPE["ema"], RECIPE["motion"])
+    assert m["semantic"] == "selfie_multiclass_256x256" and m["model"] == "selfie_segmenter_landscape"
     assert [bool(x.get("behind")) for x in scene] == [True, True, True, False, False, False]
     assert deck_layer.matte_part({"story": {"layers": []}}, [], 10) is None
 
@@ -262,3 +270,136 @@ def test_deck_in_the_engine_project_and_a_retime_changes_only_two_segment_clips(
     b = scene(ed["file_id"])
     changed = sorted(k for k in a if a[k]["hash"] != b[k]["hash"])
     assert changed == ["L1.1", "L1.2"], changed                                     # the carrier and slide 3 are reused
+
+
+# ---------- round 2: the speaker matte (live recipe = the final render's) ----------
+
+def test_matte_recipe_kernel_and_motion_aware_smoothing():
+    import numpy as np
+    from app.tools import deck_matte as dm
+    K = dm.kernel(0.6)
+    assert abs(float(K.sum()) - 1) < 1e-6 and K[1, 1] == pytest.approx(0.44) and K[0, 1] == pytest.approx(0.08) and K[0, 0] == pytest.approx(0.06)
+    e = np.array([0.0, 0.0, 1.0, 0.5], np.float32)
+    a = np.array([1.0, 0.05, 1.0, 0.55], np.float32)
+    dm.ema_step(e, a, 0.5, [0.15, 0.4])
+    assert e[0] == pytest.approx(1.0)                  # a big change (the head moved): the new value at once
+    assert e[1] == pytest.approx(0.025) and e[3] == pytest.approx(0.525)   # small changes: smoothed (k 0.5)
+    e2 = np.zeros(1, np.float32)
+    dm.ema_step(e2, np.ones(1, np.float32), 0.5, None)
+    assert e2[0] == pytest.approx(0.5)                 # the plain EMA (round 1) for comparison
+    m = np.zeros((144, 256), np.float32)
+    m[30:120, 90:170] = 1.0
+    al = dm.alpha_of(m, 960, 540)
+    assert al.shape == (540, 960) and al[300, 480] == 255 and al[20, 20] == 0
+    edge = al[300, 320:360]
+    assert edge.min() == 0 and edge.max() == 255 and len(set(edge.tolist())) > 3      # a soft, not a stepped edge
+
+
+def test_motion_aware_smoothing_is_the_same_in_the_browser():
+    """live-player.js emaStep == deck_matte.ema_step (node runs the player's function)."""
+    import numpy as np
+    from app.tools import deck_matte as dm
+    if not shutil.which("node"):
+        pytest.skip("node needed")
+    rng = np.random.default_rng(1)
+    e0, a = rng.random(64).astype(np.float32), rng.random(64).astype(np.float32)
+    js = Path(__file__).resolve().parent.parent / "app" / "static" / "live-player.js"
+    code = (f"const m = require({json.dumps(str(js))}); const e = Float32Array.from({json.dumps(e0.tolist())}); "
+            f"const a = Float32Array.from({json.dumps(a.tolist())}); m.emaStep(e, a, new Uint8Array(64), 0.5, [0.15, 0.4]); "
+            "console.log(JSON.stringify(Array.from(e)));")
+    out = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
+    py = dm.ema_step(e0.copy(), a, 0.5, [0.15, 0.4])
+    assert np.allclose(np.array(out, np.float32), py, atol=1e-5)
+
+
+def test_speaker_items_go_right_after_their_deck(tmp_path, monkeypatch):
+    from app.tools import deck_matte as dm, video
+    [ly] = video.layers_from([_deck(dur=60, placement="background", slides=[{"at": 150, "slide": 1}, {"at": 172, "slide": 4}])], "", [])
+    [w] = video.layers_from([{**_deck(at=300, dur=20, placement="window"), "id": "L9"}], "", [])
+    for x in (ly, w):
+        x["_files"], x["_aspect"] = {1: "a.png", 4: "b.png"}, 16 / 9
+    items, _, _ = video.layer_comps([ly, w], 1920, 1080, 600.0, "hu", [0.9, 0.3, 0.2], 1000)
+    D = {"fps": 25.0, "total": 600.0, "layers": items + [{"id": "L5", "name": "Layer L5 – logo", "pos": [100, 100], "w": 50, "h": 50, "at": 0, "dur": 600, "elements": []}]}
+    clip = tmp_path / "m.mp4"
+    clip.write_bytes(b"x")
+    calls = []
+
+    async def fake(src, media, fa, n, fps):
+        calls.append((media, fa, n))
+        return clip, {"cached": False}
+    monkeypatch.setattr(dm, "matte", fake)
+    monkeypatch.setattr(dm, "available", lambda: None)
+    names, notes = asyncio.run(dm.add_speakers(D, tmp_path, "footage.mp4", "abc.mp4"))
+    ids = [x["id"] for x in D["layers"]]
+    assert ids[:4] == ["L1", "L1.1", "L1.2", "L1.speaker"] and ids[-1] == "L5" and not notes
+    sp = D["layers"][3]
+    assert sp["name"] == "Speaker L1" and sp["speaker"]["at"] == 150 and sp["speaker"]["dur"] == 60 and names == [sp["speaker"]["file"]]
+    assert calls == [("abc.mp4", 3750, 1500)]          # frames 150 s × 25 … 210 s × 25 of the copy
+    monkeypatch.setattr(dm, "available", lambda: "MediaPipe isn't installed on this server")
+    D2 = {"fps": 25.0, "total": 600.0, "layers": [dict(x) for x in items]}
+    names, notes = asyncio.run(dm.add_speakers(D2, tmp_path, "footage.mp4", "abc.mp4"))
+    assert names == [] and "slides over you" in notes[0] and not any(x.get("speaker") for x in D2["layers"])
+    assert video._holders(D) and all(h[0] != "Layer L1.speaker" for h in video._holders(D))
+
+
+def test_fast_render_draws_the_speaker_span_with_the_engine():
+    from app.tools import fast_render as fr
+    info = {"W": 640, "H": 360, "fps": 25, "dur": 60, "comp": "Video", "layers": [
+        {"i": 1, "name": "Speaker L1", "a": 20, "b": 40, "on": True, "video": True, "nul": False, "adj": False, "keys": [], "fx": 0,
+         "normal": True, "matte": True, "file": "footage.mp4"},
+        {"i": 2, "name": "Layer L1.1 – slide 1", "a": 20, "b": 40, "on": True, "video": True, "nul": False, "adj": False, "keys": [],
+         "fx": 0, "normal": True},
+        {"i": 3, "name": "Footage", "a": 0, "b": 60, "on": True, "video": True, "nul": False, "adj": False, "keys": [], "fx": 0,
+         "normal": True, "file": "footage.mp4"}]}
+    k = fr.classify(info, {"kind": "overlay", "base": {"asset": "footage.mp4"}})
+    assert k["ok"] and [x["i"] for x in k["gfx"]] == [2] and fr.spans(k["opaque"], 60, 25) == [(19.96, 40.04)]
+    other = {**info, "layers": [{**info["layers"][0], "name": "Layer L7 – masked"}] + info["layers"][1:]}
+    assert "track matte" in fr.classify(other, {"kind": "overlay", "base": {"asset": "footage.mp4"}})["why"]
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI, ffmpeg and LibreOffice needed")
+def test_background_deck_puts_the_speaker_over_the_slides_in_the_project(tmp_path, put_file):
+    from app.storage import output_path
+    from app.tools import deck_matte, video
+    if deck_matte.available():
+        pytest.skip(deck_matte.available())
+    clip = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "12", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(clip)], check=True)
+    fid = put_file(clip)
+    deck = put_file(_make_pptx(tmp_path / "d.pptx"))
+    res = asyncio.run(video.overlay({"file_id": fid, "render": False, "layers": [
+        {"at": 2, "until": 9, "type": "deck", "file_id": deck, "placement": "background",
+         "slides": [{"at": 2, "slide": 1}, {"at": 6, "slide": 2}]}]}))
+    assert not any("cut you out" in f or "slides over you" in f for f in res["check"]["findings"]), res["check"]["findings"]
+    d = json.loads(output_path(res["file_id"]).read_text("utf-8"))
+    main = next(it for it in d["items"].values() if it.get("name") == "Video")
+    names = [L.get("name") for L in main["kind"]["layers"]]
+    sp = next(L for L in main["kind"]["layers"] if L.get("name") == "Speaker L1")
+    assert (sp.get("track_matte") or {}).get("kind") == "Luma" and "Speaker L1 matte" in names
+    assert names.index("Speaker L1 matte") < names.index("Speaker L1") < names.index("Layer L1.2 – slide 2")   # above the slides
+    mname = next(n for n in video.assets_of(res["file_id"]) if n.startswith("speaker-"))
+    probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
+                                       "stream=nb_read_frames,width,height", "-of", "json",
+                                       str(output_path(video.assets_of(res["file_id"])[mname]))],
+                                      capture_output=True, text=True, check=True).stdout)["streams"][0]
+    assert (probe["width"], probe["height"]) == (640, 360) and int(probe["nb_read_frames"]) == 7 * 25
+
+
+def test_hole_fill_takes_the_landscape_mask_only_where_it_is_sure_and_near_the_person():
+    import numpy as np
+    from app.tools import deck_matte as dm
+    m = np.zeros((256, 256), np.float32)
+    m[60:200, 80:180] = 1.0
+    m[100:140, 121:129] = 0.0                     # a hole in the person (the blown-out cheek)
+    l = np.zeros((144, 256), np.float32)
+    l[30:115, 80:180] = 0.95                      # the landscape model is sure there
+    l[5:20, 5:30] = 0.95                          # … and wrong far away (the wall picture)
+    l[60:80, 190:200] = 0.6                       # unsure next to the person
+    out = dm.fill_holes(m, l)
+    assert out[120, 125] > 0.9                    # the hole is filled
+    assert out[20, 20] == 0                       # far from the person: not added
+    assert out[120, 196] < 0.5                    # an unsure landscape edge: not added
+    assert dm.RECIPE["fill"] == {"size": [256, 144], "min": 0.9, "r": 4} and dm.RECIPE["model"] == "selfie_multiclass_256x256"
