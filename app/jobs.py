@@ -58,7 +58,8 @@ def start(kind: str, work: Callable[[Progress], Awaitable[dict[str, Any]]], eta_
             job["result"] = await work(Progress(job))
             job["status"] = "done"
         except asyncio.CancelledError:
-            job.update(status="cancelled", error="Stopped.")
+            status, error = job.pop("_cancel_as", None) or ("cancelled", "Stopped.")
+            job.update(status=status, error=error)
         except Exception as e:  # a felhasználó lássa, mi történt
             log.exception("job %s (%s) failed", jid, kind)
             job.update(status="failed", error=getattr(e, "detail", None) or str(e)[:300])
@@ -67,6 +68,13 @@ def start(kind: str, work: Callable[[Progress], Awaitable[dict[str, Any]]], eta_
     # a task létrehozáskor a futó kontextus másolatát kapja → a tenancy (melyik felhasználó tárhelye) átmegy.
     # (context= paramétert NEM adunk: élesben Python 3.10 + uvloop, ott nincs ilyen paraméter.)
     job["_task"] = asyncio.get_running_loop().create_task(run())
+
+    def _settled(t: asyncio.Task) -> None:            # leállítva, mielőtt a run() egyáltalán elindult volna
+        if t.cancelled() and (job["status"] in _LIVE or "_cancel_as" in job):
+            status, error = job.pop("_cancel_as", None) or ("cancelled", "Stopped.")
+            job.update(status=status, error=error)
+        job.setdefault("finished", time.time())
+    job["_task"].add_done_callback(_settled)
     return _public(job)
 
 
@@ -100,6 +108,25 @@ def _gc() -> None:
     now = time.time()
     for jid in [j for j, v in _JOBS.items() if now - v.get("finished", now) > _KEEP_S]:
         _JOBS.pop(jid, None)
+
+
+def live(kind: str, **match: Any) -> list[dict[str, Any]]:
+    """Ennek a folyamatnak a még nem végzett (futó vagy a nehéz munka sorában váró) munkái."""
+    return [j for j in _JOBS.values() if j["kind"] == kind and j["status"] in _LIVE
+            and all(j.get(k) == v for k, v in match.items())]
+
+
+def cancel(job_id: str, *, status: str = "cancelled", error: str = "Stopped.", **extra: Any) -> bool:
+    """Egy még nem végzett munka leállítása a kódból (pl. egy újabb változat leváltja a régi végleges renderjét): a task
+    leáll (a futó ffmpeg / motor-folyamat vele — engines.run, video._run), az állapota status (+ error, extra). → True,
+    ha volt mit leállítani."""
+    job = _JOBS.get(job_id or "")
+    if not job or job["status"] not in _LIVE or not job.get("_task") or job["_task"].done():
+        return False
+    job.update(extra, status=status, error=error)    # azonnal: a futók összesítése (becslés, sor) már ne számolja
+    job["_cancel_as"] = (status, error)              # (a run() a leállás után ugyanezt írja vissza, és a finished-et)
+    job["_task"].cancel()
+    return True
 
 
 @router.get("/api/jobs/{job_id}")
