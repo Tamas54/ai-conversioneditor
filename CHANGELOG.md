@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-10-26 — The preview is live: the browser puts the video together, nothing is rendered for it
+
+The segment preview of the same day still rendered every preview frame on the server, so a 30-minute video took 7–14
+minutes to fill. Real editors don't render a timeline for their preview. They work out what is on screen at the
+playhead and composite only that frame on the GPU. Now the Studio does the same. The server only hands the browser
+its materials, and the browser composes them live:
+
+- **The footage** is the ≤960 px working copy (H.264, a keyframe every second), played straight from the server with
+  byte ranges. A cut is a list of ranges. While a cut's new copy is being made, the ranges point into the old copy, and
+  the next range starts a moment before the joint, so the cut plays across with no gap.
+- **The colour** is applied in a WebGL2 shader with the same tables as ffmpeg's `eq`, bit for bit. A colour change
+  doesn't wait for a new copy: the preview switches to a copy without the recipe and the shader applies it.
+- **The camera zoom and the split screen** move the footage the way the engine does. The keyframes are read from the
+  engine project and use the engine's own interpolation.
+- **Every graphic layer** (lower thirds, chapter, stat and quote cards, charts, slides, picture-in-picture, the logo,
+  the end card) is rendered by the engine once, as a short clip with alpha. The clips are cached by content in Postgres
+  (`preview_segments`), so moving a layer in time reuses its clip. Editing one renders only that layer again. The logo
+  that runs the whole video is one fade-in and then its last frame held.
+- **The captions** are the same ASS file as before, drawn by libass in the browser (JASSUB, vendored), so they look and
+  time exactly like the server's, word highlight included.
+- **The sound** is the working copy's own, so it can't drift from the picture.
+
+An edit's answer now gives `preview.page_url` (`/live/<pid>`) and the scene (`/api/video/<pid>/live.json`, signed).
+Nothing is rendered for the preview; the changed graphics are queued at once. `VIDEO_PREVIEW_LIVE=0`, or
+`preview="mp4"`, keeps the segment playlist.
+
+Measured on the 30-minute test project in Chrome:
+
+| What | Before (segment preview) | Now (live) |
+|---|---|---|
+| Opening the preview | 1.6–19 s to the first segment, 7–14 min to fill | first frame in 0.3–0.8 s, the whole video at once |
+| Jump anywhere | 0.3 s once its segments are made | 21–54 ms to the new frame |
+| Edit a stat card's text | 5.4–16.9 s answer, then segments | 1.4 s answer, the new card 3.5 s later |
+| Cut | 8.8–24 s answer, then segments | 1.6 s answer, on screen 0.2 s later |
+| Colour | 18.5–24 s answer, then 16–35 s segments | 3.4 s answer, on screen 0.9 s later |
+| Caption style | 8.3 s answer, then segments | 4.7 s answer, on screen 1.1 s later |
+| Move a layer in time | 3.7 s answer, then segments | 5.3 s answer, on screen 0.8 s later, nothing rendered |
+
+The answers grow with background load (1.4 → 5.3 s over five edits in a row, load up to 23): each edit still builds
+the engine project, and starts the final video's first step in the background.
+
+Checked against the server's render:
+- **Captions:** the highlighted word changes on the same frame at 72 of 72 points.
+- **Graphics:** 35 dB inside their rectangles on average, frame-aligned.
+- **Footage:** 36–39 dB, with colour 40 dB against ffmpeg's `eq`.
+- **A/V by content:** 0 ms on the copy's sound. In the browser −35 ms median, measured through a WebAudio capture.
+
 ## 2026-10-26 — Long videos: a playable preview within seconds, and an edit re-renders only what changed
 
 Before, every change to a video project rebuilt the whole engine project from scratch and rendered a new preview
