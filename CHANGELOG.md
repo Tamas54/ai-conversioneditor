@@ -28,6 +28,21 @@ cut): 1.95, 1.94, 1.70, 1.56, 1.65, 1.76, 1.77, 1.67 s (load 2–4), and the fin
 first step took 58 s: a 33 s smart cut and the captioned project (it used to be minutes of engine work for every
 version, plus the 39-minute re-encode after every colour change).
 
+## 2026-10-26 — A deck layer: a pptx in the video, beside the speaker, in front, or behind the speaker
+
+A `deck` layer turns one pptx (or ppt / odp) into a timed slide sequence. The slides are drawn once with LibreOffice
+at the project size and cached by the file's content. A slide switches at a time, or when a phrase is spoken (from the
+captions' word times; within a caption line the time is estimated, and the check says so). It has three placements:
+- **window:** beside the speaker, like `split`;
+- **front:** full frame, the sound continues;
+- **background:** the speaker in front of the slide. In the live preview the browser cuts the speaker out (MediaPipe
+  selfie segmenter, Apache-2.0). In the final video the slide still covers the speaker, and the check says so; the
+  server-side cut-out is planned.
+
+Slides cross-fade in 0.45 s. In the live preview each slide segment is one still clip, so retiming one switch renders
+two segments again and nothing else. Measured on the 30-minute test project with the owner's deck: the first deck edit
+took 11.4 s, 8.1 s of it drawing the slides; retiming a switch took 2.75 s.
+
 ## 2026-10-26 — Effect layers: lightning from the hand, a fireball, a chart on fire
 
 The lightning prototype the owner tuned ("kurva jó") is now a layer type, the first of a family:

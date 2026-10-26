@@ -2770,6 +2770,7 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             out += deck_layer.items({**ly, "dur": dur}, W, H, total)
             rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "deck", "layer": True})
             placed.append((ly, at, at + dur, deck_layer.box(ly, W, H)))
+            continue
         if ly["type"] == "effect":                    # előre komponált klip (D.effects, effect_layers.prepare), nem kompozíció
             rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "effect", "layer": True})
             continue
