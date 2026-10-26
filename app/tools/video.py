@@ -5485,8 +5485,9 @@ async def _hls_preview(hls: tuple[Any, Any], pid: str, parent: Optional[str], sp
                           "segments_total": len(segs), "segments_dirty": len(dirty),
                           "segments_ready": sum(1 for x in segs if x["hash"] in have), "first_ready_s": first_s,
                           "reused": int(d["reused"]), "markers": marks}
-    log.info("szakasz-előnézet %s: %d szakasz, %d új, %d a gyorsítótárból, az első %.1f s alatt", pid, len(segs), len(dirty),
-             pv["segments_ready"], first_s if first_s is not None else -1)
+    log.info("szakasz-előnézet %s: %d szakasz, %d új, %d a szülőtől újrahasznált (%.0f %%), most kész %d, az első %.1f s alatt",
+             pid, len(segs), len(dirty), pv["reused"], 100.0 * pv["reused"] / max(1, len(segs)), pv["segments_ready"],
+             first_s if first_s is not None else -1)
     if preview == "mp4":
         step(3, 4, "the preview as one MP4")
         mp4, note = await _preview_mp4(hls, pid, plan, label_stem, group)
