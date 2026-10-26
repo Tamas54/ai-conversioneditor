@@ -8,6 +8,9 @@
 //   D.base (overlay): a felhasználó felvétele az alapsáv a jelenetek helyett. D.layers: időkódos rétegek (rétegenként egy
 //   „Layer L1 – …” kompozíció) abszolút időben a fő idővonalon — a make- és az overlay-videón ugyanígy.
 //   D.alpha: csak a grafika (felvétel, képek, sötétítés, hang nélkül) — az átlátszó (rgba) renderhez.
+//   D.effects (overlay): effekt-rétegek (villám a kézből) — a felvétel szakasza az effekttel, előre komponálva
+//   (app/tools/effect_layers.py): átlátszatlan felvétel-réteg a felvétel fölött, a grafikai rétegek alatt, a felvétel
+//   mozgásával (ráközelítés, osztott kép).
 
 function tp(layer) { return layer.property("ADBE Transform Group"); }
 function ease(prop) {   // lágy indulás/érkezés minden kulcskockán (ha a motor nem tudja, marad lineáris)
@@ -500,9 +503,9 @@ function endScene(sc) {
 
 // időkódos réteg: saját kompozíció (a Python számolta elemekkel) a fő idővonalon at-tól dur-ig, be/ki úsztatva;
 // osztott képnél az alapsáv (felvétel vagy jelenetek) a fél képre zsugorodik, a végén vissza
-function splitBase(Lb, ly) {
+function splitBase(Lb, ly, f) {   // f: a réteg alapnagyítása (a munkamásolat: BASE_K; egy teljes méretű effekt-klip: 1)
   var T = tp(Lb), S = T.property("ADBE Scale"), P = T.property("ADBE Position"), s = ly.split;
-  var a = ly.at, b = ly.at + ly.dur, d = Math.min(0.5, ly.dur / 4), k = s.scale * 100 * BASE_K, p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
+  var a = ly.at, b = ly.at + ly.dur, d = Math.min(0.5, ly.dur / 4), k = s.scale * 100 * (f || BASE_K), p0 = P.valueAtTime(a, false), s0 = S.valueAtTime(a, false);
   S.setValueAtTime(a, s0); S.setValueAtTime(a + d, [k, k]); S.setValueAtTime(b - d, [k, k]); S.setValueAtTime(b, s0);
   P.setValueAtTime(a, p0); P.setValueAtTime(a + d, s.to); P.setValueAtTime(b - d, s.to); P.setValueAtTime(b, p0);
   ease(S); ease(P);
@@ -548,17 +551,17 @@ function overlayLayers(main, base) {
     if (ai === "pop") { S.setValueAtTime(a, [86, 86]); S.setValueAtTime(a + di, [100, 100]); }
     if (ao === "pop") { S.setValueAtTime(b - dq, [100, 100]); S.setValueAtTime(b, [86, 86]); }
     ease(O); ease(P); ease(S);
-    if (ly.split) for (var j = 0; j < base.length; j++) splitBase(base[j], ly);
+    if (ly.split) for (var j = 0; j < base.length; j++) splitBase(base[j], ly, BASE_F[j]);
   }
 }
 
 var main = app.project.items.addComp("Video", D.W, D.H, 1, D.total, D.fps);
 main.bgColor = D.dark;
-var baseLayers = [], BASE_K = 1;
+var baseLayers = [], BASE_K = 1, BASE_F = [];
 if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja) az alapsáv
   if (!D.alpha) {
     var fb = main.layers.add(app.project.importFile(new ImportOptions(new File(D.base.file))));
-    fb.name = D.base.label || "Footage"; baseLayers.push(fb);
+    fb.name = D.base.label || "Footage"; baseLayers.push(fb); BASE_F.push(0);
     if (D.base.scale && D.base.scale !== 1) {   // a munkamásolat (kicsi) a kompozíció méretére: a rétegek a teljes méretben
       BASE_K = D.base.scale;
       tp(fb).property("ADBE Scale").setValue([BASE_K * 100, BASE_K * 100]);
@@ -571,6 +574,16 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
       fb.outPoint = D.total;
     }
     if (D.camera) camera(fb, D.camera, 0, BASE_K);      // ráközelítés a felvételre (punch-in), abszolút időben
+    for (var ei = 0; ei < (D.effects || []).length; ei++) {   // effekt: a felvétel szakasza az effekttel, a felvétel fölött
+      var ef = D.effects[ei];
+      var es = FOOT[ef.file] || (FOOT[ef.file] = app.project.importFile(new ImportOptions(new File(ef.file))));
+      var Le = main.layers.add(es); Le.name = ef.name;
+      Le.startTime = ef.at; Le.inPoint = ef.at; Le.outPoint = Math.min(D.total, ef.at + ef.dur);
+      if (ef.k !== 1) tp(Le).property("ADBE Scale").setValue([ef.k * 100, ef.k * 100]);
+      try { Le.property("ADBE Audio Group").property("ADBE Audio Levels").setValue([-192, -192]); } catch (e) {}
+      if (D.camera) camera(Le, D.camera, 0, ef.k);          // a felvétel mozgásával együtt
+      baseLayers.push(Le); BASE_F.push(ef.k);
+    }
   }
 } else {
   var order = [titleScene(D.title)], starts = [0], t = D.title.dur - D.xfade;
@@ -580,7 +593,7 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
     var L = main.layers.add(order[j]);
     L.startTime = starts[j];
     if (j > 0) transIn(main, L, baseLayers[j - 1], starts[j], D.xfade, (D.transitions || [])[j - 1] || "fade");
-    baseLayers.push(L);
+    baseLayers.push(L); BASE_F.push(0);
   }
 }
 overlayLayers(main, baseLayers);      // a rétegek a jelenetek / a felvétel fölött, a feliratok alatt
