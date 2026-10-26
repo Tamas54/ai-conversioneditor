@@ -19,6 +19,8 @@ A version's scene JSON tells app/static/live-player.js what to play at every out
     the engine project itself (the .ecproj is JSON: the same keys, interpolation and temporal ease the engine renders),
     evaluated in the browser with the engine's interpolation (linear / hold / bezier speed+influence).
   · layers / captions — lanes L2 / L3 (live_layers.layers_part, live_captions.captions_part), optional imports.
+  · matte — the background decks' spans (deck_layer.matte_part): there the browser draws the footage again through a
+    person mask over the layers flagged `behind` (the speaker in front of the slide).
 
 `build(pid)` assembles it; everything else here is pure (no I/O) and tested in tests/test_live_scene.py.
 """
@@ -732,6 +734,12 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
     scene["captions"] = await _part(_live_captions, "captions_part_async" if hasattr(_live_captions, "captions_part_async")
                                     else "captions_part", pid, spec, ctx)
     scene["layers"] = await _part(_live_layers, "layers_part", pid, spec, ctx) or []
+    try:                                         # a háttérbe tett pakli: a beszélő a dia elé (a böngésző maszkjával)
+        from app.tools import deck_layer
+        scene["matte"] = deck_layer.matte_part(spec, scene["layers"], total)
+    except Exception as e:                       # noqa: BLE001 — the rest of the scene plays without it
+        log.warning("live scene: matte part (%s): %s", pid, e)
+        scene["matte"] = None
     scene["rev"] = revision(scene)
     return scene
 

@@ -214,6 +214,7 @@
       running: `Final video: rendering${e ? ", " + e : ""}`,
       done: done ? (st.src === "final" ? "Playing the final video — full quality." : "Final video: ready — full quality.") : "",
       failed: "Final video: the render failed. The preview still plays.",
+      superseded: "Final video: a newer version replaced this one — the newest version's final video is made.",
       none: "Final video: not rendered yet.",
     }[f.status] || "";
     if (finEl.textContent !== text) finEl.textContent = text;

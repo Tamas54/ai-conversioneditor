@@ -69,6 +69,9 @@ def test_classify_sorts_layers_and_refuses_what_it_cant_match():
     assert [x["i"] for x in k["persistent"]] == [4] and [x["i"] for x in k["short"]] == [3]
     assert fr.spans(k["opaque"], 60, 25) == [(9.96, 11.04)]                    # csak ahol el van mozdítva (a 0 s-os kulcs nem)
     assert not fr.classify(_info(**{"3": {"normal": False, "blend": "Multiply"}}), spec)["ok"]
+    # screen / add (egy effekt fénye): a szakaszát a motor a felvétellel együtt rajzolja (átlátszatlan szakasz)
+    lit = fr.classify(_info(**{"3": {"normal": False, "blend": "5223", "light": True}}), spec)
+    assert lit["ok"] and fr.spans(lit["opaque"], 60, 25) == [(2.96, 5.04), (9.96, 11.04)]
     assert not fr.classify(_info(**{"3": {"adj": True}}), spec)["ok"]
     assert not fr.classify(_info(**{"5": {"fx": 1}}), spec)["ok"]
     assert fr.classify(_info(), {"kind": "make"})["why"] == fr.NOT_OVERLAY

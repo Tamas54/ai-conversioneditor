@@ -166,9 +166,10 @@ async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: 
         raise RuntimeError("Custom scripts need the sandbox, and it isn't available on this server — use a graphic (type \"graphic\") instead.")
     else:
         log.warning("zárka nélkül fut a videómotor (a kernel nem tud Landlockot)")
-    from app.convert.engines import niced
+    from app.convert.engines import niced, track, untrack
     proc = await asyncio.create_subprocess_exec(*niced(argv), cwd=str(cwd), env=env,
                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    track(proc.pid)                         # háttérmunka: egy szerkesztés építése alatt áll (engines.foreground)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout or settings.VIDEO_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -180,6 +181,8 @@ async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: 
             proc.kill()
         await asyncio.shield(proc.wait())
         raise
+    finally:
+        untrack(proc.pid)
     if proc.returncode != 0:
         msg = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip()
         raise RuntimeError(f"effectcraft-cli {args[0]}: {msg[-600:] or f'exit code {proc.returncode}'}")
@@ -207,7 +210,7 @@ def carry_assets(source_id: Optional[str], new_id: str) -> None:
     if not source_id:
         return
     meta = read_meta(source_id) or {}
-    extra = {k: meta[k] for k in ("assets", "video", "spec") if meta.get(k)}
+    extra = {k: meta[k] for k in ("assets", "video", "spec", "full_footage") if meta.get(k)}
     if extra.get("assets"):                    # a felirat nélküli előnézet-projekt a régi változaté, nem a kézzel átírté
         extra["assets"] = {k: v for k, v in extra["assets"].items() if k != PREVIEW_ECPROJ}
     if extra.get("spec"):
@@ -1927,19 +1930,22 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
 # itt számoljuk (mint a chart_elements), a builder csak lerakja (overlayLayers). Az ábra, a szám és az idézet a forrással
 # ellenőrizve — forrás nélkül a réteg a saját szövegével megy át (NEM ellenőrizve; a check ezt ki is mondja).
 
-LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform")
+LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform", "deck", "effect")
+# effect: a felvételre rajzolt effekt (villám a kézből — app/tools/effect_layers.py): előre komponált klip a felvétel fölött,
+# a grafikai rétegek alatt; csak saját felvételen (overlay)
 _LAYER_DUR = {"lower_third": 5.0, "title": 4.0, "chapter": 3.5, "source": 5.0, "stat": 5.0, "quote": 6.0, "chart": 6.0,
-              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0}
+              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0, "deck": 30.0, "effect": 4.0}
 _LAYER_ANIM = {"lower_third": ("slide", "fade"), "title": ("fade", "fade"), "chapter": ("slide", "fade"), "source": ("fade", "fade"),
                "stat": ("pop", "fade"), "quote": ("fade", "fade"), "chart": ("pop", "fade"), "fullscreen": ("fade", "fade"),
-               "split": ("fade", "fade"), "waveform": ("fade", "fade")}
+               "split": ("fade", "fade"), "waveform": ("fade", "fade"), "deck": ("fade", "fade"), "effect": ("none", "none")}
 _LAYER_ANIMS = ("fade", "slide", "pop", "none")
 _LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
 # z-sorrend: a teljes képes és az osztott alul, a névsáv és a forrásfelirat legfelül (egy fajtán belül az idő szerint)
-_LAYER_Z = {"fullscreen": 0, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
+_LAYER_Z = {"effect": -1, "fullscreen": 0, "deck": 1, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
             "source": 5}
 _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
-                "splitscreen": "split", "credit": "source"}
+                "splitscreen": "split", "credit": "source", "slides": "deck", "pptx": "deck", "presentation": "deck",
+                "slideshow": "deck"}
 # a rövidített réteg ({"type": "race", …}) ezeket viszi át az ábrába — a saját alakú ábrák mezői is (10-17: a „series”,
 # az „x_title”, a magyarázó ábrák „nodes”/„edges” mezője eddig elveszett a rövidítésben)
 _CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "series", "x_title",
@@ -1952,10 +1958,13 @@ _LAYER_COMMON = ("id", "at", "dur", "until", "type", "position", "anim", "remove
 _LAYER_FIELDS = {"lower_third": ("name", "text", "role", "subtitle", "side"), "title": ("text", "title", "subtitle", "kicker"),
                  "chapter": ("text", "title", "subtitle", "kicker"), "source": ("text",), "stat": ("stat", "value", "label"),
                  "quote": ("text", "label", "author", "who"), "waveform": ("style", "bars", "color"),
+                 "effect": (),                    # a mezőit a regiszter adja (effect_layers.fields(): a közösek + PARAMS)
                  "chart": ("chart", "panel") + _CHART_KEYS,
                  # teljes kép / osztott: a tartalma szerint (ábra | kép | szöveg)
                  "fullscreen:chart": ("chart",) + _CHART_KEYS, "fullscreen:image": _IMAGE_KEYS,
-                 "fullscreen:text": ("text", "subtitle", "kicker")}
+                 "fullscreen:text": ("text", "subtitle", "kicker"),
+                 # a pptx a képben (N2, 10-26): app/tools/deck_layer.py
+                 "deck": ("file_id", "deck", "pptx", "placement", "side", "slides", "follow", "transition")}
 _PIP_FIELDS = ("image", "file_id", "corner", "size", "aspect", "sound", "clip", "panel")
 _PANEL = [0.035, 0.04, 0.055]
 # a hibaüzenetek minimális példája (10-19: a csonkolt leírás után a „type None” hiba nem mondta meg, mi a jó alak)
@@ -2068,9 +2077,15 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         # szerkesztésnél a tárolt ábrára mennek; a "chart" belsejében megadott érték az erősebb
         inner = raw.get("chart") if isinstance(raw.get("chart"), dict) else {}
         raw = {**raw, "chart": {**{k: raw[k] for k in _CHART_KEYS if k in raw}, **inner}}
+    if typ == "effect" and (r.get("after_said") not in (None, "") or r.get("at_speech_end_after") not in (None, "")):
+        raise ValueError(f"{what} (effect): after_said / at_speech_end_after come from the footage's sound — they work on your "
+                         "own footage (overlay, or editing such a video); give at instead.")
     if typ not in LAYER_TYPES:
         raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} | pip (or a chart type such as \"column\"), "
                          f"e.g. {_LAYER_EXAMPLE} — the full list: video(action=\"schema\", topic=\"layers\").")
+    if typ == "deck":                                    # a pakli kezdete az első diájából; az egész pakli eltolása
+        from app.tools import deck_layer
+        r = deck_layer.prepare(r, raw, base, what)
     if r.get("at") is None:
         raise ValueError(f"{what}: give at — when it starts (seconds, or a timecode such as \"01:24\"), e.g. {_LAYER_EXAMPLE}.")
     at = timecode(r["at"], f"{what} at")
@@ -2078,6 +2093,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         dur = timecode(raw["until"], f"{what} until") - at
     elif r.get("dur") is not None:
         dur = timecode(r["dur"], f"{what} dur")
+    elif typ == "deck":
+        from app.tools import deck_layer
+        dur = deck_layer.default_dur(r, at) or _LAYER_DUR[typ]
     else:
         dur = _LAYER_DUR[typ]
     if dur < 0.5:
@@ -2128,7 +2146,16 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
                           f"{'unknown type' if cc.get('type') not in _CHART_TYPES else 'not enough usable items (check items / elements)'}.")
         return chart
 
-    if typ == "lower_third":
+    if typ == "effect":                                  # villám, tűzgolyó… (app/tools/effect_layers.py, app/tools/fx/)
+        from app.tools import effect_layers, fx
+        ly.pop("position", None)
+        ly.pop("anim", None)
+        if r.get("dur") is None and raw.get("until") is None and str(r.get("effect") or "lightning").lower() in fx.names():
+            ly["dur"] = fx.get(str(r.get("effect") or "lightning").lower()).DEFAULT_DUR     # az effekt saját alap-hossza
+        # új időpont (at) a szerkesztésben: a régi kiváltó (after_said …) már nem igaz
+        ly.update(effect_layers.normalize({k: v for k, v in r.items() if k != "trigger"} if "at" in raw and "trigger" not in raw
+                                          else r, what))
+    elif typ == "lower_third":
         ly["name"] = _clean(r.get("name") or r.get("text"), 60, "Lower-third name")
         if not ly["name"]:
             raise ValueError(f"{what} (lower_third): give name (and role).")
@@ -2152,6 +2179,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
             raise ValueError(f"{what} (waveform): bars = 8–64") from None
         if r.get("color"):
             ly["color"] = str(r["color"])[:24]
+    elif typ == "deck":                                   # pptx a képben: diák időben (app/tools/deck_layer.py)
+        from app.tools import deck_layer
+        ly.update(deck_layer.fields(r, raw, base, ly, what, notes))
     elif typ == "source":
         ly["text"] = _clean(r.get("text"), 140, "Source caption")
         if not ly["text"]:
@@ -2215,6 +2245,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
               else _LAYER_FIELDS[typ]) + _LAYER_COMMON + (_PIP_FIELDS if pip or asked_type in ("pip", "picture_in_picture", "inset") else ())
     if typ == "chart" and asked_type in _CHART_TYPES:
         fields += ("type",)
+    if typ == "effect":
+        from app.tools import effect_layers
+        fields += effect_layers.fields()
     unused = [k for k in asked if k not in fields]
     if unused:
         kind = "picture-in-picture" if pip else (ly.get("chart") or {}).get("type") or typ if typ == "chart" else typ
@@ -2223,6 +2256,14 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
                      + ", ".join(own) + (" and the chart's own (title, items, elements, nodes…)" if "chart" in fields else "")
                      + ' — video(action="schema", topic="layers").')
     return ly
+
+
+def _no_effects(layers: list[dict[str, Any]]) -> None:
+    """A szövegből készült videón nincs felvétel, amire effektet rajzolhatnánk (a villám a felvétel kezéből indul)."""
+    fx = [ly["id"] for ly in layers if ly.get("type") == "effect"]
+    if fx:
+        raise ValueError(f"Layer {fx[0]} (effect): effects are drawn on your own footage (the lightning comes from a hand in "
+                         "it) — use video(action=\"overlay\") with your video, or edit such a video.")
 
 
 def layers_from(raw: Any, source: str, notes: list[str], existing: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
@@ -2294,6 +2335,12 @@ def apply_layer_changes(layers: list[dict[str, Any]], changes: dict[str, Any], s
 def _layer_text(ly: dict[str, Any]) -> str:
     """A réteg fő szövege a listázáshoz és a kompozíció nevéhez."""
     t, ch = ly["type"], ly.get("chart") or {}
+    if t == "deck":
+        from app.tools import deck_layer
+        return deck_layer.text(ly)
+    if t == "effect":
+        from app.tools import effect_layers
+        return effect_layers.label(ly)
     if t == "lower_third":
         return ly["name"] + (f" — {ly['role']}" if ly.get("role") else "")
     if t == "waveform":
@@ -2615,7 +2662,8 @@ def _layer_elements(ly: dict[str, Any], b: dict[str, Any], lang: str, acc: list[
 def _loose(ly: dict[str, Any], b: dict[str, Any]) -> bool:
     """Szándékosan mindent takaró (teljes képes) vagy panel nélküli saját grafika (nyíl, jelölés a felvételen): ezek nem
     „ütköznek” a többi réteggel — a teljes képes alul van, a jelölésnek csak a rajzolt elemei látszanak."""
-    return ly["type"] == "fullscreen" or (ly["type"] == "chart" and not any(e.get("name") == "Panel" for e in b["els"]))
+    return ly["type"] == "fullscreen" or (ly["type"] == "deck" and ly.get("placement") != "window") or \
+        (ly["type"] == "chart" and not any(e.get("name") == "Panel" for e in b["els"]))
 
 
 def _overlaps(placed: list[tuple[dict[str, Any], float, float, dict[str, Any]]]) -> list[str]:
@@ -2717,6 +2765,15 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
         if at + dur > total + 0.05:
             problems.append(f"Layer {ly['id']} was asked to last until {_tc(at + dur)}; the video ends at {_tc(total)}, so it ends there.")
             dur = round(total - at, 3)
+        if ly["type"] == "deck":                       # pakli: hordozó + diánként egy réteg (deck_layer.items)
+            from app.tools import deck_layer
+            out += deck_layer.items({**ly, "dur": dur}, W, H, total)
+            rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "deck", "layer": True})
+            placed.append((ly, at, at + dur, deck_layer.box(ly, W, H)))
+            continue
+        if ly["type"] == "effect":                    # előre komponált klip (D.effects, effect_layers.prepare), nem kompozíció
+            rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "effect", "layer": True})
+            continue
         b = _layer_box(ly, W, H, safe, acc)
         if ly["type"] in ("source", "lower_third") and not ly.get("position") and not ly.get("side"):
             b = _auto_place(ly, b, at, at + dur, placed, zones, W, H, safe, acc)
@@ -2961,6 +3018,7 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
     duration_mode(body.get("duration_mode"), body.get("duration"))
     lnotes: list[str] = []
     layers = layers_from(body.get("layers"), text, lnotes)      # időkódos rétegek a fő idővonalon (a forrás számaival)
+    _no_effects(layers)
     if body.get("scenes"):                  # a kliens jelenetterve: nem tervezünk újra, pontosan ez lesz
         return await _make_from_scenes(body, step, fmt, text, title_hint, site, pictures, layers, lnotes)
     if len(text) < 20:
@@ -3829,15 +3887,19 @@ async def _final_eta(spec: dict[str, Any], *, render: bool, draft: bool, kinds: 
 
 async def _full_build_s(D: dict[str, Any], base: dict[str, Any]) -> float:
     """A háttérben épülő teljes projekt becsült ideje (a végleges render becslése fölé): a felirat-ciklus négyzetes —
-    mérve (PROFILE.md 4.) highlight 63 / 127 / 255 darab: 10 / 38 / 140 s, box 127 / 255: 6 / 22 s; + a munkamásolat,
-    ha az is a háttérben készül (proxy_pending)."""
+    mérve (PROFILE.md 4.) highlight 63 / 127 / 255 darab: 10 / 38 / 140 s, box 127 / 255: 6 / 22 s; + a végleges
+    rendernek kellő munkamásolat (proxy_pending: _copy_plan — színváltozásnál semmi, vágásnál egy smart cut)."""
     n = len(D.get("captions") or [])
     k = 0.00034 if (D.get("captionStyle") or "box") == "box" else 0.0022
     secs = 2.0 + k * n * n if n else 0.0
-    if base.get("proxy_pending"):
+    kind, _ = _copy_plan(base) if base.get("proxy_pending") else ("none", None)
+    length = float((base.get("plain") or {}).get("duration") or base.get("duration") or 0)
+    if kind == "smart" or (kind == "own" and footage.donors(_copy_recipe(base))):   # (smart cut: a vágáspontok körül)
+        secs += SMART_COPY_S[0] + SMART_COPY_S[1] * length
+    elif kind == "own":                          # teljes újrakódolás (nincs miből vágni)
         from app.tools import render_eta
         m = {"display_width": base.get("width"), "display_height": base.get("height"), "fps": base.get("fps"), "hdr": base.get("hdr")}
-        secs += await render_eta.proxy(m, float((base.get("plain") or {}).get("duration") or base.get("duration") or 0))
+        secs += await render_eta.proxy(m, length)
     return secs
 
 
@@ -3850,16 +3912,42 @@ def _full_later(pid: str, D: dict[str, Any], lotties: list[tuple[str, str]], pro
             "full_build": {"input": fid, "lotties": [list(x) for x in lotties], **({"proxy_base": proxy_base} if proxy_base else {})}}
 
 
-async def ensure_full(pid: str, *, background: bool = False) -> bool:
-    """A verzió projektfájlja teljes legyen (a feliratokkal, a saját munkamásolatával): ha még „pending”, most épül meg
-    (verziónként egyszer; a többi hívó a zárnál vár). background: a végleges render első lépése (a saját kapuján, nice
-    alatt). → True, ha most épült."""
-    if not full_pending(pid):
+def copy_pending(pid: str) -> bool:
+    """A verzió saját munkamásolata még nem készült el (spec.base.proxy_pending: a helyén egy meglévő másolat áll)."""
+    return bool((((read_meta(pid) or {}).get("spec") or {}).get("base") or {}).get("proxy_pending"))
+
+
+def _copy_recipe(base: dict[str, Any]) -> dict[str, Any]:
+    """A verzió saját munkamásolatának receptje a spec.base-ből (footage.make_proxy bemenete: az eredeti, a korrekció, az
+    idővonal — a zárókártya nélkül, a helyén álló másolat mezői nélkül). Ugyanaz, amit a szerkesztés a full_build.proxy_base-be
+    írt; egy függő (proxy_pending) verzióból szerkesztett újabb verziónál nincs ilyen mező — ott ebből (10-26: e nélkül a
+    láncban a második függő verzió teljes építése „az eredeti már nincs meg” hibával állt meg)."""
+    b = _with_end_card(dict(base), None)
+    return {k: v for k, v in b.items() if k not in footage._KEEP + ("proxy_pending", "clean_media_id")}
+
+
+async def ensure_full(pid: str, *, background: bool = False, copy: Any = True) -> bool:
+    """A verzió projektfájlja teljes legyen (a feliratokkal): ha még „pending”, most épül meg (verziónként egyszer; a többi
+    hívó a zárnál vár). background: a végleges render első lépése (a saját kapuján, nice alatt). → True, ha most épült.
+    copy — a verzió saját munkamásolata (ha még függő, spec.base.proxy_pending):
+      True        most készül el, és a projektbe kerül (a szerkesztő, render scene=…: a motor a munkamásolat KÉPÉT rajzolja);
+      "timeline"  elég egy kész másolat, amelynek az IDŐVONALA a verzióé (a végleges render: a kép az eredetiből készül a
+                  recepttel — fast_render / _full_size_project —, a projekt felvétel-rétegéből csak a hang): színváltozásnál
+                  a helyén álló másolat jó, vágásnál egy smart cut a meglévőből — a színes újrakódolás (S4: 39 perc) nem;
+      "soon"      a saját, ha másodpercek alatt meglesz (footage.ready_soon), különben mint a "timeline" (a letöltés ne
+                  várjon perceket)."""
+    if not full_pending(pid) and not (copy is not False and copy != "timeline" and copy_pending(pid)):
         return False
     lock = _full_lock(pid)
     async with lock:
         meta = read_meta(pid) or {}
+        spec = meta.get("spec") or {}
+        base = spec.get("base") or {}
+        own = copy is True or (copy == "soon" and footage.ready_soon(_copy_recipe(base)))
         if meta.get("full_project") != FULL_PENDING:
+            if base.get("proxy_pending") and own:             # a teljes projekt kész, de egy idővonal-másolattal
+                await _own_copy_into(pid, meta, spec)
+                return True
             return False
         t0 = time.time()
         fb = meta.get("full_build") or {}
@@ -3868,12 +3956,19 @@ async def ensure_full(pid: str, *, background: bool = False) -> bool:
         except (KeyError, OSError, ValueError):
             raise RuntimeError("This version's full timeline can't be built any more (its saved build plan is gone) — "
                                "edit the video again (any small change) to rebuild it.") from None
-        spec = meta.get("spec") or {}
-        if (spec.get("base") or {}).get("proxy_pending"):     # a munkamásolat is most készül (pl. új színkorrekció)
-            spec = await _finish_proxy(pid, spec, fb)
+        foot = None                                           # a projekt felvétel-rétege, ha nem a verzió saját másolata
+        if base.get("proxy_pending"):                         # a munkamásolat is most készül (pl. új színkorrekció)
+            if own:
+                spec = await _finish_proxy(pid, spec, fb)
+            else:
+                spec, foot = await _timeline_copy(pid, spec, fb)
             b = spec["base"]
-            D["base"] = {**D["base"], "file": b["asset"], **({"scale": round(int(b["width"]) / int(b["proxy"]["w"]), 6)}
-                                                            if b.get("proxy") else {})}
+            if foot:
+                D["base"] = {**D["base"], "file": foot["asset"], **({"scale": round(int(b["width"]) / int(foot["proxy"]["w"]), 6)}
+                                                                   if foot.get("proxy") else {})}
+            elif not b.get("proxy_pending"):
+                D["base"] = {**D["base"], "file": b["asset"], **({"scale": round(int(b["width"]) / int(b["proxy"]["w"]), 6)}
+                                                                if b.get("proxy") else {})}
         work = Path(tempfile.mkdtemp(prefix="video-full-", dir=str(temp_path("").parent)))
         try:
             _link_assets(pid, work)
@@ -3885,21 +3980,91 @@ async def ensure_full(pid: str, *, background: bool = False) -> bool:
             os.replace(tmp, dst)                              # egy lépésben: az olvasó vagy a régit, vagy a teljeset látja
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        write_meta(pid, extra={"full_project": FULL_READY, "full_build": None})
+        write_meta(pid, extra={"full_project": FULL_READY, "full_build": None,
+                               "full_footage": D["base"]["file"] if (spec.get("base") or {}).get("proxy_pending") else None})
         try:
             output_path(fb["input"]).unlink(missing_ok=True)
         except OSError:
             pass
         _FULL_LOCKS.pop((id(asyncio.get_running_loop()), pid), None)
-        log.info("teljes projekt felépítve: %s (%d felirat, %.1f s)", pid, len(D.get("captions") or []), time.time() - t0)
+        log.info("teljes projekt felépítve: %s (%d felirat, %.1f s%s)", pid, len(D.get("captions") or []), time.time() - t0,
+                 f", felvétel: {D['base']['file']} — a saját munkamásolat nélkül" if (spec.get("base") or {}).get("proxy_pending") else "")
         return True
+
+
+SMART_COPY_S = (20.0, 0.06)      # egy smart cut munkamásolat becslése: alap + a hossz arányában (mérve S4, 30 perc: 96–122 s)
+
+
+def _copy_plan(base: dict[str, Any], recipe: Optional[dict[str, Any]] = None) -> tuple[str, Any]:
+    """Mit kell tenni, hogy a végleges rendernek legyen egy kész munkamásolata a verzió IDŐVONALÁVAL (a hang a projekt
+    felvétel-rétegéből jön; a kép az eredetiből, a recepttel — a másolat színe mindegy). → ("none", None): nincs függő
+    másolat; ("cached", recipe): a verzió saját másolata már kész; ("same", (kulcs, bejegyzés)): egy kész másolat (a helyén
+    álló vagy bármely más színű) ugyanezzel az idővonallal — semmi sem készül; ("smart", recipe'): egy smart cut a helyén
+    álló másolatból, annak a színével (a vágáspontok körül kódol); ("own", recipe): a verzió saját másolata (a helyén álló
+    színe a verzióé — ez is smart cut —, vagy smart cut nem lehet: teljes újrakódolás)."""
+    if not base.get("proxy_pending"):
+        return "none", None
+    recipe = recipe or _copy_recipe(base)
+    if footage.cached(recipe) is not None:
+        return "cached", recipe
+    stand = _with_end_card(dict(base), None).get("media_id")
+    hits = footage.same_timeline(recipe)
+    if hits:                                     # a helyén álló elöl, aztán a semleges
+        return "same", sorted(hits, key=lambda x: (x[1].get("media_id") != stand, bool(x[0].get("adjust"))))[0]
+    st = next(((kd, h) for kd, h in footage.registered(recipe) if h.get("media_id") == stand), None)
+    adj = (st[0].get("adjust") or {}) if st else None
+    if st is None or adj == (recipe.get("adjust") or {}):
+        return "own", recipe
+    tl = {**{k: v for k, v in recipe.items() if k != "adjust"}, **({"adjust": adj} if adj else {})}
+    return ("smart", tl) if footage.donors(tl) else ("own", recipe)
+
+
+async def _timeline_copy(pid: str, spec: dict[str, Any], fb: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """A végleges renderhez egy kész munkamásolat a verzió idővonalával (_copy_plan). → (a spec, None — a verzió saját
+    másolata került a projektbe, nincs több függő) vagy (a spec — továbbra is függő —, {asset, media_id, proxy}: a projekt
+    felvétele)."""
+    base = spec["base"]
+    kind, x = _copy_plan(base, (fb or {}).get("proxy_base"))
+    if kind in ("cached", "own"):
+        return await _finish_proxy(pid, spec, {"proxy_base": x}), None
+    if kind == "same":
+        hit = x[1]
+    else:                                        # "smart"
+        src = footage.original(x)
+        if src is None:
+            raise RuntimeError("Your original video is no longer stored (uploads are kept for a limited time) — upload it "
+                               "again to change its colours, light or cuts.")
+        hit, _ = await _timed_proxy(x, src)
+    write_meta(pid, extra={"assets": {**assets_of(pid), hit["asset"]: hit["media_id"]}})
+    log.info("végleges render: a felvétel %s (%s; az idővonal a verzióé, a saját színes munkamásolat nélkül) — %s",
+             hit["asset"], kind, pid)
+    return spec, {"asset": hit["asset"], "media_id": hit["media_id"], "proxy": hit.get("proxy")}
+
+
+async def _own_copy_into(pid: str, meta: dict[str, Any], spec: dict[str, Any]) -> None:
+    """A teljes projekt egy idővonal-másolattal épült (_timeline_copy, meta.full_footage): most a verzió saját munkamásolata
+    készül el, és a projektben a helyére kerül (ugyanaz az idővonal és méret: footage.swap)."""
+    spec = await _finish_proxy(pid, spec, {"proxy_base": _copy_recipe(spec["base"])})
+    cur, new = meta.get("full_footage"), spec["base"]["asset"]
+    if cur and cur != new:
+        work = Path(tempfile.mkdtemp(prefix="video-own-", dir=str(temp_path("").parent)))
+        try:
+            proj = stage(pid, work)
+            name = await footage.swap(proj, _main_comp(proj), cur, new, "own-copy")
+            dst = output_path(pid)
+            tmp = dst.with_name(dst.name + ".own-tmp")
+            shutil.copyfile(work / name, tmp)
+            os.replace(tmp, dst)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    write_meta(pid, extra={"full_footage": None})
 
 
 async def _finish_proxy(pid: str, spec: dict[str, Any], fb: dict[str, Any]) -> dict[str, Any]:
     """A háttérben készülő munkamásolat (spec.base.proxy_pending — a kérés addig a szülő munkamásolatát tette a
     helyére): a recept (full_build.proxy_base) → footage.make_proxy → a verzió base-ében (és a zárókártya plain-jében)
     az új media_id / asset, a projekt assets-e közé is. → az új spec."""
-    pb = fb.get("proxy_base") or {}
+    pb = fb.get("proxy_base") or _copy_recipe(spec["base"])
     src = footage.original(pb) if pb else None
     if src is None:
         raise RuntimeError("Your original video is no longer stored (uploads are kept for a limited time) — upload it again "
@@ -4362,6 +4527,9 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         cstyle = caption_style(body.get("caption_style"))     # a hibás stílus a hosszú munka (átirat) ELŐTT derüljön ki
         raw = await said_to_times(body.get("layers"), crafts.existing(fid), notes, step, body.get("language"), new_ids=True,
                                   topts=topts)
+        from app.tools import deck_layer                       # pakli: a diaváltás egy mondathoz kötve (follow)
+        raw = await deck_layer.resolve(raw, notes, cues=subtitle_cues(body["subtitles"]) if isinstance(body.get("subtitles"), list) else None,
+                                       footage=crafts.existing(fid), language=body.get("language"), topts=topts, step=step)
         layers = layers_from(raw, body.get("text") or "", notes)
         subs = await _auto_subtitles(fid, body.get("language"), step, topts, notes) if body.get("subtitles") == "auto" \
             else subtitle_cues(body.get("subtitles"))
@@ -4419,8 +4587,11 @@ def _unsaid(raw: Any) -> Any:
     """Az előzetes (szerkezeti) ellenőrzéshez: a {"say": …} idők helyén egy helyőrző — az igazi időt az átirat adja."""
     if not _says(raw):
         return raw
+    from app.tools import effect_layers
     out = []
     for ly in raw:
+        if effect_layers.pending(ly):                     # villám „amikor elhangzott…”: az idő a hangból jön
+            ly = effect_layers.placeholder(ly)
         if isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))):
             ly = dict(ly)
             if _say_of(ly.get("at")):
@@ -4435,8 +4606,9 @@ def _unsaid(raw: Any) -> Any:
 
 
 def _says(raw: Any) -> bool:
-    return isinstance(raw, list) and any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until")))
-                                         for ly in raw)
+    from app.tools import effect_layers
+    return isinstance(raw, list) and any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))
+                                                                   or effect_layers.pending(ly)) for ly in raw)
 
 
 def transcript_opts(raw: Any) -> dict[str, Any]:
@@ -4473,9 +4645,19 @@ async def said_to_times(raw: Any, footage: Path, notes: list[str], step: Callabl
     el, a réteg kimarad, és a jegyzet megmondja, mit hallott a gép helyette."""
     if not _says(raw):
         return raw
-    from app.tools import transcript
-    step(0, 4, "listening to the footage (transcript)")
-    tr = await transcript.transcribe(footage, transcript_lang(language), **(topts or {}))
+    from app.tools import effect_layers, transcript
+    heard: dict[str, Any] = {}
+
+    async def hear() -> dict[str, Any]:                  # az átirat csak egyszer, és csak ha kell
+        if "tr" not in heard:
+            step(0, 4, "listening to the footage (transcript)")
+            heard["tr"] = await transcript.transcribe(footage, transcript_lang(language), **(topts or {}))
+        return heard["tr"]
+    if any(effect_layers.pending(ly) for ly in raw):     # effekt „amikor elhangzott…” / „a mondat végén”: at a hangból
+        raw = await effect_layers.resolve(raw, footage, notes, hear)
+    if not any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))) for ly in raw):
+        return raw
+    tr = await hear()
     out = []
     for n, ly in enumerate(raw, 1):
         if not isinstance(ly, dict):
@@ -4698,7 +4880,11 @@ def _recut(layers: list[dict[str, Any]], subs: list[dict[str, Any]], camera: Any
             notes.append(f"⚠ Layer {ly['id']} ({ly['type']}, {_tc(float(ly['at']))}) was in a part that was cut out — "
                          "it is left out.")
             continue
-        out_layers.append({**ly, "at": round(span[0], 4), "dur": round(max(0.3, span[1] - span[0]), 4)})
+        moved = {**ly, "at": round(span[0], 4), "dur": round(max(0.3, span[1] - span[0]), 4)}
+        if ly.get("type") == "deck":                  # a pakli diaváltásai is az új időben
+            from app.tools import deck_layer
+            moved = deck_layer.recut(moved, (moved["at"], moved["at"] + moved["dur"]), lambda t: footage.remap_near(t, old, new))
+        out_layers.append(moved)
     out_subs, gone = [], 0
     for c in subs or []:
         span = footage.remap_span(float(c["start"]), float(c["end"]), old, new)
@@ -5120,6 +5306,10 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             safe = min(safe, _caption_top(W, H))
         map_credits, gfx_findings = await _place_on_maps(story, (W, H, safe))
         gfx_names, lotties, gfx_credits = await _materialize_gfx(story, work, parent, (W, H, safe))
+        if any(ly.get("type") == "deck" for ly in layers):   # a pakli diái képként (a tartalma szerint gyorsítótárból)
+            from app.tools import deck_layer
+            step(1, 4, "drawing the slides")
+            gfx_names = gfx_names + await deck_layer.materialize(layers, work, W, H, layer_notes)
         gfx_findings = gfx_findings + _gfx_failures(story)
         credit_list = list(dict.fromkeys(gfx_credits + map_credits))
         lang = _lang_of(_layer_text_all({"layers": [{k: v for k, v in ly.items() if k != "name"} for ly in layers]}) + " " + (source or ""))
@@ -5148,6 +5338,19 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         for ly in waves:                                      # a hullámforma a felvétel hangjából, a réteg idejére
             ly["_levels"] = await wave_levels(work / base["asset"], float(ly["at"]), float(ly["dur"])) if base.get("audio") else []
         D["layers"], rows, problems = layer_comps(all_layers, W, H, total, lang, acc, safe)
+        if any(ly.get("type") == "deck" for ly in layers):
+            from app.tools import deck_layer
+            problems = problems + deck_layer.final_notes(layers)
+        if any(ly.get("type") == "effect" for ly in layers):    # villám a kézből: előre komponált klip a felvétel fölött
+            from app.tools import effect_layers
+            fx_items, fx_names, fx_v, fx_f = await effect_layers.prepare(layers, base, W=W, H=H, fps=fps, total=total,
+                                                                         work=work, step=step)
+            if fx_items:
+                D["effects"] = fx_items
+            gfx_names = gfx_names + fx_names
+            fx_verified, problems = fx_v, problems + fx_f
+        else:
+            fx_verified = []
         for ly in waves:
             if not ly.pop("_levels", None):
                 problems.append(f"Layer {ly['id']} (waveform): the footage has no sound there — the bars stay flat.")
@@ -5182,6 +5385,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                     m_v.append("Your footage's own sound: " + ("muted — music only." if base_db <= -48 else
                                                                f"{-base_db:g} dB lower, the music is in front."))
         problems = problems + m_f
+        m_v = m_v + fx_verified
         if _has_3d(D):                                        # three.js-rétegek: a réteg hosszában és méretében
             step(2, 4, "rendering the 3D scenes")
             three_names, three_notes = await _render_3d(D, work, acc)
@@ -5212,7 +5416,21 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             bg_eta = float((await render_eta.final(spec))["seconds"])
         deferred = bg_eta is not None and bool(D["captions"] or base.get("proxy_pending"))
         step(2, 4, "building the timeline")
-        out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+        from app.convert.engines import foreground
+        with foreground():                                    # a háttérmunka (más végleges render…) addig áll
+            out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+        if any(ly.get("type") == "effect" for ly in layers):   # effekt egy grafikai rétegen (on: "L17"): a cél alfájából
+            from app.tools import effect_layers
+            fxl = effect_layers.on_layers(layers)
+            if fxl:
+                it2, nm2, v2, f2 = await effect_layers.prepare_on_layers(fxl, D, W=W, H=H, fps=fps, total=total, work=work,
+                                                                         step=step)
+                if it2:
+                    D["effects"] = (D.get("effects") or []) + it2
+                    gfx_names = gfx_names + nm2
+                    with foreground():
+                        out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+                m_v, problems = m_v + v2, problems + f2
         problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
         problems, m_v = problems + lot_f, m_v + lot_v
@@ -5324,8 +5542,8 @@ async def _proxy_later(base: dict[str, Any], stand_in: dict[str, Any], m: dict[s
     kerül: a smart cut (footage.smart_proxy) a képet másodpercek alatt adja, de a hangot egyben kell kódolni (30 percnél
     25–60 s) — a háttérben így ~1 perc a 7–9 helyett, a szerkesztés pedig nem vár. → (az új base, a leírás), vagy None."""
     from app.tools import video_fx, video_preview, videonorm
-    if footage.cached(base) is not None or not stand_in.get("asset") or not video_preview.hls():
-        return None
+    if footage.cached(base) is not None or not stand_in.get("asset") or not (video_preview.live() or video_preview.hls()):
+        return None                                      # (élő előnézetnél a lejátszó maga oldja meg: szín = shader, vágás = tartományok)
     probe = {"kind": "overlay", "base": {**_with_end_card(base, card), **{k: stand_in.get(k) for k in ("proxy", "hdr")}},
              "story": {"layers": layers}, "opts": opts}
     if await _final_eta(probe, render=render, draft=draft, kinds=alpha_kinds(opts.get("alpha")), final=final) is None:
@@ -5364,12 +5582,13 @@ async def _job_eta(info: dict[str, Any], items: int, proxy: bool, render: bool) 
     from app.tools import render_eta, video_preview
     m = {"display_width": info.get("width"), "display_height": info.get("height"), "fps": info.get("fps"), "hdr": info.get("hdr")}
     est = 5.0 + render_eta.ITEM_S * items
-    if proxy:
-        est += await render_eta.proxy(m, float(info.get("duration") or 0))
+    fin = None
     if render:
         fin = (await render_eta.final({"base": {"width": info.get("width"), "height": info.get("height"), "fps": info.get("fps"),
                                                 "duration": info.get("duration"), "hdr": info.get("hdr"), "proxy": proxy}}))["seconds"]
         est += 30.0 if fin > video_preview.inline_limit_s() else fin
+    if proxy and not (fin is not None and fin > video_preview.inline_limit_s() and (video_preview.live() or video_preview.hls())):
+        est += await render_eta.proxy(m, float(info.get("duration") or 0))   # (hosszú videónál a háttérbe kerül: _proxy_later)
     return est
 
 
@@ -5430,9 +5649,13 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
         result["preview"] = {**_file_entry(pvid), "parts": [{"from": a, "to": b, "what": lab} for a, b, lab in picked],
                              "left_out": left, "seconds": pv["seconds"]}
     job = _start_final(pid, eta)
+    quiet = float(job.get("quiet_s") or 0)
+    eta = float(job.get("eta_s") or eta)                  # (a csendre várással együtt)
     result["final"] = {"job_id": job["id"], "eta_s": round(eta), "eta": render_eta.text(eta),
-                       "ready_at": render_eta.ready_at(eta),
-                       "how": "video(action=\"status\", job_id=…, wait=55) — when it is done, its result is the final MP4."}
+                       "ready_at": render_eta.ready_at(eta), "starts_after_s": quiet,
+                       "how": "video(action=\"status\", job_id=…, wait=55) — when it is done, its result is the final MP4."
+                              + (f" It starts {quiet:g} s after your last change; a newer edit replaces it (only the newest "
+                                 "version's final video is made)." if quiet else "")}
     mp4 = (result.get("preview") or {}).get("mp4") if hls else None
     result["files"] = [result["project"]] + ([result["preview"]] if picked else []) + ([mp4] if mp4 else []) + \
         ([srt_entry] if srt_entry else [])
@@ -5440,7 +5663,8 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
     fs = list(dict.fromkeys(lay_f + findings))
     result["check"] = {"status": "needs_check" if fs else "ok", "findings": fs,
                        "verified": ([pv_note] if pv_note else ["Nothing visible changed, so there is no quick preview."])
-                       + [f"The final video is rendering in the background in full quality from your original: "
+                       + [f"The final video {'starts' if quiet else 'is rendering'} in the background in full quality from your original"
+                          + (f" {quiet:g} s after your last change" if quiet else "") + ": "
                           f"{render_eta.text(eta)} (ready around {render_eta.ready_at(eta)[11:16]}). Check it with "
                           f"video(action=\"status\", job_id=\"{job['id']}\")."] + verified + lay_v}
     step(4, 4, "done — the final video is rendering in the background")
@@ -5600,19 +5824,92 @@ async def _preview_mp4(hls: tuple[Any, Any], pid: str, plan: dict[str, Any], lab
     return entry, note
 
 
+# ---------- a végleges render egy szerkesztés után: csendre vár, és az újabb változat leváltja (N1, 10-26) ----------
+# Mérve (S4, 30 perc, 10-26): hat egymás utáni szerkesztés válasza 2,4 → 2,3 → 2,4 → 4,7 → 5,1 → 4,8 s, a terhelés 15 → 23
+# (utána nyolc egymás után: 1,6–2,0 s, load 2–4, a végleges becslése 32–35 perc maradt a 33 → 263 perc helyett):
+# minden szerkesztés AZONNAL elindította a saját végleges renderjének első lépését (a feliratos teljes projekt, 3–7 perc
+# motormunka; vágás / szín után a munkamásolat is — a színé a 30 perces HDR-eredeti teljes újrakódolása, 39 perc), és a
+# régi változatokéi is futottak tovább, pedig csak a legutolsó változat végleges videója kell. Most:
+#   · a végleges render FINAL_QUIET_S másodperc csend után indul (addig a job „running”, stage = várakozás, a becslés a
+#     várakozással együtt) — a szerkesztés közben semmi sem fut miatta;
+#   · egy szerkesztés már az ELEJÉN leállítja a szerkesztett változat és az ősei még futó / váró végleges renderjét
+#     (superseded; a futó ffmpeg / motor vele áll le — engines.run, _run); ha a szerkesztés elbukik, a szülőé újraindul;
+#   · az új változat végleges renderje is leváltja az őseiét (ha a szerkesztés elején még nem futott);
+#   · a végleges render első lépése nem készíti el a színes munkamásolatot (ensure_full copy="timeline").
+# A testvér-változatok (variants: A/B) nem váltják le egymást (_KEEP_FINALS), és egy ág sem a másikat — csak az ősöket.
+
+_KEEP_FINALS: "contextvars.ContextVar[bool]" = contextvars.ContextVar("aice_keep_finals", default=False)
+
+
+def final_quiet_s() -> float:
+    """Ennyi másodperc csend (nincs újabb szerkesztés a változat után) után indul a végleges render (VIDEO_FINAL_QUIET_S)."""
+    try:
+        return max(0.0, float(os.getenv("VIDEO_FINAL_QUIET_S", "20")))
+    except ValueError:
+        return 20.0
+
+
+def lineage(pid: str, limit: int = 400) -> list[str]:
+    """A változat ősei (a szülő, annak szülője…; csak videóprojektek), a legközelebbi elöl."""
+    out, cur, seen = [], pid, {pid}
+    for _ in range(limit):
+        src = (read_meta(cur) or {}).get("source_file_id")
+        if not src or not str(src).lower().endswith(".ecproj") or src in seen:
+            break
+        out.append(src)
+        seen.add(src)
+        cur = src
+    return out
+
+
+def _supersede_finals(pids: set[str], by: Optional[str], next_job: Optional[str] = None) -> list[dict[str, Any]]:
+    """A pids változatok még nem végzett végleges renderjei leállnak (status "superseded"). → a leállítottak (project,
+    hátralévő becslés), hogy egy elbukott szerkesztés után újraindulhassanak."""
+    from app import jobs
+    out = []
+    for j in jobs.live("render", final=True):
+        if j.get("project") in pids:
+            left = jobs.remaining_s(j)
+            if jobs.cancel(j["id"], status="superseded", superseded_by=by, next_job=next_job,
+                           error="Replaced by a newer version" + (f" ({by})" if by else " (an edit of it is being made)")
+                           + " — only the newest version's final video is made."):
+                out.append({"project": j["project"], "eta": left, "job_id": j["id"]})
+                log.info("végleges render leváltva: %s (job %s) → %s", j["project"], j["id"], by or "szerkesztés folyamatban")
+    return out
+
+
 def _start_final(pid: str, eta: float) -> dict[str, Any]:
-    """A végleges render háttérmunkaként, alacsony prioritással (az előnézet és a weboldal ne várjon rá)."""
+    """A végleges render háttérmunkaként, alacsony prioritással (az előnézet és a weboldal ne várjon rá), csendre várva;
+    leváltja az ősök még futó végleges renderjeit. A becslés (eta_s) a várakozással együtt."""
     from app import jobs
     from app.convert.engines import background
+    quiet = final_quiet_s()
 
     async def work(progress):
+        if quiet > 0:                                 # amíg szerkesztenek, semmi: az újabb változat leváltja ezt
+            progress(0, 1, f"waiting for a pause in editing — the final video starts {quiet:g} s after the last change")
+            await asyncio.sleep(quiet)
         with background():
-            if full_pending(pid):                     # a teljes projekt (feliratok, munkamásolat) — az első lépés
-                progress(0, 1, "building the full timeline (subtitles) for the final video")
-                await ensure_full(pid, background=True)
+            progress(0, 1, "building the full timeline (subtitles) for the final video")
+            await _final_prepare(pid)
             progress(0, 1, "rendering the final video in full quality")
             return await render(pid, progress=progress)
-    return jobs.start("render", work, eta_s=eta, final=True, project=pid)
+    job = jobs.start("render", work, eta_s=eta + quiet, final=True, project=pid, quiet_s=quiet)
+    if not _KEEP_FINALS.get():
+        olds = set(lineage(pid))
+        _supersede_finals(olds, pid, job["id"])
+        for j in jobs._JOBS.values():                # a szerkesztés elején leállítottak: hova lett a munkájuk
+            if j.get("status") == "superseded" and j.get("project") in olds and not j.get("next_job"):
+                j.update(superseded_by=pid, next_job=job["id"],
+                         error=f"Replaced by a newer version ({pid}) — only the newest version's final video is made.")
+    return job
+
+
+async def _final_prepare(pid: str) -> None:
+    """A végleges render első lépése: a teljes (feliratos) projekt, ha még függő — a színes munkamásolat nélkül (a kép az
+    eredetiből készül, elég az idővonal másolata: ensure_full copy="timeline")."""
+    if full_pending(pid):
+        await ensure_full(pid, background=True, copy="timeline")
 
 
 _STEM = lambda w: w[:5]
@@ -5726,7 +6023,8 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
                 out.unlink(missing_ok=True)              # a félbemaradt gyors kimenet ne maradjon
         gone = None
         if fast is None and not draft:                   # a munkamásolat helyén a teljes méretű felvétel (footage.py)
-            project_path, gone = await _full_size_project(project_path, spec)
+            project_path, gone = await _full_size_project(project_path, spec,
+                                                          (read_meta(project_id) or {}).get("full_footage"))
             args[2] = project_path.name
         pieces = _master_pieces(project_path) if fast is None and master is not None else []
         if fast is None and progress:
@@ -5826,7 +6124,7 @@ async def _observe_render(project_path: Path, spec: dict[str, Any], fast: Option
         log.warning("render-idő mérése: %s", e)
 
 
-async def _full_size_project(project_path: Path, spec: dict[str, Any]) -> tuple[Path, Optional[str]]:
+async def _full_size_project(project_path: Path, spec: dict[str, Any], asset: Optional[str] = None) -> tuple[Path, Optional[str]]:
     """A teljes (régi) renderhez: ha a projektben a felvétel munkamásolata áll, egy változat a teljes méretű felvétellel
     (az eredetiből, ugyanazzal a lánccal) — a végső kép a kis másolatból csak akkor készül, ha az eredeti már lejárt, és
     azt a check megmondja (→ a projekt, a megjegyzés)."""
@@ -5837,7 +6135,7 @@ async def _full_size_project(project_path: Path, spec: dict[str, Any]) -> tuple[
     if src is None:
         return project_path, footage.gone_note(base)
     full = await footage.full(base, src, project_path.parent)
-    name = await footage.swap(project_path, _main_comp(project_path), base["asset"], full.name, "render-full")
+    name = await footage.swap(project_path, _main_comp(project_path), asset or base["asset"], full.name, "render-full")
     return project_path.parent / name, None
 
 
@@ -5862,10 +6160,10 @@ async def render(file_id: str, fmt: str = "mp4", draft: bool = False,
     """Egy videóprojekt (akár kézzel szerkesztett) újrarenderelése."""
     if not file_id.lower().endswith(".ecproj"):
         raise ValueError("render needs a video project (.ecproj)")
-    if full_pending(file_id):
+    if full_pending(file_id):                          # (a kép az eredetiből készül: elég az idővonal másolata)
         if progress:
             progress(0, 1, "building the full timeline (subtitles) first")
-        await ensure_full(file_id)
+        await ensure_full(file_id, copy="timeline")
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(file_id, work)
@@ -6279,9 +6577,26 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                draft: bool = False, label_stem: Optional[str] = None, final: str = "auto",
                preview: Optional[str] = None) -> dict[str, Any]:
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
+    held: list[dict[str, Any]] = []
+    if not _KEEP_FINALS.get():                       # a szerkesztett változat (és az ősei) végleges renderje most áll le —
+        try:                                         # az új változat úgyis leváltja, és a szerkesztés ne versenyezzen vele
+            pid = project_of(file_id)
+            held = _supersede_finals({pid, *lineage(pid)}, None)
+        except Exception as e:  # noqa: BLE001 — a leváltás sose állítja meg a szerkesztést
+            log.warning("végleges render leváltása (%s): %s", file_id, e)
     try:
         return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha, render=render, draft=draft,
                            label_stem=label_stem, final=final_mode(final), preview=preview)
+    except BaseException:
+        for h in held:                               # nem lett új változat: a leállított végleges render újra indul
+            try:
+                from app import jobs
+                nj = _start_final(h["project"], h["eta"])
+                (jobs._JOBS.get(h["job_id"]) or {}).update(next_job=nj["id"], error="Restarted (the edit that replaced "
+                                                                                      "it didn't go through).")
+            except Exception as e:  # noqa: BLE001
+                log.warning("végleges render újraindítása (%s): %s", h["project"], e)
+        raise
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
@@ -6403,6 +6718,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     layer_src = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
     lnotes: list[str] = []
     story["layers"] = apply_layer_changes(story.get("layers") or [], changes, layer_src, lnotes)
+    _no_effects(story["layers"])
     if isinstance(changes.get("music"), dict):           # {"file_id"?, "mood"?} → a régi két kulcs
         mm = _make_music(changes["music"], changes.get("music_file_id"))
         changes = {**{k: v for k, v in changes.items() if k != "music"},
@@ -6524,6 +6840,16 @@ async def variants(file_id: str, raw: Any, progress: Optional[Callable[..., None
                          "script to vary.")
     plans = variant_plan(spec, raw)
     root = result_stem(pid, "")
+    keep_tok = _KEEP_FINALS.set(True)                # A/B: minden változat végleges videója kell (egymást nem váltják le)
+    try:
+        return await _variants(pid, meta, plans, root, step, draft)
+    finally:
+        _KEEP_FINALS.reset(keep_tok)
+
+
+async def _variants(pid: str, meta: dict[str, Any], plans: list[dict[str, Any]], root: str, step: Callable[..., None],
+                    draft: bool) -> dict[str, Any]:
+    from app.storage.naming import result_stem
     out = [{"name": "A", "what": "the original", "project": _file_entry(pid),
             **({"video": _file_entry(meta["render_file_id"])} if meta.get("render_file_id") else {})}]
     findings: list[str] = []
@@ -6600,6 +6926,14 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
         topts = transcript_opts(changes.get("transcript") or opts.get("transcript"))
         changes = {**changes, "layers": await said_to_times(changes.get("layers"), heard, notes, step, topts=topts),
                    "add_layers": await said_to_times(changes.get("add_layers"), heard, notes, step, topts=topts)}
+    from app.tools import deck_layer
+    if deck_layer.has_follow(changes.get("layers")) or deck_layer.has_follow(changes.get("add_layers")):
+        # a pakli diaváltásai a mondatokhoz: a verzió feliratainak szavaiból, felirat nélkül az átiratból (gyorsítótár)
+        heard = crafts.existing(assets_of(pid).get(spec["base"]["asset"]) or spec["base"].get("media_id") or spec["base"]["file_id"])
+        kw = {"cues": opts["subtitles"] or None, "footage": heard, "topts": transcript_opts(changes.get("transcript") or opts.get("transcript")),
+              "existing": (spec.get("story") or {}).get("layers") or [], "step": step}
+        changes = {**changes, "layers": await deck_layer.resolve(changes.get("layers"), notes, **kw),
+                   "add_layers": await deck_layer.resolve(changes.get("add_layers"), notes, **kw)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
     base = dict(spec["base"])
     card = base.get("end_card")
@@ -7036,7 +7370,9 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
     munkafájl; a teljes videó a render / edit útján készül."""
     pid = project_of(file_id)
     k, sc, row = _scene_index(pid, scene)
-    await ensure_full(pid)                           # a felirat nélküli (háttérben teljessé váló) projekt: előbb teljes
+    await ensure_full(pid, copy="soon")              # a felirat nélküli (háttérben teljessé váló) projekt: előbb teljes;
+    color_note = copy_pending(pid) and bool(((read_meta(pid) or {}).get("spec") or {}).get("base", {}).get("adjust"))
+    # (a saját színes munkamásolat csak akkor készül itt, ha gyorsan megvan — egy 30 perces HDR-felvételnél 39 perc lenne)
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(pid, work)
@@ -7066,13 +7402,15 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
         stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(display_label(pid)).stem)
         write_meta(vid, label=f"{stem} – {sc['id']} clip.mp4", operation="video scene render", source_file_id=pid,
                    extra={"ephemeral": True})
+        cnote = (" The footage in this check clip doesn't have your newest colour change yet (its editor's copy isn't "
+                 "made); the final video has it.") if color_note else ""
         if row.get("layer"):
             return {**_file_entry(vid), "layer": sc["id"], "type": row.get("type"), "start": row["start"], "end": row["end"],
                     "render_seconds": round(time.time() - t0, 1),
                     "note": f"Just {sc['id']}'s time span ({_tc(row['start'])}–{_tc(row['end'])}) of the video, with what is under it "
-                            "(draft quality unless draft=false) — to check it quickly."}
+                            "(draft quality unless draft=false) — to check it quickly." + cnote}
         return {**_file_entry(vid), "scene": sc["id"], "headline": sc.get("headline"), "render_seconds": round(time.time() - t0, 1),
-                "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly."}
+                "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly." + cnote}
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

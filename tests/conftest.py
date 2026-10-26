@@ -29,6 +29,7 @@ os.environ.update({
     "SITE_LANGS": "en,hu",          # a nyelvi mechanizmus tesztjéhez a magyar is be (élesben alapból csak angol)
     "SILICONFLOW_API_KEY": "",
     "FILE_SIGNING_KEY": "test-signing-key",
+    "VIDEO_FINAL_QUIET_S": "0",     # a végleges render azonnal indul (a csendre várást a test_final_schedule.py méri)
     "VIDEO_PREVIEW_LIVE": "0",      # a régi előnézet-tesztek alakja; az élőé a saját tesztjében (test_live_wire.py)
 })
 ROOT = Path(__file__).resolve().parent.parent

@@ -144,10 +144,31 @@ Types:
   waveform {style: bars (default, around a centre line) | rise (growing from the bottom), bars?: 8–64 (28),
     color?: "#hex" (default the accent), position?: bottom (default) | center | top | [x, y, w, h]}: the footage's
     sound as moving bars — e.g. over a podcast or interview; dur = how long (whole video: "until" its end).
+  effect {effect: lightning (Palpatine-style lightning from the raised hand) | fireball (forms in the palm, flies along the
+    forearm) — your own footage only; when: at | after_said: "words" (it starts at the end of the sentence those words
+    are said in: the transcript's word times, then the voice's end to 10 ms) | at_speech_end_after: seconds (the first end
+    of speech after it); dur?: how long (lightning 4 s, fireball 2 s; the scene's tint fades ~1 s after); on?: hand
+    (default: the raised hand, tracked) | body | [x, y] (a point) | [x, y, w, h] (a rectangle, 0–1 of the frame);
+    target?: arm (the forearm's direction, default) | right | left | up | down (towards that edge) | [x, y] (a point);
+    blend?: over (default: drawn into the footage — the scene darkens and takes the effect's colour) | screen (only the
+    light, screen-blended); lightning: strands?: 1–16 (6), intensity?: 0.3–2 (1); fireball: size?: 0.4–2.5 (1),
+    form?: seconds it grows in the palm (0.6), speed?: frame diagonals per second (1.4), intensity?}: drawn by the server
+    on your footage (hand + pose tracking), under the graphics and captions; it moves with the footage (camera, split).
+    E.g. {"type": "effect", "effect": "lightning", "after_said": "now you will die", "target": "right"}. The first
+    drawing costs ~9 s per second of effect (1080×1920); edits that don't touch it reuse it.
   pip {image (a video or picture — a see-through video, e.g. from action="cutout", shows without the frame), corner: top-right (default) | top-left | bottom-right | bottom-left, size: 0.2–0.7
     of the frame's width (default 0.45), aspect: "16:9" (default) | "9:16" | "1:1"…, clip?: [from, to], sound?:
     off (default) | mix | replace}: picture in picture — the footage stays full screen, the other video plays in a
     framed window in a corner.
+  deck {file_id: a .pptx, placement: window (default — beside the speaker; side: right (default) | left | top |
+    bottom) | front (over the footage, the sound goes on) | background (the slide behind the speaker: the live preview
+    cuts the speaker out; the final video doesn't yet — there it shows like front), slides: [{"at": time, "slide": n}]
+    (n from 1) OR follow: [{"slide": n, "said": "the words that bring it"}] (the switch when they are spoken — from the
+    video's subtitles, or the footage transcript without them), transition?: fade (default) | cut}: a talk's slides over
+    time in one layer, e.g. {"type": "deck", "file_id": "<pptx>", "placement": "window", "at": "02:30", "until":
+    "04:00", "slides": [{"at": "02:30", "slide": 1}, {"at": "02:52", "slide": 4}]}. at defaults to the first slide's
+    time, dur to 20 s after the last switch. Edit: a new "slides" list replaces the old; a new "at" alone moves the
+    deck with its switches.
 A lower third or source caption without position goes where nothing else is (other layers, a made video's headlines and
 charts). Overlaps that remain, a layer past the end, a dropped number, a text that collides or runs out of its box all
 come back in the check's findings. Edit by id: changes={"layers": [{"id": "L2", …only the fields that change} | {"id":
