@@ -355,6 +355,26 @@ def test_the_lightning_strikes_the_box_then_crackles_on_the_growing_bar():
     assert gs[lead + 4].astype(float).mean() < _frames(1)[0].astype(float).mean()   # a jelenet sötétebb
 
 
+def test_the_reveal_is_pluggable_a_fireball_lands_on_the_impact_frame():
+    """Ugyanaz a felfedő menet egy másik effekttel: a tűzgolyó a tenyérben formálódik, és a becsapódás kockájára ér a
+    doboz közepébe; utána parázs a kirajzolódó élen."""
+    from app.tools.fx import reveal
+    n, lead, build = 36, 12, 16
+    masks, tr = _bar_masks(n, lead), _track(n)
+    box = (20.0, 20.0, 100.0, 120.0)                             # bal fent: a kéztől (jobbra) messze
+    eff = fx.get("fireball")(W, H, FPS, {"target": "arm"}, 7)
+    rv = reveal.Reveal(eff, box, lead, build)
+    prev, lights = None, []
+    for i in range(n):
+        _, li = rv.frame(_frames(1)[0], tr[i], prev, masks[i], i)
+        prev = masks[i]
+        lights.append(li.astype(float).sum(2))
+    cy, cx = 70, 60
+    near = lambda f: f[cy - 25: cy + 25, cx - 25: cx + 25].sum()            # noqa: E731
+    assert near(lights[2]) < near(lights[lead - 1]) and near(lights[lead - 1]) > 1000   # odaér a becsapódásra
+    assert eff.pos is not None and np.linalg.norm(eff.pos - np.array([cx, cy])) < 3
+
+
 def test_no_sqlite():
     for p in (el.__file__, common.__file__, fx.__file__):
         assert "sqlite" not in Path(p).read_text("utf-8").lower()

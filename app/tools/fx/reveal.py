@@ -48,6 +48,7 @@ class Reveal:
 
     def __init__(self, fx: common.Effect, box: tuple[float, float, float, float], lead: int, build: int):
         self.fx, self.box, self.lead, self.build = fx, box, int(lead), max(1, int(build))
+        fx.reveal_lead = self.lead / fx.fps                         # (a hookok tudják, mikor a becsapódás: t = lead)
         self.center = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2], np.float32)
 
     def frame(self, img: np.ndarray, tr: dict[str, Any], prev: Optional[np.ndarray], mask: Optional[np.ndarray],

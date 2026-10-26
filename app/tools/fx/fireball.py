@@ -113,3 +113,40 @@ class Fireball(common.Effect):
                 self.phase = "done"
             return 1.0 - k
         return 0.0
+
+    # ---------- felfedés (fx/reveal.py): a golyó a tenyérben formálódik, és PONTOSAN a becsapódásra ér a doboz közepébe ----
+
+    def strike(self, layer, core, casters, t, lights, box, amount) -> float:
+        lead = max(1e-6, self.reveal_lead)
+        goal = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2], np.float32)
+        u = t / lead
+        if casters and (self.start is None or u < 0.4):              # formálódás: a tenyérben (a lead első 40 %-a)
+            c = max(casters, key=lambda x: x.power)
+            self.start = c.center.copy()
+            self._ball(layer, core, c.center, self.R * (0.25 + 0.75 * _smooth(u / 0.4)), c.d, lights)
+            return 0.4 + 0.6 * _smooth(u / 0.4)
+        if self.start is None or u >= 1.0:
+            return 0.0
+        d = (goal - self.start) / (np.linalg.norm(goal - self.start) + 1e-6)
+        last = max(0.41, 1.0 - 1.0 / (lead * self.fps))               # az utolsó becsapás-kocka: ott már a célban van
+        k = _smooth((u - 0.4) / (last - 0.4))                        # repülés: lágy indulás, a becsapódásra ér oda
+        if self.pos is not None:
+            self.trail = (self.trail + [self.pos.copy()])[-self.TRAIL:]
+        self.pos = self.start + (goal - self.start) * k
+        self._ball(layer, core, self.pos, self.R, d, lights)
+        return 1.0 * amount
+
+    def crackle(self, layer, core, pts, t, lights, amount) -> float:
+        """Parázs és apró lángnyelvek a felfedett réteg kirajzolódó élén."""
+        if not len(pts):
+            return 0.0
+        rng = self.rng
+        up = np.array([0.0, -1.0], np.float32)
+        for p in pts[rng.choice(len(pts), size=min(len(pts), 24), replace=False)]:
+            h = self.R * rng.uniform(0.6, 1.6) * amount
+            lick = common.bolt(p, p + up * h + rng.normal(0, h * 0.25, 2).astype(np.float32), 0.25, 3, rng)
+            cv2.polylines(layer, [np.round(lick / 2).astype(np.int32)], False, self.GLOW.tolist(), max(2, int(self.R * 0.2)),
+                          cv2.LINE_AA)
+            cv2.circle(core, (int(p[0]), int(p[1])), max(1, int(self.R * 0.08)), (self.CORE * 0.7).tolist(), -1, cv2.LINE_AA)
+        lights.append(pts.mean(0) / 2)
+        return amount

@@ -375,6 +375,7 @@ class Effect:
         yy, xx = np.mgrid[0:self.h2, 0:self.w2]
         self._grid = (yy.astype(np.float32), xx.astype(np.float32))
         self.powers: list[float] = []
+        self.reveal_lead = 0.5                                       # felfedésnél: a becsapás hossza (s) — a Reveal állítja
 
     @classmethod
     def tail(cls) -> int:
