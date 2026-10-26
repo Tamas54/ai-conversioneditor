@@ -21,11 +21,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import re
 from pathlib import Path
 from typing import Any, Optional
+
+log = logging.getLogger("aice.footage")
 
 PROXY_SIDE = 960          # a munkamásolat hosszabbik oldala (px): a szerkesztő előnézete, a motor rajza ebből nem lesz végső kép
 PROXY_CRF = 22
@@ -93,15 +96,39 @@ _KEEP = ("media_id", "asset", "proxy", "rotated", "hdr", "auto")
 _BUSY: dict[str, asyncio.Lock] = {}
 
 
+def _key(base: dict[str, Any], keep: Any = "same") -> str:
+    """A munkamásolat kulcsa az eredeti metájában (proxies): a recept (korrekció, idővonal) és a méret."""
+    return json.dumps({"v": 2, "side": PROXY_SIDE, "budget": PROXY_BUDGET_MB, "adjust": base.get("adjust") or {},
+                       "keep": (base.get("keep") if keep == "same" else keep) or None}, sort_keys=True)
+
+
+def cached(base: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """A recepthez már elkészült munkamásolat (proxies-bejegyzés), ha a fájlja még megvan; különben None."""
+    from app.storage import read_meta
+    from app.tools import crafts
+    fid0 = str(base.get("file_id") or "")
+    hit = ((read_meta(fid0) or {}).get("proxies") or {}).get(_key(base)) if fid0 else None
+    try:
+        return hit if hit and crafts.existing(hit["media_id"]) else None
+    except FileNotFoundError:
+        return None
+
+
+def ready_soon(base: dict[str, Any]) -> bool:
+    """Másodpercek alatt meglesz-e a munkamásolat: már elkészült, vagy egy meglévőből vágható (smart cut — a vágás,
+    a beszúrás csak a vágáspontok körül kódol)."""
+    return cached(base) is not None or bool(donors(base))
+
+
 async def make_proxy(base: dict[str, Any], src: Path) -> tuple[dict[str, Any], list[str]]:
     """A munkamásolat → (az új base: media_id, asset, proxy-méret, rotated, hdr, auto; a korrekció leírása). Ugyanabból a
     feltöltésből ugyanazzal a korrekcióval egyszer készül: a következő videó (újabb változat ugyanarról a felvételről) a
-    meglévőt kapja (az eredeti metájában: proxies), amíg a fájlja megvan."""
+    meglévőt kapja (az eredeti metájában: proxies), amíg a fájlja megvan. Új vágásnál / beszúrásnál ugyanazzal a
+    korrekcióval egy meglévő munkamásolatból (smart_proxy: másolva, csak a vágáspontok körül kódolva)."""
     from app.storage import read_meta, write_meta
     from app.tools import crafts
     fid0 = str(base.get("file_id") or "")
-    key = json.dumps({"v": 2, "side": PROXY_SIDE, "budget": PROXY_BUDGET_MB, "adjust": base.get("adjust") or {},
-                      "keep": base.get("keep") or None}, sort_keys=True)
+    key = _key(base)
     async with _BUSY.setdefault(fid0 + key, asyncio.Lock()):
         hit = ((read_meta(fid0) or {}).get("proxies") or {}).get(key) if fid0 else None
         try:
@@ -111,11 +138,23 @@ async def make_proxy(base: dict[str, Any], src: Path) -> tuple[dict[str, Any], l
                 return {**b, **{k: hit[k] for k in _KEEP if k in hit}}, list(hit.get("applied") or [])
         except FileNotFoundError:
             pass
-        from app import jobs
-        # a munkamásolat egy nehéz munka (app/jobs.py): sorban vár, ha minden hely foglalt; a szeletei egy helyen, a saját
-        # -threads-ükkel. A gyorsítótárból jött másolat (fent) nem kér helyet: a szerkesztés előnézete nem vár.
-        async with jobs.heavy(threads=False):
-            b, applied = await _build_proxy(base, src)
+        made = None
+        for old_keep, donor in donors(base):
+            try:
+                made = await smart_proxy(base, src, old_keep, donor)
+            except Exception as e:                           # bármi eltér: a teljes újrakódolás fut (naplózva)
+                log.warning("smart cut munkamásolat elakadt (%s): %s — a teljes úton", donor.get("media_id"), e)
+                made = None
+            if made:
+                break
+        if made:
+            b, applied = made
+        else:
+            from app import jobs
+            # a munkamásolat egy nehéz munka (app/jobs.py): sorban vár, ha minden hely foglalt; a szeletei egy helyen, a
+            # saját -threads-ükkel. A gyorsítótárból jött másolat (fent) nem kér helyet: a szerkesztés előnézete nem vár.
+            async with jobs.heavy(threads=False):
+                b, applied = await _build_proxy(base, src)
         if fid0:
             have = (read_meta(fid0) or {}).get("proxies") or {}
             write_meta(fid0, extra={"proxies": {**have, key: {**{k: b[k] for k in _KEEP if k in b}, "applied": applied}}})
@@ -198,6 +237,439 @@ async def _build_proxy(base: dict[str, Any], src: Path) -> tuple[dict[str, Any],
         b["rotated"] = int(m["rotation"])
     if m.get("hdr"):
         b["hdr"] = m["hdr"]
+    return b, applied
+
+
+# ---------- a munkamásolat vágása újrakódolás nélkül (smart cut, 10-25) ----------
+# PROFILE.md 3.d: a vágás (05:00–05:20) +430 s volt — a munkamásolat kulcsában a keep is benne van, az új másolat az
+# eredetiből készült újra (4 szelet × 404 s, + a hang 23,7 s). A munkamásolat a SAJÁT x264-kimenetünk (zárt GOP, kulcskocka
+# másodpercenként: -g fps, mindig ugyanazok a kapcsolók), így egy MEGLÉVŐ munkamásolatból (ugyanazzal a korrekcióval, más
+# idővonallal) a megmaradó szakaszok kulcskockától kulcskockáig bitre pontosan átmásolhatók; csak ami a régiben nincs meg
+# (a vágáspontok körüli részleges GOP-ok, egy beszúrt klip, egy új áttűnés) készül az eredetiből — ugyanazzal a lánccal
+# és kódolóval, ahogy a teljes újrakódolás egy szelete (_tl_window). Az idővonal ugyanaz (kockaszám, sorrend): a
+# munkamásolat ideje = a kimenet ideje, minden fogyasztó változatlan. A hang az új idővonalból (tl_audio, az eredetiből).
+# Ellenőrizve, mielőtt kiadjuk: a kódolt darabok paraméterkészlete (avcC) bájtra a régié, a kockák száma a vártszám, és
+# minden illesztés után az első kockák dekódolva a darabéval azonosak. Bármi eltér: a teljes újrakódolás fut.
+# VIDEO_SMART_PROXY=0 kikapcsolja.
+
+SMART_MIN_REUSE = 0.5          # a régi munkamásolatból legalább ennyi (az új kockáinak aránya) jöjjön, különben teljes út
+SMART_MAX_ENCODE_S = 180.0     # ennél több újrakódolandó másodperc: a teljes út (párhuzamos szeleteivel) se sokkal lassabb
+SMART_PIECE_S = 30.0           # az újrakódolt szakaszok darabja (egyszerre több fut)
+
+
+def _smart_on() -> bool:
+    return os.getenv("VIDEO_SMART_PROXY", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _frame(t: float, fps: float) -> int:
+    return round(t * fps + 1e-6)
+
+
+def _dissolve_key(ss: list[dict[str, Any]], i: int, fps: float) -> Optional[tuple[Any, ...]]:
+    """Az i. szakasz elején álló képi áttűnés azonosítója (amitől a képe függ: transitions) és a kockaszáma; None: nincs."""
+    if i <= 0 or i >= len(ss) or ss[i].get("join") != "dissolve":
+        return None
+    p, x = ss[i - 1], ss[i]
+    n = max(2, round(min(DISSOLVE_S, (x["b"] - x["a"]) / 2) * fps))
+    return (p["src"], round(p["a"], 4), round(p["b"], 4), x["src"], round(x["a"], 4), json.dumps(x.get("match") or {},
+            sort_keys=True), n)
+
+
+def reuse(old_keep: Any, new_keep: Any, fps: float) -> list[tuple[int, int, int]]:
+    """Az új idővonal mely kockái vannak meg a régi munkamásolatban → futamok [(új első kocka, régi első kocka, db)].
+    Egy szakasz akkor jön a régiből, ha ugyanaz a forrás, ugyanaz a képi illesztés (match), és a régi idővonal egy
+    szakasza tartalmazza; az áttűnések kockái csak akkor, ha a régiben ugyanaz az áttűnés áll ugyanott."""
+    olds = segs(old_keep) or [{"a": 0.0, "b": _BIG, "src": None}]
+    news = segs(new_keep) or [{"a": 0.0, "b": _BIG, "src": None}]
+    o_off, acc = [], 0.0
+    for y in olds:
+        o_off.append(acc)
+        acc += y["b"] - y["a"]
+    runs: list[tuple[int, int, int]] = []
+    on = 0.0
+    for i, x in enumerate(news):
+        nf0, nf1 = _frame(on, fps), _frame(on + x["b"] - x["a"], fps)
+        on += x["b"] - x["a"]
+        for j, y in enumerate(olds):
+            if y["src"] != x["src"] or (y.get("match") or {}) != (x.get("match") or {}):
+                continue
+            if not (y["a"] - 1e-4 <= x["a"] and x["b"] <= y["b"] + 1e-4):
+                continue
+            of0 = _frame(o_off[j] + x["a"] - y["a"], fps)
+            n = nf1 - nf0
+            if y["b"] < _BIG / 2:
+                n = min(n, _frame(o_off[j] + y["b"] - y["a"], fps) - of0)
+            delta = of0 - _frame(o_off[j], fps)
+            dn, do = _dissolve_key(news, i, fps), _dissolve_key(olds, j, fps)
+            same = delta == 0 and dn is not None and dn == do
+            skip = 0
+            if dn and not same:
+                skip = dn[-1]
+            if do and not same:
+                skip = max(skip, do[-1] - delta)
+            if n - skip > 0:
+                runs.append((nf0 + skip, of0 + skip, n - skip))
+            break
+    merged: list[tuple[int, int, int]] = []
+    for r in runs:
+        if merged and merged[-1][0] + merged[-1][2] == r[0] and merged[-1][1] + merged[-1][2] == r[1]:
+            merged[-1] = (merged[-1][0], merged[-1][1], merged[-1][2] + r[2])
+        else:
+            merged.append(r)
+    return merged
+
+
+def reuse_frames(old_keep: Any, new_keep: Any, fps: float, times: list[float]) -> list[tuple[int, int, int]]:
+    """Mint a reuse, kockánként, a régi munkamásolat VALÓS kockaidőivel (times: megjelenítési sorrendben, s): az új
+    idővonal j. kockája (a rács: fps) a forrás melyik pillanata, az a régi idővonalon mikor van, és ott a régi
+    munkamásolatnak van-e kockája (fél kockán belül). Futam: egymást követő új kockák egymást követő, egyenletesen
+    (±¼ kocka) álló régi kockákon. Így egy kiesett / megduplázott kocka, egy szelet-illesztés eltolódása a régiben csak
+    ott szakítja meg a másolást (10-25, a 30 perces donorban: egy 2 kockás lyuk és két 0,65 ms-os csúszás — az
+    index-aritmetika a lyuk után egy kockával mellé másolt volna)."""
+    import bisect
+    olds = segs(old_keep) or [{"a": 0.0, "b": _BIG, "src": None}]
+    news = segs(new_keep) or [{"a": 0.0, "b": _BIG, "src": None}]
+    o_off, acc = [], 0.0
+    for y in olds:
+        o_off.append(acc)
+        acc += y["b"] - y["a"]
+    half, step = 0.5 / fps, 1.0 / fps
+    pairs: list[tuple[int, int]] = []
+    on = 0.0
+    for p_, x in enumerate(news):
+        f0, f1 = _frame(on, fps), _frame(on + x["b"] - x["a"], fps)
+        on += x["b"] - x["a"]
+        dn = _dissolve_key(news, p_, fps)
+        cands = [(q, y) for q, y in enumerate(olds) if y["src"] == x["src"] and (y.get("match") or {}) == (x.get("match") or {})]
+        for j in range(f0, f1):
+            sp = x["a"] + (j - f0) / fps                          # a forrás pillanata (a teljes újrakódolás kockája)
+            hit = next(((q, y) for q, y in cands if y["a"] - 1e-6 <= sp < y["b"] - 1e-6), None)
+            if hit is None:
+                continue
+            q, y = hit
+            t_old = o_off[q] + sp - y["a"]
+            k = bisect.bisect_left(times, t_old - half)
+            if k >= len(times) or abs(times[k] - t_old) >= half:
+                continue
+            do = _dissolve_key(olds, q, fps)
+            r_new, r_old = j - f0, round((t_old - o_off[q]) * fps)
+            same = dn is not None and dn == do and r_new == r_old
+            if (dn and r_new < dn[-1] and not same) or (do and r_old < do[-1] and not same):
+                continue                                          # egy áttűnés kockája, ami a régiben nem ugyanaz
+            pairs.append((j, k))
+    runs: list[tuple[int, int, int]] = []
+    for j, k in pairs:
+        if runs and runs[-1][0] + runs[-1][2] == j and runs[-1][1] + runs[-1][2] == k \
+                and abs(times[k] - times[k - 1] - step) <= step / 4:
+            runs[-1] = (runs[-1][0], runs[-1][1], runs[-1][2] + 1)
+        else:
+            runs.append((j, k, 1))
+    return runs
+
+
+def stitch(runs: list[tuple[int, int, int]], keys: list[int], n_old: int, total: int,
+           piece: int = 0) -> list[tuple[Any, ...]]:
+    """A futamokból a munkamásolat darabjai sorban: ("copy", új első kocka, régi első kocka, db) — a régi kulcskockájától
+    a következő futamon belüli kulcskockájáig (vagy a végéig) —, és ("enc", új első kocka, új utolsó utáni) — a többi,
+    legfeljebb piece kockás darabokban (0: egyben). Csak tiszta kulcskockán kezdődik másolt darab."""
+    ks = sorted(set(k for k in keys if 0 <= k < n_old) | {n_old})
+    ops: list[tuple[Any, ...]] = []
+    cur = 0
+
+    def enc(a: int, b: int) -> None:
+        step = piece if piece > 0 else max(1, b - a)
+        while a < b:
+            ops.append(("enc", a, min(b, a + step)))
+            a += step
+    for nf0, of0, n in runs:
+        n = min(n, n_old - of0)
+        k1 = next((k for k in ks if k >= of0), None)
+        k2 = max((k for k in ks if k <= of0 + n), default=None)
+        if k1 is None or k2 is None or k2 <= k1 or nf0 + (k1 - of0) < cur:
+            continue
+        c0 = nf0 + (k1 - of0)
+        if c0 > cur:
+            enc(cur, c0)
+        ops.append(("copy", c0, k1, k2 - k1))
+        cur = c0 + (k2 - k1)
+    if cur < total:
+        enc(cur, total)
+    return ops
+
+
+def donors(base: dict[str, Any]) -> list[tuple[Any, dict[str, Any]]]:
+    """A meglévő munkamásolatok ugyanerről a felvételről ugyanazzal a korrekcióval, más idővonallal (az eredeti metájában:
+    proxies), amelyekből az új (vágott / beszúrt) idővonal zöme átmásolható — a legtöbbet adó elöl. Stabilizálásnál
+    nincs (az egész felvétel mozgásából számol)."""
+    from app.storage import read_meta
+    from app.tools import crafts
+    fid0 = str(base.get("file_id") or "")
+    if not fid0 or not base.get("keep") or stabilized(base) or not _smart_on():
+        return []
+    fps = float(base.get("fps") or 30)
+    total = max(1, _frame(length(base["keep"], 0.0), fps))
+    out = []
+    for k, hit in ((read_meta(fid0) or {}).get("proxies") or {}).items():
+        try:
+            kd = json.loads(k)
+            crafts.existing(hit["media_id"])
+        except (ValueError, KeyError, FileNotFoundError):
+            continue
+        if kd.get("v") != 2 or kd.get("side") != PROXY_SIDE or kd.get("budget") != PROXY_BUDGET_MB \
+                or (kd.get("adjust") or {}) != (base.get("adjust") or {}) or (kd.get("keep") or None) == base["keep"]:
+            continue
+        got = sum(n for _, _, n in reuse(kd.get("keep"), base["keep"], fps))
+        if got >= SMART_MIN_REUSE * total:
+            out.append((got, kd.get("keep"), hit))
+    return [(kp, hit) for _, kp, hit in sorted(out, key=lambda x: -x[0])]
+
+
+async def _grid(path: Path, pk: list[tuple[int, bool]]) -> Optional[tuple[float, list[float]]]:
+    """A munkamásolat kockarácsa (kocka/s: a sáv névleges sebessége, ha a kockák ≥ 99 %-a ennyinként jön) és a kockák
+    valós ideje (s, megjelenítési sorrendben, 0-tól). None: nincs ilyen rács. (A vágatlan munkamásolat az iPhone-felvétel
+    névleges 30-ján áll, a vágott idővonal a mért átlagán — 29,993 —: más rács; az új másolat a régiéhez igazodik.)"""
+    from fractions import Fraction
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=time_base,r_frame_rate",
+                       "-of", "json", str(path), timeout=60)
+    st = (json.loads(out.decode("utf-8", "replace") or "{}").get("streams") or [{}])[0]
+    try:
+        tb, rate = Fraction(st["time_base"]), Fraction(st["r_frame_rate"])
+    except (KeyError, ValueError, ZeroDivisionError):
+        return None
+    if rate <= 0 or len(pk) < 2:
+        return None
+    ts = sorted(p for p, _ in pk)
+    step = 1 / rate
+    regular = sum(1 for a, b in zip(ts, ts[1:]) if abs((b - a) * tb - step) <= step / 4)
+    if regular < 0.99 * (len(ts) - 1) or abs(ts[0] * tb) > step / 2:
+        return None
+    return float(rate), [float(p * tb) for p in ts]
+
+
+async def _packets(path: Path) -> list[tuple[int, bool]]:
+    """A videósáv csomagjai dekódolási sorrendben: (pts, kulcskocka-e)."""
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts,flags",
+                       "-of", "compact=p=0:nk=1", str(path), timeout=600)
+    pk = []
+    for ln in out.decode("utf-8", "replace").split():
+        f = ln.split("|")
+        if len(f) >= 2 and f[0].lstrip("-").isdigit():
+            pk.append((int(f[0]), "K" in f[1]))
+    return pk
+
+
+def clean_keys(pk: list[tuple[int, bool]]) -> list[int]:
+    """A tiszta vágópontok (megjelenítési sorszámmal): kulcskocka, előtte dekódolt mind korábban, utána dekódolt mind
+    később látszik (a zárt GOP) — innen a csomagok változatlanul másolhatók, a kockák ugyanazok."""
+    order = {p: i for i, p in enumerate(sorted(p for p, _ in pk))}
+    n, out = len(pk), []
+    suf = [0] * n
+    run_min = None
+    for i in range(n - 1, -1, -1):
+        run_min = pk[i][0] if run_min is None else min(run_min, pk[i][0])
+        suf[i] = run_min
+    run_max = None
+    for i, (p, key) in enumerate(pk):
+        if key and (run_max is None or run_max < p) and suf[i] == p:
+            out.append(order[p])
+        run_max = p if run_max is None else max(run_max, p)
+    return out
+
+
+async def _extradata(path: Path) -> str:
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_streams", "-show_data", "-of", "json",
+                       str(path), timeout=120)
+    st = (json.loads(out.decode("utf-8", "replace") or "{}").get("streams") or [{}])[0]
+    return "".join(ln.split(":", 1)[1][:40].replace(" ", "") for ln in str(st.get("extradata") or "").splitlines() if ":" in ln)
+
+
+async def _audio_copy_of(orig: Path, k: Optional[int], copy: Path) -> bool:
+    """A munkamásolat hangja az eredeti hangsávjának bitre azonos másolata-e (a vágatlan másolat AAC-nál -c copy-val
+    viszi): az első 10 s csomagjai (md5) ugyanazok. Ha igen, a hang onnan dekódolva ugyanaz a minta, mint az eredetiből —
+    a 3 GB-os eredeti helyett a kicsi másolatot kell olvasni (10-25, a 30 perces vágás hangja hideg lemezről 60 s volt)."""
+    from app.convert.engines import run
+    if k is None:
+        return False
+
+    async def md5s(p: Path, stream: str) -> list[str]:
+        out, _ = await run("ffmpeg", "-v", "error", "-t", "10", "-i", str(p), "-map", stream, "-c", "copy", "-f", "framemd5", "-",
+                           timeout=120)
+        return [ln.rsplit(",", 1)[1].strip() for ln in out.decode("utf-8", "replace").splitlines() if ln and not ln.startswith("#")]
+
+    async def pcm(p: Path, stream: str, at: float) -> str:        # dekódolva, kereséssel: az előtöltés / az időbélyegek is
+        out, _ = await run("ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-t", "1", "-i", str(p), "-map", stream, "-f", "md5", "-",
+                           timeout=120)
+        return out.decode().strip()
+    try:
+        a, b = await md5s(orig, f"0:a:{k}"), await md5s(copy, "0:a:0")
+        same = bool(a) and a == b
+        for at in (0.0, 61.37):
+            same = same and await pcm(orig, f"0:a:{k}", at) == await pcm(copy, "0:a:0", at)
+    except Exception:
+        return False
+    return same
+
+
+async def _sar(path: Path) -> str:
+    """A sáv képpont-aránya setsar-értéknek: "0" (nincs megadva — a vágatlan munkamásolaté), "1" (1:1 — az idővonalé:
+    setsar=1), vagy num/den. Az SPS-be kerül (VUI): ha a kódolt darabé más, a paraméterkészlet sem egyezik."""
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=sample_aspect_ratio",
+                       "-of", "csv=p=0", str(path), timeout=60)
+    v = out.decode().strip()
+    if not v or v in ("N/A", "0:1"):
+        return "0"
+    return "1" if v == "1:1" else v.replace(":", "/")
+
+
+async def _count(path: Path) -> int:
+    """A videósáv kockáinak száma (MP4: a mintatábla szerint — nem kell végigolvasni)."""
+    from app.convert.engines import run
+    out, _ = await run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames",
+                       "-of", "csv=p=0", str(path), timeout=120)
+    v = (out.decode().strip().split() or ["0"])[0]
+    return int(v) if v.isdigit() else -1
+
+
+async def _md5s(path: Path, t: float, n: int) -> list[str]:
+    from app.convert.engines import run
+    out, _ = await run("ffmpeg", "-v", "error", "-ss", f"{t:.6f}", "-i", str(path), "-map", "0:v:0", "-frames:v", str(n),
+                       "-f", "framemd5", "-", timeout=300)
+    return [ln.rsplit(",", 1)[1].strip() for ln in out.decode("utf-8", "replace").splitlines() if ln and not ln.startswith("#")]
+
+
+async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dict[str, Any]) -> Optional[tuple[dict[str, Any], list[str]]]:
+    """Az új idővonal munkamásolata egy meglévőből (donor: proxies-bejegyzés ugyanazzal a korrekcióval, old_keep
+    idővonallal) — lásd fent. → (az új base, a korrekció leírása), vagy None, ha nem éri meg / nem biztonságos (a hívó
+    ilyenkor a teljes úton készít)."""
+    import shutil
+    import tempfile
+    import time
+    from app.config import settings
+    from app.convert.engines import run
+    from app.storage import output_path, temp_path, write_meta
+    from app.storage.files import new_file_id
+    from app.tools import crafts, mediaprobe, video_fx
+    t_start = time.time()
+    m = await mediaprobe.info(src)
+    b = {k: v for k, v in base.items() if k not in ("media_id", "proxy", "auto", "clean_media_id", "rotated", "hdr")}
+    W, H = int(m["display_width"] or b["width"]), int(m["display_height"] or b["height"])
+    pw, ph = size(W, H)
+    if donor.get("proxy") and (int(donor["proxy"]["w"]), int(donor["proxy"]["h"])) != (pw, ph):
+        return None
+    if donor.get("auto") is not None:
+        b["auto"] = donor["auto"]                           # ugyanaz a korrekció, ugyanaz az eredetin mért auto
+    adj = b.get("adjust") or {}
+    old = crafts.existing(donor["media_id"])
+    fps = float(m.get("fps") or 30)                         # a kódoló GOP-ja (_build_proxy: -g round(fps))
+    pk = await _packets(old)
+    grid = await _grid(old, pk)                             # a régi munkamásolat rácsa: az új is ezen áll (lásd _grid)
+    if not grid:
+        log.info("smart cut: a régi munkamásolatnak nincs állandó kockarácsa (%s)", old.name)
+        return None
+    fps_v, times = grid
+    runs = reuse_frames(old_keep, b["keep"], fps_v, times)
+    work = Path(tempfile.mkdtemp(prefix="proxy-smart-", dir=str(temp_path("").parent)))
+    try:
+        tl = await timeline(b, src, W, H, fps_v, work, size=(pw, ph))
+        dur = tl.length
+        total = _frame(dur, fps_v)
+        ops = stitch(runs, clean_keys(pk), len(pk), total, piece=max(1, round(SMART_PIECE_S * fps_v)))
+        enc_frames = sum(op[2] - op[1] for op in ops if op[0] == "enc")
+        copied = sum(op[3] for op in ops if op[0] == "copy")
+        if copied < SMART_MIN_REUSE * total or enc_frames > SMART_MAX_ENCODE_S * fps_v:
+            log.info("smart cut: nem éri meg (másolva %d, kódolva %d kocka a %d-ból)", copied, enc_frames, total)
+            return None
+        gop = str(max(1, round(fps)))
+        venc = ["-c:v", "libx264", "-preset", "veryfast", *_rate(dur), "-g", gop, "-pix_fmt", "yuv420p"]
+        encs = [op for op in ops if op[0] == "enc"]
+        sar = await _sar(old)                               # (a régiével egyező SPS-hez a képpont-arány is ugyanaz)
+        threads = ["-threads", str(max(2, (os.cpu_count() or 4) // max(1, min(4, len(encs)))))]
+        items = await transitions(tl, work, "p", venc) if encs else []
+        gate = asyncio.Semaphore(4)
+
+        async def encode(k: int, f0: int, f1: int) -> str:
+            name = f"smart-enc-{k:04d}.mp4"
+            async with gate:
+                await _tl_window(tl, f0 / fps_v, f1 / fps_v, ["format=yuv420p", f"setsar={sar}"], items, venc + threads,
+                                 work / name, work)
+            return name
+
+        async def audio() -> list[str]:
+            if any(i.get("audio_stream") is not None for i in tl.infos.values()):
+                tl_a = tl
+                if old_keep is None and await _audio_copy_of(src, m.get("audio_stream"), old):
+                    import copy as copy_mod                # a fő felvétel hangja a régi másolatból (ugyanazok a csomagok)
+                    tl_a = copy_mod.copy(tl)
+                    tl_a.paths, tl_a.infos = {**tl.paths, None: old}, {**tl.infos, None: await mediaprobe.info(old)}
+                await tl_audio(tl_a, work / "proxy-a.m4a", work)
+                return ["-i", "proxy-a.m4a", "-map", "1:a:0", "-c:a", "copy"]
+            return []
+        bounds = sorted(({op[2] for op in ops if op[0] == "copy"} | {op[2] + op[3] for op in ops if op[0] == "copy"})
+                        - {0, len(pk)})
+        seg_args = ["-segment_frames", ",".join(str(x) for x in bounds)] if bounds else ["-segment_time", "100000000"]
+
+        async def segments() -> None:                       # a régi munkamásolat a vágópontokon darabolva, másolva
+            # (-avoid_negative_ts disabled: különben az első darab a B-kockák késleltetésével eltolva kezdődik — 0,067 s —,
+            # és az összefűzés minden utána jövő kockát ennyivel később tenne)
+            await run("ffmpeg", "-v", "error", "-y", "-i", str(old), "-map", "0:v:0", "-c", "copy", "-avoid_negative_ts",
+                      "disabled", "-f", "segment", *seg_args, "-reset_timestamps", "1", "-segment_format", "mp4",
+                      "smart-seg-%04d.mp4",
+                      timeout=settings.VIDEO_TIMEOUT_S, cwd=work)
+        names_enc, aud, _ = await asyncio.gather(asyncio.gather(*(encode(k, op[1], op[2]) for k, op in enumerate(encs))),
+                                                 audio(), segments())
+        seg_start = [0] + bounds
+        it = iter(names_enc)
+        parts: list[tuple[str, int, int]] = []              # (fájl, új első kocka, db)
+        for op in ops:
+            if op[0] == "enc":
+                parts.append((next(it), op[1], op[2] - op[1]))
+                continue
+            _, c0, k1, n = op
+            for si, s0 in enumerate(seg_start):
+                s1 = seg_start[si + 1] if si + 1 < len(seg_start) else len(pk)
+                if k1 <= s0 and s1 <= k1 + n:
+                    parts.append((f"smart-seg-{si:04d}.mp4", c0 + s0 - k1, s1 - s0))
+        # ellenőrzés: paraméterkészlet, darabonként a kockák száma
+        want = await _extradata(old)
+        for name in names_enc:
+            if await _extradata(work / name) != want:
+                log.info("smart cut: a kódolt darab paraméterkészlete más (%s)", name)
+                return None
+        for name, _f0, n in parts:
+            if await _count(work / name) != n:
+                log.info("smart cut: %s kockaszáma nem %d", name, n)
+                return None
+        # minden darab a rács pontos helyére (a régi másolat illesztésein 0,65 ms-os csúszás lehet a saját idejében)
+        (work / "smart.txt").write_text("".join(f"file '{n}'\nduration {k / fps_v:.6f}\n" for n, _, k in parts), "utf-8")
+        await run("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "smart.txt", "-c", "copy", "proxy-v.mp4",
+                  timeout=settings.VIDEO_TIMEOUT_S, cwd=work)
+        if await _count(work / "proxy-v.mp4") != total:
+            log.info("smart cut: az összefűzött másolat kockaszáma nem %d", total)
+            return None
+        for name, f0, n in parts[1:9]:                      # az illesztések után ugyanazok a kockák, mint a darabban
+            if await _md5s(work / "proxy-v.mp4", (f0 - 0.5) / fps_v, 2) != await _md5s(work / name, 0.0, 2):
+                log.info("smart cut: a %d. kockánál (%s) az összefűzött kép más", f0, name)
+                return None
+        tmp = work / "proxy.mp4"
+        await run("ffmpeg", "-v", "error", "-y", "-i", "proxy-v.mp4", *aud, "-map", "0:v:0", "-c:v", "copy", "-t", f"{dur:.4f}",
+                  "-movflags", "+faststart", str(tmp), timeout=settings.VIDEO_TIMEOUT_S, cwd=work)
+        fid = new_file_id("mp4")
+        shutil.move(str(tmp), output_path(fid))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    write_meta(fid, operation="footage: the editor's copy", source_file_id=None, extra={"ephemeral": True})
+    applied = video_fx.describe(adj, b.get("auto")) if adj else []
+    b.update(media_id=fid, asset=f"footage-{fid.split('.')[0][:8]}.mp4", proxy={"w": pw, "h": ph})
+    if (m.get("rotation") or 0) % 360:
+        b["rotated"] = int(m["rotation"])
+    if m.get("hdr"):
+        b["hdr"] = m["hdr"]
+    log.info("smart cut munkamásolat: %d kocka, ebből %d másolva, %d kódolva, %d darab (%.1f s)", total, copied, enc_frames,
+             len(parts), time.time() - t_start)
     return b, applied
 
 

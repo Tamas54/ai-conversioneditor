@@ -7,6 +7,14 @@
     POST /api/video/to-pptx        a videó egy diára (új pakli vagy egy meglévő új diája)
     GET  /api/video/assets         a projekt médiafájljai (név + letöltési link) — a böngészős szerkesztőnek (bridge)
     POST /api/video/asset          a böngészőben a projekthez adott médiafájl feltöltése (mentés után a bridge küldi)
+
+  Szakasz-gyorsítótáras HLS-előnézet (app/tools/preview_serve.py) — mind aláírt (?t=, mint a /files/):
+    GET  /api/video/{pid}/preview.m3u8   master (kép + külön hang-rendition)
+    GET  /api/video/{pid}/video.m3u8     a szakaszok (VOD, szakaszonként #EXT-X-DISCONTINUITY)
+    GET  /api/video/{pid}/audio.m3u8     a hang darabokban, egy folytonos renditionként (a PTS-t a kiszolgálás tolja)
+    GET  /api/video/{pid}/preview.json   a lejátszó állapota (kész szakaszok, markerek, a végleges render)
+    GET  /api/video/preview/seg/{hash}.ts?p=<pid>&t=   egy szakasz: kész → fájl; különben sorba (0), vár, 503 + Retry-After
+    GET  /api/video/preview/aud/{hash}.ts?p=<pid>&t=   egy hangdarab: mint a szakasz (kész → fájl; különben sorba, vár, 503)
 """
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app import events, tenancy
 from app.tools import crafts
@@ -231,7 +240,8 @@ async def render_video(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/api/video/edit")
 async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
-    """{file_id: <.ecproj vagy a renderje>, changes: {...}, source?: str, alpha?} → job (az új projekt + MP4)."""
+    """{file_id: <.ecproj vagy a renderje>, changes: {...}, source?: str, alpha?, preview?: "mp4"} → job (az új projekt + MP4;
+    hosszú videónál a szakasz-előnézet listája, preview="mp4": a kész szakaszok egy letölthető MP4-ben)."""
     from app import jobs
     from app.tools import video
     if tenancy.is_guest():
@@ -249,7 +259,8 @@ async def edit_video(body: dict[str, Any]) -> dict[str, Any]:
         try:
             res = await video.edit(fid, body.get("changes") or {}, extra_source=body.get("source") or "", progress=progress,
                                    alpha=body.get("alpha"), render=body.get("render", True) is not False,
-                                   draft=bool(body.get("draft")), final=body.get("final") or "auto")
+                                   draft=bool(body.get("draft")), final=body.get("final") or "auto",
+                                   **({"preview": body["preview"]} if body.get("preview") is not None else {}))  # "mp4": letölthető
         except Exception as e:
             raise _fail(e)
         events.emit("tool_done", tool="edit_video", params={"file_id": fid}, result={"files": [f["file_id"] for f in res.get("files") or []]})
@@ -357,3 +368,121 @@ async def video_asset(request: Request, project: str = Query(...), name: str = Q
     finally:
         tmp.unlink(missing_ok=True)
     return {"file_id": fid, "name": video._asset_name(name)}
+
+
+# ---------- szakasz-gyorsítótáras HLS-előnézet (app/tools/preview_serve.py, plan20261025_preview_cache.md) ----------
+# A jogosultság ugyanaz, mint a /files/{id}?t=-é: a link maga aláírt (a munkaterület az u=-ban, a tokenbe aláírva) —
+# a lejátszó (Safari natív HLS, hls.js) így süti nélkül, megosztott projektnél is kéri. A listákban minden szakasz-URL
+# saját aláírással; a lista tokenje (pid||exp) nem nyit szakaszt, a szakaszé nem nyit listát.
+
+_NO_STORE = {"Cache-Control": "private, no-store"}       # a listában friss tokenek: ne gyorsítótárazzák
+
+
+async def _hls_plan(pid: str, h: Optional[str], t: str, u: str) -> dict[str, Any]:
+    from app.tools import preview_serve as ps
+    if not ps.verify(pid, h, t, u):
+        raise HTTPException(403, "invalid or expired token")
+    tenancy.set_user(u)         # a link aláírása igazolja: ennek a munkaterületnek a projektje
+    from app.tools import preview_cache
+    if not preview_cache.enabled():
+        raise HTTPException(404, "The segment preview is off on this server (VIDEO_PREVIEW_HLS=0).")
+    try:
+        return await ps.plan_of(pid)          # a verzió preview_cache.context()-jének terve (első kéréskor épül)
+    except FileNotFoundError:
+        raise HTTPException(404, "no such video project") from None
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except RuntimeError as e:                 # átmeneti (a környezet nem épült fel): a lejátszó újrapróbálja
+        raise HTTPException(503, str(e), headers={"Retry-After": "2", **_NO_STORE}) from None
+
+
+def _m3u8(text: str) -> Response:
+    from app.tools import preview_serve as ps
+    return Response(text, media_type=ps.MPEGURL, headers=_NO_STORE)
+
+
+def _busy(what: str) -> Response:
+    return Response(f"The {what} is still rendering — try again in a moment.", status_code=503,
+                    media_type="text/plain", headers={"Retry-After": "2", **_NO_STORE})
+
+
+@router.get("/api/video/{project_id}/preview.m3u8")
+async def preview_master(project_id: str, t: str = Query(..., description="signed token"),
+                         u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)")):
+    """A lejátszó (hls.js) mindig a 0. szakasszal indul (P4 mérése: később indulva nem hozza létre a puffereit) — ezért a
+    lista kérésekor a 0. szakasz és a hang elsőbbséggel (0) sorba áll, ha még nincs kész (nem vár rá)."""
+    from app.tools import preview_serve as ps
+    plan = await _hls_plan(project_id, None, t, u)
+    ps.warm(project_id, plan)
+    return _m3u8(ps.master_m3u8(project_id, plan))
+
+
+@router.get("/api/video/{project_id}/video.m3u8")
+async def preview_video_playlist(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
+    from app.tools import preview_serve as ps
+    plan = await _hls_plan(project_id, None, t, u)
+    ps.warm(project_id, plan)
+    return _m3u8(ps.video_m3u8(project_id, plan))
+
+
+@router.get("/api/video/{project_id}/audio.m3u8")
+async def preview_audio_playlist(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
+    """A hang darabjai — azonnal (nem vár a hangra: a darabot a darab-végpont kérésre rendereli, a 0.-at a lista kérése
+    már sorba tette)."""
+    from app.tools import preview_serve as ps
+    plan = await _hls_plan(project_id, None, t, u)
+    if not plan.get("audio_hash"):
+        raise HTTPException(404, "This preview has no sound track.")
+    ps.warm(project_id, plan)
+    return _m3u8(ps.audio_m3u8(project_id, plan))
+
+
+@router.get("/api/video/{project_id}/preview.json")
+async def preview_state(project_id: str, t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
+    from app.tools import preview_serve as ps
+    return JSONResponse(ps.status(project_id, await _hls_plan(project_id, None, t, u)), headers=_NO_STORE)
+
+
+@router.get("/api/video/preview/seg/{seg_hash}.ts")
+async def preview_segment(seg_hash: str, p: str = Query(..., description="the video project"),
+                          t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
+    """Egy szakasz: kész → a fájl (a hash a tartalom: örökre ugyanaz); nincs → elsőbbséggel (0) sorba, és legfeljebb
+    VIDEO_PREVIEW_SEG_WAIT_S-ig vár, utána 503 + Retry-After (a lejátszó újrapróbálja, a render közben megy tovább)."""
+    from app.tools import preview_serve as ps
+    plan = await _hls_plan(p, seg_hash, t, u)
+    k = ps.k_of(plan, seg_hash)
+    if k is None:
+        raise HTTPException(404, "That segment isn't in this project's preview (the project changed — reload the playlist).")
+    try:
+        path = await ps.request(p, k, priority=ps.P_PLAYER, plan=plan)
+    except TimeoutError:
+        return _busy("preview segment")
+    except RuntimeError as e:
+        raise HTTPException(500, f"The preview segment could not be rendered: {str(e)[:200]}") from None
+    data = ps.segment_bytes(plan, k, path)               # folytonos kép (VIDEO_PREVIEW_CONTINUOUS=1): a PTS a helyére
+    if data is not None:
+        return Response(data, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})
+    return FileResponse(path, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})
+
+
+@router.get("/api/video/preview/aud/{chunk_hash}.ts")
+async def preview_audio_chunk(chunk_hash: str, p: str = Query(..., description="the video project"),
+                              t: str = Query(...), u: str = Query(tenancy.ADMIN_ID)):
+    """Egy hangdarab (preview_cache.audio_plan): mint a képszakasz — kész → a fájl (immutable); nincs → elsőbbséggel (0)
+    sorba, legfeljebb VIDEO_PREVIEW_SEG_WAIT_S-ig vár, utána 503 + Retry-After; ami nincs a verzió tervében: 404."""
+    from app.tools import preview_serve as ps
+    plan = await _hls_plan(p, chunk_hash, t, u)
+    j = ps.ck_of(plan, chunk_hash)
+    if j is None:
+        raise HTTPException(404, "That part of the sound isn't in this project's preview (the project changed — reload the playlist).")
+    try:
+        path = await ps.request_audio_chunk(p, j, priority=ps.P_PLAYER, plan=plan)
+    except TimeoutError:
+        return _busy("sound")
+    except RuntimeError as e:
+        raise HTTPException(500, f"This part of the preview sound could not be made: {str(e)[:200]}") from None
+    try:                                                # a darab a köteten 0-tól; a lejátszó a helyére tolva kapja
+        data = ps.audio_chunk_bytes(plan, j, path)
+    except ValueError as e:
+        raise HTTPException(500, f"This part of the preview sound is damaged: {e}") from None
+    return Response(data, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})

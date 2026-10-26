@@ -118,6 +118,15 @@ async def variant(project: Path, info: dict[str, Any], off: list[int], name: str
 # ---------- mit hogyan ----------
 
 def _same(a: Any, b: Any) -> bool:
+    """Ugyanaz-e két kulcskocka-érték — a számok lebegőpontos zaj nélkül (10-26: az osztott kép a felvétel méretét
+    199.99999999999994-re tette vissza a 200 helyett, és a moved() a felvétel ~700 másodpercét a motorral rajzoltatta)."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)          # noqa: E731
+    if num(a) and num(b):
+        return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(a)), abs(float(b)))
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
@@ -272,8 +281,18 @@ def _ass_rgb(rgb: list[float] | tuple[float, ...]) -> str:
     return f"&H{b:02X}{g:02X}{r:02X}&"
 
 
-def _ass_time(t: float) -> str:
-    cs = max(0, round(t * 100))
+def _ass_time(t: float, fps: Optional[float] = None) -> str:
+    """ASS-idő (centiszekundum). fps megadva (a szakasz-előnézet): a t utáni első kockára igazítva — az a centiszekundum,
+    amelytől a libass (az ffmpeg ass-szűrője: a kocka ideje egész ms-ra csonkolva) pontosan ettől a kockától mutatja. Így
+    a felirat kockái csak a kockaszámtól függnek: egy vágás utáni, nem egész centiszekundumos eltolás (pl. 600 kocka
+    29,993 fps-en = 20,0047 s) nem tol el egy-egy szót egy kockával (preview_cache: a feliratos szakaszok újrahasználhatók)."""
+    if fps:
+        f = math.ceil(t * fps - 1e-6)                    # (= preview_cache._on: az első kocka, amelynek ideje ≥ t)
+        # a kocka ideje ms-ban, fél ms tartalékkal (a szűrő lebegőpontos szorzata egy hajszállal alá eshet): a legnagyobb
+        # centiszekundum, ami még nem később — és az előző kocka (≥ 33 ms-mal korábban) még nem látja
+        cs = max(0, math.floor(f * 1000 / fps - 0.5) // 10) if f > 0 else 0
+    else:
+        cs = max(0, round(t * 100))
     return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
 
 
@@ -321,9 +340,11 @@ _ASS_SIZE = 1.2183
 _SEMIBOLD = "Inter Semi Bold"
 
 
-def ass_subtitles(subs: list[dict[str, Any]], style: str, W: int, H: int, total: float, accent: list[float]) -> str:
+def ass_subtitles(subs: list[dict[str, Any]], style: str, W: int, H: int, total: float, accent: list[float],
+                  fps: Optional[float] = None) -> str:
     """A spec feliratai → ASS (PlayRes = a videó mérete), ugyanazokkal a darabokkal és szóidőkkel, amiket a projekt
-    felirat-rétegei kaptak (video.caption_track), a sáv és a betű a builder méreteivel (video_builder.jsx)."""
+    felirat-rétegei kaptak (video.caption_track), a sáv és a betű a builder méreteivel (video_builder.jsx). fps: az idők
+    kockára igazítva (_ass_time) — a szakasz-előnézet ezt kéri."""
     from app.tools import video
     Lc = video._layout(W, H)
     rows = video.caption_track(subs, W, H, total, style)
@@ -342,7 +363,7 @@ def ass_subtitles(subs: list[dict[str, Any]], style: str, W: int, H: int, total:
 
     def dialogue(layer: int, a: float, b: float, st: str, text: str) -> None:
         if b - a >= 0.01:
-            ev.append(f"Dialogue: {layer},{_ass_time(a)},{_ass_time(b)},{st},,0,0,0,,{text}")
+            ev.append(f"Dialogue: {layer},{_ass_time(a, fps)},{_ass_time(b, fps)},{st},,0,0,0,,{text}")
 
     def states(r: dict[str, Any], words: list[str]) -> list[tuple[float, float, int]]:
         """(a, b, i): i = az épp mondott szó (−1: még egy sem)."""

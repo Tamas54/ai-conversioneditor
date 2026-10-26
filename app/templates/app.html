@@ -2754,7 +2754,8 @@ async function wireRevise(f) {
       } catch {}
       await loadAccount();
       const sameEditor = app && editorsFor(r.file_id.split(".").pop()).some(([a]) => a === app);   // szerkesztőből: ott marad
-      nav("/app/file/" + encodeURIComponent(r.file_id) + (sameEditor ? `/edit/${app}` : ""));
+      // hosszú videó: a szakasz-gyorsítótáras előnézet (HLS, a változások jelölőivel) a nézhető eredmény — oda nyílik
+      nav("/app/file/" + encodeURIComponent(r.file_id) + (r.preview?.playlist_url ? "/preview" : sameEditor ? `/edit/${app}` : ""));
     } catch (err) { st.textContent = err.message; go.disabled = false; input.disabled = false; }
   };
 }

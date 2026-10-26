@@ -180,6 +180,11 @@ async def run(*args: str, timeout: float = 600, cwd: Optional[Path] = None, stdi
         proc.kill()
         await proc.wait()
         raise EngineError(f"{Path(exe).name} took longer than {int(timeout)} s and was stopped")
+    except asyncio.CancelledError:          # a hívót leállították (pl. egy előnézeti futamot megelőzött a sürgős) → a program se fusson tovább
+        if proc.returncode is None:
+            proc.kill()
+        await asyncio.shield(proc.wait())
+        raise
     if proc.returncode not in ok_codes:
         msg = (err or out).decode("utf-8", "replace").strip().splitlines()
         tail = " ".join(msg[-3:])[:400] if msg else f"exit code {proc.returncode}"
