@@ -206,8 +206,8 @@ async def resolve(raw: Any, footage: Path, notes: list[str], heard: Callable[[],
             ly["at"] = at
             ly["trigger"] = {"after_said": phrase, "heard": hit["said"], "word_end": round(hit["end"], 3),
                              "speech_end": end}
-            notes.append(f"{name} ({label({**ly, 'target': ly.get('target') or 'arm', 'trigger': ly['trigger']})}) starts at "
-                         f"{at:.2f} s — the end of the sentence"
+            notes.append(f"{name} ({ly.get('effect') or 'effect'}) starts at {at:.2f} s — the end of the sentence after "
+                         f"“{phrase}”"
                          + (f" (the words end at {hit['end']:.2f} s, the voice at {end:.2f} s)" if end is not None
                             else " (the words' end; the sound has no clear pause after it)") + ".")
         else:
