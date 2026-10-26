@@ -118,6 +118,15 @@ async def variant(project: Path, info: dict[str, Any], off: list[int], name: str
 # ---------- mit hogyan ----------
 
 def _same(a: Any, b: Any) -> bool:
+    """Ugyanaz-e két kulcskocka-érték — a számok lebegőpontos zaj nélkül (10-26: az osztott kép a felvétel méretét
+    199.99999999999994-re tette vissza a 200 helyett, és a moved() a felvétel ~700 másodpercét a motorral rajzoltatta)."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)          # noqa: E731
+    if num(a) and num(b):
+        return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(a)), abs(float(b)))
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 

@@ -97,6 +97,20 @@ def test_ass_has_the_bar_the_font_and_word_highlights():
     assert "Dialogue: 0," not in bold and "REMÉLHETŐEN" in bold
 
 
+def test_moved_ignores_float_noise_in_the_rest_value():
+    """10-26, a 30 perces bemutató (két osztott kép + ráközelítés): a felvétel méretének kulcsai az osztott kép után
+    199.99999999999994-en álltak a nyugalmi 200 helyett, és a moved() a 0–147 s és a 159–710 s közti részt is mozgásnak
+    vette (a motor rajzolta a felvételt: a szakasz-előnézet futamidejének 59 %-a). A valódi mozgás marad."""
+    kv = [("ADBE Scale", 0.0, [200, 200, 0]), ("ADBE Scale", 147.001, [199.99999999999994, 199.99999999999994, 0]),
+          ("ADBE Scale", 147.501, [91.56, 91.56, 0]), ("ADBE Scale", 158.504, [91.56, 91.56, 0]),
+          ("ADBE Scale", 159.004, [199.99999999999994, 199.99999999999994, 0]), ("ADBE Scale", 710.499, [200, 200, 0]),
+          ("ADBE Scale", 711.099, [240, 240, 0]), ("ADBE Scale", 716.501, [240, 240, 0]), ("ADBE Scale", 717.101, [200, 200, 0])]
+    spans = fr.moved({"kv": kv, "t0": [[200, 200, 0]]}, 1800.0)
+    assert spans == [(147.001, 147.501), (147.501, 158.504), (158.504, 159.004), (710.499, 711.099), (711.099, 716.501),
+                     (716.501, 717.101)]
+    assert not fr._same([200, 200, 0], [200.1, 200, 0]) and fr._same({"a": [1.0]}, {"a": [1]})
+
+
 def test_ass_times_snap_to_frames_for_the_segment_preview():
     """fps-sel (a szakasz-előnézet): az ASS-idő a t utáni első kockára igazodik — a libass (az ffmpeg ass-szűrője a kocka
     idejét egész ms-ra csonkolja) pontosan attól a kockától mutatja. Egy egész kockás vágás-eltolás így a felirat kockáit
