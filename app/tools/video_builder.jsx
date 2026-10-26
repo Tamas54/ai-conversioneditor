@@ -544,7 +544,9 @@ function speakerLayer(main, base, ly) {
   if (D.camera) camera(S, D.camera, 0, BASE_K);
   S.inPoint = sp.at; S.outPoint = sp.at + sp.dur;
   var M = main.layers.add(app.project.importFile(new ImportOptions(new File(sp.file)))); M.name = ly.name + " matte";
-  M.startTime = sp.at;
+  // fél kockával korábban: a motor a réteg idejét a kompozíció kockarácsán vágja le (floor) — egész kockára téve a k. kockán a
+  // maszk k−1. kockája jött (mérve 10-26, S4: a gyors kéz mellett a fal látszott ott, ahol a kéz egy kockával előbb volt)
+  M.startTime = sp.at - 0.5 / D.fps;
   var k = BASE_K * (fb.source.width / M.source.width) * 100;
   tp(M).property("ADBE Scale").setValue([k, k]);
   if (D.camera) camera(M, D.camera, 0, BASE_K * fb.source.width / M.source.width);
