@@ -1029,7 +1029,7 @@ _NO_ETA = {"eta": None, "eta_s": None, "ready_at": None}
 
 
 def final_status(pid: str, meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """{status: none|queued|running|done|failed, eta (szöveg), eta_s, ready_at (ISO, render_eta.ready_at), video_url}.
+    """{status: none|queued|running|done|failed|superseded, eta (szöveg), eta_s, ready_at (ISO, render_eta.ready_at), video_url}.
     A végleges render állapota: a jobs-nyilvántartás (video._start_final: kind=render, final=True, project=pid —
     ugyanaz, amit a video(action="status") olvas), újraindítás után a projekt metája (render_file_id, nem vázlat)."""
     from app import jobs
@@ -1052,6 +1052,9 @@ def final_status(pid: str, meta: Optional[dict[str, Any]] = None) -> dict[str, A
             fid = res.get("file_id")
             url = res.get("url") or (public_url(fid) if fid and output_path(fid).exists() else None)
             return {"status": "done", **_NO_ETA, "video_url": url}
+        if j["status"] == "superseded":              # egy újabb változat leváltotta: annak a végleges videója készül
+            return {"status": "superseded", **_NO_ETA, "video_url": None, "superseded_by": j.get("superseded_by"),
+                    "next_job": j.get("next_job")}
         return {"status": "failed", **_NO_ETA, "video_url": None}
     rid = meta.get("render_file_id")
     if rid and not meta.get("render_draft") and output_path(rid).exists():

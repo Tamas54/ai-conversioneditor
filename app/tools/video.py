@@ -3829,15 +3829,19 @@ async def _final_eta(spec: dict[str, Any], *, render: bool, draft: bool, kinds: 
 
 async def _full_build_s(D: dict[str, Any], base: dict[str, Any]) -> float:
     """A háttérben épülő teljes projekt becsült ideje (a végleges render becslése fölé): a felirat-ciklus négyzetes —
-    mérve (PROFILE.md 4.) highlight 63 / 127 / 255 darab: 10 / 38 / 140 s, box 127 / 255: 6 / 22 s; + a munkamásolat,
-    ha az is a háttérben készül (proxy_pending)."""
+    mérve (PROFILE.md 4.) highlight 63 / 127 / 255 darab: 10 / 38 / 140 s, box 127 / 255: 6 / 22 s; + a végleges
+    rendernek kellő munkamásolat (proxy_pending: _copy_plan — színváltozásnál semmi, vágásnál egy smart cut)."""
     n = len(D.get("captions") or [])
     k = 0.00034 if (D.get("captionStyle") or "box") == "box" else 0.0022
     secs = 2.0 + k * n * n if n else 0.0
-    if base.get("proxy_pending"):
+    kind, _ = _copy_plan(base) if base.get("proxy_pending") else ("none", None)
+    length = float((base.get("plain") or {}).get("duration") or base.get("duration") or 0)
+    if kind == "smart" or (kind == "own" and footage.donors(_copy_recipe(base))):   # (smart cut: a vágáspontok körül)
+        secs += SMART_COPY_S[0] + SMART_COPY_S[1] * length
+    elif kind == "own":                          # teljes újrakódolás (nincs miből vágni)
         from app.tools import render_eta
         m = {"display_width": base.get("width"), "display_height": base.get("height"), "fps": base.get("fps"), "hdr": base.get("hdr")}
-        secs += await render_eta.proxy(m, float((base.get("plain") or {}).get("duration") or base.get("duration") or 0))
+        secs += await render_eta.proxy(m, length)
     return secs
 
 
@@ -3850,16 +3854,42 @@ def _full_later(pid: str, D: dict[str, Any], lotties: list[tuple[str, str]], pro
             "full_build": {"input": fid, "lotties": [list(x) for x in lotties], **({"proxy_base": proxy_base} if proxy_base else {})}}
 
 
-async def ensure_full(pid: str, *, background: bool = False) -> bool:
-    """A verzió projektfájlja teljes legyen (a feliratokkal, a saját munkamásolatával): ha még „pending”, most épül meg
-    (verziónként egyszer; a többi hívó a zárnál vár). background: a végleges render első lépése (a saját kapuján, nice
-    alatt). → True, ha most épült."""
-    if not full_pending(pid):
+def copy_pending(pid: str) -> bool:
+    """A verzió saját munkamásolata még nem készült el (spec.base.proxy_pending: a helyén egy meglévő másolat áll)."""
+    return bool((((read_meta(pid) or {}).get("spec") or {}).get("base") or {}).get("proxy_pending"))
+
+
+def _copy_recipe(base: dict[str, Any]) -> dict[str, Any]:
+    """A verzió saját munkamásolatának receptje a spec.base-ből (footage.make_proxy bemenete: az eredeti, a korrekció, az
+    idővonal — a zárókártya nélkül, a helyén álló másolat mezői nélkül). Ugyanaz, amit a szerkesztés a full_build.proxy_base-be
+    írt; egy függő (proxy_pending) verzióból szerkesztett újabb verziónál nincs ilyen mező — ott ebből (10-26: e nélkül a
+    láncban a második függő verzió teljes építése „az eredeti már nincs meg” hibával állt meg)."""
+    b = _with_end_card(dict(base), None)
+    return {k: v for k, v in b.items() if k not in footage._KEEP + ("proxy_pending", "clean_media_id")}
+
+
+async def ensure_full(pid: str, *, background: bool = False, copy: Any = True) -> bool:
+    """A verzió projektfájlja teljes legyen (a feliratokkal): ha még „pending”, most épül meg (verziónként egyszer; a többi
+    hívó a zárnál vár). background: a végleges render első lépése (a saját kapuján, nice alatt). → True, ha most épült.
+    copy — a verzió saját munkamásolata (ha még függő, spec.base.proxy_pending):
+      True        most készül el, és a projektbe kerül (a szerkesztő, render scene=…: a motor a munkamásolat KÉPÉT rajzolja);
+      "timeline"  elég egy kész másolat, amelynek az IDŐVONALA a verzióé (a végleges render: a kép az eredetiből készül a
+                  recepttel — fast_render / _full_size_project —, a projekt felvétel-rétegéből csak a hang): színváltozásnál
+                  a helyén álló másolat jó, vágásnál egy smart cut a meglévőből — a színes újrakódolás (S4: 39 perc) nem;
+      "soon"      a saját, ha másodpercek alatt meglesz (footage.ready_soon), különben mint a "timeline" (a letöltés ne
+                  várjon perceket)."""
+    if not full_pending(pid) and not (copy is not False and copy != "timeline" and copy_pending(pid)):
         return False
     lock = _full_lock(pid)
     async with lock:
         meta = read_meta(pid) or {}
+        spec = meta.get("spec") or {}
+        base = spec.get("base") or {}
+        own = copy is True or (copy == "soon" and footage.ready_soon(_copy_recipe(base)))
         if meta.get("full_project") != FULL_PENDING:
+            if base.get("proxy_pending") and own:             # a teljes projekt kész, de egy idővonal-másolattal
+                await _own_copy_into(pid, meta, spec)
+                return True
             return False
         t0 = time.time()
         fb = meta.get("full_build") or {}
@@ -3868,12 +3898,19 @@ async def ensure_full(pid: str, *, background: bool = False) -> bool:
         except (KeyError, OSError, ValueError):
             raise RuntimeError("This version's full timeline can't be built any more (its saved build plan is gone) — "
                                "edit the video again (any small change) to rebuild it.") from None
-        spec = meta.get("spec") or {}
-        if (spec.get("base") or {}).get("proxy_pending"):     # a munkamásolat is most készül (pl. új színkorrekció)
-            spec = await _finish_proxy(pid, spec, fb)
+        foot = None                                           # a projekt felvétel-rétege, ha nem a verzió saját másolata
+        if base.get("proxy_pending"):                         # a munkamásolat is most készül (pl. új színkorrekció)
+            if own:
+                spec = await _finish_proxy(pid, spec, fb)
+            else:
+                spec, foot = await _timeline_copy(pid, spec, fb)
             b = spec["base"]
-            D["base"] = {**D["base"], "file": b["asset"], **({"scale": round(int(b["width"]) / int(b["proxy"]["w"]), 6)}
-                                                            if b.get("proxy") else {})}
+            if foot:
+                D["base"] = {**D["base"], "file": foot["asset"], **({"scale": round(int(b["width"]) / int(foot["proxy"]["w"]), 6)}
+                                                                   if foot.get("proxy") else {})}
+            elif not b.get("proxy_pending"):
+                D["base"] = {**D["base"], "file": b["asset"], **({"scale": round(int(b["width"]) / int(b["proxy"]["w"]), 6)}
+                                                                if b.get("proxy") else {})}
         work = Path(tempfile.mkdtemp(prefix="video-full-", dir=str(temp_path("").parent)))
         try:
             _link_assets(pid, work)
@@ -3885,21 +3922,91 @@ async def ensure_full(pid: str, *, background: bool = False) -> bool:
             os.replace(tmp, dst)                              # egy lépésben: az olvasó vagy a régit, vagy a teljeset látja
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        write_meta(pid, extra={"full_project": FULL_READY, "full_build": None})
+        write_meta(pid, extra={"full_project": FULL_READY, "full_build": None,
+                               "full_footage": D["base"]["file"] if (spec.get("base") or {}).get("proxy_pending") else None})
         try:
             output_path(fb["input"]).unlink(missing_ok=True)
         except OSError:
             pass
         _FULL_LOCKS.pop((id(asyncio.get_running_loop()), pid), None)
-        log.info("teljes projekt felépítve: %s (%d felirat, %.1f s)", pid, len(D.get("captions") or []), time.time() - t0)
+        log.info("teljes projekt felépítve: %s (%d felirat, %.1f s%s)", pid, len(D.get("captions") or []), time.time() - t0,
+                 f", felvétel: {D['base']['file']} — a saját munkamásolat nélkül" if (spec.get("base") or {}).get("proxy_pending") else "")
         return True
+
+
+SMART_COPY_S = (20.0, 0.06)      # egy smart cut munkamásolat becslése: alap + a hossz arányában (mérve S4, 30 perc: 96–122 s)
+
+
+def _copy_plan(base: dict[str, Any], recipe: Optional[dict[str, Any]] = None) -> tuple[str, Any]:
+    """Mit kell tenni, hogy a végleges rendernek legyen egy kész munkamásolata a verzió IDŐVONALÁVAL (a hang a projekt
+    felvétel-rétegéből jön; a kép az eredetiből, a recepttel — a másolat színe mindegy). → ("none", None): nincs függő
+    másolat; ("cached", recipe): a verzió saját másolata már kész; ("same", (kulcs, bejegyzés)): egy kész másolat (a helyén
+    álló vagy bármely más színű) ugyanezzel az idővonallal — semmi sem készül; ("smart", recipe'): egy smart cut a helyén
+    álló másolatból, annak a színével (a vágáspontok körül kódol); ("own", recipe): a verzió saját másolata (a helyén álló
+    színe a verzióé — ez is smart cut —, vagy smart cut nem lehet: teljes újrakódolás)."""
+    if not base.get("proxy_pending"):
+        return "none", None
+    recipe = recipe or _copy_recipe(base)
+    if footage.cached(recipe) is not None:
+        return "cached", recipe
+    stand = _with_end_card(dict(base), None).get("media_id")
+    hits = footage.same_timeline(recipe)
+    if hits:                                     # a helyén álló elöl, aztán a semleges
+        return "same", sorted(hits, key=lambda x: (x[1].get("media_id") != stand, bool(x[0].get("adjust"))))[0]
+    st = next(((kd, h) for kd, h in footage.registered(recipe) if h.get("media_id") == stand), None)
+    adj = (st[0].get("adjust") or {}) if st else None
+    if st is None or adj == (recipe.get("adjust") or {}):
+        return "own", recipe
+    tl = {**{k: v for k, v in recipe.items() if k != "adjust"}, **({"adjust": adj} if adj else {})}
+    return ("smart", tl) if footage.donors(tl) else ("own", recipe)
+
+
+async def _timeline_copy(pid: str, spec: dict[str, Any], fb: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """A végleges renderhez egy kész munkamásolat a verzió idővonalával (_copy_plan). → (a spec, None — a verzió saját
+    másolata került a projektbe, nincs több függő) vagy (a spec — továbbra is függő —, {asset, media_id, proxy}: a projekt
+    felvétele)."""
+    base = spec["base"]
+    kind, x = _copy_plan(base, (fb or {}).get("proxy_base"))
+    if kind in ("cached", "own"):
+        return await _finish_proxy(pid, spec, {"proxy_base": x}), None
+    if kind == "same":
+        hit = x[1]
+    else:                                        # "smart"
+        src = footage.original(x)
+        if src is None:
+            raise RuntimeError("Your original video is no longer stored (uploads are kept for a limited time) — upload it "
+                               "again to change its colours, light or cuts.")
+        hit, _ = await _timed_proxy(x, src)
+    write_meta(pid, extra={"assets": {**assets_of(pid), hit["asset"]: hit["media_id"]}})
+    log.info("végleges render: a felvétel %s (%s; az idővonal a verzióé, a saját színes munkamásolat nélkül) — %s",
+             hit["asset"], kind, pid)
+    return spec, {"asset": hit["asset"], "media_id": hit["media_id"], "proxy": hit.get("proxy")}
+
+
+async def _own_copy_into(pid: str, meta: dict[str, Any], spec: dict[str, Any]) -> None:
+    """A teljes projekt egy idővonal-másolattal épült (_timeline_copy, meta.full_footage): most a verzió saját munkamásolata
+    készül el, és a projektben a helyére kerül (ugyanaz az idővonal és méret: footage.swap)."""
+    spec = await _finish_proxy(pid, spec, {"proxy_base": _copy_recipe(spec["base"])})
+    cur, new = meta.get("full_footage"), spec["base"]["asset"]
+    if cur and cur != new:
+        work = Path(tempfile.mkdtemp(prefix="video-own-", dir=str(temp_path("").parent)))
+        try:
+            proj = stage(pid, work)
+            name = await footage.swap(proj, _main_comp(proj), cur, new, "own-copy")
+            dst = output_path(pid)
+            tmp = dst.with_name(dst.name + ".own-tmp")
+            shutil.copyfile(work / name, tmp)
+            os.replace(tmp, dst)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    write_meta(pid, extra={"full_footage": None})
 
 
 async def _finish_proxy(pid: str, spec: dict[str, Any], fb: dict[str, Any]) -> dict[str, Any]:
     """A háttérben készülő munkamásolat (spec.base.proxy_pending — a kérés addig a szülő munkamásolatát tette a
     helyére): a recept (full_build.proxy_base) → footage.make_proxy → a verzió base-ében (és a zárókártya plain-jében)
     az új media_id / asset, a projekt assets-e közé is. → az új spec."""
-    pb = fb.get("proxy_base") or {}
+    pb = fb.get("proxy_base") or _copy_recipe(spec["base"])
     src = footage.original(pb) if pb else None
     if src is None:
         raise RuntimeError("Your original video is no longer stored (uploads are kept for a limited time) — upload it again "
@@ -5324,8 +5431,8 @@ async def _proxy_later(base: dict[str, Any], stand_in: dict[str, Any], m: dict[s
     kerül: a smart cut (footage.smart_proxy) a képet másodpercek alatt adja, de a hangot egyben kell kódolni (30 percnél
     25–60 s) — a háttérben így ~1 perc a 7–9 helyett, a szerkesztés pedig nem vár. → (az új base, a leírás), vagy None."""
     from app.tools import video_fx, video_preview, videonorm
-    if footage.cached(base) is not None or not stand_in.get("asset") or not video_preview.hls():
-        return None
+    if footage.cached(base) is not None or not stand_in.get("asset") or not (video_preview.live() or video_preview.hls()):
+        return None                                      # (élő előnézetnél a lejátszó maga oldja meg: szín = shader, vágás = tartományok)
     probe = {"kind": "overlay", "base": {**_with_end_card(base, card), **{k: stand_in.get(k) for k in ("proxy", "hdr")}},
              "story": {"layers": layers}, "opts": opts}
     if await _final_eta(probe, render=render, draft=draft, kinds=alpha_kinds(opts.get("alpha")), final=final) is None:
@@ -5364,12 +5471,13 @@ async def _job_eta(info: dict[str, Any], items: int, proxy: bool, render: bool) 
     from app.tools import render_eta, video_preview
     m = {"display_width": info.get("width"), "display_height": info.get("height"), "fps": info.get("fps"), "hdr": info.get("hdr")}
     est = 5.0 + render_eta.ITEM_S * items
-    if proxy:
-        est += await render_eta.proxy(m, float(info.get("duration") or 0))
+    fin = None
     if render:
         fin = (await render_eta.final({"base": {"width": info.get("width"), "height": info.get("height"), "fps": info.get("fps"),
                                                 "duration": info.get("duration"), "hdr": info.get("hdr"), "proxy": proxy}}))["seconds"]
         est += 30.0 if fin > video_preview.inline_limit_s() else fin
+    if proxy and not (fin is not None and fin > video_preview.inline_limit_s() and (video_preview.live() or video_preview.hls())):
+        est += await render_eta.proxy(m, float(info.get("duration") or 0))   # (hosszú videónál a háttérbe kerül: _proxy_later)
     return est
 
 
@@ -5430,9 +5538,13 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
         result["preview"] = {**_file_entry(pvid), "parts": [{"from": a, "to": b, "what": lab} for a, b, lab in picked],
                              "left_out": left, "seconds": pv["seconds"]}
     job = _start_final(pid, eta)
+    quiet = float(job.get("quiet_s") or 0)
+    eta = float(job.get("eta_s") or eta)                  # (a csendre várással együtt)
     result["final"] = {"job_id": job["id"], "eta_s": round(eta), "eta": render_eta.text(eta),
-                       "ready_at": render_eta.ready_at(eta),
-                       "how": "video(action=\"status\", job_id=…, wait=55) — when it is done, its result is the final MP4."}
+                       "ready_at": render_eta.ready_at(eta), "starts_after_s": quiet,
+                       "how": "video(action=\"status\", job_id=…, wait=55) — when it is done, its result is the final MP4."
+                              + (f" It starts {quiet:g} s after your last change; a newer edit replaces it (only the newest "
+                                 "version's final video is made)." if quiet else "")}
     mp4 = (result.get("preview") or {}).get("mp4") if hls else None
     result["files"] = [result["project"]] + ([result["preview"]] if picked else []) + ([mp4] if mp4 else []) + \
         ([srt_entry] if srt_entry else [])
@@ -5440,7 +5552,8 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
     fs = list(dict.fromkeys(lay_f + findings))
     result["check"] = {"status": "needs_check" if fs else "ok", "findings": fs,
                        "verified": ([pv_note] if pv_note else ["Nothing visible changed, so there is no quick preview."])
-                       + [f"The final video is rendering in the background in full quality from your original: "
+                       + [f"The final video {'starts' if quiet else 'is rendering'} in the background in full quality from your original"
+                          + (f" {quiet:g} s after your last change" if quiet else "") + ": "
                           f"{render_eta.text(eta)} (ready around {render_eta.ready_at(eta)[11:16]}). Check it with "
                           f"video(action=\"status\", job_id=\"{job['id']}\")."] + verified + lay_v}
     step(4, 4, "done — the final video is rendering in the background")
@@ -5600,19 +5713,91 @@ async def _preview_mp4(hls: tuple[Any, Any], pid: str, plan: dict[str, Any], lab
     return entry, note
 
 
+# ---------- a végleges render egy szerkesztés után: csendre vár, és az újabb változat leváltja (N1, 10-26) ----------
+# Mérve (S4, 30 perc, 10-26): hat egymás utáni szerkesztés válasza 2,4 → 2,3 → 2,4 → 4,7 → 5,1 → 4,8 s, a terhelés 15 → 23:
+# minden szerkesztés AZONNAL elindította a saját végleges renderjének első lépését (a feliratos teljes projekt, 3–7 perc
+# motormunka; vágás / szín után a munkamásolat is — a színé a 30 perces HDR-eredeti teljes újrakódolása, 39 perc), és a
+# régi változatokéi is futottak tovább, pedig csak a legutolsó változat végleges videója kell. Most:
+#   · a végleges render FINAL_QUIET_S másodperc csend után indul (addig a job „running”, stage = várakozás, a becslés a
+#     várakozással együtt) — a szerkesztés közben semmi sem fut miatta;
+#   · egy szerkesztés már az ELEJÉN leállítja a szerkesztett változat és az ősei még futó / váró végleges renderjét
+#     (superseded; a futó ffmpeg / motor vele áll le — engines.run, _run); ha a szerkesztés elbukik, a szülőé újraindul;
+#   · az új változat végleges renderje is leváltja az őseiét (ha a szerkesztés elején még nem futott);
+#   · a végleges render első lépése nem készíti el a színes munkamásolatot (ensure_full copy="timeline").
+# A testvér-változatok (variants: A/B) nem váltják le egymást (_KEEP_FINALS), és egy ág sem a másikat — csak az ősöket.
+
+_KEEP_FINALS: "contextvars.ContextVar[bool]" = contextvars.ContextVar("aice_keep_finals", default=False)
+
+
+def final_quiet_s() -> float:
+    """Ennyi másodperc csend (nincs újabb szerkesztés a változat után) után indul a végleges render (VIDEO_FINAL_QUIET_S)."""
+    try:
+        return max(0.0, float(os.getenv("VIDEO_FINAL_QUIET_S", "20")))
+    except ValueError:
+        return 20.0
+
+
+def lineage(pid: str, limit: int = 400) -> list[str]:
+    """A változat ősei (a szülő, annak szülője…; csak videóprojektek), a legközelebbi elöl."""
+    out, cur, seen = [], pid, {pid}
+    for _ in range(limit):
+        src = (read_meta(cur) or {}).get("source_file_id")
+        if not src or not str(src).lower().endswith(".ecproj") or src in seen:
+            break
+        out.append(src)
+        seen.add(src)
+        cur = src
+    return out
+
+
+def _supersede_finals(pids: set[str], by: Optional[str], next_job: Optional[str] = None) -> list[dict[str, Any]]:
+    """A pids változatok még nem végzett végleges renderjei leállnak (status "superseded"). → a leállítottak (project,
+    hátralévő becslés), hogy egy elbukott szerkesztés után újraindulhassanak."""
+    from app import jobs
+    out = []
+    for j in jobs.live("render", final=True):
+        if j.get("project") in pids:
+            left = jobs.remaining_s(j)
+            if jobs.cancel(j["id"], status="superseded", superseded_by=by, next_job=next_job,
+                           error="Replaced by a newer version" + (f" ({by})" if by else " (an edit of it is being made)")
+                           + " — only the newest version's final video is made."):
+                out.append({"project": j["project"], "eta": left, "job_id": j["id"]})
+                log.info("végleges render leváltva: %s (job %s) → %s", j["project"], j["id"], by or "szerkesztés folyamatban")
+    return out
+
+
 def _start_final(pid: str, eta: float) -> dict[str, Any]:
-    """A végleges render háttérmunkaként, alacsony prioritással (az előnézet és a weboldal ne várjon rá)."""
+    """A végleges render háttérmunkaként, alacsony prioritással (az előnézet és a weboldal ne várjon rá), csendre várva;
+    leváltja az ősök még futó végleges renderjeit. A becslés (eta_s) a várakozással együtt."""
     from app import jobs
     from app.convert.engines import background
+    quiet = final_quiet_s()
 
     async def work(progress):
+        if quiet > 0:                                 # amíg szerkesztenek, semmi: az újabb változat leváltja ezt
+            progress(0, 1, f"waiting for a pause in editing — the final video starts {quiet:g} s after the last change")
+            await asyncio.sleep(quiet)
         with background():
-            if full_pending(pid):                     # a teljes projekt (feliratok, munkamásolat) — az első lépés
-                progress(0, 1, "building the full timeline (subtitles) for the final video")
-                await ensure_full(pid, background=True)
+            progress(0, 1, "building the full timeline (subtitles) for the final video")
+            await _final_prepare(pid)
             progress(0, 1, "rendering the final video in full quality")
             return await render(pid, progress=progress)
-    return jobs.start("render", work, eta_s=eta, final=True, project=pid)
+    job = jobs.start("render", work, eta_s=eta + quiet, final=True, project=pid, quiet_s=quiet)
+    if not _KEEP_FINALS.get():
+        olds = set(lineage(pid))
+        _supersede_finals(olds, pid, job["id"])
+        for j in jobs._JOBS.values():                # a szerkesztés elején leállítottak: hova lett a munkájuk
+            if j.get("status") == "superseded" and j.get("project") in olds and not j.get("next_job"):
+                j.update(superseded_by=pid, next_job=job["id"],
+                         error=f"Replaced by a newer version ({pid}) — only the newest version's final video is made.")
+    return job
+
+
+async def _final_prepare(pid: str) -> None:
+    """A végleges render első lépése: a teljes (feliratos) projekt, ha még függő — a színes munkamásolat nélkül (a kép az
+    eredetiből készül, elég az idővonal másolata: ensure_full copy="timeline")."""
+    if full_pending(pid):
+        await ensure_full(pid, background=True, copy="timeline")
 
 
 _STEM = lambda w: w[:5]
@@ -5726,7 +5911,8 @@ async def _render_staged(project_id: str, project_path: Path, stem: str, *, grou
                 out.unlink(missing_ok=True)              # a félbemaradt gyors kimenet ne maradjon
         gone = None
         if fast is None and not draft:                   # a munkamásolat helyén a teljes méretű felvétel (footage.py)
-            project_path, gone = await _full_size_project(project_path, spec)
+            project_path, gone = await _full_size_project(project_path, spec,
+                                                          (read_meta(project_id) or {}).get("full_footage"))
             args[2] = project_path.name
         pieces = _master_pieces(project_path) if fast is None and master is not None else []
         if fast is None and progress:
@@ -5826,7 +6012,7 @@ async def _observe_render(project_path: Path, spec: dict[str, Any], fast: Option
         log.warning("render-idő mérése: %s", e)
 
 
-async def _full_size_project(project_path: Path, spec: dict[str, Any]) -> tuple[Path, Optional[str]]:
+async def _full_size_project(project_path: Path, spec: dict[str, Any], asset: Optional[str] = None) -> tuple[Path, Optional[str]]:
     """A teljes (régi) renderhez: ha a projektben a felvétel munkamásolata áll, egy változat a teljes méretű felvétellel
     (az eredetiből, ugyanazzal a lánccal) — a végső kép a kis másolatból csak akkor készül, ha az eredeti már lejárt, és
     azt a check megmondja (→ a projekt, a megjegyzés)."""
@@ -5837,7 +6023,7 @@ async def _full_size_project(project_path: Path, spec: dict[str, Any]) -> tuple[
     if src is None:
         return project_path, footage.gone_note(base)
     full = await footage.full(base, src, project_path.parent)
-    name = await footage.swap(project_path, _main_comp(project_path), base["asset"], full.name, "render-full")
+    name = await footage.swap(project_path, _main_comp(project_path), asset or base["asset"], full.name, "render-full")
     return project_path.parent / name, None
 
 
@@ -5862,10 +6048,10 @@ async def render(file_id: str, fmt: str = "mp4", draft: bool = False,
     """Egy videóprojekt (akár kézzel szerkesztett) újrarenderelése."""
     if not file_id.lower().endswith(".ecproj"):
         raise ValueError("render needs a video project (.ecproj)")
-    if full_pending(file_id):
+    if full_pending(file_id):                          # (a kép az eredetiből készül: elég az idővonal másolata)
         if progress:
             progress(0, 1, "building the full timeline (subtitles) first")
-        await ensure_full(file_id)
+        await ensure_full(file_id, copy="timeline")
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(file_id, work)
@@ -6279,9 +6465,26 @@ async def edit(file_id: str, changes: dict[str, Any], *, extra_source: str = "",
                draft: bool = False, label_stem: Optional[str] = None, final: str = "auto",
                preview: Optional[str] = None) -> dict[str, Any]:
     tok, fit_tok = _TRUNC.set([]), _FIT.set([])
+    held: list[dict[str, Any]] = []
+    if not _KEEP_FINALS.get():                       # a szerkesztett változat (és az ősei) végleges renderje most áll le —
+        try:                                         # az új változat úgyis leváltja, és a szerkesztés ne versenyezzen vele
+            pid = project_of(file_id)
+            held = _supersede_finals({pid, *lineage(pid)}, None)
+        except Exception as e:  # noqa: BLE001 — a leváltás sose állítja meg a szerkesztést
+            log.warning("végleges render leváltása (%s): %s", file_id, e)
     try:
         return await _edit(file_id, changes, extra_source=extra_source, progress=progress, alpha=alpha, render=render, draft=draft,
                            label_stem=label_stem, final=final_mode(final), preview=preview)
+    except BaseException:
+        for h in held:                               # nem lett új változat: a leállított végleges render újra indul
+            try:
+                from app import jobs
+                nj = _start_final(h["project"], h["eta"])
+                (jobs._JOBS.get(h["job_id"]) or {}).update(next_job=nj["id"], error="Restarted (the edit that replaced "
+                                                                                      "it didn't go through).")
+            except Exception as e:  # noqa: BLE001
+                log.warning("végleges render újraindítása (%s): %s", h["project"], e)
+        raise
     finally:
         _TRUNC.reset(tok)
         _FIT.reset(fit_tok)
@@ -6524,6 +6727,16 @@ async def variants(file_id: str, raw: Any, progress: Optional[Callable[..., None
                          "script to vary.")
     plans = variant_plan(spec, raw)
     root = result_stem(pid, "")
+    keep_tok = _KEEP_FINALS.set(True)                # A/B: minden változat végleges videója kell (egymást nem váltják le)
+    try:
+        return await _variants(pid, meta, plans, root, step, draft)
+    finally:
+        _KEEP_FINALS.reset(keep_tok)
+
+
+async def _variants(pid: str, meta: dict[str, Any], plans: list[dict[str, Any]], root: str, step: Callable[..., None],
+                    draft: bool) -> dict[str, Any]:
+    from app.storage.naming import result_stem
     out = [{"name": "A", "what": "the original", "project": _file_entry(pid),
             **({"video": _file_entry(meta["render_file_id"])} if meta.get("render_file_id") else {})}]
     findings: list[str] = []
