@@ -146,6 +146,86 @@ def niced(argv: list[str]) -> list[str]:
     return [nice, "-n", "10", *argv] if nice else list(argv)
 
 
+# ---------- előtér: a háttérmunka egy pillanatra megáll (N1, 10-26) ----------
+# Mérve (S4, 30 perc): egy másik változat végleges renderje a háttérben (nice 10, load 25–47) mellett a szerkesztés válasza
+# 3,9–7,6 s volt az 1,6–2,0 helyett — a nice a CPU-sorrendet adja, de a hiperszálon osztozó mag, a csökkenő turbó és a
+# memória-sávszél nem. Ezért egy szerkesztés projekt-építése (video._assemble_overlay → _build, ~1,5 s) alatt a háttérben
+# futó külső programok (a background() alatt indultak: végleges render, teljes projekt, munkamásolat, távoli réteg-klip)
+# SIGSTOP-ot kapnak, utána SIGCONT-ot. Csak a saját folyamatukat állítjuk meg (a motor a zárkában execve-vel indul, nem
+# forkol; a nice is execve); a megállítás legfeljebb FG_MAX_S tart (őr), és nincs, ha a hívó maga is háttérmunka.
+# VIDEO_PAUSE_BACKGROUND=0 kikapcsolja.
+
+_BG_PIDS: set[int] = set()
+_FG: set[object] = set()
+FG_MAX_S = 20.0
+
+
+def _pause_on() -> bool:
+    return os.getenv("VIDEO_PAUSE_BACKGROUND", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _signal(pid: int, sig: int) -> None:
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def track(pid: int) -> bool:
+    """Egy most indult külső program: ha háttérmunka, nyilvántartjuk (és ha épp előtér-munka fut, rögtön megáll)."""
+    if not _BACKGROUND.get():
+        return False
+    _BG_PIDS.add(pid)
+    if _FG:
+        import signal
+        _signal(pid, signal.SIGSTOP)
+    return True
+
+
+def untrack(pid: int) -> None:
+    _BG_PIDS.discard(pid)
+
+
+def paused() -> bool:
+    return bool(_FG)
+
+
+def _release(token: object) -> None:
+    if token not in _FG:
+        return
+    _FG.discard(token)
+    if not _FG:
+        import signal
+        for pid in list(_BG_PIDS):
+            _signal(pid, signal.SIGCONT)
+
+
+@contextlib.contextmanager
+def foreground():
+    """A blokk alatt a háttérben futó külső programok állnak (lásd fent). Egymásba ágyazva / párhuzamosan is: az utolsó
+    kilépő indítja újra őket; legfeljebb FG_MAX_S után mindenképp."""
+    if _BACKGROUND.get() or not _pause_on():
+        yield
+        return
+    import asyncio
+    import signal
+    token = object()
+    if not _FG:
+        for pid in list(_BG_PIDS):
+            _signal(pid, signal.SIGSTOP)
+    _FG.add(token)
+    try:
+        guard = asyncio.get_running_loop().call_later(FG_MAX_S, _release, token)
+    except RuntimeError:
+        guard = None
+    try:
+        yield
+    finally:
+        if guard is not None:
+            guard.cancel()
+        _release(token)
+
+
 # a nehéz munka kapuja (app/jobs.py heavy()) állítja: ennyi szálon dolgozik az ffmpeg ebben a munkában
 FFMPEG_THREADS: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar("aice_ffmpeg_threads", default=None)
 
@@ -174,6 +254,7 @@ async def run(*args: str, timeout: float = 600, cwd: Optional[Path] = None, stdi
         *niced(list(args)), cwd=str(cwd) if cwd else None, env=_env_for(exe),
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    track(proc.pid)
     try:
         out, err = await asyncio.wait_for(proc.communicate(stdin), timeout)
     except asyncio.TimeoutError:
@@ -185,6 +266,8 @@ async def run(*args: str, timeout: float = 600, cwd: Optional[Path] = None, stdi
             proc.kill()
         await asyncio.shield(proc.wait())
         raise
+    finally:
+        untrack(proc.pid)
     if proc.returncode not in ok_codes:
         msg = (err or out).decode("utf-8", "replace").strip().splitlines()
         tail = " ".join(msg[-3:])[:400] if msg else f"exit code {proc.returncode}"

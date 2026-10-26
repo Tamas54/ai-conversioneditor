@@ -166,9 +166,10 @@ async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: 
         raise RuntimeError("Custom scripts need the sandbox, and it isn't available on this server — use a graphic (type \"graphic\") instead.")
     else:
         log.warning("zárka nélkül fut a videómotor (a kernel nem tud Landlockot)")
-    from app.convert.engines import niced
+    from app.convert.engines import niced, track, untrack
     proc = await asyncio.create_subprocess_exec(*niced(argv), cwd=str(cwd), env=env,
                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    track(proc.pid)                         # háttérmunka: egy szerkesztés építése alatt áll (engines.foreground)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout or settings.VIDEO_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -180,6 +181,8 @@ async def _run(*args: str, cwd: Path, timeout: Optional[int] = None, untrusted: 
             proc.kill()
         await asyncio.shield(proc.wait())
         raise
+    finally:
+        untrack(proc.pid)
     if proc.returncode != 0:
         msg = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip()
         raise RuntimeError(f"effectcraft-cli {args[0]}: {msg[-600:] or f'exit code {proc.returncode}'}")
@@ -5319,7 +5322,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             bg_eta = float((await render_eta.final(spec))["seconds"])
         deferred = bg_eta is not None and bool(D["captions"] or base.get("proxy_pending"))
         step(2, 4, "building the timeline")
-        out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+        from app.convert.engines import foreground
+        with foreground():                                    # a háttérmunka (más végleges render…) addig áll
+            out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
         problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
         problems, m_v = problems + lot_f, m_v + lot_v

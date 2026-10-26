@@ -332,3 +332,48 @@ def test_the_eta_counts_the_copy_the_final_really_makes(monkeypatch):
         monkeypatch.setattr(footage, "donors", lambda b: [])
         assert await video._full_build_s(D, _pending_base(fid0, parent, {"brightness": 0.03}, KEEP_B)) == 2400.0
     asyncio.run(main())
+
+
+# ---------- az előtér-munka (egy szerkesztés építése) alatt a háttér külső programjai állnak ----------
+
+def _state(pid: int) -> str:
+    from pathlib import Path
+    return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+
+
+def test_background_programs_stop_while_an_edit_builds_and_go_on_after(monkeypatch):
+    from app.convert import engines
+    monkeypatch.setenv("VIDEO_PAUSE_BACKGROUND", "1")
+
+    async def main():
+        async def bg():
+            with engines.background():
+                await engines.run("python3", "-c", "import time\nwhile True: time.sleep(0.01)", timeout=30)
+        task = asyncio.get_running_loop().create_task(bg())
+        await _until(lambda: bool(engines._BG_PIDS))
+        pid = next(iter(engines._BG_PIDS))
+        assert _state(pid) in "RS"
+        with engines.foreground():
+            await asyncio.sleep(0.1)
+            assert _state(pid) == "T" and engines.paused()          # áll
+            with engines.foreground():                              # egymásba ágyazva: a külső kilépésig áll
+                pass
+            assert _state(pid) == "T"
+            with engines.background():                              # háttérmunka maga nem állít meg senkit
+                with engines.foreground():
+                    assert engines.paused()
+        await asyncio.sleep(0.1)
+        assert _state(pid) in "RS" and not engines.paused()         # megy tovább
+        monkeypatch.setattr(engines, "FG_MAX_S", 0.2)               # az őr: egy beragadt előtér sem tartja örökké
+        with engines.foreground():
+            await asyncio.sleep(0.5)
+            assert _state(pid) in "RS"
+        monkeypatch.setenv("VIDEO_PAUSE_BACKGROUND", "0")           # kikapcsolva: semmi
+        with engines.foreground():
+            await asyncio.sleep(0.1)
+            assert _state(pid) in "RS"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not engines._BG_PIDS
+    asyncio.run(main())
