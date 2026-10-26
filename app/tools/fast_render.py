@@ -319,18 +319,30 @@ def _font(weight: str, size: int):
     return _FONTS[key]
 
 
+_LINES: dict[tuple[Any, ...], list[list[int]]] = {}
+
+
 def _lines(words: list[str], weight: str, size: int, width: float) -> list[list[int]]:
-    """Szótördelés a doboz szélességére, az Inter tényleges szélességeivel (ha nincs meg, betűszám-becsléssel)."""
-    ft = _font(weight, size)
-    meas = (lambda s: ft.getlength(s)) if ft else (lambda s: len(s) * size * 0.53)    # noqa: E731
-    out: list[list[int]] = [[]]
-    for i, w in enumerate(words):
-        trial = " ".join(words[j] for j in out[-1] + [i])
-        if out[-1] and meas(trial) > width:
-            out.append([i])
-        else:
-            out[-1].append(i)
-    return out
+    """Szótördelés a doboz szélességére, az Inter tényleges szélességeivel (ha nincs meg, betűszám-becsléssel).
+    Megjegyezve (a bemenetének tiszta függvénye): a PIL-mérés egy 30 perces műsor ASS-ének ~75 %-a (0,2–0,6 s), így egy
+    akcentus- / stílusváltás vagy egy sor szövegének javítása csak a megváltozott sorokat méri újra (az élő előnézet
+    feliratának a szerkesztés után < 1 s alatt kell látszania, live_captions)."""
+    key = (tuple(words), weight, size, width)
+    hit = _LINES.get(key)
+    if hit is None:
+        ft = _font(weight, size)
+        meas = (lambda s: ft.getlength(s)) if ft else (lambda s: len(s) * size * 0.53)    # noqa: E731
+        out: list[list[int]] = [[]]
+        for i, w in enumerate(words):
+            trial = " ".join(words[j] for j in out[-1] + [i])
+            if out[-1] and meas(trial) > width:
+                out.append([i])
+            else:
+                out[-1].append(i)
+        if len(_LINES) >= 20000:
+            _LINES.clear()
+        _LINES[key] = hit = out
+    return [ln[:] for ln in hit]
 
 
 # Az ASS betűmérete nem az em-méret: mérve (libass, Inter Semi Bold, 100-as méret) a szöveg az em-100-as szélesség
