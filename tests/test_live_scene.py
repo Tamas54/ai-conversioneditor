@@ -158,6 +158,28 @@ def test_inserted_clip_without_a_copy_is_missing_and_one_with_its_match_is_used(
     assert not good["missing"] and good["ranges"][1]["src"] == pytest.approx(52.0)
 
 
+def test_inserted_clip_copy_and_its_range_has_no_main_colour():
+    """While the version's copy is pending, the clip's own small copy (its timeline: just the piece) plays the clip;
+    the main footage's colour recipe is never put on a clip's range; a copy of the exact timeline is split at the
+    clip's edges without player-side fades (they are in the copy)."""
+    keep = [[0.0, 100.0], {"a": 2.0, "b": 12.0, "src": CLIP, "join": "dissolve", "match": {"gamma": 1.1}},
+            {"a": 100.0, "b": 1815.974, "join": "dissolve"}]
+    clipcopy = {**copy("clipcopy.mp4", [{"a": 2.0, "b": 12.0, "src": CLIP, "match": {"gamma": 1.1}}]), "clip": True}
+    fp = ls.footage_plan(base(keep=keep, adjust=EQ), [copy("parent.mp4", None, EQ), clipcopy])
+    r = fp["ranges"]
+    assert [x["copy"] for x in r] == [0, 1, 0] and not fp["missing"]
+    assert r[1]["clip"] == CLIP and r[1]["src"] == 0.0 and "clip" not in r[0] and "clip" not in r[2]
+    assert r[1]["join"] == "dissolve" and r[2]["join"] == "dissolve" and "xfade" in r[2]
+    own = ls.footage_plan(base(keep=keep, adjust=EQ), [copy("own.mp4", keep, EQ, own=True)])
+    assert [x["copy"] for x in own["ranges"]] == [0, 0, 0] and all(x.get("cont") for x in own["ranges"][1:])
+    assert own["ranges"][1]["clip"] == CLIP and not any("join" in x for x in own["ranges"])
+
+
+def test_clip_key_is_stable():
+    assert ls.clip_key(2.0, 12.0, {"gamma": 1.1}, (960, 540), FPS) == ls.clip_key(2.00001, 12.0, {"gamma": 1.1}, (960, 540), FPS)
+    assert ls.clip_key(2.0, 12.0, None, (960, 540), FPS) != ls.clip_key(2.0, 12.0, {"gamma": 1.1}, (960, 540), FPS)
+
+
 def test_the_copy_with_the_dissolve_in_it_needs_no_crossfade():
     keep = [[0.0, 100.0], {"a": 200.0, "b": 1815.974, "join": "dissolve"}]
     fp = ls.footage_plan(base(keep=keep), [copy("own.mp4", keep, own=True)])

@@ -222,12 +222,10 @@ def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: 
         first = neutral if prefer == "neutral" else own
         return (0 if first else 1 if (own or neutral) else 2, 0 if c.get("own") else 1)
     exact = sorted((c for c in copies if _norm_keep(c.get("keep"), dur) == want), key=rank)
-    if exact:
-        c = exact[0]
-        return {"ranges": [{"t0": 0.0, "t1": round(end, 6), "copy": 0, "src": 0.0}], "copies": [c], "end": round(end, 6),
-                "missing": []}
-    # piece by piece: the copies in order of how much of the new timeline they hold (then the colour preference)
     pieces = [(x["src"], _mkey(x), x["a"], x["b"], o) for o, x in _offsets(keep, dur)] if keep else [(None, "{}", 0.0, end, 0.0)]
+    if exact:                    # the copy of this very timeline: one range (an inserted clip's part apart: see "clip")
+        copies = exact[:1]
+    # piece by piece: the copies in order of how much of the new timeline they hold (then the colour preference)
 
     def alone(c: dict[str, Any]) -> tuple[float, int]:
         """How much of the new timeline this copy holds, and in how many runs (each run = one range; fewer = fewer
@@ -257,7 +255,7 @@ def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: 
                         nxt.append((cur, lo))
                     if c not in used:
                         used.append(c)
-                    raw.append({"t0": o + lo - a, "t1": o + hi - a, "copy": used.index(c), "src": cs})
+                    raw.append({"t0": o + lo - a, "t1": o + hi - a, "copy": used.index(c), "src": cs, "clip": src})
                     cur = hi
                 if hi0 - cur > 1e-6:
                     nxt.append((cur, hi0))
@@ -271,8 +269,8 @@ def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: 
     ranges: list[dict[str, Any]] = []
     for r in raw:                                   # one copy, continuing where the last range stopped: one range
         p = ranges[-1] if ranges else None
-        if p and p["copy"] is not None and p["copy"] == r["copy"] and abs(p["t1"] - r["t0"]) < 1e-4 \
-                and abs(p["src"] + (p["t1"] - p["t0"]) - r["src"]) < 1e-4:
+        if p and p["copy"] is not None and p["copy"] == r["copy"] and p.get("clip") == r.get("clip") \
+                and abs(p["t1"] - r["t0"]) < 1e-4 and abs(p["src"] + (p["t1"] - p["t0"]) - r["src"]) < 1e-4:
             p["t1"] = r["t1"]
             continue
         ranges.append(dict(r))
@@ -280,6 +278,11 @@ def footage_plan(base: dict[str, Any], copies: list[dict[str, Any]], *, prefer: 
         for k in ("t0", "t1", "src"):
             if isinstance(r.get(k), float):
                 r[k] = round(r[k], 6)
+        if r.get("clip") is None:
+            r.pop("clip", None)          # (an inserted clip's range keeps its file id: the main recipe isn't on it)
+    for p, r in zip(ranges, ranges[1:]):  # the same copy, continuing: the joint is IN the copy (its fades baked)
+        if p.get("copy") is not None and p.get("copy") == r.get("copy") and abs(p["src"] + (p["t1"] - p["t0"]) - r["src"]) < 1e-4:
+            r["cont"] = True
     _joins(ranges, keep, dur, float(base.get("fps") or 30))
     return {"ranges": ranges, "copies": used, "end": round(end, 6), "missing": missing}
 
@@ -300,7 +303,7 @@ def _joins(ranges: list[dict[str, Any]], keep: Any, dur: float, fps: float) -> N
         acc += x["b"] - x["a"]
     for r in ranges:
         x = starts.get(round(r["t0"], 4))
-        if x is None:
+        if x is None or r.get("cont"):
             continue
         j = x.get("join") or "cut"
         r["join"] = j
@@ -339,6 +342,105 @@ def copies_of(base: dict[str, Any], *, parent: Optional[dict[str, Any]] = None) 
         except FileNotFoundError:
             pass
     return out
+
+
+# ---------- an inserted clip's browser copy (while the version's own copy is pending) ----------
+# The clip's own picture as the timeline makes it (footage.timeline: HDR → SDR, the colour match, BT.709, fitted to
+# the copy size, the video's frame rate) for just the inserted piece, H.264 at the working copy's size — a few seconds
+# of encoding for a short clip, instead of the whole new working copy. Registered on the clip (its metadata:
+# live_copies), so copies_of offers it like any other copy (its timeline: that one piece).
+
+CLIP_V = 1
+_CLIP_TASKS: dict[str, Any] = {}
+
+
+def clip_key(a: float, b: float, match: Any, size: tuple[int, int], fps: float) -> str:
+    return json.dumps({"v": CLIP_V, "a": round(float(a), 4), "b": round(float(b), 4), "match": match or {},
+                       "size": [int(size[0]), int(size[1])], "fps": round(float(fps), 4)}, sort_keys=True)
+
+
+def clip_copies(keep: Any) -> list[dict[str, Any]]:
+    """The finished clip copies of the clips in this timeline (their files still there), as copies."""
+    from app.storage import read_meta
+    from app.tools import crafts, footage
+    out = []
+    for src in sorted({x["src"] for x in footage.segs(keep) if x["src"]}):
+        for k, hit in ((read_meta(src) or {}).get("live_copies") or {}).items():
+            try:
+                kd = json.loads(k)
+                crafts.existing(hit["media_id"])
+            except (ValueError, KeyError, FileNotFoundError, TypeError):
+                continue
+            out.append({"id": hit["media_id"], "keep": [{"a": kd["a"], "b": kd["b"], "src": src, "match": kd.get("match") or {}}],
+                        "adjust": {}, "auto": None, "w": kd["size"][0], "h": kd["size"][1], "own": False, "clip": True})
+    return out
+
+
+async def make_clip_copy(src: str, a: float, b: float, match: Any, gain: Any, size: tuple[int, int], fps: float) -> str:
+    """The [a, b) piece of the clip `src` → a browser copy (see above) → its file id, registered on the clip."""
+    import shutil
+    import tempfile
+    from app.convert.engines import run
+    from app.storage import output_path, read_meta, temp_path, write_meta
+    from app.storage.files import new_file_id
+    from app.tools import crafts, encoding, fast_render, mediaprobe, video_fx, videonorm
+    path = crafts.existing(src)
+    info = await mediaprobe.info(path)
+    tw, th = size
+    work = Path(tempfile.mkdtemp(prefix="live-clip-", dir=str(temp_path("").parent)))
+    try:
+        pre = videonorm.tonemap_filters(info) + (video_fx.chain(match, work, None) if match else []) + \
+            await fast_render.base_filters(path)
+        fit = "contain" if videonorm.same_shape(info, tw, th) else "blur"
+        d = b - a
+        graph = f"[0:v]setpts=PTS-STARTPTS,{','.join(pre + [videonorm.fit_chain(tw, th, fit, 'lc')])},fps={fps:g}," \
+                f"tpad=stop_mode=clone:stop_duration=2,trim=duration={d:.4f},format=yuv420p[v]"
+        st = info.get("audio_stream")
+        aud: list[str] = []
+        if st is not None:
+            af = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo" + \
+                (f",volume={float(gain):.2f}dB" if gain else "") + f",apad,atrim=duration={d:.4f}"
+            aud = ["-map", f"0:a:{st}", "-af", af, *encoding.aac()]
+        await run("ffmpeg", "-v", "error", "-y", "-ss", f"{a:.4f}", "-t", f"{d + 0.5:.4f}", "-i", str(path), "-filter_complex", graph,
+                  "-map", "[v]", *aud, "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-g", str(max(1, round(fps))),
+                  "-pix_fmt", "yuv420p", "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+                  "-movflags", "+faststart", "clip.mp4", timeout=600, cwd=work)
+        fid = new_file_id("mp4")
+        shutil.move(str(work / "clip.mp4"), output_path(fid))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    write_meta(fid, operation="live preview: an inserted clip's copy", source_file_id=src, extra={"ephemeral": True})
+    have = (read_meta(src) or {}).get("live_copies") or {}
+    write_meta(src, extra={"live_copies": {**have, clip_key(a, b, match, size, fps): {"media_id": fid}}})
+    return fid
+
+
+def _schedule_clips(keep: Any, missing: list[list[Any]], size: tuple[int, int], fps: float) -> list[str]:
+    """Background copies for the inserted clips no copy holds yet (once per piece; the scene shows them as pending and
+    the player's next scene has them). → the keys started or running."""
+    import asyncio
+    from app.tools import footage
+    keys = []
+    srcs = {m[2] for m in missing if m[2]}
+    for x in footage.segs(keep):
+        if x["src"] not in srcs:
+            continue
+        k = x["src"] + "|" + clip_key(x["a"], x["b"], x.get("match"), size, fps)
+        keys.append(k)
+        t = _CLIP_TASKS.get(k)
+        if t is not None and not t.done():
+            continue
+        if t is not None and t.done() and t.exception() is None:
+            continue                                  # (done: the registry has it — unless its file went away)
+
+        async def go(x=x, k=k):
+            try:
+                await make_clip_copy(x["src"], x["a"], x["b"], x.get("match"), x.get("gain"), size, fps)
+            except Exception as e:                    # noqa: BLE001 — logged; the range stays pending
+                log.warning("live preview: the copy of the inserted clip %s failed: %s", k[:60], e)
+                raise
+        _CLIP_TASKS[k] = asyncio.get_running_loop().create_task(go())
+    return keys
 
 
 # ---------- the footage layer's transform (from the engine project) ----------
@@ -587,7 +689,8 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
     total = round(float(base.get("duration") or 0), 6)
     pw, ph = (int(base["proxy"]["w"]), int(base["proxy"]["h"])) if base.get("proxy") else \
         footage.size(int(base.get("width") or 1920), int(base.get("height") or 1080))
-    fp = footage_plan(base, copies_of(base, parent=parent), prefer=prefer)
+    fp = footage_plan(base, copies_of(base, parent=parent) + clip_copies(base.get("keep")), prefer=prefer)
+    making = _schedule_clips(base.get("keep"), fp["missing"], (pw, ph), fps) if fp["missing"] else []
     copies = []
     for c in fp["copies"]:
         copies.append({"id": c["id"], "url": _rel(public_url(c["id"])), "w": c.get("w") or pw, "h": c.get("h") or ph,
@@ -599,6 +702,8 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
         rr = {**r, "url": copies[r["copy"]]["url"] if r.get("copy") is not None else None}
         if rr["url"] is None:
             rr["status"] = "pending"
+        if r.get("clip"):            # an inserted clip: the main footage's colour recipe isn't on it (footage.timeline)
+            rr["nocolor"] = True
         ranges.append(rr)
     card = base.get("end_card")
     plain = float((base.get("plain") or {}).get("duration") or 0) or fp["end"]
@@ -614,8 +719,8 @@ async def build(pid: str, *, prefer: str = "own") -> dict[str, Any]:
         if any(abs(float(t) - float(v)) > 1.5 / fps for t, v in tr["remap"]):
             warnings.append("the footage is retimed in the project (edited by hand?) — the live preview plays it unretimed")
     if fp["missing"]:
-        warnings.append(f"{len(fp['missing'])} part(s) of the footage have no playable copy yet (an inserted clip whose "
-                        "copy is still being made)")
+        warnings.append(f"{len(fp['missing'])} part(s) of the footage have no playable copy yet — the inserted clip's "
+                        f"copy is being made ({len(making)} running); the page picks it up when it is ready")
     scene: dict[str, Any] = {
         "v": SCENE_V, "pid": pid, "fps": round(fps, 6), "W": pw, "H": ph, "total": total, "frames": round(total * fps),
         "footage": {"ranges": ranges, "copies": copies, "end": fp["end"], "hold_from": hold_from,

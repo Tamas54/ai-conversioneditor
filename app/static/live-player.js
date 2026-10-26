@@ -338,6 +338,9 @@ void main() {
       if (!nx || r.t1 >= this.holdFrom - 0.5 / this.fps) { this._enterHold(r.t1); return; }
       const w0 = now(), o = this.els[1 - this.active];
       this.idx = i + 1;
+      if (nx.cont && nx.copyObj && s.copy === nx.copyObj.id) {   // the same file goes on (a clip's edge in the copy)
+        this._lead = null; this.stats.switches.push({ t: nx.t0, at: w0, cont: true }); this._preroll(); return;
+      }
       if (!nx.copyObj) { this._enterHold(nx.t0, true); s.el.pause(); return; }
       const L = this._lead, om = o.mt != null ? o.mt : o.el.currentTime;
       const running = !!(L && L.started && !o.el.paused && o.copy === nx.copyObj.id && Math.abs(om - nx.src) < 1.5 / this.fps);
@@ -368,7 +371,7 @@ void main() {
 
     _preroll() {                     // the other element: on the next range's file, paused LEAD before its start
       const nx = this.ranges[this.idx + 1], o = this.els[1 - this.active], r = this.ranges[this.idx], s = this.els[this.active];
-      if (!nx || !nx.copyObj || this._fade) { this._lead = null; return; }
+      if (!nx || !nx.copyObj || this._fade || nx.cont) { this._lead = null; return; }
       const left = r ? r.src + (r.t1 - r.t0) - (s.el.currentTime || 0) : 0;
       const at = left > LEAD + 0.3 && nx.src - LEAD >= 0 ? nx.src - LEAD : nx.src;
       this._lead = { nx, at, early: at < nx.src - 1e-6, started: false };
@@ -518,14 +521,14 @@ void main() {
       s.uploaded = true; s.fresh = false;
       return true;
     }
-    _drawFoot(s, copy, t, alpha) {
+    _drawFoot(s, copy, t, alpha, range) {
       const gl = this.gl, P = this.pf;
       if (!copy || !s.uploaded) return;
       const fm = footageMatrix(this.tr, this.byProp, t, copy.w, copy.h), m = fm.m;
       gl.useProgram(P.p);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, s.tex); gl.uniform1i(P.u.uVid, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, copy._lut); gl.uniform1i(P.u.uLut, 1);
-      gl.uniform1i(P.u.uMode, modeOf(copy.color));
+      gl.uniform1i(P.u.uMode, range && range.nocolor ? 0 : modeOf(copy.color));
       const bg = (this.tr && this.tr.bg) || [0, 0, 0];
       gl.uniform3f(P.u.uBg, bg[0], bg[1], bg[2]);
       gl.uniformMatrix3fv(P.u.uM, false, [m[0], m[3], 0, m[1], m[4], 0, m[2], m[5], 1]);
@@ -551,9 +554,9 @@ void main() {
         if (fd && fd.d > 0 && t < fd.t0 + fd.d) {             // dissolve: the previous source under, the new one over
           if (fd.from.fresh || this.playing) this._upload(fd.from);
           const fr = this.ranges[this.idx - 1];
-          this._drawFoot(fd.from, fr && fr.copyObj, t, 1);
-          this._drawFoot(s, r && r.copyObj, t, Math.max(0, Math.min(1, (t - fd.t0) / fd.d)));
-        } else this._drawFoot(s, r && r.copyObj, t, 1);
+          this._drawFoot(fd.from, fr && fr.copyObj, t, 1, fr);
+          this._drawFoot(s, r && r.copyObj, t, Math.max(0, Math.min(1, (t - fd.t0) / fd.d)), r);
+        } else this._drawFoot(s, r && r.copyObj, t, 1, r);
         if (this.drawLog && s.mt !== this._lastDrawn) {   // QA: each new footage frame that reached the canvas
           this._lastDrawn = s.mt;
           this.drawLog.push({ w: +now().toFixed(2), el: this.active, mt: s.mt, t: r ? +(r.t0 + s.mt - r.src).toFixed(4) : null });
