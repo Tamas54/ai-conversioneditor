@@ -843,3 +843,40 @@ async def test_fill_interleaves_picture_and_sound_by_time(aq, pc, project, monke
     assert order[:2] == [("v", 0), ("a", 0)]                                 # 1: a 0. szakasz és a 0. darab
     t = [plan["segments"][k]["out_start"] if kind == "v" else REAL.audio_plan(plan)[k]["out_start"] for kind, k in order[2:]]
     assert t == sorted(t) and {k for kind, k in order if kind == "a"} == {0, 1, 2, 3}
+
+
+async def test_a_playing_player_keeps_one_worker_free_of_prefetch(aq, pc, project, monkeypatch):
+    """Mérve (10-26, 10 perc): két hosszú előtöltő futam mögött a lejátszó hangdarabja 20 s-ig várt (503), és a hls.js a
+    tekerés után már nem kért hangot. Amíg a lejátszó játszik, az előtöltés / feltöltés legfeljebb n−1 dolgozón fut."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_WORKERS", "2")
+    monkeypatch.setenv("VIDEO_PREVIEW_PREFETCH", "0")
+    plan = make_plan(parts=((None, 0.0, 80.0),), hold_s=0)
+    pc._plan = plan
+    hold = asyncio.Event()                                      # a feltöltés (nem a 0.) futamai állnak, amíg el nem engedjük
+    running = []
+    run0 = pc.render_run
+
+    async def rr(ctx, ks):
+        running.append(ks[0])
+        try:
+            if ks[0] != 0:
+                await hold.wait()
+            return await run0(ctx, ks)
+        finally:
+            running.remove(ks[0])
+    pc.render_run = rr
+    ps.warm(PID, plan)                                          # a lejátszó kérte a listát → „játszik”
+    ps.schedule(PID, plan, dirty=[], playhead=0.0)
+    await asyncio.sleep(0.3)
+    st = ps._state()
+    assert st.bg_running == 1 and len(running) == 1             # EGY feltöltő futam áll; a második dolgozó nem vett fel másikat
+    late = asyncio.create_task(ps.request_audio_chunk(PID, 2, plan=plan))   # a lejátszó a 2. hangdarabot kéri
+    await asyncio.wait_for(late, 2)                             # azonnal kiszolgálja a szabadon hagyott dolgozó
+    st.player_seen = -1e9                                       # a lejátszó elhallgatott: a feltöltés megint két dolgozón
+    st.wake.set()
+    await asyncio.sleep(0.1)
+    assert st.bg_running == 2 and len(running) == 2
+    hold.set()
+    await _drain()
+    assert sorted(k for ks in pc.calls for k in ks) == list(range(40))

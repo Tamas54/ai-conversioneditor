@@ -59,6 +59,7 @@ AUDIO_INDEX = "index.m3u8"                    # az egész hang (render_audio, cs
 FAIL_HOLD_S = 15.0                            # elakadt szakasz: ennyi ideig nem renderel újra (a lejátszó újrapróbál)
 TOUCH_EVERY_S = 2.0                           # a kiszolgált szakaszok last_used_at-je kötegben
 SWEEP_EVERY_S = 300.0                         # LRU (preview_cache.sweep) legfeljebb ennyi időnként, render után
+PLAYER_ACTIVE_S = 15.0                        # ennyi ideig „játszik valaki” a lejátszó utolsó kérése után (lásd _bg_limit)
 
 
 def _env_num(name: str, default: float, lo: float) -> float:
@@ -308,6 +309,9 @@ class _State:
         self.touch_task: Optional[asyncio.Task] = None
         self.swept = 0.0
         self.stats = {"hits": 0, "misses": 0, "runs": 0, "segments": 0, "failed": 0}
+        self.bg_running = 0                          # most futó előtöltés / feltöltés (elsőbbség 2–3)
+        self.player_seen = -1e9                      # a lejátszó utolsó kérése (monotonic)
+        self.wake = asyncio.Event()                  # új bejegyzés vagy véget ért munka: a félretett dolgozó újranéz
 
 
 _S: Optional[_State] = None
@@ -348,6 +352,16 @@ def _ensure_workers(st: _State) -> None:
 
 def _push(st: _State, job: _Job, prio: int) -> None:
     st.queue.put_nowait((prio, next(st.seq), job))
+    st.wake.set()
+
+
+def _bg_limit(st: _State) -> int:
+    """Egyszerre ennyi előtöltés / feltöltés (2–3) futhat. Amíg egy lejátszó játszik (PLAYER_ACTIVE_S-on belül kért), egy
+    dolgozó — és vele a video_preview.gate() egy helye — szabadon marad a 0–1-nek: mérve (10-26, 10 perc, load 10–14) két
+    8 szakaszos előtöltő futam (10–15 s) mögött a lejátszó hangdarabja 20 s után 503-at kapott, és a hls.js a tekerés után
+    már nem kért hangot. Lejátszó nélkül minden dolgozó tölt."""
+    n = n_workers()
+    return n - 1 if n > 1 and time.monotonic() - st.player_seen < PLAYER_ACTIVE_S else n
 
 
 def _new_job(st: _State, kind: str, pid: str, plan: dict[str, Any], ks: list[int], keys: list[str], prio: int) -> _Job:
@@ -457,10 +471,20 @@ def _done_ok(job: _Job) -> bool:
 
 async def _worker(st: _State) -> None:
     while True:
-        prio, _, job = await st.queue.get()
+        prio, seq, job = await st.queue.get()
         if job.started or job.fut.done() or prio != job.prio:
             continue                               # felülírt elsőbbségű / már futó / elvetett bejegyzés
+        bg = prio >= P_NEAR
+        if bg and st.bg_running >= _bg_limit(st):
+            st.queue.put_nowait((prio, seq, job))  # vissza a helyére (ugyanaz a sorszám); új munkára / egy végére vár
+            st.wake.clear()
+            try:
+                await asyncio.wait_for(st.wake.wait(), PLAYER_ACTIVE_S)   # a lejátszó elhallgatott: újra a teljes szám
+            except asyncio.TimeoutError:
+                pass
+            continue
         job.started = True
+        st.bg_running += bg
         t0 = time.monotonic()
         try:
             with _as(job):
@@ -498,6 +522,8 @@ async def _worker(st: _State) -> None:
             for key in job.keys:
                 if st.live.get(key) is job:
                     del st.live[key]
+            st.bg_running -= bg
+            st.wake.set()
         _maybe_sweep(st)
 
 
@@ -565,6 +591,8 @@ async def request(pid: str, k: int, *, priority: int = P_PLAYER, plan: Optional[
     h = segs[k]["hash"]
     path = _seg_file(plan, h)
     st = _state()
+    if priority == P_PLAYER:
+        st.player_seen = time.monotonic()
     if path.exists():
         st.stats["hits"] += 1
         _touch(st, plan["source_id"], [h])
@@ -594,6 +622,8 @@ async def request_audio_chunk(pid: str, j: int, *, priority: int = P_PLAYER, pla
     h = chunks[j]["hash"]
     path = _seg_file(plan, h)
     st = _state()
+    if priority == P_PLAYER:
+        st.player_seen = time.monotonic()
     nxt = chunks[j]["seg1"]
 
     def ahead() -> None:
@@ -643,6 +673,7 @@ def warm(pid: str, plan: dict[str, Any]) -> None:
     puffereit). Nem vár."""
     segs = plan.get("segments") or []
     st = _state()
+    st.player_seen = time.monotonic()                 # a listát a lejátszó kéri: játszani fog
     if segs and not _have(plan, segs[0]["hash"]) and not _held_failure(st, segs[0]["hash"]):
         _enqueue_run(st, pid, plan, 0, P_PLAYER)
     if audio_chunks(plan) and _chunk_missing(st, plan, 0):
