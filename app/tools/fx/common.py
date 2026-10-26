@@ -171,13 +171,17 @@ def needs_tracking(on: Any) -> bool:
     return on in (None, "hand", "body")
 
 
+OPAQUE = 240                # a maszkban ennél átlátszatlanabb pont sugároz: az oszlop, a vonal, a szöveg — a félig
+                            # átlátszó sötét panel (86 % = 219) nem (különben a panel teteje égne a grafikon helyett)
+
+
 def mask_edge(mask: np.ndarray, W: int, H: int, step: Optional[int] = None) -> np.ndarray:
     """Egy réteg alfájának (H × W, 0–255) felső éle oszloponként (minden step. oszlopban az első átlátszatlan pont) →
     [(x, y)] px — innen lobognak a lángok (egy grafikon oszlopainak teteje, a kirajzolt vonal)."""
     if mask.shape[:2] != (H, W):
         mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_AREA)
     step = step or max(4, W // 48)
-    cols = mask[:, ::step] > 127
+    cols = mask[:, ::step] > OPAQUE
     has = cols.any(0)
     if not has.any():
         return np.zeros((0, 2), np.float32)

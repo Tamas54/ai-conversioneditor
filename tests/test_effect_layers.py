@@ -220,6 +220,7 @@ def test_on_a_graphic_layer_the_flames_rise_from_its_alpha():
     mask = np.zeros((H, W), np.uint8)
     for k, top in enumerate((200, 150, 240)):                   # három oszlop, más magassággal
         mask[top:300, 20 + 50 * k: 50 + 50 * k] = 255
+    mask[100:320, :] = np.maximum(mask[100:320, :], 219)        # a félig átlátszó panel (86 %) nem sugároz
     edge = common.mask_edge(mask, W, H, step=5)
     assert set(edge[:, 1].astype(int)) == {200, 150, 240} and edge[:, 0].min() >= 20
     an = common.Anchors(W, H, "L3")({"mask": mask}, 0.0, True)
