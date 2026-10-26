@@ -11,7 +11,7 @@
   Szakasz-gyorsítótáras HLS-előnézet (app/tools/preview_serve.py) — mind aláírt (?t=, mint a /files/):
     GET  /api/video/{pid}/preview.m3u8   master (kép + külön hang-rendition)
     GET  /api/video/{pid}/video.m3u8     a szakaszok (VOD, szakaszonként #EXT-X-DISCONTINUITY)
-    GET  /api/video/{pid}/audio.m3u8     a hang darabokban (darabonként #EXT-X-DISCONTINUITY)
+    GET  /api/video/{pid}/audio.m3u8     a hang darabokban, egy folytonos renditionként (a PTS-t a kiszolgálás tolja)
     GET  /api/video/{pid}/preview.json   a lejátszó állapota (kész szakaszok, markerek, a végleges render)
     GET  /api/video/preview/seg/{hash}.ts?p=<pid>&t=   egy szakasz: kész → fájl; különben sorba (0), vár, 503 + Retry-After
     GET  /api/video/preview/aud/{hash}.ts?p=<pid>&t=   egy hangdarab: mint a szakasz (kész → fájl; különben sorba, vár, 503)
@@ -459,6 +459,9 @@ async def preview_segment(seg_hash: str, p: str = Query(..., description="the vi
         return _busy("preview segment")
     except RuntimeError as e:
         raise HTTPException(500, f"The preview segment could not be rendered: {str(e)[:200]}") from None
+    data = ps.segment_bytes(plan, k, path)               # folytonos kép (VIDEO_PREVIEW_CONTINUOUS=1): a PTS a helyére
+    if data is not None:
+        return Response(data, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})
     return FileResponse(path, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})
 
 
@@ -478,4 +481,8 @@ async def preview_audio_chunk(chunk_hash: str, p: str = Query(..., description="
         return _busy("sound")
     except RuntimeError as e:
         raise HTTPException(500, f"This part of the preview sound could not be made: {str(e)[:200]}") from None
-    return FileResponse(path, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})
+    try:                                                # a darab a köteten 0-tól; a lejátszó a helyére tolva kapja
+        data = ps.audio_chunk_bytes(plan, j, path)
+    except ValueError as e:
+        raise HTTPException(500, f"This part of the preview sound is damaged: {e}") from None
+    return Response(data, media_type=ps.MP2T, headers={"Cache-Control": ps.IMMUTABLE})

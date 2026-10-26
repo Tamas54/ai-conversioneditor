@@ -19,7 +19,16 @@ rögzül és munkánként áll be.
 
 A hang (10-26): darabokban (preview_cache.audio_plan: AUDIO_CHUNK videószakasz egy darab, render_audio_chunk), a darab
 ugyanúgy kérésre készül, mint a képszakasz — az egész hang keverése (render_audio, 10 percen 13,4 s) nincs a hideg úton
-(csak a letölthető MP4-é, request_audio). A lista a darabok között #EXT-X-DISCONTINUITY.
+(csak a letölthető MP4-é, request_audio). A hang EGY folytonos rendition (a 10-25-i A1 alakja, discontinuity nélkül): a
+darab a köteten 0-tól indul (tartalom szerint újrahasznosítható), kiszolgáláskor a PTS / PCR a darab helyére tolódik
+(shift_ts). Mérve (10-26, Chrome + hls.js 1.5.13, valódi P1-render): darabonkénti #EXT-X-DISCONTINUITY-vel a hls.js
+minden fájlt a VELE AZONOS cc-jű képszakasz initPTS-éhez rak — 15 szakaszos darabnál az 1. darab (30–60 s hangja) 2 s-ra
+került, a puffer 34 s-nál elfogyott; szakaszonkénti darabnál (1) a 7:00-ra tekerés holtpont: a darabok ~26 ms-os
+túlnyúlása eltolja a hang-töredékek térképét, a hang a 209. (cc 209), a kép a 210. szakaszt veszi, a hang örökre a 209-es
+initPTS-re vár. Folytonos hanggal mindkettő megszűnik, és a hls.js a darabhatáron az átfedő AAC-előtöltést (1024 minta)
+maga dobja el (különben a következő darab előtöltése a valódi hang utolsó 21 ms-ára íródna). VIDEO_PREVIEW_AUDIO_DISC=1: a
+régi, darabonkénti discontinuity (összehasonlításhoz, pl. iOS-en). VIDEO_PREVIEW_CONTINUOUS=1: a kép is folytonos (a
+terv B-terve: a szakaszok PTS-e is kiszolgáláskor tolódik, a listában egy discontinuity sincs — iOS-próbához).
 
 A terv (plan_of) a preview_cache.context() terve: a hash-ekben a végig látható rétegek mért köre és (motoros úton /
 kézzel szerkesztett projektnél) a projektfájl is benne van — ezt csak a context tudja, a puszta plan(spec) nem.
@@ -60,6 +69,8 @@ FAIL_HOLD_S = 15.0                            # elakadt szakasz: ennyi ideig nem
 TOUCH_EVERY_S = 2.0                           # a kiszolgált szakaszok last_used_at-je kötegben
 SWEEP_EVERY_S = 300.0                         # LRU (preview_cache.sweep) legfeljebb ennyi időnként, render után
 PLAYER_ACTIVE_S = 15.0                        # ennyi ideig „játszik valaki” a lejátszó utolsó kérése után (lásd _bg_limit)
+TS_CLOCK = 90000                              # az MPEG-TS PTS órája
+PRIMING_TICKS = 1024 * TS_CLOCK // 48000      # az AAC-kódoló előtöltése (1024 minta 48 kHz-en) = 1920 tick = 21,3 ms
 
 
 def _env_num(name: str, default: float, lo: float) -> float:
@@ -81,6 +92,14 @@ def n_workers() -> int:
 def prefetch_n() -> int:
     """A lejátszó által kért szakasz után ennyit tölt elő (elsőbbség 2)."""
     return int(_env_num("VIDEO_PREVIEW_PREFETCH", 5, 0))
+
+
+def audio_discontinuous() -> bool:
+    return os.getenv("VIDEO_PREVIEW_AUDIO_DISC", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def video_continuous() -> bool:
+    return os.getenv("VIDEO_PREVIEW_CONTINUOUS", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _pc():
@@ -748,6 +767,119 @@ async def _fill(st: _State, pid: str, plan: dict[str, Any], dirty: list[int], pl
             _enqueue_chunk(st, pid, plan, ks[0], P_FILL)
 
 
+# ---------- MPEG-TS időbélyeg-eltolás (kiszolgáláskor; a köteten a 0-tól induló fájl marad) ----------
+
+_NO_PES_HEADER = {0xBC, 0xBE, 0xBF, 0xF0, 0xF1, 0xF2, 0xF8, 0xFF}       # ezeknek a PES-eknek nincs PTS-mezőjük
+
+
+def _ts_get(b: bytearray, i: int) -> int:
+    return ((b[i] >> 1) & 0x07) << 30 | b[i + 1] << 22 | (b[i + 2] >> 1) << 15 | b[i + 3] << 7 | b[i + 4] >> 1
+
+
+def _ts_put(b: bytearray, i: int, v: int) -> None:
+    v %= 1 << 33
+    b[i] = (b[i] & 0xF0) | ((v >> 30) & 0x07) << 1 | 1               # a 4 bites előtag (0010 / 0011 / 0001) marad
+    b[i + 1] = (v >> 22) & 0xFF
+    b[i + 2] = ((v >> 15) & 0x7F) << 1 | 1
+    b[i + 3] = (v >> 7) & 0xFF
+    b[i + 4] = (v & 0x7F) << 1 | 1
+
+
+def _ts_walk(b: bytearray, delta: Optional[int]):
+    """A csomagok PCR- és PES-PTS/DTS-mezői: delta=None → az első PES-PTS (vagy None); különben mind + delta (mod 2^33)."""
+    n = len(b) - len(b) % 188
+    for off in range(0, n, 188):
+        if b[off] != 0x47:
+            raise ValueError(f"not an MPEG-TS packet at byte {off}")
+        pusi, afc, p = b[off + 1] & 0x40, (b[off + 3] >> 4) & 3, off + 4
+        if afc & 2:
+            ln = b[p]
+            if delta is not None and ln >= 7 and b[p + 1] & 0x10:      # PCR: 33 bites alap, 6 fenntartott, 9 bites kiterjesztés
+                base = (b[p + 2] << 25 | b[p + 3] << 17 | b[p + 4] << 9 | b[p + 5] << 1 | b[p + 6] >> 7) + delta
+                base %= 1 << 33
+                b[p + 2], b[p + 3], b[p + 4], b[p + 5] = (base >> 25) & 0xFF, (base >> 17) & 0xFF, (base >> 9) & 0xFF, (base >> 1) & 0xFF
+                b[p + 6] = (base & 1) << 7 | (b[p + 6] & 0x7F)
+            p += 1 + ln
+        if not (pusi and afc & 1) or p + 14 > off + 188 or b[p:p + 3] != b"\x00\x00\x01":
+            continue
+        if b[p + 3] in _NO_PES_HEADER or (b[p + 6] & 0xC0) != 0x80:
+            continue
+        flags = b[p + 7] >> 6
+        if not flags & 2:
+            continue
+        if delta is None:
+            return _ts_get(b, p + 9)
+        _ts_put(b, p + 9, _ts_get(b, p + 9) + delta)
+        if flags == 3 and p + 19 <= off + 188:
+            _ts_put(b, p + 14, _ts_get(b, p + 14) + delta)
+    return None
+
+
+def first_pts(data: bytes) -> Optional[int]:
+    """Az MPEG-TS első PES-PTS-e (90 kHz), ha van."""
+    return _ts_walk(bytearray(data), None)
+
+
+def shift_ts(data: bytes, delta: int) -> bytes:
+    """Minden PTS / DTS / PCR + delta tick (90 kHz, 33 biten körbefordulva) — a többi bájt változatlan."""
+    b = bytearray(data)
+    if delta:
+        _ts_walk(b, int(delta))
+    return bytes(b)
+
+
+_BASES: dict[str, int] = {}
+
+
+def _video_base(plan: dict[str, Any]) -> Optional[int]:
+    """A 0. képszakasz első PTS-e (a P1 kódolásában 126000 = 1,4 s, az ffmpeg mpegts muxdelay-e) — ehhez igazodik a hang."""
+    segs = plan.get("segments") or []
+    if not segs:
+        return None
+    h = segs[0]["hash"]
+    if h not in _BASES:
+        p = _seg_file(plan, h)
+        if not p.exists():
+            return None
+        with open(p, "rb") as f:
+            v = first_pts(f.read(188 * 64))
+        if v is None:
+            return None
+        _BASES[h] = v
+    return _BASES[h]
+
+
+def _slot_ticks(plan: dict[str, Any], f0: int) -> int:
+    return round(int(f0) * TS_CLOCK / float(plan["fps"]))
+
+
+def audio_chunk_bytes(plan: dict[str, Any], j: int, path: Path) -> bytes:
+    """A hangdarab, ahogy a lejátszó kapja: folytonos módban a PTS-e a darab helyére (a kép 0. szakaszának alapjához +
+    a darab első kockájának ideje), az AAC-előtöltéssel előbbre — így a valódi hang pontosan a kockarácson indul, és a
+    hls.js az előző darab végével átfedő előtöltő keretet eldobja. VIDEO_PREVIEW_AUDIO_DISC=1: a fájl változatlanul."""
+    data = path.read_bytes()
+    if audio_discontinuous():
+        return data
+    first = first_pts(data)
+    if first is None:
+        return data
+    base = _video_base(plan)
+    c = audio_chunks(plan)[j]
+    return shift_ts(data, (first if base is None else base) + _slot_ticks(plan, c["f0"]) - PRIMING_TICKS - first)
+
+
+def segment_bytes(plan: dict[str, Any], k: int, path: Path) -> Optional[bytes]:
+    """Folytonos képnél (VIDEO_PREVIEW_CONTINUOUS=1) a szakasz PTS-e a helyére tolva; különben None (a fájl, ahogy van)."""
+    if not video_continuous():
+        return None
+    data = path.read_bytes()
+    first = first_pts(data)
+    base = _video_base(plan)
+    if first is None or base is None:
+        return data
+    return shift_ts(data, base + _slot_ticks(plan, plan["segments"][k]["f0"]) - first)
+
+
 # ---------- lejátszási listák ----------
 
 _LEVELS = ((10, 1485, 99), (11, 3000, 396), (12, 6000, 396), (13, 11880, 396), (20, 11880, 396), (21, 19800, 792),
@@ -777,13 +909,14 @@ def durations(plan: dict[str, Any], items: Optional[list[dict[str, Any]]] = None
     return out
 
 
-def _media_m3u8(pid: str, plan: dict[str, Any], items: list[dict[str, Any]], path: str, independent: bool) -> str:
+def _media_m3u8(pid: str, plan: dict[str, Any], items: list[dict[str, Any]], path: str, independent: bool,
+                discontinuity: bool = True) -> str:
     durs = durations(plan, items)
     _, exp, uid = sign(pid)
     lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{max([1] + [math.ceil(d) for d in durs])}",
              "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD"] + (["#EXT-X-INDEPENDENT-SEGMENTS"] if independent else [])
     for i, (s, d) in enumerate(zip(items, durs)):
-        if i:
+        if i and discontinuity:
             lines.append("#EXT-X-DISCONTINUITY")
         lines.append(f"#EXTINF:{d:.6f},")
         lines.append(f"/api/video/preview/{path}/{s['hash']}.ts{_query(pid, s['hash'], exp, uid)}")
@@ -819,18 +952,18 @@ def master_m3u8(pid: str, plan: Optional[dict[str, Any]] = None) -> str:
 def video_m3u8(pid: str, plan: dict[str, Any]) -> str:
     """VOD-lista, benne MINDEN szakasz (kész vagy sem — a hiányzót a szakasz-végpont kérésre rendereli), mindegyik
     a saját EXTINF-jével, és mivel minden fájl 0-tól indul: szakaszonként #EXT-X-DISCONTINUITY."""
-    return _media_m3u8(pid, plan, plan.get("segments") or [], "seg", True)
+    return _media_m3u8(pid, plan, plan.get("segments") or [], "seg", True, not video_continuous())
 
 
 def audio_m3u8(pid: str, plan: dict[str, Any]) -> str:
     """A hang-rendition: a darabok (preview_cache.audio_plan), mindegyik a saját EXTINF-jével (kocka / fps, a képpel
-    azonos rácson), aláírt címmel, és mivel minden darab 0-tól indul: köztük #EXT-X-DISCONTINUITY. Nem vár semmire (a
-    hiányzó darabot a végpont kérésre rendereli). VIDEO_PREVIEW_AUDIO_CHUNK=1: darab = képszakasz (a két lista
-    szakaszolása és discontinuity-sorszáma azonos — RFC 8216 6.2.4)."""
+    azonos rácson), aláírt címmel, discontinuity NÉLKÜL (egy folytonos hang: a darab időbélyegét a kiszolgálás tolja a
+    helyére, audio_chunk_bytes). Nem vár semmire (a hiányzó darabot a végpont kérésre rendereli).
+    VIDEO_PREVIEW_AUDIO_DISC=1: darabonként #EXT-X-DISCONTINUITY (a régi alak)."""
     chunks = audio_chunks(plan)
     if not chunks:
         raise LookupError("This preview has no sound track.")
-    return _media_m3u8(pid, plan, chunks, "aud", False)
+    return _media_m3u8(pid, plan, chunks, "aud", False, audio_discontinuous())
 
 
 # ---------- preview.json (a P4 lejátszója) ----------

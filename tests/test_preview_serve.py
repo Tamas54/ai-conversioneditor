@@ -24,6 +24,21 @@ from app import tenancy
 from app.tools import preview_cache as REAL
 
 REAL_PLAN = json.loads((Path(__file__).parent / "fixtures" / "preview_plan_real2m.json").read_text("utf-8"))
+_TS: dict[str, bytes] = {}
+
+
+def ts_template(kind: str) -> bytes:
+    """Valódi MPEG-TS (ffmpeg, mint a P1-é: 0-tól, a muxdelay miatt PTS 126000-ről): „a” = 2 s AAC 48 kHz, „v” = 2 s H.264."""
+    if kind not in _TS:
+        import subprocess
+        import tempfile
+        d = Path(tempfile.mkdtemp(dir=str(Path(REAL.cache_root()).parent)))
+        src = ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2", "-c:a", "aac", "-b:a", "96k", "-ac", "2"] \
+            if kind == "a" else ["-f", "lavfi", "-i", "testsrc=size=160x90:rate=30", "-frames:v", "60", "-c:v", "libx264",
+                                 "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "60", "-bf", "0"]
+        subprocess.run(["ffmpeg", "-v", "error", "-y", *src, "-f", "mpegts", str(d / "x.ts")], check=True)
+        _TS[kind] = (d / "x.ts").read_bytes()
+    return _TS[kind]
 
 PID = "0123456789abcdef0123456789abcdef.ecproj"
 SRC = "fedcba9876543210fedcba9876543210.mov"
@@ -76,6 +91,7 @@ class FakePC:
         self.calls: list[list[int]] = []
         self.chunk_calls: list[str] = []                 # a renderelt hangdarabok hash-e
         self.adelay = 0.0
+        self.real_ts = False                              # True: a képszakasz is valódi TS (a folytonos kép tesztjéhez)
         self.audio_calls = 0
         self.contexts = 0
         self.touched: list[str] = []
@@ -137,7 +153,7 @@ class FakePC:
             p = self.seg_path(ctx["plan"]["source_id"], h)
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_name(f".{p.name}.tmp")
-            tmp.write_bytes(b"G" + h.encode() * 4)
+            tmp.write_bytes(ts_template("v") if self.real_ts else b"G" + h.encode() * 4)
             tmp.replace(p)
             out.append(h)
         return out
@@ -153,7 +169,7 @@ class FakePC:
             p = self.seg_path(ctx["plan"]["source_id"], ch["hash"])
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_name(f".{p.name}.tmp")
-            tmp.write_bytes(b"A" + ch["hash"].encode())
+            tmp.write_bytes(ts_template("a"))                # valódi TS: a kiszolgálás a PTS-ét a helyére tolja
             tmp.replace(p)
         return ch["hash"]
 
@@ -319,20 +335,22 @@ def test_codecs_level_follows_the_frame_size(pc):
     assert ps.codecs({"pw": 640, "ph": 360, "fps": 25}) == "avc1.42c01e"           # 3.0
 
 
-@pytest.mark.parametrize("chunk", [15, 1])
-def test_audio_playlist_lists_the_chunks(pc, monkeypatch, chunk):
+@pytest.mark.parametrize("chunk,disc", [(15, False), (1, False), (1, True)])
+def test_audio_playlist_lists_the_chunks(pc, monkeypatch, chunk, disc):
     """A hang darabokban (P1 audio_plan, a valódi terven): darabonként EXTINF = kocka / fps a képpel azonos rácson,
-    köztük DISCONTINUITY, darabonként aláírt cím. AUDIO_CHUNK=1: a hanglista szakaszolása, EXTINF-jei, TARGETDURATION-je
-    és discontinuity-sorszámai = a képéi (RFC 8216 6.2.4; ezt egy szigorú lejátszó — iOS — megkövetelheti)."""
+    darabonként aláírt cím; alapból EGY folytonos rendition (discontinuity nélkül — a darab PTS-ét a kiszolgálás tolja),
+    VIDEO_PREVIEW_AUDIO_DISC=1: darabonként DISCONTINUITY. AUDIO_CHUNK=1: a hanglista szakaszolása, EXTINF-jei és
+    TARGETDURATION-je = a képéi (RFC 8216 6.2.4)."""
     from app.tools import preview_serve as ps
     monkeypatch.setattr(REAL, "AUDIO_CHUNK", chunk)
+    monkeypatch.setenv("VIDEO_PREVIEW_AUDIO_DISC", "1" if disc else "0")
     plan = json.loads(json.dumps(REAL_PLAN))                    # friss objektum: az audio_chunks tervenként számol
     chunks = REAL.audio_plan(plan)
     assert len(chunks) == math.ceil(len(plan["segments"]) / chunk)
     text = ps.audio_m3u8(PID, plan)
     lines = text.splitlines()
     assert lines[0] == "#EXTM3U" and lines[-1] == "#EXT-X-ENDLIST" and "#EXT-X-PLAYLIST-TYPE:VOD" in lines
-    assert text.count("#EXT-X-DISCONTINUITY") == len(chunks) - 1
+    assert text.count("#EXT-X-DISCONTINUITY") == (len(chunks) - 1 if disc else 0)
     ext = [float(ln[8:].rstrip(",")) for ln in lines if ln.startswith("#EXTINF:")]
     vext = [float(ln[8:].rstrip(",")) for ln in ps.video_m3u8(PID, plan).splitlines() if ln.startswith("#EXTINF:")]
     assert abs(sum(ext) - plan["frames"] / plan["fps"]) < 1e-3 and abs(sum(ext) - sum(vext)) < 1e-3
@@ -386,8 +404,8 @@ def test_playlist_endpoints(client, pc, project):
     ra = client.get(aurl)                                       # nem vár a hangra: a darabokat azonnal listázza
     assert ra.status_code == 200 and time.time() - t0 < 2 and len(_uris(ra.text)) == 5 and pc.audio_calls == 0
     piece = client.get(_uris(ra.text)[0])                       # egy darab: a végpont rendereli, aztán kiszolgálja
-    h0 = REAL.audio_plan(REAL_PLAN)[0]["hash"]
-    assert piece.status_code == 200 and piece.headers["content-type"] == "video/mp2t" and piece.content == b"A" + h0.encode()
+    assert piece.status_code == 200 and piece.headers["content-type"] == "video/mp2t"
+    assert len(piece.content) == len(ts_template("a")) and piece.content[0] == 0x47
     assert piece.headers["cache-control"] == "private, max-age=31536000, immutable"
     seg = client.get(_uris(rv.text)[0])                        # egy szakasz: a végpont rendereli, aztán kiszolgálja
     assert seg.status_code == 200 and seg.headers["content-type"] == "video/mp2t"
@@ -418,7 +436,8 @@ def test_audio_chunk_endpoint_checks_signature_plan_and_waits(client, pc, projec
     deadline = time.time() + 10
     while time.time() < deadline and not pc.seg_path(SRC, h).exists():
         time.sleep(0.05)
-    assert client.get(_aud_url(PID, h)).status_code == 200 and pc.chunk_calls == [h]
+    r = client.get(_aud_url(PID, h))
+    assert r.status_code == 200 and pc.chunk_calls == [h]
 
 
 @pytest.mark.parametrize("case", ["wrong_pid", "wrong_hash", "expired", "playlist_token", "tampered", "wrong_user", "no_token"])
@@ -880,3 +899,63 @@ async def test_a_playing_player_keeps_one_worker_free_of_prefetch(aq, pc, projec
     hold.set()
     await _drain()
     assert sorted(k for ks in pc.calls for k in ks) == list(range(40))
+
+
+def test_shift_ts_moves_every_timestamp_and_nothing_else(pc):
+    """A kiszolgáláskori eltolás: minden PES-PTS / DTS és PCR + delta (90 kHz, 33 biten), a többi bájt változatlan; az
+    ffprobe szerint a fájl ugyanaz, csak később indul."""
+    import subprocess
+    from app.tools import preview_serve as ps
+    for kind in ("a", "v"):
+        data = ts_template(kind)
+        assert ps.first_pts(data) == 126000                     # mint a P1 fájljai (mpegts muxdelay 0,7 s × 2)
+        moved = ps.shift_ts(data, 90000 * 300 + 7)
+        assert ps.first_pts(moved) == 126000 + 90000 * 300 + 7 and len(moved) == len(data)
+        diff = [i for i in range(len(data)) if data[i] != moved[i]]
+        assert diff and all(i % 188 >= 4 for i in diff)         # csak a csomagfejlécek UTÁN (PCR / PTS-mezők)
+        probe = lambda b: json.loads(subprocess.run(            # noqa: E731
+            ["ffprobe", "-v", "error", "-show_entries", "stream=start_pts:packet=pts,dts", "-of", "json", "-"],
+            input=b, capture_output=True, check=True).stdout)
+        a, m = probe(data), probe(moved)
+        assert m["streams"][0]["start_pts"] == a["streams"][0]["start_pts"] + 90000 * 300 + 7
+        assert [p["pts"] + 90000 * 300 + 7 for p in a["packets"]] == [p["pts"] for p in m["packets"]]
+    wrap = ps.shift_ts(ts_template("a"), (1 << 33) - 126000)    # körbefordul: 0-ra
+    assert ps.first_pts(wrap) == 0
+    with pytest.raises(ValueError):
+        ps.shift_ts(b"not a transport stream" * 20, 5)
+
+
+def test_audio_chunks_are_served_on_one_continuous_timeline(client, pc, project, monkeypatch):
+    """A darab a köteten 0-tól (126000); a lejátszó a helyén kapja: a kép 0. szakaszának alapja + a darab első kockájának
+    ideje − az AAC-előtöltés (1920 tick) — így a valódi hang a kockarácson indul, a darabok egy idővonalon."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setattr(REAL, "AUDIO_CHUNK", 1)
+    plan = json.loads(json.dumps(REAL_PLAN))
+    pc._plan = plan
+    pc.real_ts = True
+    chunks = REAL.audio_plan(plan)
+    assert client.get(_seg_url(PID, plan["segments"][0]["hash"])).status_code == 200      # a kép alapja (126000)
+    for j in (0, 1, 37, 63):
+        r = client.get(_aud_url(PID, chunks[j]["hash"]))
+        assert r.status_code == 200
+        want = 126000 + round(chunks[j]["f0"] * 90000 / plan["fps"]) - 1920
+        assert ps.first_pts(r.content) == want, j
+    assert ps.first_pts(pc.seg_path(plan["source_id"], chunks[37]["hash"]).read_bytes()) == 126000   # a köteten változatlan
+    monkeypatch.setenv("VIDEO_PREVIEW_AUDIO_DISC", "1")                                       # a régi alak: ahogy van
+    assert ps.first_pts(client.get(_aud_url(PID, chunks[37]["hash"])).content) == 126000
+
+
+def test_continuous_picture_option(client, pc, project, monkeypatch):
+    """VIDEO_PREVIEW_CONTINUOUS=1 (a terv B-terve, iOS-próbához): a képlistában nincs discontinuity, a szakasz PTS-e a
+    helyére tolva (a 0. szakasz alapja + a szakasz első kockájának ideje)."""
+    from app.tools import preview_serve as ps
+    monkeypatch.setenv("VIDEO_PREVIEW_CONTINUOUS", "1")
+    plan = json.loads(json.dumps(REAL_PLAN))
+    pc._plan = plan
+    pc.real_ts = True
+    text = ps.video_m3u8(PID, plan)
+    assert "#EXT-X-DISCONTINUITY" not in text and len(_uris(text)) == len(plan["segments"])
+    assert client.get(_seg_url(PID, plan["segments"][0]["hash"])).status_code == 200
+    for k in (1, 30, 63):
+        r = client.get(_seg_url(PID, plan["segments"][k]["hash"]))
+        assert ps.first_pts(r.content) == 126000 + round(plan["segments"][k]["f0"] * 90000 / plan["fps"]), k
