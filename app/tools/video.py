@@ -5271,6 +5271,17 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         deferred = bg_eta is not None and bool(D["captions"] or base.get("proxy_pending"))
         step(2, 4, "building the timeline")
         out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+        if any(ly.get("type") == "effect" for ly in layers):   # effekt egy grafikai rétegen (on: "L17"): a cél alfájából
+            from app.tools import effect_layers
+            fxl = effect_layers.on_layers(layers)
+            if fxl:
+                it2, nm2, v2, f2 = await effect_layers.prepare_on_layers(fxl, D, W=W, H=H, fps=fps, total=total, work=work,
+                                                                         step=step)
+                if it2:
+                    D["effects"] = (D.get("effects") or []) + it2
+                    gfx_names = gfx_names + nm2
+                    out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+                m_v, problems = m_v + v2, problems + f2
         problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
         problems, m_v = problems + lot_f, m_v + lot_v

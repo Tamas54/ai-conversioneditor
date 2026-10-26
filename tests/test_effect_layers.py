@@ -22,7 +22,7 @@ from app.tools.fx import common
 # ---------- a séma ----------
 
 def test_the_registry_has_lightning_and_fireball_with_their_own_schemas():
-    assert {"lightning", "fireball"} <= set(fx.names())
+    assert {"lightning", "fireball", "flames"} <= set(fx.names())
     for n in fx.names():
         cls = fx.get(n)
         assert issubclass(cls, common.Effect) and cls.NAME == n and cls.DEFAULT_DUR > 0 and cls.PARAMS
@@ -42,10 +42,10 @@ def test_defaults_bounds_and_the_effects_own_duration():
 
 
 @pytest.mark.parametrize("bad, words", [
-    ({"effect": "laser"}, "lightning | fireball"),
+    ({"effect": "laser"}, "lightning | fireball | flames"),
     ({"effect": "flame_jet"}, "planned"),
     ({"target": "sideways"}, "arm (the forearm"),
-    ({"on": "L17"}, "aren't drawn yet"),
+    ({"on": "L 17!"}, "on = "),
     ({"strands": "many"}, "a number"),
 ])
 def test_wrong_fields_say_what_is_right(bad, words):
@@ -168,7 +168,8 @@ def _h(frames: list[np.ndarray]) -> str:
 
 
 @pytest.mark.parametrize("name, params", [("lightning", {"target": "right", "strands": 6}),
-                                          ("fireball", {"target": [0.2, 0.3], "speed": 2.0, "form": 0.3})])
+                                          ("fireball", {"target": [0.2, 0.3], "speed": 2.0, "form": 0.3}),
+                                          ("flames", {"target": "up", "height": 1.5})])
 def test_the_render_is_deterministic_visible_and_fades(name, params):
     a, b = _run(name, params), _run(name, params)
     assert _h(a) == _h(b)                                       # bájtra ugyanaz
@@ -210,6 +211,25 @@ def test_the_anchors_hand_body_point_rectangle():
     assert common.Anchors(W, H, [0.25, 0.5])({"h": [], "p": None}, 0.0, False) == []      # nem szól: nincs sugárzó
     tgt, d = common.aim("right", hand[0].center, hand[0].d, W, H)
     assert tgt[0] > W and abs(d[1]) < 1e-6
+
+
+def test_on_a_graphic_layer_the_flames_rise_from_its_alpha():
+    """A „tüzes grafikon”: on = egy réteg id-ja → csak fény (screen); a lángok a réteg alfájának felső élén."""
+    ly = video.layers_from([{"type": "effect", "effect": "flames", "at": 1, "on": "L3"}], "", [])[0]
+    assert (ly["on"], ly["blend"], ly["target"]) == ("L3", "screen", "up") and fx.is_layer("L3") and not fx.is_layer("hand")
+    mask = np.zeros((H, W), np.uint8)
+    for k, top in enumerate((200, 150, 240)):                   # három oszlop, más magassággal
+        mask[top:300, 20 + 50 * k: 50 + 50 * k] = 255
+    edge = common.mask_edge(mask, W, H, step=5)
+    assert set(edge[:, 1].astype(int)) == {200, 150, 240} and edge[:, 0].min() >= 20
+    an = common.Anchors(W, H, "L3")({"mask": mask}, 0.0, True)
+    assert len(an) == 1 and len(an[0].pts) == len(edge) and an[0].d[1] < 0
+    masks = [{"mask": mask} for _ in range(30)]
+    a = _run("flames", {"blend": "screen", "on": "L3", "target": "up"}, track=masks, n=30, start=0, active=20)
+    b = _run("flames", {"blend": "screen", "on": "L3", "target": "up"}, track=masks, n=30, start=0, active=20)
+    assert _h(a) == _h(b)
+    f = a[10].astype(float).sum(2)
+    assert f[100:200].sum() > 20 * f[300:].sum() + 1             # a lángok az oszlopok FÖLÖTT, nem alattuk
 
 
 def test_the_clip_key_follows_the_content():
@@ -308,5 +328,42 @@ def test_on_a_real_overlay_the_effect_is_an_opaque_normal_layer_over_the_footage
         # a klip: a horgonynál kék, a kezdete előtt a felvétel
         clip = next(p for n, p in video.assets_of(pid).items() if n.startswith("effect-L1-"))
         assert clip
+    asyncio.run(main())
+    ll._reset()
+
+
+@pytest.mark.engines
+@pytest.mark.skipif(not _engine_ok(), reason="EffectCraft CLI and ffmpeg needed")
+def test_on_a_real_overlay_a_chart_on_fire_is_a_screen_layer_just_above_its_chart(tmp_path, put_file, monkeypatch):
+    """on: "L1" (egy oszlopdiagram): a motor a diagramot egyedül rendereli, az alfájából lángok — a klip közvetlenül a
+    diagram FÖLÖTT, SCREEN keveréssel; a gyors render a szakaszát a motorral rajzolja, az élő előnézetben blend screen."""
+    from app.tools import fast_render, live_layers as ll
+    ll._reset()
+    video._gate = video._bgate = None
+    monkeypatch.setattr(video, "_start_final", lambda pid, eta: {"id": "stub"})
+    src = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-f", "lavfi", "-i",
+                    "sine=frequency=330:sample_rate=48000", "-t", "6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(src)], check=True)
+    fid = put_file(src)
+    layers = [{"at": 0.5, "dur": 5, "type": "column", "title": "Budget", "unit": "bn",
+               "items": [{"label": "2024", "value": 44.8}, {"label": "2025", "value": 47.5}, {"label": "2026", "value": 51.0}]},
+              {"type": "effect", "effect": "flames", "at": 2.0, "dur": 2.0, "on": "L1"}]
+
+    async def main():
+        res = await video.overlay({"file_id": fid, "brand": "none", "layers": layers, "text": "Budget 44.8 47.5 51.0 bn",
+                                   "render": False})
+        pid = res["file_id"]
+        assert not [f for f in res["check"]["findings"] if "L2" in f], res["check"]["findings"]
+        (tmp_path / "w").mkdir()
+        proj = video.stage(pid, tmp_path / "w")
+        info = await fast_render.inspect(proj)
+        by = {x["name"].split(" – ")[0]: x for x in info["layers"]}
+        assert by["Layer L2"]["i"] == by["Layer L1"]["i"] - 1, [x["name"] for x in info["layers"]]   # közvetlenül fölötte
+        assert by["Layer L2"]["light"] and not by["Layer L2"]["normal"]
+        cl = fast_render.classify(info, video.read_meta(pid)["spec"])
+        assert cl["ok"] and any(a <= 2.1 and b >= 4.0 for a, b in cl["opaque"]), cl
+        e = {x["id"]: x for x in ll.scene(pid)["layers"]}
+        assert e["L2"]["blend"] == "screen" and e["L2"]["unsupported"] is None and e["L2"]["z"] > e["L1"]["z"]
     asyncio.run(main())
     ll._reset()

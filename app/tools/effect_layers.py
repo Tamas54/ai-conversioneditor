@@ -85,6 +85,8 @@ def normalize(r: dict[str, Any], what: str) -> dict[str, Any]:
     except (TypeError, ValueError):
         raise ValueError(f"{what} (effect): seed = a whole number.") from None
     blend = str(r.get("blend") or "over").strip().lower()
+    if r.get("on") not in (None, "") and fx.is_layer(fx.anchor(r["on"], what)):
+        blend = "screen"                                   # egy grafikai réteg fölött csak a fény (screen) lehet
     if blend not in fx.BLENDS:
         raise ValueError(f"{what} (effect): blend {r.get('blend')!r} — over (default: drawn into the footage, the scene darkens "
                          "and takes the effect's colour) | screen (only the light, screen-blended — no darkening).")
@@ -438,12 +440,126 @@ async def _info(src: Path) -> dict[str, Any]:
     return await mediaprobe.info(src)
 
 
+def on_layers(layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Az egy másik grafikai rétegen ülő effektek (on: "L17" — a „tüzes grafikon”): a projekt első építése UTÁN készülnek
+    (a cél-réteg alfáját a motor rajzolja), lásd prepare_on_layers."""
+    from app.tools import fx
+    return [ly for ly in layers if is_effect(ly) and fx.is_layer(ly.get("on"))]
+
+
+def _run_light(frames_alpha: list[Any], enc: list[str], W: int, H: int, fps: float, ly: dict[str, Any], active: int,
+               stat: dict[str, Any]) -> None:
+    """A szálban: a cél-réteg alfája kockánként → csak a fény (fekete alapon) → kódolás."""
+    import numpy as np
+    from app.tools import fx
+    pe = subprocess.Popen(enc, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    st = fx.get(ly.get("effect") or "flames")(W, H, fps, {**fx_params(ly), "blend": "screen"}, _seed(ly))
+    black = np.zeros((H, W, 3), np.uint8)
+    t0 = time.monotonic()
+    try:
+        for i, m in enumerate(frames_alpha):
+            pe.stdin.write(np.ascontiguousarray(st.frame(black, {"mask": m}, i / fps, i < active)).tobytes())
+        pe.stdin.close()
+        if pe.wait(timeout=600) != 0:
+            raise RuntimeError("the effect clip couldn't be encoded: " + pe.stderr.read().decode("utf-8", "replace")[-300:])
+    finally:
+        if pe.poll() is None:
+            pe.kill()
+    stat.update(draw_s=round(time.monotonic() - t0, 2), frames=len(frames_alpha), casting=sum(1 for p in st.powers if p > 0))
+
+
+async def prepare_on_layers(fxs: list[dict[str, Any]], D: dict[str, Any], *, W: int, H: int, fps: float, total: float,
+                            work: Path, project: str = "project.ecproj",
+                            step: Callable[..., None] = lambda *a, **k: None) -> tuple[list[dict[str, Any]], list[str],
+                                                                                     list[str], list[str]]:
+    """A rétegen ülő effektek (on: "L17"): a cél-réteg EGYEDÜL, átlátszóan a motorból (fél méretben, a hatás szakaszára)
+    → az alfája a sugárzó maszk kockánként → csak a fény (screen) → a builder a cél-réteg FÖLÉ teszi (above).
+    → (D.effects-elemek, fájlnevek, verified, findings) — a hívó utána újraépíti a projektet."""
+    import numpy as np
+    from app.tools import fast_render, fx as fxreg, preview_cache, video
+    items, names, verified, findings = [], [], [], []
+    by_id = {x["id"]: x for x in D.get("layers") or []}
+    for ly in fxs:
+        tgt = by_id.get(ly["on"])
+        if tgt is None:
+            findings.append(f"Layer {ly['id']} (effect, {ly.get('effect')}): on {ly['on']!r} — there is no such graphic layer "
+                            "on the timeline (effect layers can't be a target); it was left out.")
+            continue
+        f0, active, f1 = span(ly, fps, total)
+        if f1 - f0 < 2:
+            continue
+        key = _sha({"v": fxreg.version(ly.get("effect") or "flames"),
+                    "on": {k: v for k, v in tgt.items() if k != "name"}, "fps": round(float(fps), 6), "span": [f0, active, f1],
+                    "size": [W, H], "crf": clip_crf(), "fx": fx_params(ly)})
+        dst = clip_path(key)
+        stat: dict[str, Any] = {"key": key, "f0": f0, "f1": f1, "on": ly["on"]}
+        step(3, 4, f"rendering the {ly.get('effect')} effect on {ly['on']} ({ly['id']})")
+        try:
+            if dst.exists():
+                await preview_cache.touch(["e-" + key], "_effects")
+                stat["cached"] = True
+            else:
+                t0 = time.monotonic()
+                info = await fast_render.inspect(work / project)
+                me = next((x for x in info["layers"] if x["name"] == tgt["name"]), None)
+                if me is None:
+                    raise RuntimeError(f"{ly['on']} isn't in the project")
+                off = [x["i"] for x in info["layers"] if x["i"] != me["i"]]
+                solo = await fast_render.variant(work / project, info, off, f"fx-solo-{ly['id']}")
+                mov = f"fx-alpha-{ly['id']}.mov"
+                await video._run("render", "--project", solo, "--comp", info["comp"], "--out", mov,
+                                 "--start", f"{max(0.0, (f0 - 0.5) / fps):.6f}", "--end", f"{(f1 - 0.5) / fps:.6f}",
+                                 "--format", "prores", "--prores", "4444", "--channels", "rgba", "--audio", "off",
+                                 "--resolution", "0.5", "--quality", "draft", cwd=work)
+                raw = await asyncio.to_thread(lambda: subprocess.run(
+                    ["ffmpeg", "-v", "error", "-i", str(work / mov), "-vf", "alphaextract", "-f", "rawvideo", "-pix_fmt", "gray",
+                     "-"], capture_output=True, timeout=600).stdout)
+                mi = await _info(work / mov)
+                mw, mh = int(mi.get("display_width") or mi["width"]), int(mi.get("display_height") or mi["height"])
+                n = len(raw) // (mw * mh)
+                masks = [np.frombuffer(raw, np.uint8, mw * mh, k * mw * mh).reshape(mh, mw) for k in range(n)]
+                masks += [masks[-1]] * max(0, (f1 - f0) - n) if masks else [np.zeros((mh, mw), np.uint8)] * (f1 - f0)
+                t1 = time.monotonic()
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(f"{key}.tmp-{uuid.uuid4().hex[:6]}.mp4")
+                try:
+                    await asyncio.to_thread(_run_light, masks[: f1 - f0], _encode_args(str(tmp), W, H, fps), W, H, fps, ly,
+                                            active, stat)
+                    os.replace(tmp, dst)
+                finally:
+                    tmp.unlink(missing_ok=True)
+                    for f_ in (mov, solo):
+                        (work / f_).unlink(missing_ok=True)
+                await preview_cache.register("e-" + key, "_effects", dst.stat().st_size)
+                stat.update(alpha_s=round(t1 - t0, 2), seconds=round(time.monotonic() - t0, 2), load=round(os.getloadavg()[0], 2))
+                log.info("effekt-klip %s (%s, on %s): %s", ly["id"], ly.get("effect"), ly["on"], stat)
+        except Exception as e:  # noqa: BLE001
+            log.warning("effekt %s: %s", ly.get("id"), e)
+            findings.append(f"Layer {ly['id']} (effect, {ly.get('effect')}, on {ly['on']}): it couldn't be drawn — {str(e)[:200]}.")
+            continue
+        name = f"effect-{ly['id']}-{key[:12]}.mp4"
+        try:
+            os.link(dst, work / name)
+        except OSError:
+            shutil.copyfile(dst, work / name)
+        names.append(name)
+        items.append({"id": ly["id"], "name": f"Layer {ly['id']} – {ly.get('effect')} effect", "file": name,
+                      "at": round(f0 / fps, 6), "dur": round((f1 - f0) / fps, 6), "k": 1.0, "blend": "screen",
+                      "above": tgt["name"]})
+        verified.append(f"Layer {ly['id']}: {label(ly)} on {ly['on']} — {video._tc(f0 / fps)}–{video._tc(f1 / fps)}, from "
+                        f"{ly['on']}'s own shape" + (" (drawn before, from the cache)" if stat.get("cached") else
+                                                      f", drawn in {stat.get('seconds')} s") + ".")
+        if stat.get("casting") == 0:
+            findings.append(f"Layer {ly['id']} (effect): {ly['on']} shows nothing in its time — move it (at) into {ly['on']}'s time.")
+    return items, names, verified, findings
+
+
 async def prepare(layers: list[dict[str, Any]], base: dict[str, Any], *, W: int, H: int, fps: float, total: float,
                   work: Path, step: Callable[..., None] = lambda *a, **k: None) -> tuple[list[dict[str, Any]], list[str],
                                                                                          list[str], list[str]]:
     """A verzió effekt-rétegei → (a builder D.effects-e, a munkamappába tett fájlok nevei, verified, findings)."""
-    from app.tools import video
-    fx = [ly for ly in layers if is_effect(ly)]
+    from app.tools import fx as fxreg, video
+    fx = [ly for ly in layers if is_effect(ly) and not fxreg.is_layer(ly.get("on"))]     # (a rétegen ülők: on_layers)
     items: list[dict[str, Any]] = []
     names: list[str] = []
     verified: list[str] = []

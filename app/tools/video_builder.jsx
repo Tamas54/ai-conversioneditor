@@ -576,6 +576,7 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
     if (D.camera) camera(fb, D.camera, 0, BASE_K);      // ráközelítés a felvételre (punch-in), abszolút időben
     for (var ei = 0; ei < (D.effects || []).length; ei++) {   // effekt: a felvétel szakasza az effekttel, a felvétel fölött
       var ef = D.effects[ei];
+      if (ef.above) continue;                               // (egy grafikai rétegen ül: a rétegek után, fölé — lent)
       var es = FOOT[ef.file] || (FOOT[ef.file] = app.project.importFile(new ImportOptions(new File(ef.file))));
       var Le = main.layers.add(es); Le.name = ef.name;
       Le.startTime = ef.at; Le.inPoint = ef.at; Le.outPoint = Math.min(D.total, ef.at + ef.dur);
@@ -598,6 +599,16 @@ if (D.base) {          // overlay: a felhasználó felvétele (képe és hangja)
   }
 }
 overlayLayers(main, baseLayers);      // a rétegek a jelenetek / a felvétel fölött, a feliratok alatt
+for (var ej = 0; D.base && !D.alpha && ej < (D.effects || []).length; ej++) {   // effekt egy grafikai rétegen („tüzes
+  var eg = D.effects[ej];                                                       // grafikon”): csak a fény, screen, fölötte
+  if (!eg.above) continue;
+  var gs = FOOT[eg.file] || (FOOT[eg.file] = app.project.importFile(new ImportOptions(new File(eg.file))));
+  var Lg = main.layers.add(gs); Lg.name = eg.name;
+  Lg.startTime = eg.at; Lg.inPoint = eg.at; Lg.outPoint = Math.min(D.total, eg.at + eg.dur);
+  if (eg.k !== 1) tp(Lg).property("ADBE Scale").setValue([eg.k * 100, eg.k * 100]);
+  Lg.blendingMode = BlendingMode.SCREEN;
+  try { Lg.moveBefore(main.layer(eg.above)); } catch (e) { writeLn("effect above " + eg.above + ": " + e); }
+}
 // feliratok: sáv + szöveg, a jelenetek fölött (a szerkesztőben egyenként átírhatók). Stílus (D.captionStyle): box (alap) |
 // karaoke | highlight | reveal — a sávon, szavanként animálva | bold — sáv nélkül, nagy körvonalas betű, 1–3 szó
 function wordAnim(t, cp, st, size) {   // szavankénti animátor: a kijelölés (index, szavak) a szavak kezdőidején ugrik

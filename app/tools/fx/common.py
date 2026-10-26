@@ -171,6 +171,21 @@ def needs_tracking(on: Any) -> bool:
     return on in (None, "hand", "body")
 
 
+def mask_edge(mask: np.ndarray, W: int, H: int, step: Optional[int] = None) -> np.ndarray:
+    """Egy réteg alfájának (H × W, 0–255) felső éle oszloponként (minden step. oszlopban az első átlátszatlan pont) →
+    [(x, y)] px — innen lobognak a lángok (egy grafikon oszlopainak teteje, a kirajzolt vonal)."""
+    if mask.shape[:2] != (H, W):
+        mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_AREA)
+    step = step or max(4, W // 48)
+    cols = mask[:, ::step] > 127
+    has = cols.any(0)
+    if not has.any():
+        return np.zeros((0, 2), np.float32)
+    ys = cols.argmax(0)
+    xs = np.arange(cols.shape[1]) * step
+    return np.stack([xs[has], ys[has]], 1).astype(np.float32)
+
+
 class Anchors:
     """A horgony kockánként → [Caster]. on: hand (alap: a felemelt kéz, az alkar irányával — a villám próbájának
     szabályai) | body (a törzs közepe, a vállak közt) | [x, y] (egy pont) | [x, y, w, h] (egy téglalap: közép + méret,
@@ -182,6 +197,12 @@ class Anchors:
 
     def __call__(self, tr: dict[str, Any], t: float, active: bool) -> list[Caster]:
         W, H, on = self.W, self.H, self.on
+        if isinstance(on, str) and on not in ("hand", "body"):    # egy grafikai réteg: az alfájának felső éle sugároz
+            m = tr.get("mask")
+            pts = mask_edge(m, W, H) if (active and m is not None) else np.zeros((0, 2), np.float32)
+            if not len(pts):
+                return []
+            return [Caster(pts, np.array([0.0, -1.0], np.float32), 1.0, pts.mean(0))]
         if isinstance(on, (list, tuple)):                          # rögzített pont / téglalap (követés nélkül)
             if not active:
                 return []
