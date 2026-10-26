@@ -210,7 +210,7 @@ def carry_assets(source_id: Optional[str], new_id: str) -> None:
     if not source_id:
         return
     meta = read_meta(source_id) or {}
-    extra = {k: meta[k] for k in ("assets", "video", "spec") if meta.get(k)}
+    extra = {k: meta[k] for k in ("assets", "video", "spec", "full_footage") if meta.get(k)}
     if extra.get("assets"):                    # a felirat nélküli előnézet-projekt a régi változaté, nem a kézzel átírté
         extra["assets"] = {k: v for k, v in extra["assets"].items() if k != PREVIEW_ECPROJ}
     if extra.get("spec"):
@@ -7254,7 +7254,9 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
     munkafájl; a teljes videó a render / edit útján készül."""
     pid = project_of(file_id)
     k, sc, row = _scene_index(pid, scene)
-    await ensure_full(pid)                           # a felirat nélküli (háttérben teljessé váló) projekt: előbb teljes
+    await ensure_full(pid, copy="soon")              # a felirat nélküli (háttérben teljessé váló) projekt: előbb teljes;
+    color_note = copy_pending(pid) and bool(((read_meta(pid) or {}).get("spec") or {}).get("base", {}).get("adjust"))
+    # (a saját színes munkamásolat csak akkor készül itt, ha gyorsan megvan — egy 30 perces HDR-felvételnél 39 perc lenne)
     work = Path(tempfile.mkdtemp(prefix="video-", dir=str(temp_path("").parent)))
     try:
         proj = stage(pid, work)
@@ -7284,13 +7286,15 @@ async def render_scene(file_id: str, scene: Any, draft: bool = True) -> dict[str
         stem = re.sub(r"( \(edited [^)]*\))+$", "", Path(display_label(pid)).stem)
         write_meta(vid, label=f"{stem} – {sc['id']} clip.mp4", operation="video scene render", source_file_id=pid,
                    extra={"ephemeral": True})
+        cnote = (" The footage in this check clip doesn't have your newest colour change yet (its editor's copy isn't "
+                 "made); the final video has it.") if color_note else ""
         if row.get("layer"):
             return {**_file_entry(vid), "layer": sc["id"], "type": row.get("type"), "start": row["start"], "end": row["end"],
                     "render_seconds": round(time.time() - t0, 1),
                     "note": f"Just {sc['id']}'s time span ({_tc(row['start'])}–{_tc(row['end'])}) of the video, with what is under it "
-                            "(draft quality unless draft=false) — to check it quickly."}
+                            "(draft quality unless draft=false) — to check it quickly." + cnote}
         return {**_file_entry(vid), "scene": sc["id"], "headline": sc.get("headline"), "render_seconds": round(time.time() - t0, 1),
-                "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly."}
+                "note": "Just this scene, rendered on its own (draft quality unless draft=false) — to check it quickly." + cnote}
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
