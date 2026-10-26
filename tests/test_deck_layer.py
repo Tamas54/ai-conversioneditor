@@ -177,10 +177,7 @@ def test_matte_part_flags_the_background_deck_clips():
                                  {"id": "L6", "type": "deck", "placement": "window", "at": 150, "dur": 60}]}}
     scene = [{"id": "L5"}, {"id": "L5.1"}, {"id": "L5.2"}, {"id": "L6"}, {"id": "L6.1"}, {"id": "L50"}]
     m = deck_layer.matte_part(spec, scene, 1797.0)
-    assert m["spans"] == [[1500, 1560]] and m["model"] == "selfie_segmenter_landscape"
-    from app.tools.deck_matte import RECIPE                                         # the browser gets the server's recipe
-    assert (m["levels"], m["ema"], m["motion"]) == (RECIPE["levels"], RECIPE["ema"], RECIPE["motion"])
-    assert m["semantic"] == "selfie_multiclass_256x256" and m["model"] == "selfie_segmenter_landscape"
+    assert m["spans"] == [[1500, 1560]] and m["clips"] == []      # the clips: deck_matte.live_clips (the scene fills them)
     assert [bool(x.get("behind")) for x in scene] == [True, True, True, False, False, False]
     assert deck_layer.matte_part({"story": {"layers": []}}, [], 10) is None
 
@@ -403,3 +400,29 @@ def test_hole_fill_takes_the_landscape_mask_only_where_it_is_sure_and_near_the_p
     assert out[20, 20] == 0                       # far from the person: not added
     assert out[120, 196] < 0.5                    # an unsure landscape edge: not added
     assert dm.RECIPE["fill"] == {"size": [256, 144], "min": 0.9, "r": 4} and dm.RECIPE["model"] == "selfie_multiclass_256x256"
+    assert dm.RECIPE["v"] == 5 and dm.RECIPE["every"] == 2 and dm.RECIPE["face"]["scale"] == 0.95 and dm.RECIPE["motion_thr"] == 1.2
+
+
+def test_face_oval_mask_and_the_full_size_piece_alignment():
+    import numpy as np
+    from app.tools import deck_matte as dm, footage
+    oval = [[0.5 + 0.2 * np.cos(a), 0.5 + 0.3 * np.sin(a)] for a in np.linspace(0, 2 * np.pi, 36, endpoint=False)]
+    m = dm.face_oval(oval, 256, 0.95)
+    assert m[128, 128] == 1 and m[128, 10] == 0 and abs(float(m.sum()) / (np.pi * 0.19 * 0.285 * 256 * 256) - 1) < 0.05
+    rng = np.random.default_rng(3)
+    src = rng.normal(size=(30, 9, 16)).astype(np.float32)          # 30 distinct "frames"
+    copy = src[10:18]                                              # the working copy starts at source frame 10
+    for start in (4, 6, 8):                                        # the piece starts 6 / 4 / 2 frames before it
+        assert footage.frame_offset(src[start:start + 16], copy, 4) == 10 - start
+
+
+def test_live_clips_say_why_there_is_no_cut_out(monkeypatch):
+    from app.tools import deck_matte as dm
+    spec = {"base": {"fps": 25.0, "duration": 600, "asset": "footage.mp4", "proxy_pending": True},
+            "story": {"layers": [{"id": "L5", "type": "deck", "placement": "background", "at": 100, "dur": 20}]}}
+    monkeypatch.setattr(dm, "available", lambda: None)
+    [c] = asyncio.run(dm.live_clips("x.ecproj", spec))
+    assert (c["f0"], c["frames"], c["status"]) == (2500, 500, "unavailable") and c["url"] is None and "copy" in c["reason"]
+    monkeypatch.setattr(dm, "available", lambda: "MediaPipe isn't installed on this server")
+    [c] = asyncio.run(dm.live_clips("x.ecproj", {**spec, "base": {**spec["base"], "proxy_pending": False}}))
+    assert c["status"] == "unavailable" and "MediaPipe" in c["reason"]

@@ -49,13 +49,14 @@ LIVE_MODEL = "selfie_segmenter_landscape.tflite"
 LIVE_SHA256 = "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e"
 # round 4 (the matte is made ONCE, offline, and both the live preview and the final video draw it): + the face oval of
 # MediaPipe Face Landmarker (shrunk to 0.95) is always person — no hole in a blown-out face (holes 0.16 → 0.001 %);
-# the multiclass model on every 2nd frame, interpolated (its cost halved: ~2.4× real time on this CPU for a span); the
-# median of each frame and its two neighbours (both ways — no lag). Measured on the 28 reference frames: leak 0.28 %,
+# the multiclass model on every 2nd frame, interpolated (its cost halved), but on EVERY moving frame (mean change of a
+# 96×54 luma > 1.2 — S4: still 0.2–0.55, moving 1.5–5.8: interpolating or taking the median there made a fast hand see-through); the median of each still
+# frame and its two neighbours (both ways — no lag). Measured on the 28 reference frames: leak 0.28 %,
 # loss 1.2 %, edge 0.12 (round 3's server recipe 0.27 / 1.39 / 0.12, holes up to 1.8 %)
 FACE_MODEL = "face_landmarker.task"
 FACE_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
-RECIPE = {"v": 4, "model": "selfie_multiclass_256x256", "live_model": "selfie_segmenter_landscape", "size": [256, 256],
-          "invert": True, "levels": [0.35, 0.75], "blur": 0.6, "every": 2, "median": 1,
+RECIPE = {"v": 5, "model": "selfie_multiclass_256x256", "live_model": "selfie_segmenter_landscape", "size": [256, 256],
+          "invert": True, "levels": [0.35, 0.75], "blur": 0.6, "every": 2, "median": 1, "motion_thr": 1.2,
           "fill": {"size": [256, 144], "min": 0.9, "r": 4}, "face": {"model": "face_landmarker", "scale": 0.95}}
 SPEAKER = "Speaker "                       # the builder layer's name prefix (fast_render.classify reads it)
 VENDORED = Path(__file__).resolve().parent.parent / "static" / "vendor" / "mediapipe" / MODEL_NAME
@@ -190,9 +191,14 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
     written, t_m = 0, {"mc": 0.0, "l": 0.0, "face": 0.0}
     last_mc = None
 
-    def emit(i: int) -> None:                  # the median of i−1, i, i+1 (the ends: what there is) → the clip
+    moving: dict[int, bool] = {}
+    thr = float(recipe.get("motion_thr", 1.2))
+    prev_small = None
+
+    def emit(i: int) -> None:                  # still: the median of i−1, i, i+1 (both ways); moving: the frame itself
         nonlocal written
-        win = [fused[j] for j in (i - 1, i, i + 1) if j in fused]
+        still = not any(moving.get(j, False) for j in (i - 1, i, i + 1))
+        win = [fused[j] for j in (i - 1, i, i + 1) if j in fused] if still else [fused[i]]
         m = np.median(np.stack(win), axis=0) if len(win) > 1 else win[0]
         enc.stdin.write(alpha_of(m.astype(np.float32), W, H, recipe).tobytes())
         written += 1
@@ -221,6 +227,9 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
                 if len(buf) < W * H * 3:
                     break
                 fr = np.frombuffer(buf, np.uint8).reshape(H, W, 3)
+                small_g = cv2.resize(cv2.cvtColor(fr, cv2.COLOR_RGB2GRAY), (96, 54), interpolation=cv2.INTER_AREA).astype(np.float32)
+                moving[i] = prev_small is not None and float(np.abs(small_g - prev_small).mean()) > thr
+                prev_small = small_g
                 x: dict[str, Any] = {"l": None, "oval": None}
                 if fill:
                     a_ = time.time()
@@ -237,7 +246,7 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
                         x["oval"] = face_oval([[lm[k].x, lm[k].y] for k in FACE_OVAL], G, float(face["scale"]))
                     t_m["face"] += time.time() - a_
                 pend[i] = x
-                if i % every == 0 or i == n - 1:
+                if i % every == 0 or i == n - 1 or moving[i]:     # (a moving frame: the heavy model on it, no interpolation)
                     a_ = time.time()
                     sm = np.ascontiguousarray(cv2.resize(fr, (G, G), interpolation=cv2.INTER_AREA))
                     c = seg.segment_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=sm), ms(i)) \
@@ -275,7 +284,7 @@ def make(src: Path, fa: int, n: int, fps: float, dst: Path, recipe: dict[str, An
         raise RuntimeError("the speaker matte couldn't be encoded")
     wall = time.time() - t0
     return {"frames": written, "size": [W, H], "wall_s": round(wall, 2), "fps": round(written / max(wall, 1e-6), 1),
-            "x_realtime": round(wall / max(written / fps, 1e-6), 2),
+            "x_realtime": round(wall / max(written / fps, 1e-6), 2), "moving_frames": int(sum(moving.values())),
             "ms": {k: round(1000 * v / max(written, 1), 1) for k, v in t_m.items()}, "seg_ms": round(1000 * sum(t_m.values()) / max(written, 1), 1)}
 
 

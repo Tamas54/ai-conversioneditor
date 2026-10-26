@@ -41,6 +41,7 @@ INTER_DIR = "/usr/share/fonts/opentype/inter"
 _CAPTION = re.compile(r"^Caption (box )?(\d+)$")
 NOT_OVERLAY = "not a project on your own footage"
 SPEAKER = "Speaker "            # = deck_matte.SPEAKER: a háttérbe tett pakli beszélő-rétegének neve
+SPEAKER_PIECE_S = 10.0         # a beszélős szakasz teljes méretű darabjai legfeljebb ennyi másodpercesek
 
 
 def enabled() -> bool:
@@ -179,7 +180,7 @@ def classify(info: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     lit += [(max(0.0, float(x["a"]) - 1 / fps), min(dur, float(x["b"]) + 1 / fps)) for x in spk]
     opaque = [(max(0.0, a - 1 / fps), min(dur, b + 1 / fps)) for a, b in moved(f, dur)] + lit   # a felvétel el van mozdítva
     return {"ok": True, "why": "", "footage": f, "captions": caps, "gfx": gfx, "persistent": pers, "short": short,
-            "opaque": opaque}
+            "opaque": opaque, "speakers": spk}
 
 
 def retimed(f: dict[str, Any], dur: float, fps: float) -> bool:
@@ -515,7 +516,10 @@ async def render(project: Path, out: Path, *, spec: dict[str, Any], draft: bool 
     most = part_seconds(W, H, fps)                              # egy darab fájlja 2 GiB alatt (a zárka korlátja)
     jobs: list[tuple[str, float, float, str, bool]] = [(alpha_proj, a, b, f"span-{k:03d}.mov", True)
                                                        for k, (a, b) in enumerate(split(clear, most, fps))]
-    jobs += [(opaque_proj, a, b, f"full-{k:03d}.mov", False) for k, (a, b) in enumerate(split(merged_opaque, most, fps))]
+    # (with a background deck's speaker the full-size pieces are short: each one is aligned to the working copy at its
+    # start by content — footage.clip align_to — and a variable-frame-rate source can drift a frame over a long piece)
+    most_o = min(most, SPEAKER_PIECE_S) if kind.get("speakers") else most
+    jobs += [(opaque_proj, a, b, f"full-{k:03d}.mov", False) for k, (a, b) in enumerate(split(merged_opaque, most_o, fps))]
     parts = sorted(clear + merged_opaque)                       # itt a szakasz-render a végig látható rétegeket is viszi
     gate = asyncio.Semaphore(_workers())
     base = spec.get("base") or {}

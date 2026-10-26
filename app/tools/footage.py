@@ -753,7 +753,7 @@ async def clip(base: dict[str, Any], src: Path, dst: Path, a: float, b: float, p
         await clip(base, src, dst, a0, b, plain, work)
         k0 = int(round(a * fps_c))
         cf = await asyncio.to_thread(_small_frames, dst, 2 * pad + 8)
-        wf = await asyncio.to_thread(_small_frames, align_to, 8, (k0 + 0.25) / fps_c)
+        wf = await asyncio.to_thread(_small_frames, align_to, 8, (k0 - 0.5) / fps_c)   # (−½: its pts may sit a bit after k/fps)
         j = await asyncio.to_thread(frame_offset, cf, wf, pad)
         log.info("full-size piece %.3f–%.3f: the copy's frame is the piece's frame %d (pad %d)", a, b, j, pad)
         return j / fps_c
