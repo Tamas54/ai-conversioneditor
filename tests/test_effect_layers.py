@@ -197,6 +197,21 @@ def test_a_fixed_anchor_needs_no_tracking():
     assert all(np.array_equal(x, y) for x, y in zip(none, src))
 
 
+def test_the_anchors_hand_body_point_rectangle():
+    tr = _track(1)[0]
+    hand = common.Anchors(W, H, "hand")(tr, 0.0, True)
+    assert len(hand) == 1 and hand[0].power >= 0.6 and hand[0].center[0] > W * 0.7      # a felemelt jobb kéz, nyitott tenyér
+    assert hand[0].d[0] > 0.5                                                            # az alkar iránya: jobbra (könyök → csukló)
+    body = common.Anchors(W, H, "body")(tr, 0.0, True)
+    assert len(body) == 1 and abs(body[0].center[0] - W * 0.5) < W * 0.05
+    pt = common.Anchors(W, H, [0.25, 0.5])({"h": [], "p": None}, 0.0, True)
+    rect = common.Anchors(W, H, [0.5, 0.5, 0.4, 0.2])({"h": [], "p": None}, 0.0, True)
+    assert pt[0].pts.shape == (1, 2) and rect[0].pts.shape == (6, 2)
+    assert common.Anchors(W, H, [0.25, 0.5])({"h": [], "p": None}, 0.0, False) == []      # nem szól: nincs sugárzó
+    tgt, d = common.aim("right", hand[0].center, hand[0].d, W, H)
+    assert tgt[0] > W and abs(d[1]) < 1e-6
+
+
 def test_the_clip_key_follows_the_content():
     base = {"file_id": "abc.mov", "width": 1080, "height": 1920, "fps": 24.0}
     ly = video.layers_from([{"type": "effect", "at": 5.86, "target": "right"}], "", [])[0]
