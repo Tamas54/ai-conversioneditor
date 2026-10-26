@@ -46,7 +46,10 @@ _PUBLIC_PREFIXES = ("/health", "/login", "/signup", "/logout", "/files/", "/favi
 # (a végpont ellenőrzi, a munkaterület az u=-ban) — a lejátszó (Safari natív HLS, hls.js) süti nélkül, megosztott
 # linkről, vendégként is kéri.
 _SIGNED_PREVIEW = re.compile(r"^/api/video/(preview/(seg|aud)/[^/]+(/[^/]+)?"
-                             r"|[0-9a-f]{32}\.ecproj/(preview\.m3u8|video\.m3u8|audio\.m3u8|preview\.json))$")
+                             r"|live/(captions|font)/[^/]+"
+                             r"|[0-9a-f]{32}\.ecproj/(preview\.m3u8|video\.m3u8|audio\.m3u8|preview\.json|live\.json))$")
+# Az élő előnézet réteg-klipjei (app/routes/live_layers.py): a klip GET, az állapot GET és a lejátszófej POST — mind aláírt
+_SIGNED_LIVE_LAYERS = re.compile(r"^/api/video/(live/layer/[0-9a-f]{64}\.mp4|[0-9a-f]{32}\.ecproj/live/layers(\.json|/prefetch))$")
 
 # Vendég (belépés nélkül): kipróbálhat mindent, ami nem AI (nincs LLM/FLUX-költség). (metódus, út-előtag)
 _GUEST_OK = (
@@ -172,6 +175,8 @@ def _limited(store: dict, ip: str, limit: int, window: int) -> bool:
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith(_PUBLIC_PREFIXES) or (request.method == "GET" and _SIGNED_PREVIEW.match(path)):
+        return await call_next(request)
+    if request.method in ("GET", "HEAD", "POST") and _SIGNED_LIVE_LAYERS.match(path):    # (a végpont ellenőrzi az aláírást)
         return await call_next(request)
     if request.method in ("GET", "HEAD"):
         from app.site.urls import is_public

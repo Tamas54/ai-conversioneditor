@@ -5393,9 +5393,12 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
         spans = video_preview.spans_edit(old, spec, changes, total, remap)
     else:
         spans = video_preview.spans_new(spec, total)
-    hls = video_preview.hls()
+    live = video_preview.live() and preview != "mp4"     # (a letölthető MP4-hez a szakaszok kellenek)
+    hls = None if live else video_preview.hls()
     picked: list = []
     pv_note = None
+    if live:
+        result["preview"], pv_note = await _live_preview(pid, spans, total, step)
     if hls:
         try:
             pv, more = await _hls_preview(hls, pid, parent if old_spec else None, spans, total, step, preview, label_stem,
@@ -5408,7 +5411,7 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
             hls = None
             if base.get("proxy_pending"):             # (a régi MP4-előnézet a szülő munkamásolatát mutatná)
                 findings = findings + [f"The preview couldn't be started ({str(e)[:160]}); the final video is still coming."]
-    if not hls and not base.get("proxy_pending"):      # VIDEO_PREVIEW_HLS=0 (vagy a lista nem indult): a PR #40-es MP4
+    if not live and not hls and not base.get("proxy_pending"):   # VIDEO_PREVIEW_HLS=0 (vagy a lista nem indult): a PR #40-es MP4
         picked, left = video_preview.pick(spans, total, fps=fps)
     if picked:
         step(3, 4, "a quick preview of what changed")
@@ -5442,6 +5445,38 @@ async def _preview_and_final(result: dict[str, Any], spec: dict[str, Any], chang
                           f"video(action=\"status\", job_id=\"{job['id']}\")."] + verified + lay_v}
     step(4, 4, "done — the final video is rendering in the background")
     return result
+
+
+_LIVE_TASKS: set[asyncio.Task] = set()
+
+
+async def _live_preview(pid: str, spans: list[tuple[float, float, str]], total: float,
+                        step: Callable[..., None]) -> tuple[dict[str, Any], str]:
+    """Az élő előnézet (video_preview.live()): nincs mit renderelni — a böngésző a munkamásolatból, a rétegek klipjeiből és
+    a feliratból rakja össze (/live/<pid>). Ami a kérésre jár: a változások helyei (jelölők), és a megváltozott grafikák
+    klipjei már most sorba állnak (live_layers.layers_part), hogy mire a lejátszó kéri, készen legyenek.
+    → (a válasz preview mezője, a verified-sor)."""
+    from urllib.parse import quote
+    from app.tools import preview_serve, video_preview
+    step(3, 4, "the live preview")
+    marks = video_preview.markers(spans, total)
+    write_meta(pid, extra={"preview": {"markers": marks, "mode": "live"}})
+    try:
+        from app.tools import live_layers
+        task = asyncio.create_task(live_layers.layers_part(pid, enqueue=True))
+        _LIVE_TASKS.add(task)                        # (a futó task ne vesszen el a szemétgyűjtőben)
+
+        def _done(t: asyncio.Task) -> None:
+            _LIVE_TASKS.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                log.warning("élő előnézet, a rétegek sorba állítása (%s): %s", pid, t.exception())
+        task.add_done_callback(_done)
+    except ImportError:
+        pass
+    root = settings.PUBLIC_BASE_URL.rstrip("/")
+    pv = {"mode": "live", "page_url": f"{root}/live/{quote(pid)}",
+          "scene_url": f"{root}/api/video/{quote(pid)}/live.json{preview_serve.signed(pid)}", "markers": marks}
+    return pv, f"The live preview plays at once — the browser puts it together, nothing is rendered for it: {pv['page_url']}"
 
 
 async def _hls_preview(hls: tuple[Any, Any], pid: str, parent: Optional[str], spans: list[tuple[float, float, str]],

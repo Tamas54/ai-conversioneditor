@@ -275,6 +275,13 @@ def preview_mode(v: Any) -> str:
     return x
 
 
+def live() -> bool:
+    """Az élő előnézet (10-26, plan20261026_live_preview.md): a böngésző rakja össze a munkamásolatból, a rétegek
+    klipjeiből és a feliratból (/live/<pid>, live.json) — a szerkesztés nem renderel előnézetet. VIDEO_PREVIEW_LIVE
+    (alapból be); 0: a szakasz-gyorsítótáras HLS (hls()), vagy a PR #40-es MP4."""
+    return os.getenv("VIDEO_PREVIEW_LIVE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def hls() -> Optional[tuple[Any, Any]]:
     """(preview_cache, preview_serve), ha a szakasz-gyorsítótáras előnézet be van kötve és be van kapcsolva
     (VIDEO_PREVIEW_HLS, alapból be); különben None — ekkor a PR #40-es MP4-előnézet (render) fut."""
