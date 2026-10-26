@@ -114,22 +114,6 @@ void main() {
       "texture(uMask, p + vec2(d.x, -d.y)).r + texture(uMask, p + vec2(-d.x, d.y)).r) / 6.0; }")
     .replace("o = vec4(c, uAlpha);", "float mk = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? " +
       "smoothstep(uLv.x, uLv.y, maskAt(tc)) : 0.0;\n  o = vec4(c, mk * uAlpha);");
-  // the footage mask (the speaker window, app/tools/facecam.py): the footage drawn with alpha = inside the rounded
-  // rectangle (centre uMc, half size uMh, radius uMr — in the project's footage-layer pixels, uSrc = its size), its edge
-  // soft like the engine's feathered mask (an erf profile: σ = uMs, offset uMo — fmSigma), 0 outside the copy; the layers
-  // flagged `under` (the content) are drawn first, so they show around the window
-  const FS_MASKED = FS_FOOT
-    .replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform int uMkOn; uniform vec2 uSrc, uMc, uMh; uniform float uMr, uMs, uMo;\n" +
-      "float sdRR(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }")
-    .replace("c = mix(uBg, rgb, uOpacity);", "c = rgb;")
-    .replace("o = vec4(c, uAlpha);", "float inb = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? 1.0 : 0.0, mk = 1.0;\n" +
-      "  if (uMkOn == 1) { float d = sdRR(tc * uSrc - uMc, uMh, min(uMr, min(uMh.x, uMh.y))) - uMo;\n" +
-      "    mk = 0.5 - 0.5 * tanh(clamp(0.8503 * d / max(uMs, 1e-3), -12.0, 12.0)); }\n" +   // erf(x/√2σ) ≈ tanh(1.2025·x/(√2σ)); clamped: NaN on some GPUs
-      "  o = vec4(c, inb * mk * uOpacity * uAlpha);");
-  // the engine's feathered mask edge, measured (eng/fit.py, 10-26): an erf step of σ (layer px) from the feather f and the
-  // output's own anti-aliasing (σ₀ output px → σ₀ / scale layer px)
-  const FM_K = 0.5, FM_AA = 0.51, FM_OFF = 0;
-  function fmSigma(f, scale) { const a = FM_K * (+f || 0), b = FM_AA / Math.max(1e-3, scale || 1); return Math.sqrt(a * a + b * b); }
   const MP_VER = "1.0.1";
   const MP_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@" + MP_VER;
   const MP_MODEL = "/static/vendor/mediapipe/selfie_segmenter_landscape.tflite";
@@ -151,6 +135,23 @@ void main() {
     if (b === "add") return { src: "ONE", dst: "ONE", premul: 1 };
     return { src: "SRC_ALPHA", dst: "ONE_MINUS_SRC_ALPHA", premul: 0 };
   }
+
+  // the footage mask (the speaker window, app/tools/facecam.py): the footage drawn with alpha = inside the rounded
+  // rectangle (centre uMc, half size uMh, radius uMr — in the project's footage-layer pixels, uSrc = its size), its edge
+  // soft like the engine's feathered mask (an erf profile: σ = uMs, offset uMo — fmSigma), 0 outside the copy; the layers
+  // flagged `under` (the content) are drawn first, so they show around the window
+  const FS_MASKED = FS_FOOT
+    .replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform int uMkOn; uniform vec2 uSrc, uMc, uMh; uniform float uMr, uMs, uMo;\n" +
+      "float sdRR(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }")
+    .replace("c = mix(uBg, rgb, uOpacity);", "c = rgb;")
+    .replace("o = vec4(c, uAlpha);", "float inb = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? 1.0 : 0.0, mk = 1.0;\n" +
+      "  if (uMkOn == 1) { float d = sdRR(tc * uSrc - uMc, uMh, min(uMr, min(uMh.x, uMh.y))) - uMo;\n" +
+      "    mk = 0.5 - 0.5 * tanh(clamp(0.8503 * d / max(uMs, 1e-3), -12.0, 12.0)); }\n" +   // erf(x/√2σ) ≈ tanh(1.2025·x/(√2σ)); clamped: NaN on some GPUs
+      "  o = vec4(c, inb * mk * uOpacity * uAlpha);");
+  // the engine's feathered mask edge, measured (eng/fit.py, 10-26): an erf step of σ (layer px) from the feather f and the
+  // output's own anti-aliasing (σ₀ output px → σ₀ / scale layer px)
+  const FM_K = 0.5, FM_AA = 0.51, FM_OFF = 0;
+  function fmSigma(f, scale) { const a = FM_K * (+f || 0), b = FM_AA / Math.max(1e-3, scale || 1); return Math.sqrt(a * a + b * b); }
 
   function compile(gl, vs, fs) {
     const p = gl.createProgram();
