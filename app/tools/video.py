@@ -1930,16 +1930,18 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
 # itt számoljuk (mint a chart_elements), a builder csak lerakja (overlayLayers). Az ábra, a szám és az idézet a forrással
 # ellenőrizve — forrás nélkül a réteg a saját szövegével megy át (NEM ellenőrizve; a check ezt ki is mondja).
 
-LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform", "deck")
+LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform", "deck", "effect")
+# effect: a felvételre rajzolt effekt (villám a kézből — app/tools/effect_layers.py): előre komponált klip a felvétel fölött,
+# a grafikai rétegek alatt; csak saját felvételen (overlay)
 _LAYER_DUR = {"lower_third": 5.0, "title": 4.0, "chapter": 3.5, "source": 5.0, "stat": 5.0, "quote": 6.0, "chart": 6.0,
-              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0, "deck": 30.0}
+              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0, "deck": 30.0, "effect": 4.0}
 _LAYER_ANIM = {"lower_third": ("slide", "fade"), "title": ("fade", "fade"), "chapter": ("slide", "fade"), "source": ("fade", "fade"),
                "stat": ("pop", "fade"), "quote": ("fade", "fade"), "chart": ("pop", "fade"), "fullscreen": ("fade", "fade"),
-               "split": ("fade", "fade"), "waveform": ("fade", "fade"), "deck": ("fade", "fade")}
+               "split": ("fade", "fade"), "waveform": ("fade", "fade"), "deck": ("fade", "fade"), "effect": ("none", "none")}
 _LAYER_ANIMS = ("fade", "slide", "pop", "none")
 _LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
 # z-sorrend: a teljes képes és az osztott alul, a névsáv és a forrásfelirat legfelül (egy fajtán belül az idő szerint)
-_LAYER_Z = {"fullscreen": 0, "deck": 1, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
+_LAYER_Z = {"effect": -1, "fullscreen": 0, "deck": 1, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
             "source": 5}
 _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
                 "splitscreen": "split", "credit": "source", "slides": "deck", "pptx": "deck", "presentation": "deck",
@@ -1956,6 +1958,7 @@ _LAYER_COMMON = ("id", "at", "dur", "until", "type", "position", "anim", "remove
 _LAYER_FIELDS = {"lower_third": ("name", "text", "role", "subtitle", "side"), "title": ("text", "title", "subtitle", "kicker"),
                  "chapter": ("text", "title", "subtitle", "kicker"), "source": ("text",), "stat": ("stat", "value", "label"),
                  "quote": ("text", "label", "author", "who"), "waveform": ("style", "bars", "color"),
+                 "effect": (),                    # a mezőit a regiszter adja (effect_layers.fields(): a közösek + PARAMS)
                  "chart": ("chart", "panel") + _CHART_KEYS,
                  # teljes kép / osztott: a tartalma szerint (ábra | kép | szöveg)
                  "fullscreen:chart": ("chart",) + _CHART_KEYS, "fullscreen:image": _IMAGE_KEYS,
@@ -2074,6 +2077,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
         # szerkesztésnél a tárolt ábrára mennek; a "chart" belsejében megadott érték az erősebb
         inner = raw.get("chart") if isinstance(raw.get("chart"), dict) else {}
         raw = {**raw, "chart": {**{k: raw[k] for k in _CHART_KEYS if k in raw}, **inner}}
+    if typ == "effect" and (r.get("after_said") not in (None, "") or r.get("at_speech_end_after") not in (None, "")):
+        raise ValueError(f"{what} (effect): after_said / at_speech_end_after come from the footage's sound — they work on your "
+                         "own footage (overlay, or editing such a video); give at instead.")
     if typ not in LAYER_TYPES:
         raise ValueError(f"{what}: type {r.get('type')!r} — use {' | '.join(LAYER_TYPES)} | pip (or a chart type such as \"column\"), "
                          f"e.g. {_LAYER_EXAMPLE} — the full list: video(action=\"schema\", topic=\"layers\").")
@@ -2140,7 +2146,16 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
                           f"{'unknown type' if cc.get('type') not in _CHART_TYPES else 'not enough usable items (check items / elements)'}.")
         return chart
 
-    if typ == "lower_third":
+    if typ == "effect":                                  # villám, tűzgolyó… (app/tools/effect_layers.py, app/tools/fx/)
+        from app.tools import effect_layers, fx
+        ly.pop("position", None)
+        ly.pop("anim", None)
+        if r.get("dur") is None and raw.get("until") is None and str(r.get("effect") or "lightning").lower() in fx.names():
+            ly["dur"] = fx.get(str(r.get("effect") or "lightning").lower()).DEFAULT_DUR     # az effekt saját alap-hossza
+        # új időpont (at) a szerkesztésben: a régi kiváltó (after_said …) már nem igaz
+        ly.update(effect_layers.normalize({k: v for k, v in r.items() if k != "trigger"} if "at" in raw and "trigger" not in raw
+                                          else r, what))
+    elif typ == "lower_third":
         ly["name"] = _clean(r.get("name") or r.get("text"), 60, "Lower-third name")
         if not ly["name"]:
             raise ValueError(f"{what} (lower_third): give name (and role).")
@@ -2230,6 +2245,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
               else _LAYER_FIELDS[typ]) + _LAYER_COMMON + (_PIP_FIELDS if pip or asked_type in ("pip", "picture_in_picture", "inset") else ())
     if typ == "chart" and asked_type in _CHART_TYPES:
         fields += ("type",)
+    if typ == "effect":
+        from app.tools import effect_layers
+        fields += effect_layers.fields()
     unused = [k for k in asked if k not in fields]
     if unused:
         kind = "picture-in-picture" if pip else (ly.get("chart") or {}).get("type") or typ if typ == "chart" else typ
@@ -2238,6 +2256,14 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
                      + ", ".join(own) + (" and the chart's own (title, items, elements, nodes…)" if "chart" in fields else "")
                      + ' — video(action="schema", topic="layers").')
     return ly
+
+
+def _no_effects(layers: list[dict[str, Any]]) -> None:
+    """A szövegből készült videón nincs felvétel, amire effektet rajzolhatnánk (a villám a felvétel kezéből indul)."""
+    fx = [ly["id"] for ly in layers if ly.get("type") == "effect"]
+    if fx:
+        raise ValueError(f"Layer {fx[0]} (effect): effects are drawn on your own footage (the lightning comes from a hand in "
+                         "it) — use video(action=\"overlay\") with your video, or edit such a video.")
 
 
 def layers_from(raw: Any, source: str, notes: list[str], existing: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
@@ -2312,6 +2338,9 @@ def _layer_text(ly: dict[str, Any]) -> str:
     if t == "deck":
         from app.tools import deck_layer
         return deck_layer.text(ly)
+    if t == "effect":
+        from app.tools import effect_layers
+        return effect_layers.label(ly)
     if t == "lower_third":
         return ly["name"] + (f" — {ly['role']}" if ly.get("role") else "")
     if t == "waveform":
@@ -2741,6 +2770,8 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             out += deck_layer.items({**ly, "dur": dur}, W, H, total)
             rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "deck", "layer": True})
             placed.append((ly, at, at + dur, deck_layer.box(ly, W, H)))
+        if ly["type"] == "effect":                    # előre komponált klip (D.effects, effect_layers.prepare), nem kompozíció
+            rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "effect", "layer": True})
             continue
         b = _layer_box(ly, W, H, safe, acc)
         if ly["type"] in ("source", "lower_third") and not ly.get("position") and not ly.get("side"):
@@ -2986,6 +3017,7 @@ async def _make_body(body: dict[str, Any], step: Callable[..., None], fmt: str, 
     duration_mode(body.get("duration_mode"), body.get("duration"))
     lnotes: list[str] = []
     layers = layers_from(body.get("layers"), text, lnotes)      # időkódos rétegek a fő idővonalon (a forrás számaival)
+    _no_effects(layers)
     if body.get("scenes"):                  # a kliens jelenetterve: nem tervezünk újra, pontosan ez lesz
         return await _make_from_scenes(body, step, fmt, text, title_hint, site, pictures, layers, lnotes)
     if len(text) < 20:
@@ -4554,8 +4586,11 @@ def _unsaid(raw: Any) -> Any:
     """Az előzetes (szerkezeti) ellenőrzéshez: a {"say": …} idők helyén egy helyőrző — az igazi időt az átirat adja."""
     if not _says(raw):
         return raw
+    from app.tools import effect_layers
     out = []
     for ly in raw:
+        if effect_layers.pending(ly):                     # villám „amikor elhangzott…”: az idő a hangból jön
+            ly = effect_layers.placeholder(ly)
         if isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))):
             ly = dict(ly)
             if _say_of(ly.get("at")):
@@ -4570,8 +4605,9 @@ def _unsaid(raw: Any) -> Any:
 
 
 def _says(raw: Any) -> bool:
-    return isinstance(raw, list) and any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until")))
-                                         for ly in raw)
+    from app.tools import effect_layers
+    return isinstance(raw, list) and any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))
+                                                                   or effect_layers.pending(ly)) for ly in raw)
 
 
 def transcript_opts(raw: Any) -> dict[str, Any]:
@@ -4608,9 +4644,19 @@ async def said_to_times(raw: Any, footage: Path, notes: list[str], step: Callabl
     el, a réteg kimarad, és a jegyzet megmondja, mit hallott a gép helyette."""
     if not _says(raw):
         return raw
-    from app.tools import transcript
-    step(0, 4, "listening to the footage (transcript)")
-    tr = await transcript.transcribe(footage, transcript_lang(language), **(topts or {}))
+    from app.tools import effect_layers, transcript
+    heard: dict[str, Any] = {}
+
+    async def hear() -> dict[str, Any]:                  # az átirat csak egyszer, és csak ha kell
+        if "tr" not in heard:
+            step(0, 4, "listening to the footage (transcript)")
+            heard["tr"] = await transcript.transcribe(footage, transcript_lang(language), **(topts or {}))
+        return heard["tr"]
+    if any(effect_layers.pending(ly) for ly in raw):     # effekt „amikor elhangzott…” / „a mondat végén”: at a hangból
+        raw = await effect_layers.resolve(raw, footage, notes, hear)
+    if not any(isinstance(ly, dict) and (_say_of(ly.get("at")) or _say_of(ly.get("until"))) for ly in raw):
+        return raw
+    tr = await hear()
     out = []
     for n, ly in enumerate(raw, 1):
         if not isinstance(ly, dict):
@@ -5294,6 +5340,16 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         if any(ly.get("type") == "deck" for ly in layers):
             from app.tools import deck_layer
             problems = problems + deck_layer.final_notes(layers)
+        if any(ly.get("type") == "effect" for ly in layers):    # villám a kézből: előre komponált klip a felvétel fölött
+            from app.tools import effect_layers
+            fx_items, fx_names, fx_v, fx_f = await effect_layers.prepare(layers, base, W=W, H=H, fps=fps, total=total,
+                                                                         work=work, step=step)
+            if fx_items:
+                D["effects"] = fx_items
+            gfx_names = gfx_names + fx_names
+            fx_verified, problems = fx_v, problems + fx_f
+        else:
+            fx_verified = []
         for ly in waves:
             if not ly.pop("_levels", None):
                 problems.append(f"Layer {ly['id']} (waveform): the footage has no sound there — the bars stay flat.")
@@ -5328,6 +5384,7 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
                     m_v.append("Your footage's own sound: " + ("muted — music only." if base_db <= -48 else
                                                                f"{-base_db:g} dB lower, the music is in front."))
         problems = problems + m_f
+        m_v = m_v + fx_verified
         if _has_3d(D):                                        # three.js-rétegek: a réteg hosszában és méretében
             step(2, 4, "rendering the 3D scenes")
             three_names, three_notes = await _render_3d(D, work, acc)
@@ -5361,6 +5418,18 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         from app.convert.engines import foreground
         with foreground():                                    # a háttérmunka (más végleges render…) addig áll
             out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+        if any(ly.get("type") == "effect" for ly in layers):   # effekt egy grafikai rétegen (on: "L17"): a cél alfájából
+            from app.tools import effect_layers
+            fxl = effect_layers.on_layers(layers)
+            if fxl:
+                it2, nm2, v2, f2 = await effect_layers.prepare_on_layers(fxl, D, W=W, H=H, fps=fps, total=total, work=work,
+                                                                         step=step)
+                if it2:
+                    D["effects"] = (D.get("effects") or []) + it2
+                    gfx_names = gfx_names + nm2
+                    with foreground():
+                        out = await _build({**D, "captions": []} if bg_eta is not None else D, work, lotties)
+                m_v, problems = m_v + v2, problems + f2
         problems = problems + _text_report(out, D)            # a renderer mért szövegdobozai: ütközés, kilógás, tördelés
         lot_v, lot_f = await _lottie_report(D, work, out) if lotties else ([], [])   # a Lottie-k mintája
         problems, m_v = problems + lot_f, m_v + lot_v
@@ -6648,6 +6717,7 @@ async def _edit(file_id: str, changes: dict[str, Any], *, extra_source: str = ""
     layer_src = ((spec.get("layer_source") or "") + "\n" + (extra_source or "")).strip()
     lnotes: list[str] = []
     story["layers"] = apply_layer_changes(story.get("layers") or [], changes, layer_src, lnotes)
+    _no_effects(story["layers"])
     if isinstance(changes.get("music"), dict):           # {"file_id"?, "mood"?} → a régi két kulcs
         mm = _make_music(changes["music"], changes.get("music_file_id"))
         changes = {**{k: v for k, v in changes.items() if k != "music"},

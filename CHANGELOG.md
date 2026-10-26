@@ -28,6 +28,41 @@ cut): 1.95, 1.94, 1.70, 1.56, 1.65, 1.76, 1.77, 1.67 s (load 2–4), and the fin
 first step took 58 s: a 33 s smart cut and the captioned project (it used to be minutes of engine work for every
 version, plus the 39-minute re-encode after every colour change).
 
+## 2026-10-26 — Effect layers: lightning from the hand, a fireball, a chart on fire
+
+The lightning prototype the owner tuned ("kurva jó") is now a layer type, the first of a family:
+`{"type": "effect", "effect": "lightning" | "fireball" | "flames", …}` on your own footage (overlay, or editing such a
+video).
+
+- **When:** `at`, or `after_said: "words"` — the transcript's word times give the end of the words, the voice's energy
+  (10 ms steps) gives the end of the sentence — or `at_speech_end_after: t`. A phrase that isn't heard leaves the
+  effect out, and the note quotes what the machine heard.
+- **Where from:** `on` = the raised hand and the forearm's direction (MediaPipe hand + pose tracking, Apache-2.0, on a
+  brightened copy; the pose is the fallback in the dark), the body, a point, a rectangle, or **another graphic layer**
+  (`on: "L3"`): the layer's own alpha is the emitter, so flames rise from a chart's bars. `target` = the arm, an edge, or
+  a point.
+- **How it looks:** the owner's tuning is kept: the deep blue-violet glow with a thin white-cyan core, a directed bundle
+  of jagged strands, the scene darkening and turning blue, a soft Gaussian light on the hand, screen blending, a
+  3-frame ramp.
+- **How it reaches the picture:** by default the server draws the effect INTO the footage span once (from the
+  original, through the version's own chain, at full size) and the clip sits over the footage as an ordinary opaque
+  layer, so the final render, the live preview, the segment preview and the editor all carry it unchanged. With
+  `blend: "screen"` (and always on a graphic layer) only the light is drawn, screen-blended: the builder sets SCREEN,
+  the fast render lets the engine draw that span with the footage, and the live player blends it on the GPU
+  (`1 − (1 − base)(1 − rgb·a)`).
+- **Cached by content:** the tracking in Postgres, the clips in the preview cache (LRU) and as the version's own file;
+  an edit that doesn't touch an effect reuses it.
+
+A new effect is one file in `app/tools/fx/` (a parameter schema and a `draw()`); the registry's docstring says how.
+
+Measured on IMG_9387 (1080×1920, 24 fps, a dark room): the lightning (4 s + the 1 s fade) was drawn in 44.7 s at load
+5.7 (tracking 76 ms/frame), ~9 s per second of effect; the wide glow blur is now computed at half size (7× faster), so
+the drawing alone went from ~380 to ~200 ms/frame. The final video starts the effect exactly on its frame and returns
+to the plain footage with no colour step (43–44 dB before and after). In Chrome, `/live/<pid>` shows the same strikes as
+the final video (36–40 dB through the effect, the live clip made by the layer pipeline in 21 s), first frame 0.57 s, no
+stall playing across it. The fireball and the chart on fire are covered by tests; their run on real footage is still to
+be measured.
+
 ## 2026-10-26 — The preview is live: the browser puts the video together, nothing is rendered for it
 
 The segment preview of the same day still rendered every preview frame on the server, so a 30-minute video took 7–14

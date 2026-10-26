@@ -10,6 +10,8 @@
      · hold: after footage.hold_from the last frame stands (end card), the clock runs on the wall clock;
      · layers (lane L2): stacked-alpha clips (W×2H H.264: top half straight RGB, bottom half alpha as luma; frame 0 at
        t0; loop {intro, period} in seconds), drawn as out = mix(base, rgb, a), only within a window around the playhead;
+       a layer with blend "screen" (an effect's light) as out = 1 − (1 − base)(1 − rgb·a), "add" as out = base + rgb·a
+       (LivePlayer.blendOf: the GL blend factors; the shader then writes premultiplied rgb·a);
      · captions (lane L3): window.LiveCaptions on a transparent element above the canvas, setTime(t) every frame;
      · matte (deck layer, placement background — app/tools/deck_layer.py): inside scene.matte.spans the footage is drawn
        AGAIN over the layers flagged `behind` (the deck's backdrop and slides), through a person mask — MediaPipe Tasks
@@ -118,13 +120,21 @@ void main() {
   const FS_LAYER = `#version 300 es
 precision highp float;
 in vec2 vUv; out vec4 o;
-uniform sampler2D uTex; uniform float uTexH;
+uniform sampler2D uTex; uniform float uTexH; uniform int uPremul;
 void main() {
   float vy = min(vUv.y * 0.5, 0.5 - 0.5 / uTexH), va = max(0.5 + vUv.y * 0.5, 0.5 + 0.5 / uTexH);
   vec3 rgb = texture(uTex, vec2(vUv.x, vy)).rgb;
-  float a = texture(uTex, vec2(vUv.x, va)).r;
-  o = vec4(rgb, clamp(a, 0.0, 1.0));
+  float a = clamp(texture(uTex, vec2(vUv.x, va)).r, 0.0, 1.0);
+  o = uPremul == 1 ? vec4(rgb * a, 1.0) : vec4(rgb, a);
 }`;
+  // a layer's blend → GL factors (src, dst) + premultiplied output: normal = mix(base, rgb, a); screen = rgb·a + base·(1 − rgb·a)
+  // = 1 − (1 − base)(1 − rgb·a); add = base + rgb·a
+  function blendOf(spec) {
+    const b = spec && spec.blend;
+    if (b === "screen") return { src: "ONE", dst: "ONE_MINUS_SRC_COLOR", premul: 1 };
+    if (b === "add") return { src: "ONE", dst: "ONE", premul: 1 };
+    return { src: "SRC_ALPHA", dst: "ONE_MINUS_SRC_ALPHA", premul: 0 };
+  }
 
   function compile(gl, vs, fs) {
     const p = gl.createProgram();
@@ -757,7 +767,9 @@ void main() {
         gl.useProgram(P.p);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.tex); gl.uniform1i(P.u.uTex, 0);
         gl.uniform1f(P.u.uTexH, L.el.videoHeight || 2 * this.scene.H);
-        gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        const bf = blendOf(L.spec);
+        gl.uniform1i(P.u.uPremul, bf.premul);
+        gl.enable(gl.BLEND); gl.blendFunc(gl[bf.src], gl[bf.dst]);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
       if (matteOn && behind && !spoke) this._drawSpeaker(s, r, t);
@@ -842,8 +854,9 @@ void main() {
 
   LivePlayer.MP_CDN = MP_CDN;
   LivePlayer.evalProp = evalProp;
+  LivePlayer.blendOf = blendOf;
   LivePlayer.footageMatrix = footageMatrix;
   LivePlayer.groupKeys = groupKeys;
   root.LivePlayer = LivePlayer;
-  if (typeof module !== "undefined" && module.exports) module.exports = { evalProp, footageMatrix, groupKeys };
+  if (typeof module !== "undefined" && module.exports) module.exports = { evalProp, footageMatrix, groupKeys, blendOf };
 })(typeof window !== "undefined" ? window : globalThis);
