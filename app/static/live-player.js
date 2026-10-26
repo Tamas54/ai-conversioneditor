@@ -496,7 +496,9 @@ void main() {
         const cur = L.el.seeking ? null : L.el.currentTime;
         const lp = spec.loop;
         const held = lp && lp.still && t - spec.t0 >= lp.intro;  // (álló kocka: nem játszik, nem tekerget)
-        if (this.playing && on && !this.hold && !held) {
+        // (a zárókártya alatt — hold: a felvétel áll, az óra a falióra — a rétegek ugyanúgy játszanak: ha itt minden kockánál
+        // tekernénk, a tekerés alatt a klip kiesik egy-egy kockára, és a kártya villog; 10-26, a Kommandant látta)
+        if (this.playing && on && !held) {
           if (L.el.paused) { L.el.currentTime = lt; L.el.play().catch(() => { }); }
           else if (cur != null && Math.abs(cur - lt) > 3 / fps) L.el.currentTime = lt;
           else if (lp && !lp.still && lp.period > 0 && cur >= lp.intro + lp.period - 0.5 / fps) L.el.currentTime = lt;
@@ -509,7 +511,7 @@ void main() {
           if (!L.el.paused) L.el.pause();
           if (cur != null && Math.abs(cur - lt) > 0.5 / fps && !L.el.seeking) L.el.currentTime = lt;
         }
-        if (on && L.el.readyState >= 2) out.push(L);
+        if (on && (L.el.readyState >= 2 || L.uploaded)) out.push(L);   // tekerés közben az utolsó kirajzolt kockája marad
       }
       return out;
     }
@@ -572,7 +574,11 @@ void main() {
       const P = this.pl;
       for (const L of this._syncLayers(t)) {
         gl.bindTexture(gl.TEXTURE_2D, L.tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, L.el);
+        if (L.el.readyState >= 2 && !L.el.seeking) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, L.el);
+          L.uploaded = true;
+        } else this.stats.layerStale = (this.stats.layerStale || 0) + 1;
+        if (!L.uploaded) continue;                               // (még egy kockája sincs: üres textúrát ne)
         gl.useProgram(P.p);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.tex); gl.uniform1i(P.u.uTex, 0);
         gl.uniform1f(P.u.uTexH, L.el.videoHeight || 2 * this.scene.H);
