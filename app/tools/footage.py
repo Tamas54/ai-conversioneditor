@@ -707,10 +707,83 @@ async def smart_proxy(base: dict[str, Any], src: Path, old_keep: Any, donor: dic
     return b, applied
 
 
-async def clip(base: dict[str, Any], src: Path, dst: Path, a: float, b: float, plain: float, work: Path) -> None:
+ALIGN_PAD = 4            # frames: the full-size piece starts this much earlier, the content match picks the right one
+
+
+ALIGN_GAIN = 0.6         # a shift only when its match is clearly better than the unshifted one (distance × 0.6)
+
+
+def frame_offset(clip_frames: Any, copy_frames: Any, pad: int) -> int:
+    """Which frame of the full-size piece is the working copy's first frame (by picture content: normalised small luma,
+    the mean squared difference over the next frames) → 0 … 2·pad. pad (no shift) unless another frame matches CLEARLY
+    better (ALIGN_GAIN): an ambiguous match — a still picture, a pattern — never moves the piece."""
+    import numpy as np
+    m = min(len(copy_frames), max(1, len(clip_frames) - 2 * pad))
+    ds = {}
+    for j in range(0, 2 * pad + 1):
+        if j + m > len(clip_frames):
+            break
+        ds[j] = float(np.mean([(clip_frames[j + i] - copy_frames[i]) ** 2 for i in range(m)]))
+    if not ds or pad not in ds:
+        return pad
+    best = min(ds, key=lambda j: (ds[j], abs(j - pad)))
+    return best if best != pad and ds[best] < ALIGN_GAIN * ds[pad] else pad
+
+
+_VFR: dict[str, bool] = {}
+
+
+def variable_rate(path: Path) -> bool:
+    """A forrás változó kockasebességű-e (a telefonfelvétel: r_frame_rate 30/1, avg 29,993) — csak ott csúszhat a darab."""
+    import json as _json
+    import subprocess
+    key = f"{path}:{path.stat().st_size}"
+    if key not in _VFR:
+        try:
+            v = _json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                            "stream=r_frame_rate,avg_frame_rate", "-of", "json", str(path)],
+                                           capture_output=True, text=True, check=True).stdout)["streams"][0]
+            fr = lambda x: (lambda a, b: float(a) / float(b) if float(b) else 0.0)(*str(x).split("/")) if "/" in str(x) else float(x or 0)  # noqa: E731
+            r, a = fr(v.get("r_frame_rate")), fr(v.get("avg_frame_rate"))
+            _VFR[key] = bool(r and a and abs(r - a) / r > 1e-5)       # (S4: 30 vs 29.993 — a 0.02 % difference)
+        except Exception:                                   # noqa: BLE001 — unknown: treated as constant (no shift)
+            _VFR[key] = False
+    return _VFR[key]
+
+
+def _small_frames(path: Path, n: int, ss: Optional[float] = None) -> Any:
+    import subprocess
+    import numpy as np
+    args = ["ffmpeg", "-v", "error"] + (["-ss", f"{ss:.6f}"] if ss is not None else []) + ["-i", str(path), "-frames:v", str(n),
+            "-vf", "scale=160:90", "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+    raw = subprocess.run(args, capture_output=True, check=True).stdout
+    a = np.frombuffer(raw, np.uint8).reshape(-1, 90, 160).astype(np.float32)
+    return (a - a.mean(axis=(1, 2), keepdims=True)) / (a.std(axis=(1, 2), keepdims=True) + 1e-6)
+
+
+async def clip(base: dict[str, Any], src: Path, dst: Path, a: float, b: float, plain: float, work: Path,
+               align_to: Optional[Path] = None) -> float:
     """A videó [a, b) szakasza teljes méretben (vágott felvételnél a megtartott részekből), a lánccal (és b > plain
     esetén a kimerevített véggel) — a motor ezt rajzolja ott, ahol a felvétel maga mozog. Köztes fájl: a végső kódolás
-    előtti minőségen (VIDEO_CRF_INTERMEDIATE)."""
+    előtti minőségen (VIDEO_CRF_INTERMEDIATE). → hány másodperccel a darab eleje UTÁN van az a (0, ha nincs igazítás).
+    align_to: a munkamásolat — VÁLTOZÓ kockasebességű forrásnál a darab kockái TARTALOM szerint igazodnak hozzá (állandónál
+    semmi sem változik; és csak egyértelmű egyezésre tolódik — frame_offset) (10-26, S4: egy változó kockasebességű
+    telefonfelvételből a darab a kezdőpontjától függően 1–2 kockával előbbre vagy hátrébb járt, mint a munkamásolat — a
+    rétegek, a beszélő maszkja elcsúszott rajta): a darab ALIGN_PAD kockával korábban indul, és a munkamásolat a-beli
+    kockájának megfelelő kocka a kezdete (a hívó az időtérképpel innen indítja: swap(skip=…))."""
+    if align_to is not None and await asyncio.to_thread(variable_rate, src):     # (a constant rate: exactly as before)
+        from app.tools import mediaprobe
+        mc = await mediaprobe.info(align_to)
+        fps_c = float(mc.get("fps") or base.get("fps") or 30)
+        pad = min(ALIGN_PAD, int(a * fps_c + 1e-6))
+        a0 = a - pad / fps_c
+        await clip(base, src, dst, a0, b, plain, work)
+        k0 = int(round(a * fps_c))
+        cf = await asyncio.to_thread(_small_frames, dst, 2 * pad + 8)
+        wf = await asyncio.to_thread(_small_frames, align_to, 8, (k0 - 0.5) / fps_c)   # (−½: its pts may sit a bit after k/fps)
+        j = await asyncio.to_thread(frame_offset, cf, wf, pad)
+        log.info("full-size piece %.3f–%.3f: the copy's frame is the piece's frame %d (pad %d)", a, b, j, pad)
+        return j / fps_c
     from app.tools import encoding, mediaprobe
     m = await mediaprobe.info(src)
     fps = float(m.get("fps") or 30)
@@ -722,9 +795,10 @@ async def clip(base: dict[str, Any], src: Path, dst: Path, a: float, b: float, p
         tl = await timeline(base, src, W, H, float(base.get("fps") or fps), work)
         items = await transitions(tl, work, "f", enc)
         await _tl_window(tl, cs, ce, ["format=yuv420p"] + tail, items, ["-t", f"{b - a:.4f}"] + enc, dst, work)
-        return
+        return 0.0
     vf = chain(base, m, work) + ["format=yuv420p"] + tail
     await _video_window(src, [(cs, ce)], ",".join(vf), ["-t", f"{b - a:.4f}"] + enc, dst, work)
+    return 0.0
 
 
 async def _tl_window(tl: Timeline, cs: float, ce: float, post: list[str], items: list[dict[str, Any]], enc: list[str],
@@ -838,12 +912,13 @@ var k = item.width / w0;
 for (var u = 0; u < users.length; u++) {
   var L = users[u][1];
   if (start !== null) {   // egy szakasz darabja a [start, …) időre: időtérképpel (a startTime a kulcsokat is eltolná)
-    var d = item.duration - 1 / comp.frameRate, i0 = L.inPoint, o0 = L.outPoint;   // (a beszélő: csak a pakli idejére)
+    var skip = __SKIP__;      // the piece's frame that is the working copy's frame at start (footage.clip align_to)
+    var d = item.duration - 1 / comp.frameRate - skip, i0 = L.inPoint, o0 = L.outPoint;   // (a beszélő: csak a pakli idejére)
     L.timeRemapEnabled = true;
     var TR = L.property("ADBE Time Remapping");
     while (TR.numKeys > 0) TR.removeKey(1);
-    TR.setValueAtTime(start, 0); TR.setValueAtTime(start + d, d);
-    L.inPoint = Math.max(start, i0); L.outPoint = Math.min(comp.duration, start + item.duration, o0);
+    TR.setValueAtTime(start, skip); TR.setValueAtTime(start + d, skip + d);
+    L.inPoint = Math.max(start, i0); L.outPoint = Math.min(comp.duration, start + item.duration - skip, o0);
   }
   convert(L, k); n++;
 }
@@ -851,13 +926,15 @@ writeLn("swapped " + n);
 """
 
 
-async def swap(project: Path, comp: str, asset: str, file: str, name: str, start: Optional[float] = None) -> str:
+async def swap(project: Path, comp: str, asset: str, file: str, name: str, start: Optional[float] = None,
+               skip: float = 0.0) -> str:
     """A projekt egy változata (--save-as), amelyben a munkamásolat (asset) helyén a teljes méretű felvétel (file, a
     munkamappában) áll. start=None: az egész felvétel (ugyanaz az idővonal); start=a: egy [a, …) szakasz darabja, csak a
     fő kompozíció felvétel-rétegén. → a változat fájlneve."""
     from app.tools import video
     code = (_SWAP.replace("__ASSET__", json.dumps(asset)).replace("__FILE__", json.dumps(file))
-            .replace("__START__", "null" if start is None else f"{start:.6f}").replace("__COMP__", json.dumps(comp)))
+            .replace("__START__", "null" if start is None else f"{start:.6f}").replace("__COMP__", json.dumps(comp))
+            .replace("__SKIP__", f"{max(0.0, skip):.6f}"))
     out_name = f"{name}.ecproj"
     (project.parent / f"{name}.jsx").write_text(code, "utf-8")
     out = await video._run("script", f"{name}.jsx", project.name, "--save-as", out_name, cwd=project.parent)

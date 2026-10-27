@@ -285,6 +285,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt -c /app/constraints.txt
 ARG MEDIAPIPE_VERSION=1.1.1
 ARG HAND_TASK_SHA256=fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1
 ARG POSE_TASK_SHA256=4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad
+# a háttérbe tett pakli beszélő-maszkjához (app/tools/deck_matte.py): az arc oválisa mindig a beszélőé (Apache-2.0)
+ARG FACE_TASK_SHA256=64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff
 RUN set -eux; pip install --no-cache-dir --no-deps "mediapipe==${MEDIAPIPE_VERSION}" "absl-py~=2.3" "sounddevice~=0.5"; \
     mkdir -p /opt/models; \
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/hand_landmarker.task \
@@ -293,6 +295,9 @@ RUN set -eux; pip install --no-cache-dir --no-deps "mediapipe==${MEDIAPIPE_VERSI
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/pose_landmarker_full.task \
         https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task; \
     echo "${POSE_TASK_SHA256}  /opt/models/pose_landmarker_full.task" | sha256sum -c -; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /opt/models/face_landmarker.task \
+        https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task; \
+    echo "${FACE_TASK_SHA256}  /opt/models/face_landmarker.task" | sha256sum -c -; \
     python3 -c "from mediapipe.tasks.python import vision"
 ENV MEDIAPIPE_MODELS=/opt/models
 

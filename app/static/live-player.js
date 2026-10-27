@@ -109,11 +109,11 @@ void main() {
 }`;
   // the speaker pass: the footage shader, its alpha from the person mask (in the copy's texture space) through levels
   // (the mask is small — 256×144: five bilinear taps ±0.6 texel round its stair-steps before the levels cut them)
-  const FS_SPEAKER = FS_FOOT.replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform sampler2D uMask; uniform vec2 uLv, uMpx;\n" +
+  const FS_SPEAKER = FS_FOOT.replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform sampler2D uMask; uniform vec2 uLv, uMpx; uniform int uRaw;\n" +
       "float maskAt(vec2 p) { vec2 d = 0.6 * uMpx; return (2.0 * texture(uMask, p).r + texture(uMask, p + d).r + texture(uMask, p - d).r + " +
       "texture(uMask, p + vec2(d.x, -d.y)).r + texture(uMask, p + vec2(-d.x, d.y)).r) / 6.0; }")
     .replace("o = vec4(c, uAlpha);", "float mk = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? " +
-      "smoothstep(uLv.x, uLv.y, maskAt(tc)) : 0.0;\n  o = vec4(c, mk * uAlpha);");
+      "(uRaw == 1 ? texture(uMask, tc).r : smoothstep(uLv.x, uLv.y, maskAt(tc))) : 0.0;\n  o = vec4(c, mk * uAlpha);");
   const MP_VER = "1.0.1";
   const MP_CDN = "/static/vendor/mediapipe/tasks-vision";      // self-hosted @mediapipe/tasks-vision@1.0.1 (Apache-2.0)
   const SLOW_MS = 30;
@@ -241,7 +241,7 @@ void main() {
       // stalled the page to 6–7 fps; the mask is upscaled by the texture's linear filter and sharpened by the levels
       this.matteOpts = { mode: opts.matteMode || "sync", auto: opts.matteAuto !== false, delegate: opts.matteDelegate || "CPU",
         cdn: opts.matteCdn || LivePlayer.MP_CDN || MP_CDN, w: opts.matteW || 256, h: opts.matteH || 144,
-        motion: opts.matteMotion, levels: opts.matteLevels, semantic: opts.matteSemantic !== false,
+        motion: opts.matteMotion, levels: opts.matteLevels, semantic: opts.matteSemantic !== false, live: !!opts.matteLive,
         semDelegate: opts.matteSemDelegate, semEvery: opts.matteSemEvery };
       this.matteLog = null;            // QA: [] → every drawn speaker frame with its mask
       const vb = gl.createBuffer();
@@ -337,12 +337,20 @@ void main() {
       for (const [k, t] of this.lutTex) if (!used.has(k)) { gl.deleteTexture(t); this.lutTex.delete(k); }
       this._layerSpecs = (scene.layers || []).filter(l => l && l.url).sort((a, b) => (a.z || 0) - (b.z || 0));
       this.matte = scene.matte && (scene.matte.spans || []).length ? scene.matte : null;
-      if (this.matte && !this.mk) this._initMatte();
+      // the speaker's matte: a clip made once on the server (deck_matte), frame-locked to the working copy — played
+      // like a layer clip (the same time sync), uploaded as the mask; no clip yet: no cut-out (the slides show in front)
+      for (const c of (this.matte && this.matte.clips) || []) {
+        if (!c.url) continue;
+        this._layerSpecs.unshift({ id: "matte:" + c.id, hash: "matte:" + c.key, url: c.url, t0: +c.t0, t1: +c.t1, z: -1, loop: null,
+          kind: "clip", matteClip: true });
+      }
+      if (this.matte && this.matteOpts.live && !this.mk) this._initMatte();     // (QA only: the round-1–3 live segmentation)
     }
 
     // ---------- the person matte (deck placement "background") ----------
     _matteAt(t) {
       if (!this.matte) return false;
+      if (!this.matteOpts.live) return ((this.matte.clips) || []).some(c => c.url && t >= c.t0 && t < c.t1);
       for (const sp of this.matte.spans) if (t >= sp[0] && t < sp[1]) return true;
       return false;
     }
@@ -564,11 +572,15 @@ void main() {
       }
     }
     _drawSpeaker(s, r, t) {
-      const mk = this.mk;
-      if (!mk || !mk.seg) return false;
-      this._updateMask(s);
-      if (!mk.ready || !r || !r.copyObj || !s.uploaded) return false;
-      if (this.matteLog && s.mt !== this._loggedMt && mk.u8) {     // QA: the drawn frame, the frame its mask was made from, the mask
+      const clip = !this.matteOpts.live;
+      const mk = clip ? { tex: this.mtex, w: this.mtexW || 960, h: this.mtexH || 540 } : this.mk;
+      if (clip) { if (!this.mtex || !this._mtexOn || !r || !r.copyObj || !s.uploaded) return false; }
+      else {
+        if (!mk || !mk.seg) return false;
+        this._updateMask(s);
+        if (!mk.ready || !r || !r.copyObj || !s.uploaded) return false;
+      }
+      if (!clip && this.matteLog && s.mt !== this._loggedMt && mk.u8) {     // QA: the drawn frame, the frame its mask was made from, the mask
         this._loggedMt = s.mt;
         this.matteLog.push({ mt: s.mt, mmt: mk.texMt, w: mk.w, h: mk.h, data: new Uint8Array(mk.u8) });
       }
@@ -586,6 +598,11 @@ void main() {
       gl.uniform1f(P.u.uAlpha, 1); gl.uniform1f(P.u.uOpacity, fm.opacity);
       gl.uniform2f(P.u.uLv, lv[0], lv[1]);
       gl.uniform2f(P.u.uMpx, 1 / Math.max(1, mk.w), 1 / Math.max(1, mk.h));
+      gl.uniform1i(P.u.uRaw, clip ? 1 : 0);
+      if (clip && this.matteLog && s.mt !== this._loggedMt) {     // QA: the drawn footage frame and the matte clip's frame
+        this._loggedMt = s.mt;
+        this.matteLog.push({ mt: s.mt, mmt: this._mtexMt, t });
+      }
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       this.stats.speaker = (this.stats.speaker || 0) + 1;
@@ -916,7 +933,23 @@ void main() {
       }
       const P = this.pl, matteOn = this._matteAt(t) && !(this.hold && this.hold.gap);
       let behind = false, spoke = false;
+      this._mtexOn = false;
       for (const L of this._syncLayers(t)) {
+        if (L.spec.matteClip) {                                  // the speaker's matte: into the mask texture
+          if (L.el.readyState >= 2 && !L.el.seeking) {
+            if (!this.mtex) this.mtex = tex(gl, gl.LINEAR);
+            gl.bindTexture(gl.TEXTURE_2D, this.mtex);
+            if (!(L.uploaded && L.el.paused && L.upAt === L.el.currentTime)) {
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, L.el);
+              L.upAt = L.el.paused ? L.el.currentTime : null;
+              this.mtexW = L.el.videoWidth; this.mtexH = L.el.videoHeight;
+            }
+            L.uploaded = true;
+            this._mtexMt = L.mt != null ? L.mt : L.el.currentTime;
+          }
+          this._mtexOn = !!L.uploaded;
+          continue;
+        }
         if (matteOn && behind && !spoke && !L.spec.behind) { this._drawSpeaker(s, r, t); spoke = true; }
         if (L.spec.behind) behind = true;
         gl.bindTexture(gl.TEXTURE_2D, L.tex);
@@ -1006,7 +1039,8 @@ void main() {
     document.addEventListener("keydown", e => { if (e.code === "Space" && e.target === document.body) { e.preventDefault(); btn.click(); } });
     // the version's scene changes (its own copy got ready, a layer clip got rendered): apply it — every second while a
     // layer is still being made (an edited graphic shows up as soon as it is ready), otherwise every 4 s
-    const waiting = sc => (sc.layers || []).some(l => !l.url && (l.status === "queued" || l.status === "rendering"));
+    const waiting = sc => (sc.layers || []).some(l => !l.url && (l.status === "queued" || l.status === "rendering")) ||
+      ((sc.matte && sc.matte.clips) || []).some(c => c.status === "making");
     let last = null;
     const poll = async () => {
       if (!document.hidden && !q.has("qa")) {
