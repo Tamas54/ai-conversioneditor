@@ -488,7 +488,14 @@ def effect_path(h: str) -> Path:
     return cache_root() / "_effects" / f"{_safe(h)}.mp4"
 
 
+def matte_path(h: str) -> Path:
+    """A háttérbe tett pakli beszélő-maszkja a végleges renderhez (app/tools/deck_matte.py) — „m-<hash>”, ugyanazzal az LRU-val."""
+    return cache_root() / "_mattes" / f"{_safe(h)}.mp4"
+
+
 def _path_of(h: str, source_id: str) -> Path:
+    if h.startswith("m-"):
+        return matte_path(h[2:])
     if h.startswith("e-"):
         return effect_path(h[2:])
     if h.startswith("a-"):

@@ -38,12 +38,9 @@ costs a few short clips.
 Background placement (the speaker in front of the slide): the slides are built full-frame like `front`; the speaker
 is put back over them from a person matte. Live preview: the browser segments the footage (MediaPipe Tasks Vision
 ImageSegmenter, Apache-2.0) during `matte_part`'s spans and draws the footage again through the mask over the
-"behind" layers (app/static/live-player.js). Final render: not wired yet — there the slides cover the speaker, and
-the check says so (`final_notes`). The plan (prototype and numbers: .claude/qa/nx-deck/matte_final.py): a background
-step before the final render mattes ONLY the background spans (the browser's recipe: confidence → EMA 0.5 →
-smoothstep(0.35, 0.75), the multiclass model for steadier edges, guided-filter refine to the output size), caches the
-gray matte clip by (footage content, span, recipe) in the preview cache (Postgres-registered, LRU), and the builder puts
-a copy of the footage layer with that clip as its luma track matte above the deck's layers for each span.
+"behind" layers (app/static/live-player.js). Final render: the same recipe on the server, only over the background
+spans (app/tools/deck_matte.py): a cached gray matte clip, and the builder puts the footage again over the deck with that
+clip as its luma track matte (video_builder.jsx speakerLayer; fast_render draws that span with the engine).
 """
 from __future__ import annotations
 
@@ -560,13 +557,17 @@ def box(ly: dict[str, Any], W: int, H: int) -> dict[str, Any]:
 
 
 def final_notes(layers: list[dict[str, Any]]) -> list[str]:
-    """What the final render does not do yet (a finding, so nobody is surprised by the exported video)."""
+    """What the final render can't do on this server (a finding, so nobody is surprised by the exported video): the
+    background deck's speaker is cut out on the server (app/tools/deck_matte.py) — without MediaPipe it isn't."""
+    from app.tools import deck_matte
+    if deck_matte.available() is None:
+        return []
     out = []
     for ly in layers:
         if ly.get("type") == "deck" and ly.get("placement") == "background":
             out.append(f"Layer {ly['id']} (deck, background): the live preview puts you in front of the slides "
-                       f"({_tc(ly['at'])}–{_tc(float(ly['at']) + float(ly['dur']))}); the final video doesn't cut you out yet — "
-                       "there the slides cover the footage like placement \"front\".")
+                       f"({_tc(ly['at'])}–{_tc(float(ly['at']) + float(ly['dur']))}); this server can't cut you out for the "
+                       "final video — there the slides cover the footage like placement \"front\".")
     return out
 
 
@@ -594,4 +595,6 @@ def matte_part(spec: dict[str, Any], scene_layers: list[dict[str, Any]], total: 
         if lid in decks or lid.split(".")[0] in decks:
             e["behind"] = True
     spans.sort()
-    return {"spans": spans, "model": "selfie_segmenter_landscape", "levels": [0.35, 0.75], "ema": 0.5} if spans else None
+    # the matte itself is a clip made once on the server (deck_matte.live_clips → scene.matte.clips, live_scene.build):
+    # the player draws the speaker through it — no segmentation in the browser
+    return {"spans": spans, "clips": []} if spans else None

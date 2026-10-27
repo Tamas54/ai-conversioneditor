@@ -48,6 +48,23 @@ async def live_layer_clip(layer_hash: str, p: str = Query(..., description="the 
     return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": IMMUTABLE})
 
 
+@router.get("/api/video/live/matte/{key}.mp4")
+async def live_matte_clip(key: str, p: str = Query(..., description="the video project"), t: str = Query(..., description="signed token"),
+                          u: str = Query(tenancy.ADMIN_ID, description="workspace (signed into t)")):
+    """A background deck's speaker matte (app/tools/deck_matte.py: made once, the same clip the final video uses)."""
+    import re as _re
+    from app.tools import deck_matte, preview_cache
+    if not _re.fullmatch(r"[0-9a-f]{64}", key):
+        raise HTTPException(404, "no such matte")
+    if not deck_matte.verify(p, key, t, u):
+        raise HTTPException(403, "invalid or expired token")
+    path = preview_cache.matte_path(key)
+    if not path.exists():
+        return Response("The cut-out is still being made — try again in a moment.", status_code=503, media_type="text/plain",
+                        headers={"Retry-After": "5", **_NO_STORE})
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": IMMUTABLE})
+
+
 def _check(pid: str, t: str, u: str) -> None:
     from app.tools import preview_serve as ps
     if not ps.verify(pid, None, t, u):

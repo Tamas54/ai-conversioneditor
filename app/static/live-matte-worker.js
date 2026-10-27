@@ -5,14 +5,16 @@
    over time (EMA, reset after a jump) and sent back as 8-bit (transferred). One frame in flight: the player sends the
    next one only after the answer, so the mask rate adapts to the machine and the page's own frame rate never waits.
 
-   in:  {type: "init", cdn, model, delegate} · {type: "frame", id, bitmap, ema} · {type: "reset"}
-   out: {type: "ready", delegate, loadMs} · {type: "error", error} · {type: "mask", id, w, h, data, ms, flick, soft} */
-let seg = null, ema = null, ts = 0, jump = true;
+   in:  {type: "init", cdn, model, delegate, invert} · {type: "frame", id, mt, bitmap, ema, motion} · {type: "reset"}
+   out: {type: "ready", delegate, loadMs} · {type: "error", error} · {type: "mask", id, mt, w, h, data, ms, flick, soft}
+   The smoothing is the player's emaStep (motion-aware: where the mask moves, no smoothing). */
+let seg = null, ema = null, ts = 0, jump = true, invert = false;
 
 self.onmessage = async (ev) => {
   const m = ev.data || {};
   if (m.type === "init") {
     const t0 = performance.now();
+    invert = !!m.invert;                     // the multiclass model: person = 1 − its background class
     try {
       const vision = await import(m.cdn + "/vision_bundle.mjs");
       const files = await vision.FilesetResolver.forVisionTasks(m.cdn + "/wasm", true);   // the ES-module loader (no importScripts here)
@@ -27,24 +29,28 @@ self.onmessage = async (ev) => {
   }
   if (m.type === "reset") { jump = true; return; }
   if (m.type !== "frame" || !seg) { if (m.bitmap) m.bitmap.close(); return; }
-  const t0 = performance.now(), k = m.ema != null ? +m.ema : 0.5;
+  const t0 = performance.now(), k = m.ema != null ? +m.ema : 0.5, mo = m.motion || null;
+  const lo = mo ? +mo[0] : 0, span = mo ? Math.max(1e-6, +mo[1] - lo) : 1;
   let out = null;
   try {
     ts = Math.max(ts + 1, Math.round(performance.now()));
     seg.segmentForVideo(m.bitmap, ts, res => {
       const mk = res.confidenceMasks && res.confidenceMasks[0];
       if (!mk) return;
-      const a = mk.getAsFloat32Array(), w = mk.width, h = mk.height, n = w * h;
+      const raw = mk.getAsFloat32Array(), w = mk.width, h = mk.height, n = w * h;
+      const a = invert ? raw.map(v => 1 - v) : raw;
       if (!ema || ema.length !== n || jump) { ema = new Float32Array(a); jump = false; }
       const u = new Uint8Array(n);
       let fl = 0, soft = 0;
       for (let i = 0; i < n; i++) {
-        const v = k * ema[i] + (1 - k) * a[i];
+        let wk = k;
+        if (mo) { const x = Math.min(1, Math.max(0, (Math.abs(a[i] - ema[i]) - lo) / span)); wk = k * (1 - x * x * (3 - 2 * x)); }
+        const v = wk * ema[i] + (1 - wk) * a[i];
         fl += Math.abs(v - ema[i]); ema[i] = v;
         if (v > 0.05 && v < 0.95) soft++;
         u[i] = v * 255;
       }
-      out = { type: "mask", id: m.id, w, h, data: u, flick: 255 * fl / n, soft: soft / n };
+      out = { type: "mask", id: m.id, mt: m.mt, copy: m.copy, w, h, data: u, flick: 255 * fl / n, soft: soft / n };
     });
   } catch (e) { out = { type: "error", error: String(e && e.message || e), id: m.id }; }
   m.bitmap.close();
