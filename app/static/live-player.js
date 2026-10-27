@@ -179,6 +179,23 @@ void main() {
     return { src: "SRC_ALPHA", dst: "ONE_MINUS_SRC_ALPHA", premul: 0 };
   }
 
+  // the footage mask (the speaker window, app/tools/facecam.py): the footage drawn with alpha = inside the rounded
+  // rectangle (centre uMc, half size uMh, radius uMr — in the project's footage-layer pixels, uSrc = its size), its edge
+  // soft like the engine's feathered mask (an erf profile: σ = uMs, offset uMo — fmSigma), 0 outside the copy; the layers
+  // flagged `under` (the content) are drawn first, so they show around the window
+  const FS_MASKED = FS_FOOT
+    .replace("uniform float uAlpha, uOpacity;", "uniform float uAlpha, uOpacity; uniform int uMkOn; uniform vec2 uSrc, uMc, uMh; uniform float uMr, uMs, uMo;\n" +
+      "float sdRR(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }")
+    .replace("c = mix(uBg, rgb, uOpacity);", "c = rgb;")
+    .replace("o = vec4(c, uAlpha);", "float inb = (tc.x >= 0.0 && tc.y >= 0.0 && tc.x <= 1.0 && tc.y <= 1.0) ? 1.0 : 0.0, mk = 1.0;\n" +
+      "  if (uMkOn == 1) { float d = sdRR(tc * uSrc - uMc, uMh, min(uMr, min(uMh.x, uMh.y))) - uMo;\n" +
+      "    mk = 0.5 - 0.5 * tanh(clamp(0.8503 * d / max(uMs, 1e-3), -12.0, 12.0)); }\n" +   // erf(x/√2σ) ≈ tanh(1.2025·x/(√2σ)); clamped: NaN on some GPUs
+      "  o = vec4(c, inb * mk * uOpacity * uAlpha);");
+  // the engine's feathered mask edge, measured (eng/fit.py, 10-26): an erf step of σ (layer px) from the feather f and the
+  // output's own anti-aliasing (σ₀ output px → σ₀ / scale layer px)
+  const FM_K = 0.5, FM_AA = 0.51, FM_OFF = 0;
+  function fmSigma(f, scale) { const a = FM_K * (+f || 0), b = FM_AA / Math.max(1e-3, scale || 1); return Math.sqrt(a * a + b * b); }
+
   function compile(gl, vs, fs) {
     const p = gl.createProgram();
     for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
@@ -235,6 +252,7 @@ void main() {
       this.pf = compile(gl, VS, FS_FOOT);
       this.pl = compile(gl, VS, FS_LAYER);
       this.ps = compile(gl, VS, FS_SPEAKER);
+      this.pm = compile(gl, VS, FS_MASKED);   // the footage through the speaker-window mask (facecam)
       this.mk = null;                  // the person matte (background decks): {seg, tex, ema, w, h, mt, …}
       // the segmenter sees a small copy of the frame (the model's own input is 256×144): measured in headless Chrome on
       // the 960×540 working copy, the full frame cost ~95 ms a frame (the 960×540 mask read back from the GPU), which
@@ -846,6 +864,8 @@ void main() {
       this.layers.delete(h);
     }
     _syncLayers(t) {
+      const fc = this._fmSynced;                               // (facecam: this frame's list, the `under` ones drawn)
+      if (fc && fc.t === t) { this._fmSynced = null; return fc.list; }
       const fps = this.fps, out = [];
       for (const spec of this._layerSpecs || []) {
         const near = t >= spec.t0 - 2 && t < spec.t1 + 1;
@@ -876,6 +896,71 @@ void main() {
       return out;
     }
 
+    // ---------- the footage mask + the layers under the footage (facecam — app/tools/facecam.py) ----------
+    _fmMaskAt(t) {                     // the mask at t (the engine's interpolation of its keys), null where there is none
+      const fm = this.tr && this.tr.mask;
+      if (!fm || !fm.keys || !fm.keys.length || !(fm.spans || []).some(sp => t >= sp[0] && t <= sp[1])) return null;
+      const v = evalProp(fm.keys, fm.keys[0].v, t);
+      return { c: [+v[0], +v[1]], h: [+v[2], +v[3]], r: +v[4], f: +fm.feather || 0 };
+    }
+    _fmPre(t) {                        // before the footage: clear, draw the `under` layers → the footage then goes masked
+      this._fmMode = null; this._fmSynced = null;
+      const under = (this._layerSpecs || []).some(sp => sp.under && t >= sp.t0 - 0.5 / this.fps && t < sp.t1);
+      const mk = this._fmMaskAt(t);
+      if (!under && !mk) return;
+      const gl = this.gl, bg = (this.tr && this.tr.bg) || [0, 0, 0];
+      gl.disable(gl.BLEND); gl.clearColor(bg[0], bg[1], bg[2], 1); gl.clear(gl.COLOR_BUFFER_BIT);
+      const list = this._syncLayers(t);
+      this._fmSynced = { t, list: list.filter(L => !L.spec.under) };
+      for (const L of list) if (L.spec.under) this._fmDrawLayer(L);
+      this._fmMode = { mk };
+      this.stats.masked = (this.stats.masked || 0) + 1;
+    }
+    _fmDrawLayer(L) {                  // one stacked-alpha layer clip (= the layer loop in _draw)
+      const gl = this.gl, P = this.pl;
+      gl.bindTexture(gl.TEXTURE_2D, L.tex);
+      if (L.el.readyState >= 2 && !L.el.seeking) {
+        if (!(L.uploaded && L.el.paused && L.upAt === L.el.currentTime)) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, L.el);
+          L.upAt = L.el.paused ? L.el.currentTime : null;
+        }
+        L.uploaded = true;
+      }
+      if (!L.uploaded) return;
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.tex); gl.uniform1i(P.u.uTex, 0);
+      gl.uniform1f(P.u.uTexH, L.el.videoHeight || 2 * this.scene.H);
+      const bf = blendOf(L.spec);
+      gl.uniform1i(P.u.uPremul, bf.premul);
+      gl.enable(gl.BLEND); gl.blendFunc(gl[bf.src], gl[bf.dst]);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    _drawFootMasked(s, copy, t, alpha, range) {
+      const gl = this.gl, P = this.pm;
+      if (!copy || !s.uploaded) return;
+      const fm = footageMatrix(this.tr, this.byProp, t, copy.w, copy.h), m = fm.m, mk = this._fmMode.mk;
+      const S0 = (this.tr && this.tr.src) || [copy.w, copy.h];
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, s.tex); gl.uniform1i(P.u.uVid, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, copy._lut); gl.uniform1i(P.u.uLut, 1);
+      gl.uniform1i(P.u.uMode, range && range.nocolor ? 0 : modeOf(copy.color));
+      const bg = (this.tr && this.tr.bg) || [0, 0, 0];
+      gl.uniform3f(P.u.uBg, bg[0], bg[1], bg[2]);
+      gl.uniformMatrix3fv(P.u.uM, false, [m[0], m[3], 0, m[1], m[4], 0, m[2], m[5], 1]);
+      gl.uniform1f(P.u.uAlpha, alpha); gl.uniform1f(P.u.uOpacity, fm.opacity);
+      gl.uniform2f(P.u.uSrc, S0[0], S0[1]);
+      gl.uniform1i(P.u.uMkOn, mk ? 1 : 0);
+      if (mk) {
+        // the layer's scale (comp px per layer px): the anti-aliasing part of the engine's edge is in the comp's pixels
+        const R = (this.tr && this.tr.rest) || {}, C = (this.tr && this.tr.comp) || S0;
+        const sv = evalProp(this.byProp.scale, R.scale || [100 * C[0] / S0[0], 100 * C[1] / S0[1]], t), scale = Math.abs(+sv[0] || 100) / 100;
+        gl.uniform2f(P.u.uMc, mk.c[0], mk.c[1]); gl.uniform2f(P.u.uMh, mk.h[0], mk.h[1]);
+        gl.uniform1f(P.u.uMr, mk.r); gl.uniform1f(P.u.uMs, fmSigma(mk.f, scale)); gl.uniform1f(P.u.uMo, FM_OFF);
+      }
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
     // ---------- drawing ----------
     _upload(s) {
       const gl = this.gl;
@@ -886,6 +971,7 @@ void main() {
       return true;
     }
     _drawFoot(s, copy, t, alpha, range) {
+      if (this._fmMode) return this._drawFootMasked(s, copy, t, alpha, range);
       const gl = this.gl, P = this.pf;
       if (!copy || !s.uploaded) return;
       const fm = footageMatrix(this.tr, this.byProp, t, copy.w, copy.h), m = fm.m;
@@ -914,6 +1000,7 @@ void main() {
         if (this.playing && r && t >= r.t1 - 1e-6) { this.hold = null; this._advanceFromGap(); }
       } else {
         if (s.fresh || force || this.playing) this._upload(s);
+        this._fmPre(t);                                        // facecam: the content under the footage, the mask
         const fd = this._fade;
         if (fd && fd.d > 0 && t < fd.t0 + fd.d) {             // dissolve: the previous source under, the new one over
           if (fd.from.fresh || this.playing) this._upload(fd.from);
@@ -1057,6 +1144,7 @@ void main() {
   LivePlayer.evalProp = evalProp;
   LivePlayer.blendOf = blendOf;
   LivePlayer.footageMatrix = footageMatrix;
+  LivePlayer.fmSigma = fmSigma;
   LivePlayer.groupKeys = groupKeys;
   root.LivePlayer = LivePlayer;
   if (typeof module !== "undefined" && module.exports) module.exports = { evalProp, footageMatrix, groupKeys, blendOf, emaStep };

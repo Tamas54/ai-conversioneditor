@@ -511,6 +511,12 @@ def footage_transform(project: dict[str, Any], comp: str = "Video") -> dict[str,
                                     "si": [round(float(v), 6) for v in (x.get("spatial_in") or [0, 0])[:2]],
                                     "so": [round(float(v), 6) for v in (x.get("spatial_out") or [0, 0])[:2]]})
     out["moving"] = moving(out)
+    try:                                         # the speaker window's mask on the footage (app/tools/facecam.py)
+        from app.tools import facecam
+        out["mask"] = facecam.mask_of(lay)
+    except Exception as e:                       # noqa: BLE001 — the footage plays without it
+        log.warning("live scene: the footage mask couldn't be read: %s", e)
+        out["mask"] = None
     return out
 
 
