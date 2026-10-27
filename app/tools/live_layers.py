@@ -425,6 +425,11 @@ def scene_from(d: dict[str, Any], *, proxy: Optional[tuple[int, int]], assets: d
         if _STATIC.match(name):         # a pakli hordozója / diája: álló kép a beúszás után — rövid minta, egy kocka
             e["probe"] = max(2, round(STATIC_PROBE_S * fps))
             e["persist"] = e["persist"] or N - _outro_frames(fps) >= e["probe"]
+        elif name.startswith("Layer ") and " – stage " in name:   # a színpad része: a köre ismert (stage_layer.live_cycle)
+            from app.tools import stage_layer
+            cyc = stage_layer.live_cycle(name, fps, late)
+            if cyc and N - _outro_frames(fps) > cyc[0] + cyc[1]:     # a klip: a beúszás + EGY kör, minta nélkül
+                e["cycle"], e["probe"], e["persist"] = list(cyc), cyc[0] + cyc[1], True
         out.append(e)
     out.reverse()                                                          # alulról fölfelé
     for z, e in enumerate(out):
@@ -685,7 +690,14 @@ async def render(pid: str, sc: dict[str, Any], x: dict[str, Any]) -> dict[str, A
         t0 = time.monotonic()
         proj = await _solo(ctx, sc, e, tag)
         t1 = time.monotonic()
-        if x["kind"] == "loop":
+        if x["kind"] == "loop" and e.get("cycle"):     # a színpad része: a kör a felépítéséből ismert — csak azt rajzoljuk
+            i_, p_ = int(e["cycle"][0]), int(e["cycle"][1])
+            await _pc()._engine(ctx, proj, x["f0"], x["f0"] + i_ + p_, f"{tag}.mov", alpha=True)
+            t2 = time.monotonic()
+            await _publish(ctx, f"{tag}.mov", h, 0, i_ + p_)
+            await _pc()._cycle_put(h, {"intro": i_, "period": p_})
+            stat.update(cycle={"intro": i_, "period": p_, "known": True}, frames=i_ + p_)
+        elif x["kind"] == "loop":
             n = x["probe"]
             if e["late"] >= n - 1:                       # a mintán túl is van kulcs: a kör nem bizonyítható
                 await _pc()._cycle_put(h, {"intro": 0, "period": 0})

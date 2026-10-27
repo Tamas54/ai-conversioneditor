@@ -182,6 +182,19 @@ Types:
     "04:00", "slides": [{"at": "02:30", "slide": 1}, {"at": "02:52", "slide": 4}]}. at defaults to the first slide's
     time, dur to 20 s after the last switch. Edit: a new "slides" list replaces the old; a new "at" alone moves the
     deck with its switches.
+  stage {panels: [{slide: n (from the stage's deck: "<pptx>") | file_id: a picture / clip / deck, depth?: front |
+    behind (the speaker cut out in front of it), slot?: the preset's place | box?: [cx, cy, w] (0–1), tilt?: [rx, ry,
+    rz] degrees, at? / until?, enter?: fly (default) | scale | fade | none, frame?: plain | window | none}] (1–6),
+    preset?: auto (default — by where the speaker is: centred grid4 / pair…, off-centre the panels fan out on the free
+    side) | grid4 | grid5 | pair | two_left_one_right | one_left_two_right | trio | left_stack | right_stack |
+    single_left | single_right | hexa | right_grid4 | left_grid4 | right_grid6 | left_grid6 | custom, background?: glow
+    (default) | particles | halftone | gradient | none | {"kind": "video", "file_id": "<mp4>" | "stock": "words"}
+    (+ color "#hex", intensity 0–1; colours from the accent), pills?: [{text, near?: panel n | pos?: [x, y], style?:
+    accent | light | dark, at?, until?}], float?: false (the panels stand still)}: a studio look around the talking
+    head — tilted, floating panels, some behind the speaker, a motion background behind him, labels popping in. A panel
+    that would cover the face goes behind him (unless depth front is given). E.g. {"type": "stage", "at": "03:00",
+    "until": "03:30", "deck": "<pptx>", "panels": [{"slide": 2}, {"slide": 4}, {"slide": 7}, {"slide": 9}], "background":
+    "glow", "pills": [{"text": "Claude Desktop", "near": 1}]}. Edit: a new "at" alone moves the panels and pills with it.
 A lower third or source caption without position goes where nothing else is (other layers, a made video's headlines and
 charts). Overlaps that remain, a layer past the end, a dropped number, a text that collides or runs out of its box all
 come back in the check's findings. Edit by id: changes={"layers": [{"id": "L2", …only the fields that change} | {"id":

@@ -73,6 +73,7 @@ VIDEO_SAVE = {"ecproj", "fcproj", "mp4", "mov", "webm", "gif", "wav", "aiff", "o
 FONT = {"bold": "Inter-Bold", "semibold": "Inter-SemiBold", "regular": "Inter-Regular"}   # az EffectCraftba csomagolt Inter
 DEFAULT_ACCENT = "#FF5A36"
 BUILDER_JS = Path(__file__).with_name("video_builder.jsx")
+STAGE_JS = Path(__file__).with_name("stage_builder.jsx")      # a színpad-réteg rajzolója (app/tools/stage_layer.py)
 MAX_FETCH = 6 * 1024 * 1024
 
 _gate: Optional[asyncio.Semaphore] = None     # egyszerre egy render/építés: CPU-zabáló, a párhuzamosság nem gyorsít
@@ -1930,22 +1931,24 @@ def compose(story: dict[str, Any], *, fmt: str, total: Optional[float], images: 
 # itt számoljuk (mint a chart_elements), a builder csak lerakja (overlayLayers). Az ábra, a szám és az idézet a forrással
 # ellenőrizve — forrás nélkül a réteg a saját szövegével megy át (NEM ellenőrizve; a check ezt ki is mondja).
 
-LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform", "deck", "effect")
+LAYER_TYPES = ("lower_third", "title", "chapter", "source", "stat", "quote", "chart", "fullscreen", "split", "waveform", "deck", "effect",
+               "stage")
 # effect: a felvételre rajzolt effekt (villám a kézből — app/tools/effect_layers.py): előre komponált klip a felvétel fölött,
 # a grafikai rétegek alatt; csak saját felvételen (overlay)
 _LAYER_DUR = {"lower_third": 5.0, "title": 4.0, "chapter": 3.5, "source": 5.0, "stat": 5.0, "quote": 6.0, "chart": 6.0,
-              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0, "deck": 30.0, "effect": 4.0}
+              "fullscreen": 6.0, "split": 8.0, "waveform": 10.0, "deck": 30.0, "effect": 4.0, "stage": 30.0}
 _LAYER_ANIM = {"lower_third": ("slide", "fade"), "title": ("fade", "fade"), "chapter": ("slide", "fade"), "source": ("fade", "fade"),
                "stat": ("pop", "fade"), "quote": ("fade", "fade"), "chart": ("pop", "fade"), "fullscreen": ("fade", "fade"),
-               "split": ("fade", "fade"), "waveform": ("fade", "fade"), "deck": ("fade", "fade"), "effect": ("none", "none")}
+               "split": ("fade", "fade"), "waveform": ("fade", "fade"), "deck": ("fade", "fade"), "effect": ("none", "none"),
+               "stage": ("fade", "fade")}
 _LAYER_ANIMS = ("fade", "slide", "pop", "none")
 _LAYER_POS = ("auto", "top", "bottom", "left", "right", "center")
 # z-sorrend: a teljes képes és az osztott alul, a névsáv és a forrásfelirat legfelül (egy fajtán belül az idő szerint)
-_LAYER_Z = {"effect": -1, "fullscreen": 0, "deck": 1, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
+_LAYER_Z = {"effect": -1, "fullscreen": 0, "deck": 1, "stage": 1, "split": 1, "waveform": 1, "chart": 2, "quote": 2, "stat": 2, "title": 3, "chapter": 3, "lower_third": 4,
             "source": 5}
 _LAYER_ALIAS = {"lowerthird": "lower_third", "lower-third": "lower_third", "full_screen": "fullscreen", "split_screen": "split",
                 "splitscreen": "split", "credit": "source", "slides": "deck", "pptx": "deck", "presentation": "deck",
-                "slideshow": "deck"}
+                "slideshow": "deck", "studio": "stage", "stage_layout": "stage", "composition": "stage"}
 # a rövidített réteg ({"type": "race", …}) ezeket viszi át az ábrába — a saját alakú ábrák mezői is (10-17: a „series”,
 # az „x_title”, a magyarázó ábrák „nodes”/„edges” mezője eddig elveszett a rövidítésben)
 _CHART_KEYS = ("title", "unit", "items", "elements", "code", "total", "min", "max", "backdrop", "labels", "series", "x_title",
@@ -1964,7 +1967,9 @@ _LAYER_FIELDS = {"lower_third": ("name", "text", "role", "subtitle", "side"), "t
                  "fullscreen:chart": ("chart",) + _CHART_KEYS, "fullscreen:image": _IMAGE_KEYS,
                  "fullscreen:text": ("text", "subtitle", "kicker"),
                  # a pptx a képben (N2, 10-26): app/tools/deck_layer.py
-                 "deck": ("file_id", "deck", "pptx", "placement", "side", "slides", "follow", "transition")}
+                 "deck": ("file_id", "deck", "pptx", "placement", "side", "slides", "follow", "transition"),
+                 # stúdió-kompozíció (N5, 10-26): panelek a beszélő körül, mozgó háttér, címkék — app/tools/stage_layer.py
+                 "stage": ("preset", "deck", "file_id", "panels", "background", "pills", "float")}
 _PIP_FIELDS = ("image", "file_id", "corner", "size", "aspect", "sound", "clip", "panel")
 _PANEL = [0.035, 0.04, 0.055]
 # a hibaüzenetek minimális példája (10-19: a csonkolt leírás után a „type None” hiba nem mondta meg, mi a jó alak)
@@ -2093,6 +2098,9 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     if typ == "deck":                                    # a pakli kezdete az első diájából; az egész pakli eltolása
         from app.tools import deck_layer
         r = deck_layer.prepare(r, raw, base, what)
+    if typ == "stage":                                   # a színpad eltolása a paneljeit / címkéit is viszi
+        from app.tools import stage_layer
+        r = stage_layer.prepare(r, raw, base, what)
     if r.get("at") is None and typ == "effect" and r.get("reveal") not in (None, ""):
         r = {**r, "at": 0.0}                     # felfedés: az idejét a felfedett réteg adja (effect_layers.sync_reveals)
     if r.get("at") is None:
@@ -2191,6 +2199,11 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     elif typ == "deck":                                   # pptx a képben: diák időben (app/tools/deck_layer.py)
         from app.tools import deck_layer
         ly.update(deck_layer.fields(r, raw, base, ly, what, notes))
+    elif typ == "stage":                                  # panelek a beszélő körül (app/tools/stage_layer.py)
+        from app.tools import stage_layer
+        ly.pop("position", None)
+        ly.pop("anim", None)
+        ly.update(stage_layer.fields(r, raw, base, ly, what, notes))
     elif typ == "source":
         ly["text"] = _clean(r.get("text"), 140, "Source caption")
         if not ly["text"]:
@@ -2286,6 +2299,12 @@ def _layer_from(raw: dict[str, Any], source: str, notes: list[str], base: Option
     return ly
 
 
+def stage_layer_behind(ly: dict[str, Any]) -> bool:
+    """A színpadnak van-e a beszélő MÖGÉ tett része (háttér, hátsó panel) — ott kell a beszélő maszkja."""
+    from app.tools import stage_layer
+    return stage_layer.behind_span(ly) is not None
+
+
 def _no_effects(layers: list[dict[str, Any]]) -> None:
     """A szövegből készült videón nincs felvétel, amire effektet rajzolhatnánk (a villám a felvétel kezéből indul)."""
     fx = [ly["id"] for ly in layers if ly.get("type") == "effect"]
@@ -2366,6 +2385,9 @@ def _layer_text(ly: dict[str, Any]) -> str:
     if t == "deck":
         from app.tools import deck_layer
         return deck_layer.text(ly)
+    if t == "stage":
+        from app.tools import stage_layer
+        return stage_layer.text(ly)
     if t == "effect":
         from app.tools import effect_layers
         return effect_layers.label(ly)
@@ -2690,7 +2712,7 @@ def _layer_elements(ly: dict[str, Any], b: dict[str, Any], lang: str, acc: list[
 def _loose(ly: dict[str, Any], b: dict[str, Any]) -> bool:
     """Szándékosan mindent takaró (teljes képes) vagy panel nélküli saját grafika (nyíl, jelölés a felvételen): ezek nem
     „ütköznek” a többi réteggel — a teljes képes alul van, a jelölésnek csak a rajzolt elemei látszanak."""
-    return ly["type"] == "fullscreen" or (ly["type"] == "deck" and ly.get("placement") != "window") or \
+    return ly["type"] in ("fullscreen", "stage") or (ly["type"] == "deck" and ly.get("placement") != "window") or \
         (ly["type"] == "chart" and not any(e.get("name") == "Panel" for e in b["els"]))
 
 
@@ -2811,6 +2833,12 @@ def layer_comps(layers: list[dict[str, Any]], W: int, H: int, total: float, lang
             out += _speaker_items({**ly, "dur": dur}, deck_layer.items({**ly, "dur": dur}, W, H, total), W, H, acc, safe)
             rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "deck", "layer": True})
             placed.append((ly, at, at + dur, deck_layer.box(ly, W, H)))
+            continue
+        if ly["type"] == "stage":                      # színpad: háttér, hátsó panelek, első panelek, címkék (stage_layer.items)
+            from app.tools import stage_layer
+            out += stage_layer.items({**ly, "dur": dur}, W, H, total, acc, float(ly.get("_fps") or FPS))
+            rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "stage", "layer": True})
+            placed.append((ly, at, at + dur, stage_layer.box(ly, W, H)))
             continue
         if ly["type"] == "effect":                    # előre komponált klip (D.effects, effect_layers.prepare), nem kompozíció
             rows.append({"id": ly["id"], "start": round(at, 2), "end": round(at + dur, 2), "type": "effect", "layer": True})
@@ -3873,7 +3901,8 @@ async def _build(D: dict[str, Any], work: Path, lotties: list[tuple[str, str]], 
     """D + video_builder.jsx → .ecproj (effectcraft-cli script). A Lottie-k előbb beimportálva (külön kompozíció, a
     szkript erre a projektre épít); saját szkriptes ábra (jelenet vagy réteg) → csak zárkában. gate: a háttérben épülő
     teljes projekt saját kapuja (ensure_full) — a kérés útjának rövid építései ne álljanak a 140 s-os mögé."""
-    (work / "build.jsx").write_text("var D = " + json.dumps(D, ensure_ascii=False) + ";\n" + BUILDER_JS.read_text("utf-8"), "utf-8")
+    (work / "build.jsx").write_text("var D = " + json.dumps(D, ensure_ascii=False) + ";\n" + BUILDER_JS.read_text("utf-8")
+                                    + "\n" + STAGE_JS.read_text("utf-8"), "utf-8")
     base = ["base.ecproj"] if lotties and (work / "base.ecproj").exists() else []
     if not base:
         for lf, _nm in lotties:
@@ -4034,6 +4063,13 @@ async def ensure_full(pid: str, *, background: bool = False, copy: Any = True) -
                                                                       str(assets.get(D["base"]["file"]) or D["base"]["file"]))
                 for n_ in spk_notes:
                     log.warning("teljes projekt %s: %s", pid, n_)
+            from app.tools import stage_layer                 # a színpad hátsó részei: a beszélő eléjük (stage_layer)
+            stg_names, stg_notes = await stage_layer.add_speakers(D, work, D["base"]["file"],
+                                                                  str(assets.get(D["base"]["file"]) or D["base"]["file"]),
+                                                                  (spec.get("story") or {}).get("layers"))
+            spk_names += stg_names
+            for n_ in stg_notes:
+                log.warning("teljes projekt %s: %s", pid, n_)
             await _build(D, work, [(str(a), str(b_)) for a, b_ in fb.get("lotties") or []], out_name="full.ecproj",
                          gate=_full_gate() if background else None)
             for n_ in spk_names:                              # a maszk a projekt médiafájlja (render, szerkesztő)
@@ -4594,6 +4630,9 @@ async def overlay(body: dict[str, Any], progress: Optional[Callable[..., None]] 
         from app.tools import deck_layer                       # pakli: a diaváltás egy mondathoz kötve (follow)
         raw = await deck_layer.resolve(raw, notes, cues=subtitle_cues(body["subtitles"]) if isinstance(body.get("subtitles"), list) else None,
                                        footage=crafts.existing(fid), language=body.get("language"), topts=topts, step=step)
+        from app.tools import stage_layer                       # színpad: a stock-videó háttér letöltve (Pexels)
+        if stage_layer.has_stock(raw):
+            raw = await stage_layer.resolve(raw, notes)
         layers = layers_from(raw, body.get("text") or "", notes)
         subs = await _auto_subtitles(fid, body.get("language"), step, topts, notes) if body.get("subtitles") == "auto" \
             else subtitle_cues(body.get("subtitles"))
@@ -4948,6 +4987,9 @@ def _recut(layers: list[dict[str, Any]], subs: list[dict[str, Any]], camera: Any
         if ly.get("type") == "deck":                  # a pakli diaváltásai is az új időben
             from app.tools import deck_layer
             moved = deck_layer.recut(moved, (moved["at"], moved["at"] + moved["dur"]), lambda t: footage.remap_near(t, old, new))
+        if ly.get("type") == "stage":                 # a színpad paneljei / címkéi is az új időben
+            from app.tools import stage_layer
+            moved = stage_layer.recut(moved, (moved["at"], moved["at"] + moved["dur"]), lambda t: footage.remap_near(t, old, new))
         out_layers.append(moved)
     out_subs, gone = [], 0
     for c in subs or []:
@@ -5374,6 +5416,11 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             from app.tools import deck_layer
             step(1, 4, "drawing the slides")
             gfx_names = gfx_names + await deck_layer.materialize(layers, work, W, H, layer_notes)
+        if any(ly.get("type") == "stage" for ly in layers):  # a színpad képei: a panelek kártyái, a generált háttér
+            from app.tools import stage_layer
+            step(1, 4, "drawing the stage")
+            gfx_names = gfx_names + await stage_layer.materialize(layers, work, W, H, _rgb(opts.get("accent")), layer_notes,
+                                                                  fps=fps, footage=work / base["asset"])
         gfx_findings = gfx_findings + _gfx_failures(story)
         credit_list = list(dict.fromkeys(gfx_credits + map_credits))
         lang = _lang_of(_layer_text_all({"layers": [{k: v for k, v in ly.items() if k != "name"} for ly in layers]}) + " " + (source or ""))
@@ -5408,6 +5455,9 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
         if any(ly.get("type") == "deck" for ly in layers):
             from app.tools import deck_layer
             problems = problems + deck_layer.final_notes(layers)
+        if any(ly.get("type") == "stage" for ly in layers):
+            from app.tools import stage_layer
+            problems = problems + stage_layer.final_notes(layers)
         if any(ly.get("type") == "effect" for ly in layers):    # villám a kézből: előre komponált klip a felvétel fölött
             from app.tools import effect_layers
             fx_items, fx_names, fx_v, fx_f = await effect_layers.prepare(layers, base, W=W, H=H, fps=fps, total=total,
@@ -5491,6 +5541,12 @@ async def _assemble_overlay(base: dict[str, Any], layers: list[dict[str, Any]], 
             spk_names, spk_findings = await deck_matte.add_speakers(D, work, base["asset"],
                                                                     str(shared or base.get("media_id") or base["file_id"]))
             gfx_names = gfx_names + spk_names
+        if not deferred and any(ly.get("type") == "stage" and stage_layer_behind(ly) for ly in layers):
+            from app.tools import stage_layer             # a színpad háttere / hátsó panelei: a beszélő eléjük
+            step(2, 4, "cutting you out in front of the stage")
+            spk_names, stg_findings = await stage_layer.add_speakers(D, work, base["asset"],
+                                                                     str(shared or base.get("media_id") or base["file_id"]), layers)
+            gfx_names, spk_findings = gfx_names + spk_names, spk_findings + stg_findings
         step(2, 4, "building the timeline")
         from app.convert.engines import foreground
         with foreground():                                    # a háttérmunka (más végleges render…) addig áll
@@ -7013,6 +7069,10 @@ async def _edit_overlay(pid: str, spec: dict[str, Any], changes: dict[str, Any],
               "existing": (spec.get("story") or {}).get("layers") or [], "step": step}
         changes = {**changes, "layers": await deck_layer.resolve(changes.get("layers"), notes, **kw),
                    "add_layers": await deck_layer.resolve(changes.get("add_layers"), notes, **kw)}
+    from app.tools import stage_layer                          # színpad: a stock-videó háttér letöltve (Pexels)
+    if stage_layer.has_stock(changes.get("layers")) or stage_layer.has_stock(changes.get("add_layers")):
+        changes = {**changes, "layers": await stage_layer.resolve(changes.get("layers"), notes),
+                   "add_layers": await stage_layer.resolve(changes.get("add_layers"), notes)}
     layers = apply_layer_changes(copy.deepcopy((spec.get("story") or {}).get("layers") or []), changes, source, notes)
     base = dict(spec["base"])
     card = base.get("end_card")

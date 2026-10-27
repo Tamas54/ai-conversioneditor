@@ -596,6 +596,7 @@ function overlayLayers(main, base) {
     if (ly.speaker) { speakerLayer(main, base, ly); continue; }
     var c = app.project.items.addComp(ly.name, ly.w, ly.h, 1, ly.dur, D.fps);
     chartLayers(c, ly);
+    if (ly.stage) stageLayer(c, ly);           // a színpad része (app/tools/stage_builder.jsx)
     if (ly.wave) waveLayer(c, ly);
     if (ly.code) runScript(c, { chart: { code: ly.code, id: ly.id }, dur: ly.dur });
     var L = main.layers.add(c); L.name = ly.name; L.startTime = ly.at;
