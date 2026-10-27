@@ -36,9 +36,10 @@ Builder layers (stage → D.layers, drawing order bottom → top; app/tools/stag
     tilted rectangle (a pinhole projection here, focal 1.6 × W), a Drop Shadow, the entrance as Corner Pin keys (from
     further back / more turned), a float by expression (period PERIOD_S), the fly-in as position keys;
   · "Layer L40.tK – stage pill …": a rounded label, popping in with an overshoot.
-Depth: the speaker is put back over the background and the behind panels from the person matte — live: `matte_part`
-adds the stage's span to the scene's matte spans and flags those clips `behind` (app/static/live-player.js draws the
-footage again through the mask right above the last behind clip); final: `add_speakers` puts a speaker item (the
+Depth: the speaker is put back over the background and the behind panels from the person matte — ONE server-made matte
+clip per stage span (deck_matte's round 4, frame-locked to the working copy), drawn by both: live, `live_matte` adds the
+stage's span and its matte clip to the scene's `matte` and flags the behind clips (app/static/live-player.js draws the
+footage again through the clip right above the last behind clip); final: `add_speakers` puts a speaker item (the
 background deck's: video_builder.jsx speakerLayer, the matte clip from app/tools/deck_matte.matte) right after the last
 behind item, so the front panels and the pills stay in front of him.
 
@@ -1276,9 +1277,35 @@ def matte_part(spec: dict[str, Any], scene_layers: list[dict[str, Any]], total: 
             merged.append(s)
     if existing:
         return {**existing, "spans": merged}
-    from app.tools.deck_matte import RECIPE           # the same recipe as the background deck (live = final)
-    return {"spans": merged, "model": RECIPE["live_model"], "semantic": RECIPE["model"], "levels": RECIPE["levels"],
-            "ema": RECIPE["ema"], "motion": RECIPE["motion"]} if merged else None
+    return {"spans": merged, "clips": []} if merged else None        # (= deck_layer.matte_part: the clips come after)
+
+
+async def live_matte(pid: str, spec: dict[str, Any], scene_layers: list[dict[str, Any]], total: float,
+                     existing: Optional[dict[str, Any]], warnings: Optional[list[str]] = None) -> Optional[dict[str, Any]]:
+    """The live scene's `matte` with the stages: their spans, their behind clips flagged (matte_part) and the speaker's
+    matte CLIPS for their spans — the background deck's round-4 clip (deck_matte.live_clips: made once on the server,
+    frame-locked to the working copy, the final video's speaker item uses the same one: the same key from the same
+    footage and frames as add_speakers). live_clips reads the background decks of a spec, so the stage spans go to it as
+    such (its public interface; the decks' own clips are already in `existing`)."""
+    m = matte_part(spec, scene_layers, total, existing)
+    stages = [ly for ly in ((spec or {}).get("story") or {}).get("layers") or [] if behind_span(ly)]
+    if not m or not stages:
+        return m
+    from app.tools import deck_matte
+    fake = []
+    for ly in stages:
+        a, b = behind_span(ly)
+        fake.append({"id": str(ly["id"]), "type": "deck", "placement": "background", "at": a, "dur": b - a})
+    clips = await deck_matte.live_clips(pid, {**spec, "story": {**(spec.get("story") or {}), "layers": fake}})
+    m = {**m, "clips": list(m.get("clips") or []) + clips}
+    for c in clips:
+        if c["status"] != "ready" and warnings is not None:
+            mmss = lambda x: f"{int(round(x)) // 60}:{int(round(x)) % 60:02d}"    # noqa: E731
+            warnings.append(f"the cut-out of you in front of the stage ({mmss(c['t0'])}–{mmss(c['t1'])}) is "
+                            + ("being made — until it is ready the stage's background shows in front"
+                               + (f" (about {c['eta_s']} s)" if c.get("eta_s") else "") if c["status"] == "making"
+                               else f"not available ({c.get('reason') or c['status']}) — the stage's background shows in front"))
+    return m
 
 
 def _stage_groups(D: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:

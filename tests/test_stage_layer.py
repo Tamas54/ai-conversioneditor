@@ -207,11 +207,37 @@ def test_live_matte_part_flags_the_behind_clips_and_keeps_a_decks_spans():
     spec = {"story": {"layers": [ly]}}
     scene = [{"id": "L1.b"}, {"id": "L1.f"}, {"id": "L1.t1"}, {"id": "L7"}]
     m = sl.matte_part(spec, scene, 1797.0, None)
-    assert m["spans"] == [[180.0, 210.0]] and m["model"] and [e.get("behind", False) for e in scene] == [True, False, False, False]
+    assert m == {"spans": [[180.0, 210.0]], "clips": []} and [e.get("behind", False) for e in scene] == [True, False, False, False]
     deck = {"spans": [[200.0, 260.0]], "model": "x", "semantic": "y", "levels": [0.3, 0.7], "ema": 0.5, "motion": None}
     m2 = sl.matte_part(spec, [{"id": "L1.b"}], 1797.0, deck)
     assert m2["spans"] == [[180.0, 260.0]] and m2["model"] == "x"
     assert sl.matte_part({"story": {"layers": []}}, [], 100.0, deck) is deck
+
+
+def test_live_matte_gets_the_round4_clip_for_the_stage_span_with_the_finals_frames(monkeypatch):
+    """The stage's span goes to deck_matte.live_clips (the server-made, frame-locked clip the final video's speaker item
+    uses too): the same first frame and frame count as add_speakers, so the same cache key; a deck's clip is kept."""
+    from app.tools import deck_matte as dm, stage_layer as sl
+    ly = _one(_stage(background="glow"))
+    spec = {"base": {"fps": 29.993, "duration": 1797.468, "asset": "f.mp4"}, "story": {"layers": [ly]}}
+    seen = {}
+
+    async def fake(pid, sp):
+        seen["spans"] = dm._spans_live(sp)
+        return [{"id": i, "f0": fa, "frames": n, "t0": fa / 29.993, "t1": (fa + n) / 29.993, "key": "k" * 64,
+                 "status": "making", "eta_s": 78, "url": None} for i, fa, n in dm._spans_live(sp)]
+    monkeypatch.setattr(dm, "live_clips", fake)
+    deck = {"spans": [[300.0, 320.0]], "clips": [{"id": "L9", "t0": 300.0, "t1": 320.0, "status": "ready", "url": "/m"}]}
+    warn: list[str] = []
+    m = asyncio.run(sl.live_matte("p.ecproj", spec, [{"id": "L1.b"}], 1797.468, deck, warn))
+    assert seen["spans"] == [("L1", round(180 * 29.993), round(210 * 29.993) - round(180 * 29.993))]
+    assert [c["id"] for c in m["clips"]] == ["L9", "L1"] and m["spans"] == [[180.0, 210.0], [300.0, 320.0]]
+    assert "cut-out of you in front of the stage (3:00–3:30) is being made" in warn[0]
+    D = {"fps": 29.993, "total": 1797.468, "layers": []}
+    fa = max(0, round(sl.behind_span(ly)[0] * D["fps"]))
+    fb = min(round(D["total"] * D["fps"]), round(sl.behind_span(ly)[1] * D["fps"]))
+    assert (fa, fb - fa) == seen["spans"][0][1:]                                  # = add_speakers' frames → one key
+    assert asyncio.run(sl.live_matte("p.ecproj", {"story": {"layers": []}}, [], 100.0, deck)) is deck
 
 
 def test_live_cycles_are_known_from_the_entrance_and_the_period():
