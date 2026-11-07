@@ -1199,6 +1199,8 @@ async def design(
       card          {name, role?, organization?, phone?, email?, web?, address?}   (business card 85×55 mm)
       invitation    {title?, recipient? ("Dear Anna"), text, date?, place?, rsvp?, image?}   size A5|A6|A4
       social        {title, subtitle?, handle?, image?}   size landscape (1200×630) | square | story
+                    (a big photo of the card's shape fills the background; an upright, square or small one — e.g. a
+                    portrait for a website's link image — sits whole beside / above the text, never blown up >1.5×)
       booklet       {title, subtitle?, organization?, author?, date?, cover_image?, sections[{heading, text, image?}]}
       book          {file_id (manuscript .docx, Heading 1 chapters), title?, author?, cover_image?, style_file_id?}
                     size A5|A4 → a WORD-typeset book + its PDF; the person checks it in the Word editor
