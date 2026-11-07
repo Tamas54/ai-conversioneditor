@@ -9,6 +9,10 @@ Betűk: címek "Noto Serif" (Bold is van; a szerveren a fonts-noto adja), szöve
 from __future__ import annotations
 
 import math
+import re
+import unicodedata
+from collections import Counter
+from pathlib import Path
 from typing import Any, Optional
 
 from app.tools import crafts, images
@@ -21,6 +25,10 @@ DEFAULT_THEME = {
 SIZES = {"A4": (595.3, 841.9), "A3": (841.9, 1190.6), "A5": (419.5, 595.3), "A6": (297.6, 419.5), "letter": (612, 792)}
 CARD = (240.9, 155.9)          # névjegy: 85×55 mm, fekvő
 GAP = 60  # pt az artboardok között
+# Képernyőre (social) ennél jobban nem nagyítunk fotót, nyomtatásban ennél kisebb felbontás lágy (a minőségből nem engedünk).
+# 11-07: egy 312×464-es portrét a social-sablon 3,9×-re fújt fel teljes háttérnek — elmosódott, a fej levágva.
+UPSCALE_MAX = 1.5
+PRINT_DPI_MIN = 150
 
 
 class Doc:
@@ -31,6 +39,9 @@ class Doc:
         self.cmds: list[dict[str, Any]] = [{"command": "file.new", "params": {"width": w, "height": h, "units": "Points", "name": name}}]
         self.next_id = 2
         self.page = 0
+        self.images: list[tuple[Path, float, float]] = []   # a lerakott fotók (útvonal, szélesség, magasság pt) — a check méri
+        self.tmp: list[Path] = []                           # a sablon saját ideiglenes képei (a render törli)
+        self.layout: dict[str, Any] = {}                    # a sablon döntései (pl. social: teljes háttér vagy osztott)
 
     def _add(self, cid: str, params: Optional[dict] = None, creates: bool = False) -> Optional[int]:
         self.cmds.append({"command": cid, "params": params} if params else {"command": cid})
@@ -67,7 +78,9 @@ class Doc:
         if style:
             p["style"] = style
         if w:
-            p["area"] = {"width": w, "height": h or size * 3}
+            # legalább egy sor férjen bele: a sornál alacsonyabb dobozban a VectorCraft semmit nem rajzol ki
+            # (11-07: a social-kártya telefonszáma 26,4 pt-os betűvel 31,5 pt-os dobozban — eltűnt a képről)
+            p["area"] = {"width": w, "height": max(h or size * 3, (leading or size * 1.2) * 1.15)}
             if fit:
                 p["area"]["fit"] = fit
         i = self._add("text.create", p, creates=True)
@@ -77,6 +90,7 @@ class Doc:
         return i
 
     def image(self, path, x, y, w, h) -> int:
+        self.images.append((Path(path), w, h))
         return self._add("file.place", {"path": str(path), "rect": [self.ox + x, y, w, h], "link": False}, creates=True)
 
     def thread(self, ids: list[int]) -> None:
@@ -289,24 +303,87 @@ def _certificate(d: Doc, data, t, img):
                 d.text(x, H * 0.86, sgn["role"], size=11, font=t["font_body"], color=t["muted"], w=sw, h=18, align="center")
 
 
+def _img_size(path) -> tuple[int, int]:
+    from PIL import Image
+    with Image.open(path) as im:
+        return im.size
+
+
 def _social(d: Doc, data, t, img):
+    """Közösségi kártya. A fotó a vászon arányához közeli és elég nagy → teljes háttér (alsó felén a szöveg).
+    Álló / négyzetes / kicsi fotó (tipikusan egy portré a link-képhez) → OSZTOTT elrendezés: a fotó egészben, keretben,
+    legfeljebb UPSCALE_MAX-szorosra nagyítva, a szöveg mellette (fekvő vásznon) vagy alatta (négyzetes, álló vásznon)."""
     W, H = d.w, d.h
     m = W * 0.07
-    if img:
-        d.image(img.path, 0, 0, W, H)
+    if not img:
+        d.rect(0, 0, W, H, t["primary"])
+        _social_texts(d, data, t, m, W - 2 * m, H * 0.58, H * 0.97)
+        return
+    iw, ih = _img_size(img.path)
+    if abs(math.log((iw / ih) / (W / H))) < 0.35 and max(W / iw, H / ih) <= UPSCALE_MAX:
+        full = images._crop_to(img.path, W / H, 2400)
+        d.tmp.append(full)
+        d.layout = {"photo": "full"}
+        d.image(full, 0, 0, W, H)
         d.rect(0, 0, W, H, "#000000", opacity=30)
         d.rect(0, H * 0.5, W, H * 0.5, t["primary"], opacity=72)
-    else:
-        d.rect(0, 0, W, H, t["primary"])
-    d.rect(m, H * 0.58, W * 0.1, max(4, H * 0.008), t["accent"])
-    d.text(m, H * 0.61, data.get("title", ""), size=W * 0.06, font=t["font_heading"], style="Bold", color="#FFFFFF",
-           w=W - 2 * m, h=H * 0.22, fit="shrinkText", leading=W * 0.066)
-    if data.get("subtitle"):
-        d.text(m, H * 0.84, data["subtitle"], size=W * 0.027, font=t["font_body"], color="#E8EAF0", w=W - 2 * m,
-               h=H * 0.07, fit="shrinkText")
-    if data.get("handle"):
-        d.text(m, H * 0.93, data["handle"], size=W * 0.022, font=t["font_body"], style="Bold", color=t["accent"],
-               w=W - 2 * m, h=H * 0.05)
+        _social_texts(d, data, t, m, W - 2 * m, H * 0.58, H * 0.97)
+        return
+    d.rect(0, 0, W, H, t["primary"])
+    wide = W / H >= 1.2
+    bw, bh = (W * 0.34, H * 0.76) if wide else (W - 2 * m, H * (0.46 if W / H > 0.8 else 0.5))
+    s = min(bw / iw, bh / ih, UPSCALE_MAX)
+    dw, dh = iw * s, ih * s
+    off = max(8.0, min(W, H) * 0.022)                       # eltolt színes lap a fotó mögött: keret-hatás
+    d.layout = {"photo": "split"}
+    if wide:
+        x, y = W - m - dw - off, (H - dh - off) / 2
+        d.rect(x + off, y + off, dw, dh, t["accent"], opacity=55)
+        d.image(img.path, x, y, dw, dh)
+        _social_texts(d, data, t, m, x - m - W * 0.05, H * 0.1, H * 0.9, center=True)
+        return
+    # négyzetes / álló vászon: fotó fent, szöveg alatta — a kettő együtt függőlegesen középen
+    gap = H * 0.045
+    text_h = _social_texts(d, data, t, m, W - 2 * m, 0, H * 0.45, measure=True)
+    x = (W - dw - off) / 2
+    y = max(H * 0.07, (H - (dh + off + gap + text_h)) / 2)
+    d.rect(x + off, y + off, dw, dh, t["accent"], opacity=55)
+    d.image(img.path, x, y, dw, dh)
+    _social_texts(d, data, t, m, W - 2 * m, y + dh + off + gap, H * 0.95)
+
+
+def _social_texts(d: Doc, data, t, x, w, top, bottom, center: bool = False, measure: bool = False) -> float:
+    """A social-kártya szövegei a [top, bottom] sávban, egymás alatt, MÉRT magassággal (a betűfájlból tördelve):
+    színes vonal, cím, alcím, elérhetőség. center: a tömb függőlegesen középre (a fotó mellett).
+    measure: csak a tömb magasságát adja vissza, nem rajzol."""
+    from app.tools.design_auto import fit_size
+    W, H = d.w, d.h
+    base = W * (1.2 if H / W > 1.4 else 1.0)                # álló (story) vásznon nagyobb betű: telefonon teljes szélességben nézik
+    span = bottom - top
+    gap = base * 0.022
+    rule_h = max(4, H * 0.008)
+    title, sub, handle = data.get("title", ""), data.get("subtitle"), data.get("handle")
+    ts, th = fit_size(title, w, span * (0.5 if sub else 0.7), 0.55, 1.1, base * 0.06, 14, t["font_heading"], "Bold")
+    ss, sh = fit_size(sub, w, span * 0.3, 0.5, 1.3, base * 0.027, 10, t["font_body"], "Regular") if sub else (0, 0)
+    hs = base * 0.022
+    total = rule_h + gap * 1.2 + th + (gap * 0.8 + sh if sub else 0) + (gap * 1.4 + hs * 1.3 if handle else 0)
+    if measure:
+        return total
+    y = top + max(0.0, (span - total) / 2) if center else top
+    d.rect(x, y, min(w * 0.18, W * 0.1), rule_h, t["accent"])
+    y += rule_h + gap * 1.2
+    d.text(x, y, title, size=ts, font=t["font_heading"], style="Bold", color="#FFFFFF",
+           w=w, h=th * 1.08, fit="shrinkText", leading=ts * 1.1)
+    y += th
+    if sub:
+        y += gap * 0.8
+        d.text(x, y, sub, size=ss, font=t["font_body"], color="#E8EAF0", w=w, h=sh * 1.08, fit="shrinkText", leading=ss * 1.3)
+        y += sh
+    if handle:
+        y += gap * 1.4
+        d.text(x, min(y, bottom - hs * 1.45), handle, size=hs, font=t["font_body"], style="Bold", color=t["accent"],
+               w=w, h=hs * 1.45, fit="shrinkText")
+    return total
 
 
 def _card(d: Doc, data, t, img):
@@ -396,29 +473,104 @@ def _booklet(d: Doc, data, t, imgs: dict):
         d.thread(ids)
 
 
-async def _trim_empty_pages(d: Doc) -> None:
-    """Próbakör: PDF-be renderel, pdftotext-tel megnézi, mely oldalak üresek (a túlbecsült
-    folytatólagos oldalak), és artboard.delete-tel kiveszi őket (hátulról, hogy az indexek ne csússzanak)."""
+async def _pdftotext(pdf: Path, layout: bool) -> str:
     import asyncio
+    proc = await asyncio.create_subprocess_exec("pdftotext", *(["-layout"] if layout else []), str(pdf), "-",
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    out, _ = await proc.communicate()
+    return out.decode("utf-8", "replace")
+
+
+async def _probe_text(d: Doc, layout: bool = True) -> str:
+    """Próbakör: a parancslistát PDF-be rendereli, és visszaadja a szövegrétegét (oldalanként \\f-fel elválasztva)."""
+    import json
     from app.storage import temp_path
     from app.storage.files import new_file_id
     tmp = temp_path(new_file_id("pdf"))
     args = ["run"]
     for c in d.cmds:
-        args += ["--cmd", c["command"]] + (["--params", __import__("json").dumps(c["params"], ensure_ascii=False)] if c.get("params") else [])
+        args += ["--cmd", c["command"]] + (["--params", json.dumps(c["params"], ensure_ascii=False)] if c.get("params") else [])
     args += ["--export", str(tmp)]
     try:
         await crafts.run_cli(crafts.vector_cli(), "vectorcraft-cli", *args)
-        proc = await asyncio.create_subprocess_exec("pdftotext", "-layout", str(tmp), "-",
-                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await proc.communicate()
+        return await _pdftotext(tmp, layout)
     finally:
         tmp.unlink(missing_ok=True)
-    pages = out.decode("utf-8", "replace").split("\f")
+
+
+async def _trim_empty_pages(d: Doc) -> None:
+    """Próbakör: PDF-be renderel, pdftotext-tel megnézi, mely oldalak üresek (a túlbecsült
+    folytatólagos oldalak), és artboard.delete-tel kiveszi őket (hátulról, hogy az indexek ne csússzanak)."""
+    pages = (await _probe_text(d)).split("\f")
     empty = [i for i, txt in enumerate(pages[: d.page + 1]) if i > 0 and not txt.strip()]
     for i in sorted(empty, reverse=True):
         d.cmds.append({"command": "artboard.delete", "params": {"index": i}})
     d.page -= len(empty)
+
+
+# ---------- ellenőrzés: minden szöveg látszik-e, és a fotó éles-e ----------
+
+def _norm(s: str) -> str:
+    return unicodedata.normalize("NFKC", s).casefold()
+
+
+def missing_texts(placed: list[str], pdf_text: str) -> list[str]:
+    """A lerakott szövegek közül azok, amelyek NINCSENEK a PDF szövegrétegében (a doboz túl kicsi, lecsúszott a lapról).
+    Egyezés: szóköz nélkül részsztringként (sortörés, ritkított betűk), vagy a szavak ≥90%-a megvan (hasábok sorrendje)."""
+    flat = re.sub(r"\s+", "", _norm(pdf_text))
+    words = Counter(_norm(pdf_text).split())
+    out = []
+    for s in placed:
+        n = _norm(s or "").strip()
+        if not n or re.sub(r"\s+", "", n) in flat:
+            continue
+        ws = n.split()
+        if sum(1 for x in ws if words[x] > 0) / len(ws) >= 0.9:
+            continue
+        out.append(s)
+    return out
+
+
+def _short(s: str, n: int = 60) -> str:
+    s = " ".join(s.split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+async def _check(d: Doc, template: str, res: dict[str, Any], n_photos: int) -> dict[str, Any]:
+    from app.storage import output_path
+    from app.tools import checks
+    placed = [c["params"]["text"] for c in d.cmds
+              if c["command"] == "text.create" and str(c["params"].get("text") or "").strip()]
+    pdf = next((output_path(f["file_id"]) for f in res.get("files") or [] if str(f.get("file_id", "")).endswith(".pdf")), None)
+    text = await (_pdftotext(pdf, False) if pdf is not None and pdf.exists() else _probe_text(d, False))
+    findings, verified = [], []
+    gone = missing_texts(placed, text)
+    for s in gone:
+        findings.append(f"Text not shown — its box is too small or it falls off the page: “{_short(s)}”.")
+    if not gone and placed:
+        verified.append(f"All {len(placed)} texts are on the design (checked in its PDF text layer).")
+    for p, w, h in d.images[:n_photos]:
+        try:
+            iw, _ = _img_size(p)
+        except Exception:
+            continue
+        if template == "social":
+            up = w / max(iw, 1)
+            if up > UPSCALE_MAX + 0.01:
+                findings.append(f"A photo is enlarged {up:.1f}× — it will look soft. Use one at least {int(w / UPSCALE_MAX)} px wide.")
+            else:
+                how = " (too small or the wrong shape to fill the background, so it sits beside the text)" \
+                    if d.layout.get("photo") == "split" else ""
+                verified.append(f"The photo is shown at {up:.2f}× its pixels — sharp{how}.")
+        else:
+            dpi = 72 * iw / max(w, 1)
+            if dpi < PRINT_DPI_MIN:
+                findings.append(f"A photo prints at about {dpi:.0f} dpi — it will look soft. "
+                                f"Use one at least {int(w / 72 * 300)} px wide (300 dpi).")
+            else:
+                verified.append(f"The photo prints at about {dpi:.0f} dpi.")
+    status = "failed" if gone else ("needs_check" if findings else "ok")
+    return checks.make(status, findings + ([checks.LOOK] if status != "ok" else []), verified)
 
 
 # ---------- belépési pont ----------
@@ -461,23 +613,35 @@ async def render(template: str, data: dict[str, Any], *, size: Optional[str] = N
             if sec.get("image"):
                 reqs.append((f"s{k}", sec["image"], (w * 0.8) / (h * 0.25)))
     elif data.get("image"):
-        reqs.append(("main", data["image"], _frame_aspect(template, w, h)))
+        # social: vágatlanul — a sablon a kép méretéből és arányából dönti el, hogy háttér lesz-e vagy keretes fotó
+        reqs.append(("main", data["image"], None if template == "social" else _frame_aspect(template, w, h)))
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
     imgs = {r[0]: x for r, x in zip(reqs, resolved)}
     try:
         fn = FNS.get(template)
         if fn:
             fn(d, data, t, imgs.get("main"))
+            n_photos = len(d.images)                      # a logó nem fotó: azt a check nem méri
             _logo(d, brand, template)
         else:
             _booklet(d, data, t, imgs)
+            n_photos = len(d.images)
             await _trim_empty_pages(d)
         from app.storage.naming import design_name
         res = await crafts.vector_run(commands=d.cmds, export=export or ["pdf", "png"], name=design_name(template, data))
+        try:
+            res["check"] = await _check(d, template, res, n_photos)
+        except Exception as e:                            # a mérés hiánya nem ronthatja el a kész dizájnt
+            import logging
+            logging.getLogger("aice.design").info("design check: %s", e)
     finally:
         for x in resolved:
             x.path.unlink(missing_ok=True)
+        for p in d.tmp:
+            p.unlink(missing_ok=True)
     res["template"] = template
     res["pages"] = d.page + 1
     res["credits"] = [x.attribution for x in resolved if x.attribution]
+    if d.layout:
+        res["layout"] = d.layout
     return res

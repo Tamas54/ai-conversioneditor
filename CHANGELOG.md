@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-07 — A portrait on a social card stays sharp, every text shows, and the cut-out no longer waits on an empty AI account
+
+Making a website's link image (1200×630) from a 312×464 portrait: the social template blew the photo up 3.9× to fill
+the background (soft, the top of the head cut off), the phone number (`handle`) never appeared, and the check only said
+"No automatic check". Now:
+
+- **The photo decides the layout.** A big photo of the card's shape still fills the background. An upright, square or
+  small one sits whole beside the text (landscape card) or above it (square, story), framed, at most 1.5× its pixels
+  (`UPSCALE_MAX`). The texts are stacked by measured height (wrapped with the real font), so there are no empty gaps.
+  On the portrait: 1.03× (landscape), 1.07× (square), 1.5× (story) instead of 3.9×.
+- **Every text box is at least one line high.** VectorCraft draws nothing in a box lower than the line: the handle got
+  31.5 pt for a 26.4 pt line. This holds for every template.
+- **The design templates check themselves:** every text placed must be in the PDF's text layer (wrapping, letter
+  spacing and column order don't count as missing) → `failed` with the missing text; social photos enlarged more than
+  1.5× and print photos under 150 dpi → `needs_check` with the size to use; otherwise `ok` with what was verified.
+- **Background removal with the AI account out of credit:** the vision call retried the SiliconFlow 402 six times per
+  model with growing waits, on two models of the same account — 73.8 s, and the client gave up before the finished
+  cut-out arrived. A 4xx (except 429) is now an error at once, as in the chat client, and a 402 skips the fallback
+  model: the cut-out itself (BiRefNet) is not affected, the check says the held-object search couldn't run.
+
 ## 2026-10-26 — Edits answer in under 2 s, one after another; the final video waits for a pause in editing
 
 On the 30-minute test project, six edits in a row answered in 2.4 → 2.3 → 2.4 → 4.7 → 5.1 → 4.8 s, with the load

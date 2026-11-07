@@ -254,6 +254,8 @@ async def _find_objects(img, words: list[str], held: bool) -> dict:
             break
         except Exception as e:  # a hívó jelzi a check-ben, hogy nem sikerült ellenőrizni
             last = f"{type(e).__name__}: {str(e)[:120]}"
+            if getattr(e, "status", None) == 402:     # elfogyott egyenleg: a tartalékmodell ugyanazon a fiókon fut
+                return {"objects": [], "held": [], "people": [], "error": last}
     else:
         return {"objects": [], "held": [], "people": [], "error": last or "vision model unavailable"}
 
