@@ -133,13 +133,19 @@ async def _call(messages: list[dict[str, Any]], *, response_format: Optional[dic
                     headers={"Authorization": f"Bearer {settings.SILICONFLOW_API_KEY}"},
                     json=payload,
                 )
-                if r.status_code >= 500:
+                if r.status_code >= 500 or r.status_code == 429:
                     last_exc = httpx.HTTPStatusError(
                         f"vision call {r.status_code}: {r.text[:200]}",
                         request=r.request, response=r,
                     )
                     raise last_exc
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    # 4xx (a 429 kivételével) újrapróbálva is ugyanaz — mint a chat-kliensben (siliconflow._retryable).
+                    # 11-07: elfogyott egyenlegnél (402) a háttér-eltávolítás 2 modell × 6 próbával ~70 s-ot várt,
+                    # és a kliens időtúllépéssel feladta, mire a kész kép elkészült.
+                    from app.llm.siliconflow import LLMServiceError
+                    log.warning("SiliconFlow vision %s → HTTP %s: %s", payload["model"], r.status_code, r.text[:300])
+                    raise LLMServiceError(r.status_code, payload["model"])
                 data = r.json()
                 return data["choices"][0]["message"].get("content") or ""
     raise last_exc or RuntimeError("vision call failed")
