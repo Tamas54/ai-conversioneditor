@@ -49,6 +49,7 @@ def available() -> bool:
 # a pandoc fut (a táblarácsát az ooxml_safe pótolja); minden mást a WordCraft visz, a táblák oszlopaival együtt
 _MD_PANDOC_ONLY = re.compile(
     r"\[\^[^\]\s]+\]"                       # lábjegyzet
+    r"|\^\[[^\]\n]"                         # beágyazott lábjegyzet: ^[a jegyzet szövege]
     r"|!\[[^\]]*\]\([^)]+\)"                # kép
     r"|(?<![\\$\w])\$(?=\S)[^$\n]+(?<=\S)\$(?![\w$])|^\s*\$\$"     # képlet ($…$, $$…$$) — „5 $” ár nem az
     r"|^\s*[-*+]\s+\[[ xX]\]\s"             # feladatlista

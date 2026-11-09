@@ -76,6 +76,8 @@ mcp = FastMCP(
         "`edit_url`: give it to the person — it opens that file in the matching built-in editor (Word-like, "
         "PowerPoint-like, Photoshop-like, Illustrator-like) for hand finishing. Chains that work well: write and revise "
         "a document (wordcraft) → slides from it (pptx_build from_document) → a Word handout back (convert pptx→docx); "
+        "footnotes are real Word footnotes (wordcraft references.footnote at the caret, or Markdown [^1] / ^[note] "
+        "converted md→docx), never \"[1]\" in the text with a list at the end; "
         "a manuscript → a Word-typeset book (design template=book); posters/posts: design(template=\"auto\") → 3 options "
         "to choose from → design(from_design=…, sizes=[…]) for every platform size; an article, document or the person's "
         "text → a short video with titles, pictures and captions on an editable timeline (video). The person's earlier files: files(action=\"list\", "
@@ -988,6 +990,10 @@ async def wordcraft(
       pictures, fields and comments stay where they are; a new line is a new tracked paragraph, a missing one a
       tracked deletion (its footnote goes when the deletion is accepted). Table rows aren't added or removed this
       way (the result says so) — use table.* for that.
+    Footnotes are real Word footnotes: put the caret where the mark goes (select.text {"text": the words before
+      it} + caret.end), then references.footnote {"text": "the note"}. A long text with many notes: write it as
+      Markdown with [^1] marks and "[^1]: the note" lines (or inline ^[the note]) and convert it md→docx — every one
+      becomes a footnote. Never "[1]" in the text with a list of notes at the end.
     Reads alone (document.selection, document.text, caret.*, select.*, edit.find…) never save a new version.
     After insert.picture the picture stays SELECTED: run caret.end before
       text.newParagraph, or Enter replaces (deletes) it.
