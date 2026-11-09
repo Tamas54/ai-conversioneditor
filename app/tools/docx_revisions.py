@@ -160,11 +160,14 @@ async def docx_track_replace_paragraph(
             continue
         p_elem = p._element
 
-        # Collect existing runs (skip rPr and pPr — they're paragraph-level)
-        existing_runs = []
+        # Collect existing runs (skip rPr and pPr — they're paragraph-level). A run that holds a footnote's or
+        # endnote's mark is not text to replace: it stays, after the new text — in the deletion it went with an
+        # Accept, and its note was left without a mark (11-09).
+        existing_runs, marks = [], []
         for child in list(p_elem):
             if child.tag == qn("w:r"):
-                existing_runs.append(child)
+                (marks if child.find(qn("w:footnoteReference")) is not None or child.find(qn("w:endnoteReference")) is not None
+                 else existing_runs).append(child)
 
         # Convert existing runs' <w:t> → <w:delText>, wrap them in <w:del>
         del_runs = []
@@ -184,6 +187,8 @@ async def docx_track_replace_paragraph(
             [_make_run(new_text)], author=author, date=date, rid=rid + 1,
         )
         p_elem.append(ins_wrapper)
+        for m in marks:
+            p_elem.append(m)                    # moves the mark run after the new text
 
         n += 1
         rid += 2
@@ -309,83 +314,49 @@ async def docx_track_delete_paragraph(
 # ============================================================
 
 
-async def docx_accept_all_revisions(file_id: str) -> dict[str, Any]:
-    """Accept all tracked changes: <w:ins>→keep inner runs, <w:del>→remove."""
-    from docx import Document
-    from lxml import etree
+def _decide_all(file_id: str, accept: bool) -> tuple[str, dict[str, Any]]:
+    """Every tracked change accepted or rejected through the Studio's own review engine (app/tools/review_ops): the
+    body, the footnotes, endnotes, headers and footers, paragraph marks and formatting; the footnotes of deleted text
+    go and the rest are put in the order of their marks. The body-only walk this replaced left the changes inside
+    notes pending and the orphan notes in place — LibreOffice then shows a neighbour's note under a number (11-09).
+    → (the new file's id, {"changes", "by_type"})."""
+    from app.tools import review_loop as L
+    from app.tools import review_ops
 
-    src = _resolve(file_id)
-    t0 = time.time()
-    doc = Document(str(src))
-    body = doc.element.body
-    n_ins = 0
-    n_del = 0
-
-    # Process <w:ins>: replace the element with its children (lift runs up).
-    # list() materializes the iterator before we mutate the tree — without it,
-    # nested <w:ins> (reply paragraphs produce these) get silently skipped.
-    for ins in list(body.iter(qn("w:ins"))):
-        parent = ins.getparent()
-        idx = list(parent).index(ins)
-        for child in list(ins):
-            parent.insert(idx, child)
-            idx += 1
-        parent.remove(ins)
-        n_ins += 1
-
-    # Process <w:del>: remove entirely
-    for d in list(body.iter(qn("w:del"))):
-        parent = d.getparent()
-        if parent is not None:
-            parent.remove(d)
-            n_del += 1
-
+    pkg = L._Pkg(_resolve(file_id))
+    try:
+        out = review_ops.decide(pkg, "all", accept)
+    except L._Fail:                             # nothing to decide: the same document as a new version
+        out = {"changes": 0, "by_type": {}}
     fid, dst = _new_docx_output()
-    doc.save(str(dst))
+    pkg.save(dst)
+    return fid, out
+
+
+def _count(by_type: dict[str, int], kind: str) -> int:
+    return sum(n for t, n in by_type.items() if t == kind or t.endswith("_" + kind))
+
+
+async def docx_accept_all_revisions(file_id: str) -> dict[str, Any]:
+    """Accept all tracked changes: insertions kept, deletions gone — in notes, headers and footers too."""
+    t0 = time.time()
+    fid, out = _decide_all(file_id, True)
     return {
         "file_id": fid, "url": public_url(fid),
-        "insertions_accepted": n_ins, "deletions_accepted": n_del,
+        "insertions_accepted": _count(out["by_type"], "ins"), "deletions_accepted": _count(out["by_type"], "del"),
+        "changes": out["changes"], **({"notes_removed": out["notes_removed"]} if out.get("notes_removed") else {}),
         "ms_elapsed": int((time.time() - t0) * 1000),
     }
 
 
 async def docx_reject_all_revisions(file_id: str) -> dict[str, Any]:
-    """Reject all tracked changes: <w:ins>→remove, <w:del>→keep but rename
-    delText back to t."""
-    from docx import Document
-    from lxml import etree
-
-    src = _resolve(file_id)
+    """Reject all tracked changes: insertions gone, deletions back — in notes, headers and footers too."""
     t0 = time.time()
-    doc = Document(str(src))
-    body = doc.element.body
-    n_ins = 0
-    n_del = 0
-
-    # Reject <w:ins>: remove entirely
-    for ins in list(body.iter(qn("w:ins"))):
-        parent = ins.getparent()
-        if parent is not None:
-            parent.remove(ins)
-            n_ins += 1
-
-    # Reject <w:del>: lift inner runs, rename delText → t
-    for d in list(body.iter(qn("w:del"))):
-        parent = d.getparent()
-        idx = list(parent).index(d)
-        for child in list(d):
-            for t in child.findall(qn("w:delText")):
-                t.tag = qn("w:t")
-            parent.insert(idx, child)
-            idx += 1
-        parent.remove(d)
-        n_del += 1
-
-    fid, dst = _new_docx_output()
-    doc.save(str(dst))
+    fid, out = _decide_all(file_id, False)
     return {
         "file_id": fid, "url": public_url(fid),
-        "insertions_rejected": n_ins, "deletions_rejected": n_del,
+        "insertions_rejected": _count(out["by_type"], "ins"), "deletions_rejected": _count(out["by_type"], "del"),
+        "changes": out["changes"], **({"notes_removed": out["notes_removed"]} if out.get("notes_removed") else {}),
         "ms_elapsed": int((time.time() - t0) * 1000),
     }
 
