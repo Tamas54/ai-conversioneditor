@@ -1,0 +1,25 @@
+{
+  "name": "studio",
+  "version": "1.0.0",
+  "description": "Make finished files with your AI — decks, documents, PDFs, videos and designs — built by real engines and checked before they are handed over.\nAvailable skills:\nPresentation: a designed PowerPoint deck from an outline, notes or a document — charts, tables, explainer diagrams that build up click by click, a video on a slide.\nShort video: a narrated video with motion graphics — animated charts (waterfall, before/after, forecast band, ranking race, Sankey…), camera moves, music.\nGraphics on your own video: name bars, charts, split screen and full-screen inserts on footage, tied to what is said.\nDocuments: write and edit Word files precisely — tracked changes, review comments, tables of contents.\nCheck and fix: every file is laid out and checked; problems name the exact shape or paragraph, with a ready fix.\nOld books and scans: photographed pages into an editable Word file, doubtful readings marked, never guessed.\nEvery file opens in a built-in editor (Word-, PowerPoint-, Photoshop-, After Effects-like) for the final touches.",
+  "author": {
+    "name": "Tamas Csizmadia"
+  },
+  "apps": "./.app.json",
+  "skills": "./skills",
+  "interface": {
+    "displayName": "Studio",
+    "shortDescription": "Decks, documents, videos — made and checked",
+    "longDescription": "Make finished files with your AI — decks, documents, PDFs, videos and designs — built by real engines and checked before they are handed over.\nAvailable skills:\nPresentation: a designed PowerPoint deck from an outline, notes or a document — charts, tables, explainer diagrams that build up click by click, a video on a slide.\nShort video: a narrated video with motion graphics — animated charts (waterfall, before/after, forecast band, ranking race, Sankey…), camera moves, music.\nGraphics on your own video: name bars, charts, split screen and full-screen inserts on footage, tied to what is said.\nDocuments: write and edit Word files precisely — tracked changes, review comments, tables of contents.\nCheck and fix: every file is laid out and checked; problems name the exact shape or paragraph, with a ready fix.\nOld books and scans: photographed pages into an editable Word file, doubtful readings marked, never guessed.\nEvery file opens in a built-in editor (Word-, PowerPoint-, Photoshop-, After Effects-like) for the final touches.",
+    "developerName": "Tamas Csizmadia",
+    "category": "Creativity",
+    "capabilities": [],
+    "composerIcon": "./assets/composer-icon.png",
+    "logo": "./assets/logo.png",
+    "defaultPrompt": [
+      "Turn these meeting notes into a 10-slide deck with charts",
+      "Make a 30-second vertical video about this article, with animated charts and music",
+      "Put a name bar and a chart on my video where I talk about the budget"
+    ]
+  }
+}
