@@ -166,6 +166,11 @@ async def _openverse(query: str, aspect: Optional[float]) -> tuple[bytes, str]:
 
 # ---------- jelöltek a képválasztóhoz (a felhasználó választ; tartalmi szűrés NINCS — Kommandant, 10-12) ----------
 
+def _plain(html_text: Any) -> str:
+    import html as _html
+    return " ".join(re.sub(r"<[^>]+>", " ", _html.unescape(str(html_text or ""))).split())
+
+
 def _commons_credit(ii: dict[str, Any]) -> str:
     import html as _html
     import re as _re
@@ -188,9 +193,13 @@ async def _commons_candidates(query: str, n: int) -> list[dict[str, Any]]:
             continue                                   # csak technikai: legyen letölthető kép
         full, orig = ii.get("thumburl") or ii["url"], ii["url"].split("?")[0]
         # a Wikimedia csak szabványos bélyegkép-szélességeket ad (pl. 250/330/500; a 400 → HTTP 400)
+        meta = ii.get("extmetadata") or {}
         out.append({"thumb_url": _wikimedia_thumb(orig, 330) if (ii.get("width") or 0) > 330 else orig,
                     "url": full, "credit": _commons_credit(ii), "title": (pg.get("title") or "").removeprefix("File:"),
-                    "width": ii.get("width"), "height": ii.get("height"), "source": "Wikimedia Commons"})
+                    "width": ii.get("width"), "height": ii.get("height"), "source": "Wikimedia Commons",
+                    # a relevancia-kapuhoz (pptx_build): a fájl kategóriái és a leírása eleje
+                    "categories": [c for c in str((meta.get("Categories") or {}).get("value") or "").split("|") if c][:20],
+                    "description": _plain((meta.get("ImageDescription") or {}).get("value"))[:300]})
     return out[:n]
 
 
@@ -206,7 +215,8 @@ async def _openverse_candidates(query: str, n: int) -> list[dict[str, Any]]:
                     "credit": f"Photo: {hit.get('creator') or 'unknown author'} ({hit.get('source')}), {lic} — "
                               f"{hit.get('foreign_landing_url') or hit['url']}",
                     "title": hit.get("title") or "", "width": hit.get("width"), "height": hit.get("height"),
-                    "source": hit.get("source") or "Openverse"})
+                    "source": hit.get("source") or "Openverse",
+                    "tags": [str(t.get("name")) for t in (hit.get("tags") or []) if isinstance(t, dict) and t.get("name")][:25]})
     return out[:n]
 
 
@@ -396,13 +406,81 @@ def _fits_frame(c: dict[str, Any], aspect: Optional[float]) -> bool:
     return not (aspect and aspect > 1.18 and w and h and w / h < 1.1)
 
 
-async def choose_stock(jobs: list[tuple], medium: str = "video") -> dict[Any, dict[str, Any]]:
+# ---------- a stock-találat relevanciája: determinisztikus kapu, AI-kredit nélkül (11-23) ----------
+# A robotos pakli címlapja: „humanoid robot factory” → „Speakers at Bold Bets event at UC Berkeley” — a Commons a
+# LEÍRÁSBAN találta meg a „humanoid robots … factories”-t, a képen két ember ül egy színpadon. A kép TÁRGYÁT a fájlnév,
+# a kategóriák és a címkék mondják; a leírás csak akkor számít, ha az eleje a fájlnév tárgyáról szól („Asimo at a Honda
+# factory. This humanoid robot …”). A kapu az AUTOMATIKUS választásé (pptx_build): ami nem illik, az magától nem kerül
+# a diára. A képválasztó (search) továbbra sem szűr — ott a felhasználó választ (10-12).
+
+_STOP = frozenset("""a an the of in on at for and or with without to from by into onto over under near via its their his
+her this that these those is are be as photo photos photograph photography image images picture pictures pic stock view
+close closeup shot background wallpaper hd file jpg jpeg png img dsc made new old""".split())
+
+
+def _stem(w: str) -> str:
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 3 and w.endswith("s") and not w.endswith(("ss", "us", "is")):
+        return w[:-1]
+    return w
+
+
+def _words(text: str) -> list[str]:
+    """Tartalmas szavak, kisbetűvel, ékezet és többes szám nélkül („Factories” → „factory”, „Robots” → „robot”)."""
+    import unicodedata
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(text or ""))                       # CamelCase fájlnév
+    out = []
+    for tok in re.findall(r"[^\W\d_]+", text):
+        low = "".join(ch for ch in unicodedata.normalize("NFKD", tok.lower()) if not unicodedata.combining(ch))
+        if (len(low) >= 3 or (len(tok) == 2 and tok.isupper())) and low not in _STOP:
+            out.append(_stem(low))
+    return out
+
+
+def _hit(q: str, words: set[str]) -> bool:
+    if q in words:
+        return True
+    return len(q) >= 4 and any((w.startswith(q) and len(w) - len(q) <= 4) or
+                               (len(w) >= 5 and q.startswith(w) and len(q) - len(w) <= 3) for w in words)
+
+
+def stock_match(query: str, context: str, cand: dict[str, Any]) -> tuple[int, int]:
+    """→ (hány keresőszó szerepel a kép tárgyában, hány kell hozzá). A tárgy: a fájlnév/cím, a kategóriák, a címkék, és
+    a leírás, ha az eleje a fájlnév egy szavát említi. Kell: a keresőszavak fele (felfelé kerekítve). A dia címének
+    egy szava ráadás (ha a kép nyelvén van), de csak a keresőszó mellé."""
+    q = list(dict.fromkeys(_words(query)))
+    if not q:
+        return 1, 1
+    title = re.sub(r"\.(?:jpe?g|png|tiff?|webp|gif)$", "", str(cand.get("title") or ""), flags=re.I)
+    own = set(_words(title))
+    strong = own | set(_words(" ".join(map(str, cand.get("categories") or [])))) \
+        | set(_words(" ".join(map(str, cand.get("tags") or []))))
+    desc = str(cand.get("description") or "")
+    first = re.split(r"(?<=[.!?])\s", desc, maxsplit=1)[0][:200]
+    if {w for w in own if len(w) >= 4} & set(_words(first)):
+        strong |= set(_words(desc))
+    hits = sum(_hit(w, strong) for w in q)
+    if hits and any(_hit(w, strong) for w in dict.fromkeys(_words(context)) if w not in q):
+        hits += 1
+    return hits, max(1, -(-len(q) // 2))
+
+
+def relevant(query: str, context: str, cand: dict[str, Any]) -> bool:
+    hits, need = stock_match(query, context, cand)
+    return hits >= need
+
+
+async def choose_stock(jobs: list[tuple], medium: str = "video", *, strict: bool = False,
+                       misses: Optional[dict[Any, str]] = None) -> dict[Any, dict[str, Any]]:
     """Helyenként: stock-jelöltek → a látómodell rangsorolja → a legjobb, ami még nem szerepelt másik helyen.
     jobs = [(kulcs, keresőszó, kontextus (jelenet / dia címe)[, keret-arány])] → {kulcs: {"url", "credit"}};
-    ami nem sikerült, kimarad (a hívó a régi úton keres)."""
+    ami nem sikerült, kimarad (a hívó a régi úton keres).
+    strict (pptx_build): csak a kereséshez illő jelölt (relevant — determinisztikus, AI nélkül); ha az első keresésben
+    nincs ilyen, a rövidített keresések jönnek; ha egyikben sincs, a hely kimarad, és misses[kulcs] mondja, miért."""
     sem = asyncio.Semaphore(4)
 
-    async def one(q: str, ctx: str, aspect: Optional[float]) -> tuple[list[dict[str, Any]], list[int]]:
+    async def one(q: str, ctx: str, aspect: Optional[float]) -> tuple[list[dict[str, Any]], list[int], Optional[str]]:
         async with sem:
             try:
                 # „gold bars and oil barrels”: a Commons a fájlnévben keres, az összetett kifejezésre rossz jelölteket ad →
@@ -417,19 +495,37 @@ async def choose_stock(jobs: list[tuple], medium: str = "video") -> dict[Any, di
                                 seen.add(_cand_key(c)); cands.append(c)
                 else:
                     cands = await search(q, n=PICK_N + 4)
+                if strict:
+                    checked = list(cands)
+                    ok = [c for c in cands if relevant(q, ctx, c)]
+                    seen = {_cand_key(c) for c in cands}
+                    for alt in ([] if ok else _tries(q)[1:4]):
+                        more = [c for c in await search(alt, n=PICK_N + 4) if _cand_key(c) not in seen]
+                        seen |= {_cand_key(c) for c in more}
+                        checked += more
+                        ok = [c for c in more if relevant(q, ctx, c)]
+                        if ok:
+                            break
+                    if not ok:
+                        names = "; ".join(f"“{str(c.get('title') or '')[:60]}”" for c in checked[:3])
+                        return [], [], (f"none of the {len(checked)} stock photos found for “{q}” shows it (judged by "
+                                        f"file name, categories and tags{', e.g. ' + names if names else ''})")
+                    cands = ok
                 cands = ([c for c in cands if _fits_frame(c, aspect)] or cands)[:PICK_N]
-                return cands, (await rank(q, ctx, cands, medium=medium) if len(cands) > 1 else list(range(len(cands))))
+                return cands, (await rank(q, ctx, cands, medium=medium) if len(cands) > 1 else list(range(len(cands)))), None
             except Exception as e:
                 log.info("képjelöltek (%s): %s", q, e)
-                return [], []
+                return [], [], f"the stock search for “{q}” failed ({str(e)[:80]})"
     got = await asyncio.gather(*(one(j[1], j[2], j[3] if len(j) > 3 else None) for j in jobs))
     out, used = {}, set()
-    for j, (cands, order) in zip(jobs, got):
+    for j, (cands, order, why) in zip(jobs, got):
         for k in order:
             if cands[k]["url"] not in used:
                 used.add(cands[k]["url"])
                 out[j[0]] = {"url": cands[k]["url"], "credit": cands[k]["credit"]}
                 break
+        if strict and j[0] not in out and misses is not None:
+            misses[j[0]] = why or f"every stock photo that fits “{j[1]}” is already on another slide"
     return out
 
 

@@ -158,7 +158,8 @@ def test_band_has_a_shaded_range_and_a_dashed_forecast_from_the_last_measured_po
     assert sh["Line"].line.dash_style is None                                      # a mért rész folytonos
     dot = sh["Point – 2024"]                                                       # a szaggatott a 2024-es (utolsó mért) pontból indul
     assert abs(sh["Forecast path"].left - (dot.left + dot.width // 2)) <= 2
-    assert sh["Range"].text_frame.text == "38–48\u00a0TWh" and sh["Forecast"].text_frame.text == "forecast"
+    # a tartomány a jel két oldalán word joinerrel kötve (11-23: „1780–” / „1840” nem törhet)
+    assert sh["Range"].text_frame.text == "38\u2060–\u206048\u00a0TWh" and sh["Forecast"].text_frame.text == "forecast"
 
 
 def test_lines_and_race_become_native_charts(tmp_path):

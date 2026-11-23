@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 NB = " "
+WJ = "\u2060"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 
 
@@ -37,7 +38,7 @@ def test_keep_units_binds_figures_to_their_units_only():
     assert k("90 % felett") == f"90{NB}% felett"
     assert k("4,3 millió robot") == f"4,3{NB}millió robot"
     assert k("10 000 ipari dolgozó") == f"10{NB}000 ipari dolgozó"
-    assert k("15–25 %-kal nő") == f"15–25{NB}%-kal nő"
+    assert k("15–25 %-kal nő") == f"15{WJ}–{WJ}25{NB}%-kal nő"
     assert k("€ 5 és 26 M") == f"€{NB}5 és 26{NB}M"
     # ami nem egység, az törhet: szám + szó, a betűvel folytatódó „egység” („26 Magyar”, „5 évvel”)
     assert k("2019 óta") == "2019 óta" and k("26 Magyar") == "26 Magyar" and k("5 évvel") == "5 évvel"
@@ -104,14 +105,19 @@ async def test_stat_numbers_are_big_and_one_size_per_slide():
     assert _pt(label) >= 16 and label.top > _stat_boxes(prs, 0)["12 %"].top      # a címke alatta, olvasható méretben
 
 
-async def test_a_figure_too_long_even_at_44pt_wraps_at_its_space_and_the_rest_stays_44():
-    prs = await _build([{"layout": "stats", "title": "A robotizáció számokban",
-                         "stats": [{"value": "4,3 millió", "label": "robot"}, {"value": "162", "label": "sűrűség"},
-                                   {"value": "12 %", "label": "növekedés"}, {"value": "2030", "label": "humanoid"}]}])
-    b = _stat_boxes(prs)
-    assert {_pt(b[v]) for v in ("4,3 millió", "162", "12 %", "2030")} == {44}     # a padló, egy méret
-    assert b["4,3 millió"].text_frame.text == "4,3 millió"                       # törhet a szóköznél (nem betű közepén)
+async def test_a_figure_too_long_even_at_44pt_sends_its_unit_word_to_the_label_and_never_breaks():
+    """11-23: a 44 pt-on sem férő szám régen a szóközénél két sorba tört — most a szava a címkébe kerül, a check szól."""
+    from app.tools import pptx_deck
+    res = await pptx_deck.build({"title": "Próba", "slides": [
+        {"layout": "stats", "title": "A robotizáció számokban",
+         "stats": [{"value": "4,3 millió", "label": "robot"}, {"value": "162", "label": "sűrűség"},
+                   {"value": "12 %", "label": "növekedés"}, {"value": "2030", "label": "humanoid"}]}]})
+    b = _stat_boxes(_prs(res["file_id"]))
+    assert "4,3" in b and "millió robot" in b and "4,3 millió" not in b
+    sizes = {_pt(b[v]) for v in ("4,3", "162", "12 %", "2030")}
+    assert len(sizes) == 1 and sizes.pop() >= 44                                 # egy méret, a padló fölött
     assert b["12 %"].text_frame.text == f"12{NB}%"                                # a többi kötve marad
+    assert any("“4,3 millió”" in f and "millió" in f for f in res["check"]["findings"])
 
 
 def test_a_split_big_figure_gets_a_shorten_fix():

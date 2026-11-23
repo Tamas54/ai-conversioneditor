@@ -333,26 +333,33 @@ def _picture(slide, img: Optional[images.ResolvedImage], rect) -> None:
         slide.shapes.add_picture(str(img.path), *rect)
 
 
-def _stats(slide, s: dict[str, Any], rect) -> None:
+def _stats(slide, s: dict[str, Any], rect, notes: Optional[list[str]] = None, number: int = 0) -> None:
+    """A számok a sablon címbetűjével, 44 pt-tól lefelé a legnagyobb, ami egy sorba fér (11-23: a szám SOHA nem törik
+    két sorba — ami 44 pt-on sem fér, annak a vége a címkébe kerül; ugyanaz a mérés, mint a saját dizájné)."""
     from pptx.enum.dml import MSO_THEME_COLOR
     from pptx.enum.text import PP_ALIGN
     from pptx.util import Pt
+    from app.tools.pptx_deck import STAT_MIN, fit_stats, keep_units, theme_font   # a szövegdoboz a téma szövegbetűjével ír
     stats = (s.get("stats") or [])[:4]
     if not stats:
         return
     x, y, w, h = rect
     cw = w // len(stats)
+    inner = cw / 12700 - 14.4                             # a szövegdoboz alapértelmezett 0,1"-es belső margói
+    size, vals, labels, moved = fit_stats(stats, theme_font(slide, major=False) or "Calibri", inner, top=STAT_MIN)
+    if moved and notes is not None:
+        notes.append(f"Slide {number}: " + "; ".join(moved) + ".")
     for i, st in enumerate(stats):
         tb = slide.shapes.add_textbox(x + i * cw, y + h // 5, cw, h // 2)
         tf = tb.text_frame
         tf.word_wrap = True
         p = tf.paragraphs[0]
         p.alignment = PP_ALIGN.CENTER
-        r = p.add_run(); r.text = str(st.get("value", ""))
-        r.font.size, r.font.bold = Pt(44), True
+        r = p.add_run(); r.text = keep_units(vals[i])
+        r.font.size, r.font.bold = Pt(size), True
         r.font.color.theme_color = MSO_THEME_COLOR.ACCENT_1
         p2 = tf.add_paragraph(); p2.alignment = PP_ALIGN.CENTER
-        r2 = p2.add_run(); r2.text = str(st.get("label", ""))
+        r2 = p2.add_run(); r2.text = keep_units(labels[i])
         r2.font.size = Pt(16)
 
 
@@ -424,6 +431,7 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
     resolved = await images.resolve_many(reqs) if reqs else []
     it = iter(resolved)
     SW, SH = prs.slide_width, prs.slide_height
+    stat_notes: list[str] = []
     try:
         for s, (layout, need) in zip(slides, plan):
             slide = prs.slides.add_slide(layout)
@@ -506,7 +514,7 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
                 for b in bodies[1:]:
                     _drop(b)
                 if lay == "stats":
-                    _stats(slide, s, rect)
+                    _stats(slide, s, rect, stat_notes, len(prs.slides))
                 elif lay == "chart":
                     from app.tools import pptx_charts
                     cs: Optional[dict[str, Any]] = s
@@ -552,5 +560,5 @@ async def build(spec: dict[str, Any], template: Path) -> dict[str, Any]:
             x.path.unlink(missing_ok=True)
         if tpl != template:
             shutil.rmtree(tpl.parent, ignore_errors=True)
-    return {"file_id": fid, "url": public_url(fid), "slides": len(slides), "saved_spec": saved,
+    return {"file_id": fid, "url": public_url(fid), "slides": len(slides), "saved_spec": saved, "notes": stat_notes,
             "size_kb": output_path(fid).stat().st_size // 1024, "ms_elapsed": int((time.time() - t0) * 1000)}
