@@ -1539,7 +1539,8 @@ def _break_fix(kind: str, n: int, it: dict, a: str, b: str) -> str:
                 f'pptx_build stats {{"value": "…", "label": "{b} …"}}, or fewer stats on the slide (3 or fewer give wider cards); '
                 f'in place: office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<shorter figure>")}]).')
     if kind == "split_number":
-        return (f'Join them with a no-break space (U+00A0): office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<the text with ' + a + chr(0xa0) + b + '>")}]) '
+        egyben = "<the text with " + a + chr(0xa0) + b + ">"  # 3.10: az f-string kifejezésében nem lehet ' idézőjel
+        return (f'Join them with a no-break space (U+00A0): office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text=egyben)}]) '
                 f'— or widen the box: commands=[{sel}, {_cmd("shape.setBounds", x=round(it["box"][0], 1), y=round(it["box"][1], 1), w=round((it["box"][2] - it["box"][0]) * 1.15, 1), h=round(it["box"][3] - it["box"][1], 1))}].')
     return (f'The box is too narrow for the word: widen it — office(app="deck", file_id, commands=[{sel}, '
             f'{_cmd("shape.setBounds", x=round(it["box"][0], 1), y=round(it["box"][1], 1), w=round((it["box"][2] - it["box"][0]) * 1.25, 1), h=round(it["box"][3] - it["box"][1], 1))}]) '
