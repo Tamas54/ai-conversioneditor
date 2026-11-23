@@ -1333,18 +1333,66 @@ def _pptx_shapes(path: Path) -> tuple[list[list[dict]], float, float]:
                         untitled = not (ch.category_axis.has_title and ch.value_axis.has_title)
                 except Exception:
                     pass
+            color, bold = None, False
             if shp.has_text_frame:
                 from pptx.enum.text import MSO_AUTO_SIZE
                 size = max((r.font.size.pt for p in shp.text_frame.paragraphs for r in p.runs if r.font.size), default=None)
                 grows = shp.text_frame.auto_size == MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+                color, bold = _run_look(shp)
             # id = a pptx saját alakzat-azonosítója — a DeckCraft is ezt használja (office text.set / edit.select)
             items.append({"id": shp.shape_id, "name": shp.name or "shape",
                           "box": [shp.left / 12700, shp.top / 12700, (shp.left + shp.width) / 12700, (shp.top + shp.height) / 12700],
                           "text": shp.text_frame.text if shp.has_text_frame else "", "placeholder": shp.is_placeholder,
                           "picture": pic, "table": getattr(shp, "has_table", False), "size": size, "grows": grows,
-                          "untitled_axes": untitled})
-        slides.append(items)
+                          "untitled_axes": untitled, "chart": getattr(shp, "has_chart", False),
+                          "graphic": _is_graphic(shp), "fill": _solid_fill(shp), "color": color, "bold": bold})
+        slides.append({"items": items, "bg": _slide_bg(s)})
     return slides, sw, sh
+
+
+def _run_look(shp) -> tuple[Optional[str], bool]:
+    """Az alakzat (első kifejezett) szövegszíne és félkövérsége — a kontraszt-ellenőrzéshez. A betű nélküli futam
+    (pl. egy „■  ” jel-futam más paklikban) nem a szöveg színe."""
+    for p in shp.text_frame.paragraphs:
+        for r in p.runs:
+            if not re.search(r"[^\W_]", r.text):
+                continue
+            try:
+                c = str(r.font.color.rgb) if r.font.color is not None and r.font.color.type is not None else None
+            except Exception:
+                c = None
+            return c, bool(r.font.bold)
+    return None, False
+
+
+def _is_graphic(shp) -> bool:
+    """Látványelem-e (nem szövegdoboz): csoport, összekötő, kitöltött/körvonalas alakzat, média."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    st = shp.shape_type
+    if st in (MSO_SHAPE_TYPE.GROUP, MSO_SHAPE_TYPE.LINE, MSO_SHAPE_TYPE.FREEFORM, MSO_SHAPE_TYPE.MEDIA,
+              MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT, MSO_SHAPE_TYPE.DIAGRAM):
+        return True
+    return st == MSO_SHAPE_TYPE.AUTO_SHAPE or shp.element.tag.endswith("}cxnSp")
+
+
+def _solid_fill(shp) -> Optional[tuple[str, float]]:
+    """Egyszínű kitöltés (szín, átlátszatlanság 0–1) — ami alatta van, az a szöveg háttere."""
+    from pptx.oxml.ns import qn
+    spPr = shp.element.find(qn("p:spPr"))
+    sf = spPr.find(qn("a:solidFill")) if spPr is not None else None
+    clr = sf.find(qn("a:srgbClr")) if sf is not None else None
+    if clr is None:
+        return None
+    a = clr.find(qn("a:alpha"))
+    return clr.get("val"), (int(a.get("val")) / 100000 if a is not None else 1.0)
+
+
+def _slide_bg(slide) -> Optional[str]:
+    try:
+        from app.tools.pptx_deck import bg_color
+        return bg_color(slide)
+    except Exception:
+        return None
 
 
 def _overlap(a: list[float], b: list[float], pad: float = 2) -> bool:
@@ -1426,9 +1474,148 @@ def _clear_fix(n: int, it: dict, other_tb: list[float], own_tb: list[float], sc:
             f'— or shorten one of the two texts (text.set).')
 
 
-def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
-    slides, sw, sh = _pptx_shapes(path)
+# ---------- a pakli „mércéje” gépi ellenőrzésként (11-23, az Anthropic pptx-skill vizuális QA-listája alapján) ----------
+# A skill a modellre bízza, hogy a képeken észrevegye; nálunk a gép mondja meg, melyik dián, melyik alakzatban, kész
+# javítással: maradék helykitöltő szöveg, csak szöveges dia, ponttal záruló cím, gyenge kontraszt, a szám és a
+# mértékegysége két sorban, a kettétört szó.
+
+_LEFTOVER_HARD = re.compile(r"\blorem\b|\bipsum\b|\[\s*(?:insert|ide\b|írd|add)|click to (?:add|edit)|kattint(?:son|s) ide",
+                            re.I)
+_LEFTOVER_SOFT = re.compile(r"\bTODO\b|\bTBD\b|\bFIXME\b|\bx{3,}\b|\bX{3,}\b|\?\?\?")
+_NUM = re.compile(r"^[-+−–]?[$€£]?\d[\d., ]*$")
+_UNIT_WORD = re.compile(r"^(?:%|‰|°C|°F|°|€|\$|£|¥|Ft|HUF|EUR|USD|GBP|CHF|kg|g|t|km|m|cm|mm|m²|km²|l|GW|MW|kW|kWh|MWh|GWh|"
+                        r"TWh|W|V|GB|TB|MB|M|Mrd|mrd|Md|mn|bn|k|K|ezer|millió|milliárd|billió|million|billion|trillion|"
+                        r"pp|pont|fő|db|óra|perc|mp|év|hónap|hét|nap|x|×)(?:-\w+)?[.,;:!?)]*$")
+_ABBR_END = re.compile(r"(?:\.\.\.|…|\b(?:stb|Kft|Zrt|Nyrt|Bt|Inc|Ltd|Co|etc|vs|Dr|St|Jr|Sr|Mr|Mrs|Ms)\.)$")
+
+
+def _line_breaks(words: list[tuple], tb: list[float], text: str) -> Optional[tuple[str, str, str]]:
+    """A renderelt alakzat sorvégei: szám + egység két sorban → ("split_number", szám, egység); egy szó két sorra
+    törve → ("broken_word", eleje, vége). Csak a doboz saját szavai (a középpontjuk a szöveg dobozában)."""
+    mine = [w for w in words if tb[0] - 2 <= (w[0] + w[2]) / 2 <= tb[2] + 2 and tb[1] - 2 <= (w[1] + w[3]) / 2 <= tb[3] + 2]
+    if len(mine) < 2:
+        return None
+    lines: list[list[tuple]] = []
+    for w in sorted(mine, key=lambda w: ((w[1] + w[3]) / 2, w[0])):
+        cy = (w[1] + w[3]) / 2
+        if lines and abs(cy - (lines[-1][0][1] + lines[-1][0][3]) / 2) < 0.5 * (w[3] - w[1]):
+            lines[-1].append(w)
+        else:
+            lines.append([w])
+    own = {x.strip(".,;:!?()„”\"'«»") for x in re.split(r"[\s ]+", text) if x}
+    for a, b in zip(lines, lines[1:]):
+        last, first = max(a, key=lambda w: w[2])[4], min(b, key=lambda w: w[0])[4]
+        last, first = re.split(r"[\s\u00a0]+", last)[-1], re.split(r"[\s\u00a0]+", first)[0]   # NBSP-kötött szó: a széle
+        if _NUM.match(last) and (_UNIT_WORD.match(first) or re.match(r"^\d{3}(?!\d)", first)):
+            return "split_number", last, first
+        la, fb = last.rstrip("-‐"), first.strip(".,;:!?()„”\"'«»")
+        # kettétört szó: a sor vége + a következő eleje egy (akár hosszabb, többször tört) szó része, de a sorvég maga
+        # nem szó a szövegben; kötőjelnél törni szabad (ott a „-” nélküli összeg nem része semminek)
+        if len(la) >= 2 and fb and la not in own and fb not in own and any((la + fb) in w for w in own):
+            return "broken_word", la, fb
+    return None
+
+
+def _break_fix(kind: str, n: int, it: dict, a: str, b: str) -> str:
+    sel = _cmd("edit.select", on_slide=n, ids=[it["id"]])
+    if kind == "split_number":
+        return (f'Join them with a no-break space (U+00A0): office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<the text with ' + a + chr(0xa0) + b + '>")}]) '
+                f'— or widen the box: commands=[{sel}, {_cmd("shape.setBounds", x=round(it["box"][0], 1), y=round(it["box"][1], 1), w=round((it["box"][2] - it["box"][0]) * 1.15, 1), h=round(it["box"][3] - it["box"][1], 1))}].')
+    return (f'The box is too narrow for the word: widen it — office(app="deck", file_id, commands=[{sel}, '
+            f'{_cmd("shape.setBounds", x=round(it["box"][0], 1), y=round(it["box"][1], 1), w=round((it["box"][2] - it["box"][0]) * 1.25, 1), h=round(it["box"][3] - it["box"][1], 1))}]) '
+            f'— or a smaller font (format.size after the select), or a shorter word.')
+
+
+def _behind(items: list[dict], k: int) -> Optional[tuple[str, float]] | str:
+    """Ami a k-adik alakzat szövege mögött van: (szín, átlátszatlanság) a legfelső kitöltött alakzatból, "picture" ha
+    kép, None ha semmi (akkor a dia háttere)."""
+    it = items[k]
+    cx, cy = (it["box"][0] + it["box"][2]) / 2, (it["box"][1] + it["box"][3]) / 2
+    for o in reversed(items[:k]):
+        b = o["box"]
+        if not (b[0] <= cx <= b[2] and b[1] <= cy <= b[3]):
+            continue
+        if o["picture"] or o["chart"]:
+            return "picture"
+        if o["fill"]:
+            return o["fill"]
+    return None
+
+
+def design_issues(pages: list[dict], sw: float, sh: float) -> list[dict]:
+    """A pptx-skill QA-listájának fájlból mérhető része (a renderelt része — sorvégek — a deck_issues-ban)."""
+    from app.tools.pptx_deck import contrast
     issues = []
+    area = sw * sh
+    for n, page in enumerate(pages, 1):
+        items = page["items"]
+        words = 0
+        visual = False
+        top_size = max((it["size"] or 0 for it in items if re.search(r"[^\W\d_]", it["text"] or "")), default=0)
+        for k, it in enumerate(items):
+            b = it["box"]
+            a = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+            text = it["text"] or ""
+            if (it["size"] or 12) >= 12:                # a lábléc és az oldalszám nem „tartalom”
+                words += len(text.split())
+            # látvány: kép, diagram, táblázat, alakzat (kártya, ábra), a teljes diát kitöltő színes háttér (fejezet-
+            # és záródia), vagy egy óriási szám/jel (statisztika, idézőjel)
+            if it["picture"] or it["chart"] or it["table"] or (it["graphic"] and 0.012 * area <= a <= 0.9 * area) \
+                    or (it["graphic"] and a > 0.9 * area and it["fill"] and it["fill"][0].upper() != "FFFFFF") \
+                    or (text.strip() and (it["size"] or 0) >= 60):
+                visual = True
+            if not text.strip():
+                continue
+            hard, soft = _LEFTOVER_HARD.search(text), _LEFTOVER_SOFT.search(text)
+            if hard or soft:
+                m = hard or soft
+                issues.append({**_issue("placeholder_text", ERROR if hard else WARNING,
+                                        f"Slide {n}: leftover placeholder text “{m.group(0)}” in “{it['name']}”: "
+                                        f"“{_short(text, 60)}”.", None, n,
+                                        fix=f'office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<the real text>")}]) '
+                                            f'— or remove the shape: commands=[{_cmd("edit.select", on_slide=n, ids=[it["id"]])}, {_cmd("edit.delete")}]'),
+                               **_deck_obj(n, it)})
+            t1 = text.strip()
+            # a cím: a dia legnagyobb betűs szövege, felül, egy mondat (≤ 12 szó) — ennek a végén nincs pont
+            if (it["size"] or 0) >= 24 and it["size"] >= top_size and b[1] < 0.3 * sh and "\n" not in t1 \
+                    and len(t1.split()) <= 12 and t1.endswith(".") and not _ABBR_END.search(t1) \
+                    and not re.search(r"[.!?]\s", t1):
+                issues.append({**_issue("title_period", WARNING, f"Slide {n}: the title “{_short(t1, 50)}” ends with a period.",
+                                        None, n, fix=f'office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text=t1[:-1])}])'),
+                               **_deck_obj(n, it)})
+            if it["color"] and re.search(r"[^\W_]", text):     # a díszítő jel (idézőjel, nyíl) nem olvasandó szöveg
+                under = _behind(items, k)
+                if under == "picture":
+                    continue
+                if under is not None and under[1] < 0.95:     # áttetsző panel: ami alatta van, ismeretlen
+                    continue
+                bg = under[0] if under else page["bg"]
+                if not bg:
+                    continue
+                need = 3.0 if (it["size"] or 18) >= 14 else 4.5
+                c = contrast(it["color"], bg)
+                if c < need:
+                    issues.append({**_issue("low_contrast", WARNING,
+                                            f"Slide {n}: the text of “{it['name']}” (#{it['color']} on #{bg}) is hard to read — "
+                                            f"contrast {c:.1f}:1, at least {need:g}:1 needed.", None, n,
+                                            fix=f'office(app="deck", file_id, commands=[{_cmd("edit.select", on_slide=n, ids=[it["id"]])}, '
+                                                f'{_cmd("format.color", color="#1E2430" if contrast("1E2430", bg) >= contrast("FFFFFF", bg) else "#FFFFFF")}])'),
+                                   **_deck_obj(n, it)})
+        if not visual and words >= 15:
+            issues.append({**_issue("text_only", WARNING,
+                                    f"Slide {n} has only text — no picture, chart, table or shape; text-only slides are "
+                                    f"forgettable.", None, n,
+                                    fix='pptx_build: give the slide an "image" (bullets, image_left|right, quote take one: '
+                                        '{"stock": "<search words>"} or {"url": …}), or tell it with stats / chart / table / diagram; '
+                                        'in place: office(app="deck", file_id, commands=[…insert a picture or shape…]).'),
+                           "_key": (n, "text_only")})
+    return issues
+
+
+def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
+    pages, sw, sh = _pptx_shapes(path)
+    slides = [p["items"] for p in pages]
+    issues = design_issues(pages, sw, sh)
     for n, items in enumerate(slides, 1):
         for it in items:
             b = it["box"]
@@ -1466,6 +1653,19 @@ def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
                 if not T or it["table"]:
                     continue
                 box = [v * sc for v in it["box"]]
+                # sorvégek (a pptx-skill mércéje): a szám és az egysége, a kettétört szó — a doboz saját helyén, az
+                # illesztéstől függetlenül (a kettétört szó épp a szó-illesztést rontja el)
+                split = _line_breaks(L.words[n - 1], box, it["text"])
+                if split:
+                    kind, a, b = split
+                    w, h = L.sizes[n - 1]
+                    issues.append({**_issue(kind, WARNING,
+                                            f"Slide {n}: in “{it['name']}” " + (
+                                                f"the figure “{a}” and its unit “{b}” are on two lines." if kind == "split_number"
+                                                else f"a word is broken mid-word across lines (“{a}” / “{b}”)."),
+                                            L.view, n, regions=[(n, (max(0, box[0] - 30), max(0, box[1] - 30),
+                                                                     min(w, box[2] + 30), min(h, box[3] + 30)))],
+                                            marks=[(n, box)], fix=_break_fix(kind, n, it, a, b)), **_deck_obj(n, it)})
                 sp = _span_near(T, sub, box)
                 if not sp:
                     continue
@@ -1959,7 +2159,9 @@ CHECKED = {
                  "a tracked proposal: rejecting every change gives back the version it was made from"],
     "deck": ["text overflowing its box (in the actual rendered slide)", "text drawn over other text", "things off the slide", "empty placeholders",
              "scatter charts without axis titles",
-             "empty slides", "the editor's slides against PowerPoint's (LibreOffice)"],
+             "empty slides", "the editor's slides against PowerPoint's (LibreOffice)",
+             "a figure and its unit, or one word, broken across two lines (rendered)", "leftover placeholder text (lorem, TODO, [insert…])",
+             "text-only slides (no picture, chart, table or shape)", "titles ending with a period", "low-contrast text on solid backgrounds"],
     "pdf": ["empty pages", "text and pictures off the page"],
 }
 

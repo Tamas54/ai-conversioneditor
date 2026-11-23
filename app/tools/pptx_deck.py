@@ -304,6 +304,27 @@ def _rect(slide, x, y, w, h, color: str, alpha: Optional[float] = None):
     return shp
 
 
+# Szám és mértékegysége (és az ezres tagolás) nem törhet két sorba (11-23, az Anthropic pptx-skill mércéje: „26” az
+# egyik sorban, „M” a következőben) — nem törő szóközzel kötjük össze, minden szövegünkben (cím, felsorolás, cella).
+_UNIT = (r"(?:%|‰|°C|°F|°|€|\$|£|¥|Ft|HUF|EUR|USD|GBP|CHF|kg|g|t|km|m|cm|mm|m²|km²|l|GW|MW|kW|kWh|MWh|GWh|TWh|W|V|"
+         r"GB|TB|MB|M|Mrd|mrd|Md|mn|bn|k|K|ezer|millió|milliárd|billió|million|billion|trillion|pp|pont|fő|db|óra|"
+         r"perc|mp|év|hónap|hét|nap|x|×)")
+_KEEP = None
+
+
+def keep_units(text: str) -> str:
+    """„90 %”, „4,3 millió”, „10 000”, „€ 5” — a köztük lévő szóköz nem törő (U+00A0): a sor nem a szám után törik."""
+    import re
+    global _KEEP
+    if _KEEP is None:
+        _KEEP = (re.compile(rf"(?<=\d) (?={_UNIT}(?![^\W\d_]))"),           # szám + egység (utána nem betű: „%-kal” is)
+                 re.compile(r"(?<=\d) (?=\d{3}(?!\d))"),                       # ezres tagolás: 10 000
+                 re.compile(r"(?:(?<=[€$£])|(?<=Ft)) (?=\d)"))                  # pénznem elöl: € 5
+    for rx in _KEEP:
+        text = rx.sub(" ", text)
+    return text
+
+
 def _text(slide, x, y, w, h, text, *, size, font, color, bold=False, italic=False, align="left",
           anchor="top", spacing=1.1, tracking=None):
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
@@ -318,10 +339,33 @@ def _text(slide, x, y, w, h, text, *, size, font, color, bold=False, italic=Fals
         p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[align]
         p.line_spacing = spacing
         r = p.add_run()
-        r.text = line
+        r.text = keep_units(line)
         f = r.font
         f.size, f.name, f.bold, f.italic, f.color.rgb = Pt(size), font, bold, italic, _rgb(color)
     return tb
+
+
+def bullet(p, color: str, size: float, char: str = "■") -> None:
+    """Valódi felsorolásjel (a:buChar) függő behúzással (11-23, a pptx-skill mércéje: a jel soha nem betű a szövegben).
+    A második sor a szöveg alá kerül, nem a jel alá; PowerPointban Enterre új pont jön; a felolvasó nem mondja ki."""
+    from lxml import etree
+    from pptx.oxml.ns import qn
+    from pptx.util import Pt
+    pPr = p._p.get_or_add_pPr()
+    for tag in ("a:buClr", "a:buSzPct", "a:buFont", "a:buNone", "a:buAutoNum", "a:buChar"):
+        for el in pPr.findall(qn(tag)):
+            pPr.remove(el)
+    hang = int(Pt(size * 1.0))
+    pPr.set("marL", str(hang))
+    pPr.set("indent", str(-hang))
+    # a séma sorrendje: lnSpc, spcBef, spcAft, buClr, buSzPct, buFont, buChar, tabLst, defRPr
+    after = [el for el in pPr if el.tag in (qn("a:lnSpc"), qn("a:spcBef"), qn("a:spcAft"))]
+    at = pPr.index(after[-1]) + 1 if after else 0
+    clr = etree.Element(qn("a:buClr"))
+    etree.SubElement(clr, qn("a:srgbClr"), val=color.lstrip("#").upper())
+    for k, el in enumerate([clr, etree.Element(qn("a:buSzPct"), val="60000"),
+                            etree.Element(qn("a:buFont"), typeface="Arial"), etree.Element(qn("a:buChar"), char=char)]):
+        pPr.insert(at + k, el)
 
 
 def _bullets(slide, x, y, w, h, items, t, size):
@@ -334,9 +378,8 @@ def _bullets(slide, x, y, w, h, items, t, size):
         p = tf.paragraphs[0] if n == 0 else tf.add_paragraph()
         p.line_spacing = 1.15
         p.space_after = Pt(size * 0.7)
-        dot = p.add_run(); dot.text = "■  "
-        dot.font.size, dot.font.color.rgb, dot.font.name = Pt(size * 0.55), _rgb(t["accent"]), t["font_body"]
-        r = p.add_run(); r.text = str(item)
+        bullet(p, t["accent"], size)
+        r = p.add_run(); r.text = keep_units(str(item))
         r.font.size, r.font.name, r.font.color.rgb = Pt(size), t["font_body"], _rgb(t["text"])
 
 
@@ -354,7 +397,8 @@ def _fit(text: str, size: int, w_in: float, h_in: float) -> int:
     """A cím betűmérete úgy, hogy tördelve beférjen a dobozába (a videó szövegillesztője, pontban) — a lent horgonyzott
     cím így nem nő fel a fölötte lévő sorra (10-17: a címlap háromsoros címe ráírt a felső sorra)."""
     from app.tools.video import _fit_size
-    return _fit_size(text, size, w_in * 72, h_in * 72)
+    # a nem törő szóközzel kötött „4,3 millió” EGY szóként mérendő (a renderelő sem töri ott) — az „i” ~ szóköz-széles
+    return _fit_size(keep_units(text or "").replace("\u00a0", "i"), size, w_in * 72, h_in * 72)
 
 
 def _bullet_size(items: list) -> int:
@@ -365,10 +409,11 @@ def _bullet_size(items: list) -> int:
 
 
 def _heading(slide, s, t, x=M_IN, w=W_IN - 2 * M_IN):
+    """A dia címe. Alatta NINCS akcentusvonal (11-23, a pptx-skill mércéje: a cím alá húzott színes csík az AI-gyártotta
+    diák árulkodó jele) — a címet a méret és a fehér tér választja el a tartalomtól."""
     title = s.get("title") or ""
     _text(slide, x, 0.55, w, 1.0, title, size=_fit(title, _title_size(title), w, 1.1), font=t["font_heading"], color=t["primary"],
           bold=True, anchor="bottom")
-    _rect(slide, x, 1.68, 0.9, 0.07, t["accent"])
 
 
 # ---------- elrendezések ----------
@@ -381,7 +426,6 @@ def _cover(slide, s, t, img):
         _rect(slide, 0, 1.35, W_IN * 0.62, 4.6, t["primary"], alpha=0.62)
     else:
         _rect(slide, 0, 0, W_IN, H_IN, t["primary"])
-    _rect(slide, M_IN + 0.05, 4.05, 1.2, 0.09, t["accent"])
     title = s.get("title") or ""
     text_w = (W_IN * 0.62 - M_IN - 0.35) if img else (W_IN - 2 * M_IN)      # képes címdián a sötét panel szélessége
     top = 2.2 if s.get("kicker") else 1.6                                    # a felső sor (kicker) a cím fölött marad
@@ -472,12 +516,14 @@ def _stats(slide, s, t):
     if not stats:
         return
     col = (W_IN - 2 * M_IN) / len(stats)
+    # minden kártyán UGYANAZ a számméret (a pptx-skill mércéje: az azonos szerepű elem diáról diára, kártyáról kártyára
+    # egyforma) — a leghosszabb érték egy sorba férjen; a kártya széle csík nélküli (a „single-side border” AI-jel)
+    vals = [str(st.get("value", "")) for st in stats]
+    vsize = min(_fit(v, 48, (col - 0.8) * 0.92, 48 * 1.25 / 72) for v in vals)      # 8% tartalék: a becslés nem Cambria
     for n, st in enumerate(stats):
         x = M_IN + n * col
         _rect(slide, x + 0.05, 2.55, col - 0.3, 3.6, t["panel"])
-        _rect(slide, x + 0.05, 2.55, 0.08, 3.6, t["accent"])
-        val = str(st.get("value", ""))
-        _text(slide, x + 0.35, 2.9, col - 0.8, 1.5, val, size=48 if len(val) <= 7 else 36, font=t["font_heading"],
+        _text(slide, x + 0.35, 2.9, col - 0.8, 1.5, vals[n], size=vsize, font=t["font_heading"],
               color=t["primary"], bold=True, anchor="bottom")
         _text(slide, x + 0.35, 4.55, col - 0.8, 1.4, st.get("label", ""), size=17, font=t["font_body"], color=t["muted"])
 
@@ -551,9 +597,21 @@ def _chart(slide, s, t):
                 _percent_label(pt.data_label._dLbl)
         return
     _axis_titles(ch, s, kind)
-    if s.get("data_labels"):
+    # egy sorozatú oszlop/sáv: az érték a hasábon (a pptx-skill mércéje: az alapdiagram „csupasz” — a hallgató a
+    # tengelyről nem olvas le 1012-t); a rácsvonal halvány, hogy a hasáb vigye a szemet. data_labels: false = ki.
+    labels = s.get("data_labels", len(series) == 1 and kind in (XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.BAR_CLUSTERED)
+                   and len(s.get("categories") or []) <= 12)
+    if kind != XL_CHART_TYPE.XY_SCATTER:
+        try:
+            ch.value_axis.major_gridlines.format.line.color.rgb = _rgb("#E3E6EA")
+        except Exception:
+            pass
+    if labels:
         plot.has_data_labels = True
-        plot.data_labels.font.size = Pt(12)
+        plot.data_labels.font.size = Pt(12 if len(series) > 1 else 13)
+        if kind in (XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.BAR_CLUSTERED):
+            plot.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
+            plot.data_labels.font.color.rgb = _rgb(t["text"])
     if kind == XL_CHART_TYPE.XY_SCATTER:
         # pont-feliratok: [x, y, "név"] — melyik pont melyik projekt / ország (név nélkül a pontfelhő kitalálós)
         sides = _label_sides([pt for se in series for pt in se.get("points") or []], (W_IN - 2 * M_IN - 1.2) * 72, 5.0 * 72 - 90)
@@ -694,7 +752,7 @@ def _table(slide, s, t):
     for r, row in enumerate(all_rows):
         for c in range(ncols):
             cell = tbl.cell(r, c)
-            cell.text = str(row[c]) if c < len(row) else ""
+            cell.text = keep_units(str(row[c])) if c < len(row) else ""
             head = bool(headers) and r == 0
             cell.fill.solid()
             cell.fill.fore_color.rgb = _rgb(t["primary"] if head else (t["panel"] if r % 2 == 0 else t["bg"]))
@@ -763,8 +821,17 @@ def _footer(slide, n, total, t, footer: Optional[str], dark: bool, left: float =
     _text(slide, right - 1.5, H_IN - 0.45, 1.5, 0.3, f"{n} / {total}", size=11, font=t["font_body"],
           color=color, align="right")
     if footer:
-        _text(slide, left, H_IN - 0.45, max(1.5, min(8, right - left - 1.7)), 0.3, footer, size=11, font=t["font_body"],
-              color=color)
+        # a lábléc EGY sor: a keskeny (képes) dián kisebb betű, végső esetben „…” — két sorban a második lelógott a
+        # dia aljáról (11-23, félszéles diák próbája)
+        w = max(1.5, min(8, right - left - 1.7))
+        size, text = 11, str(footer)
+        from app.tools.video import _wrap
+        room = w * 72 * 1.1                    # a becslés Inter-szélességű; a Calibri/Carlito ~10%-kal keskenyebb
+        while size > 9 and _wrap(text, size, room)[0] > 1:
+            size -= 1
+        while len(text) > 8 and _wrap(text, size, room)[0] > 1:
+            text = text[: int(len(text) * 0.9)].rstrip(" ·,-–") + "…"
+        _text(slide, left, H_IN - 0.45, w, 0.3, text, size=size, font=t["font_body"], color=color)
 
 
 _PAGE_NO = None
