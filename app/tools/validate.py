@@ -1510,6 +1510,10 @@ def _line_breaks(words: list[tuple], tb: list[float], text: str) -> Optional[tup
     mine = [w for w in words if tb[0] - 2 <= (w[0] + w[2]) / 2 <= tb[2] + 2 and tb[1] - 2 <= (w[1] + w[3]) / 2 <= tb[3] + 2]
     if len(mine) < 2:
         return None
+    # a word joiner (U+2060, a pptx_build köti vele a „1780–1840”-et) láthatatlan: a DeckCraft PDF-jében benne van,
+    # a LibreOffice-éban nincs — összevetés előtt mindkét oldalról el
+    mine = [(*w[:4], w[4].replace("\u2060", ""), *w[5:]) for w in mine]
+    text = text.replace("\u2060", "")
     lines: list[list[tuple]] = []
     for w in sorted(mine, key=lambda w: ((w[1] + w[3]) / 2, w[0])):
         cy = (w[1] + w[3]) / 2

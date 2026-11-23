@@ -97,16 +97,60 @@ def _requests(slides: list[dict[str, Any]]) -> list[tuple[tuple[int, int], Any, 
 
 
 async def _pick_stock(reqs: list[tuple[tuple[int, int], Any, Optional[float]]],
-                      slides: list[dict[str, Any]]) -> list[tuple[tuple[int, int], Any, Optional[float]]]:
+                      slides: list[dict[str, Any]]) -> tuple[list[tuple[tuple[int, int], Any, Optional[float]]], list[str]]:
     """Stockkép a látómodell rangsorával, a dia címe a kontextus (10-13: a kereső első találata egy Deutsche Post-bélyeg
-    és egy „Lorem Ipsum” mockup volt). Sorrend, nem szűrés; két dia nem kapja ugyanazt; ami nem sikerül, a régi úton megy."""
+    és egy „Lorem Ipsum” mockup volt); két dia nem kapja ugyanazt. ELŐTTE a determinisztikus relevancia-kapu (11-23: a
+    „humanoid robot factory” címlapja egy berkeley-i konferenciafotó lett): ami a keresőszavakhoz nem illik, nem kerül a
+    diára; ha egy jelölt sem illik, a hely kép nélkül marad (nem a régi, szűretlen úton keres) — és a check kimondja.
+    → (a feloldandó képek, megjegyzések a check-be)."""
     jobs = [(slot, spec["stock"], str(slides[slot[0]].get("title") or ""), aspect) for slot, spec, aspect in reqs
             if isinstance(spec, dict) and isinstance(spec.get("stock"), str) and spec["stock"].strip()]
     if not jobs:
-        return reqs
-    chosen = await images.choose_stock(jobs, medium="slide")
-    return [(slot, {**spec, "url": chosen[slot]["url"], "credit": chosen[slot]["credit"]} if slot in chosen else spec, aspect)
-            for slot, spec, aspect in reqs]
+        return reqs, []
+    misses: dict[Any, str] = {}
+    chosen = await images.choose_stock(jobs, medium="slide", strict=True, misses=misses)
+    out, notes = [], []
+    for slot, spec, aspect in reqs:
+        if slot in chosen:
+            out.append((slot, {**spec, "url": chosen[slot]["url"], "credit": chosen[slot]["credit"]}, aspect))
+        elif slot in misses:
+            notes.append(f"Slide {slot[0] + 1}: no picture — {misses[slot]}. Give other search words (English, the thing "
+                         f"itself) or an image {{\"url\"}} / {{\"file_id\"}}, or pick one in the editor's picture picker.")
+        else:
+            out.append((slot, spec, aspect))
+    return out, notes
+
+
+async def gate_stock(slides: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """A diák stockképei a relevancia-kapun át, MINDEN út előtt (saját dizájn, sablon, klónozott sablon): a választott
+    képek {"url", "credit"} lesznek (a keresőszó marad), a nem illők kimaradnak (a dia kép nélküli alakot kap, a galéria
+    felirata a képével marad). → (a diák, megjegyzések a check-be)."""
+    reqs = _requests(slides)
+    if not any(isinstance(sp, dict) and sp.get("stock") for _, sp, _ in reqs):
+        return slides, []
+    kept, notes = await _pick_stock(reqs, slides)
+    keep = {slot: sp for slot, sp, _ in kept}
+    out = []
+    for i, s in enumerate(slides):
+        if s.get("layout") == "gallery" and s.get("images"):
+            imgs, caps = (s.get("images") or [])[:4], s.get("captions") or []
+            js = [j for j in range(len(imgs)) if (i, j) in keep]
+            s = {**s, "images": [keep[(i, j)] for j in js], "captions": [caps[j] if j < len(caps) else "" for j in js]}
+        elif s.get("image") and s.get("layout") != "gallery":
+            s = {**s, "image": keep[(i, -1)]} if (i, -1) in keep else _without_image({k: v for k, v in s.items() if k != "image"})
+        out.append(s)
+    return out, notes
+
+
+def _without_image(s: dict[str, Any]) -> dict[str, Any]:
+    """A dia, amelynek a képe kimaradt: a fél dia ne maradjon üresen (kép melletti szöveg → felsorolás, teljes képes →
+    fejezetdia)."""
+    lay = s.get("layout")
+    if lay in ("image_left", "image_right"):
+        return {**s, "layout": "bullets"}
+    if lay == "full_image":
+        return {**s, "layout": "section", "subtitle": s.get("subtitle") or s.get("caption")}
+    return s
 
 
 # ---------- rajzoló segédek (python-pptx) ----------
@@ -223,6 +267,18 @@ def _theme_slot(prs, slot: str) -> Optional[str]:
         return None
 
 
+def theme_font(slide, major: bool = True) -> Optional[str]:
+    """A dia témájának cím- (major) vagy szövegbetűje (latin) — a sablon számméretének méréséhez."""
+    import re as _re
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    try:
+        xml = slide.slide_layout.slide_master.part.part_related_by(RT.THEME).blob.decode("utf-8", "replace")
+        m = _re.search(rf"<a:{'major' if major else 'minor'}Font>\s*<a:latin typeface=\"([^\"]+)\"", xml)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
 def theme_text_color(prs) -> Optional[str]:
     return _theme_slot(prs, "dk1")
 
@@ -307,21 +363,29 @@ def _rect(slide, x, y, w, h, color: str, alpha: Optional[float] = None):
 # Szám és mértékegysége (és az ezres tagolás) nem törhet két sorba (11-23, az Anthropic pptx-skill mércéje: „26” az
 # egyik sorban, „M” a következőben) — nem törő szóközzel kötjük össze, minden szövegünkben (cím, felsorolás, cella).
 _UNIT = (r"(?:%|‰|°C|°F|°|€|\$|£|¥|Ft|HUF|EUR|USD|GBP|CHF|kg|g|t|km|m|cm|mm|m²|km²|l|GW|MW|kW|kWh|MWh|GWh|TWh|W|V|"
-         r"GB|TB|MB|M|Mrd|mrd|Md|mn|bn|k|K|ezer|millió|milliárd|billió|million|billion|trillion|pp|pont|fő|db|óra|"
+         r"GB|TB|MB|M|Mrd|mrd|Md|mn|bn|k|K|e|ezer|millió|milliárd|billió|million|billion|trillion|pp|pont|fő|db|óra|"
          r"perc|mp|év|hónap|hét|nap|x|×)")
 _KEEP = None
+# Tartomány és nyíl két szám között („1780–1840”, „2400→8920”, „3,5→19,3%”) — 11-23, a robotos pakli: a sor a
+# nagykötőjel/nyíl után tört („1780–” / „1840”). Szóköz nincs benne, a nem törő szóköz nem segít: a jel két oldalára
+# WORD JOINER (U+2060, láthatatlan, nulla széles) kerül — a LibreOffice és a DeckCraft is tartja (mérve, 11-23).
+WJ = "\u2060"
+NBSP = "\u00a0"
+_RANGE_MARKS = "–—→⇒↔"
 
 
 def keep_units(text: str) -> str:
-    """„90 %”, „4,3 millió”, „10 000”, „€ 5” — a köztük lévő szóköz nem törő (U+00A0): a sor nem a szám után törik."""
+    """„90 %”, „4,3 millió”, „10 000”, „€ 5” — a köztük lévő szóköz nem törő (U+00A0): a sor nem a szám után törik;
+    „1780–1840”, „2400→8920”: a jel két oldalán word joiner (U+2060), a sor nem a jel után törik."""
     import re
     global _KEEP
     if _KEEP is None:
-        _KEEP = (re.compile(rf"(?<=\d) (?={_UNIT}(?![^\W\d_]))"),           # szám + egység (utána nem betű: „%-kal” is)
-                 re.compile(r"(?<=\d) (?=\d{3}(?!\d))"),                       # ezres tagolás: 10 000
-                 re.compile(r"(?:(?<=[€$£])|(?<=Ft)) (?=\d)"))                  # pénznem elöl: € 5
-    for rx in _KEEP:
-        text = rx.sub(" ", text)
+        _KEEP = ((re.compile(rf"(?<=\d) (?={_UNIT}(?![^\W\d_]))"), NBSP),     # szám + egység (utána nem betű: „%-kal” is)
+                 (re.compile(r"(?<=\d) (?=\d{3}(?!\d))"), NBSP),                  # ezres tagolás: 10 000
+                 (re.compile(r"(?:(?<=[€$£])|(?<=Ft)) (?=\d)"), NBSP),             # pénznem elöl: € 5
+                 (re.compile(rf"(?<=[\d%]){WJ}?([{_RANGE_MARKS}]){WJ}?(?=[−+-]?[$€£]?\d)"), rf"{WJ}\1{WJ}"))  # 1780–1840
+    for rx, rep in _KEEP:
+        text = rx.sub(rep, text)
     return text
 
 
@@ -398,7 +462,7 @@ def _fit(text: str, size: int, w_in: float, h_in: float) -> int:
     cím így nem nő fel a fölötte lévő sorra (10-17: a címlap háromsoros címe ráírt a felső sorra)."""
     from app.tools.video import _fit_size
     # a nem törő szóközzel kötött „4,3 millió” EGY szóként mérendő (a renderelő sem töri ott) — az „i” ~ szóköz-széles
-    return _fit_size(keep_units(text or "").replace("\u00a0", "i"), size, w_in * 72, h_in * 72)
+    return _fit_size(keep_units(text or "").replace("\u00a0", "i").replace(WJ, ""), size, w_in * 72, h_in * 72)
 
 
 def _bullet_size(items: list) -> int:
@@ -512,9 +576,11 @@ def _quote(slide, s, t, img):
 
 # Statisztika-kártya (11-23, a pptx-skill mércéje: „large stat callouts, big numbers 60–72 pt with small labels below”):
 # a szám 72 pt-tól lefelé a legnagyobb, ami a dia MINDEN kártyáján egy sorba fér (egy dián egy méret), 44 pt alá nem
-# megy. Ami 44 pt-on sem fér (pl. „4,3 millió” négy kártyán), az a szóköznél két sorba törik — és a renderelt
-# ellenőrzés jelzi (split_number), a javítással: rövidebb szám („4,3 M”, a „millió” a címkébe) vagy kevesebb kártya.
-STAT_MAX, STAT_MIN = 72, 44
+# megy. A szám SOHA nem törik két sorba (11-23, a robotos pakli: „2031–” / „33”, „27,” / „1%”, „2400→” / „8920”):
+# ami 44 pt-on sem fér, annak a vége a címkébe kerül — „5% vs 25–33%” → „5%” + „vs 25–33% · …”, „4,3 millió” →
+# „4,3” + „millió …”, „3,5→19,3%” → „3,5%” + „→ 19,3% · …” —, és a check megmondja. Ami így sem fér (egyetlen
+# hosszú szám), az 44 pt alatt is egy sorban marad.
+STAT_MAX, STAT_MIN, STAT_FLOOR = 72, 44, 20
 _METRIC = {"cambria": "Caladea", "calibri": "Carlito", "arial": "Liberation Sans", "times new roman": "Liberation Serif",
            "courier new": "Liberation Mono"}
 
@@ -529,43 +595,142 @@ def _pil_font(path: str):
     return load(path)
 
 
+_FC: dict[str, Optional[tuple[str, str]]] = {}
+
+
+def _fc(query: str) -> Optional[tuple[str, str]]:
+    """fc-match → (a család neve(i), a fájl): amit ezen a gépen a LibreOffice a kért betű helyett rajzol."""
+    if query not in _FC:
+        import subprocess
+        try:
+            out = subprocess.run(["fc-match", "-f", "%{family}|%{file}", query], capture_output=True, text=True,
+                                 timeout=5).stdout
+            fam, path = out.split("|", 1)
+            _FC[query] = (fam, path.strip()) if path.strip() else None
+        except Exception:
+            _FC[query] = None
+    return _FC[query]
+
+
+def _named(family: str, fams: str) -> bool:
+    """Pontosan ez a család (nem „Noto Serif Georgian” a „Georgia” helyett)."""
+    return any(f.strip().lower() == family.lower() for f in fams.split(","))
+
+
+def measure_fonts(font: Optional[str], bold: bool = False) -> list[str]:
+    """A betűfájlok, amelyekkel a szöveg megjelenik — a mérés közülük a legszélesebbel számol.
+    Cambria/Calibri/Arial/Times/Courier: a metrikailag egyező klón (a PowerPointban, a LibreOffice-ban és a
+    DeckCraftban is ugyanilyen széles). A szerveren telepített család: maga. Minden más (11-23: a Bridge Georgiát kért;
+    a szerveren nincs, a régi becslés harmadával keskenyebbnek mérte, a 68 pt-os „27,1%” kettétört): a LibreOffice
+    helyettesítője (fc-match) ÉS a DejaVu (Serif/Sans) — a szerkesztő helyettesítője (Georgia → Merriweather) és a
+    valódi Georgia sem szélesebb nála (mérve)."""
+    style = "Bold" if bold else "Regular"
+    fam = (font or "").strip() or "Calibri"
+    clone = _METRIC.get(fam.lower())
+    for name in ([clone] if clone else []) + [fam]:
+        hit = _fc(f"{name}:style={style}")
+        if hit and _named(name, hit[0]):
+            return [hit[1]]
+    hit = _fc(f"{fam}:style={style}")
+    files = [hit[1]] if hit else []
+    serif = bool(hit) and "serif" in hit[0].lower() and "sans" not in hit[0].lower()
+    dv = _fc(f"DejaVu {'Serif' if serif else 'Sans'}:style={style}")
+    if dv and "dejavu" in dv[0].lower():
+        files.append(dv[1])
+    return list(dict.fromkeys(files))
+
+
 def text_width(text: str, font: Optional[str], size: float, bold: bool = False) -> float:
-    """Egysoros szöveg szélessége pontban, a betű valódi metrikájából (Cambria/Calibri → a metrikailag egyező
-    Caladea/Carlito: a szerveren ez rajzol, a PowerPointban ugyanilyen széles); betűfájl nélkül becslés."""
-    from app.tools.design_auto import _font_file
-    fam = _METRIC.get((font or "").lower(), font or "Carlito")
-    path = _font_file(fam, "Bold" if bold else "Regular")
-    if path:
-        return _pil_font(path).getlength(text) * size / 100
+    """Egysoros szöveg szélessége pontban, a valódi betűmetrikából (ld. measure_fonts: ahol a három megjelenítés
+    eltérhet, a legszélesebb); betűfájl nélkül bővített becslés. A word joiner nulla széles."""
+    text = text.replace(WJ, "")
+    files = measure_fonts(font, bold)
+    if files:
+        return max(_pil_font(p).getlength(text) for p in files) * size / 100
     from app.tools.video import _wrap
-    return _wrap(text.replace("\u00a0", "i"), size, 1e9)[2] * 0.9
+    return _wrap(text.replace(NBSP, "i"), size, 1e9)[2] * 1.3
 
 
-def stat_size(vals: list[str], font: Optional[str], w_pt: float) -> tuple[int, list[str]]:
-    """→ (a dia egységes számmérete, a 44 pt-on sem férő értékek). Lépés: 2 pt."""
-    fits = lambda v, sz: text_width(keep_units(v), font, sz, bold=True) <= w_pt * 0.97  # noqa: E731
-    for size in range(STAT_MAX, STAT_MIN - 1, -2):
-        if all(fits(v, size) for v in vals):
-            return size, []
-    return STAT_MIN, [v for v in vals if not fits(v, STAT_MIN)]
+def _fits(font: Optional[str], size: float, w_pt: float):
+    return lambda v: text_width(keep_units(v), font, size, bold=True) <= w_pt * 0.97  # noqa: E731
 
 
-def _stats(slide, s, t):
+def shorten_stat(value: str, fits) -> tuple[str, str]:
+    """Ami 44 pt-on sem fér egy sorba: a vége a címkébe, lépésenként, amíg befér. → (a szám, a címke elejére kerülő
+    rész, természetes sorrendben). 1. összevetés („5% vs 25–33%” → „5%” | „vs 25–33%”); 2. a szám utáni szó
+    („4,3 millió” → „4,3” | „millió”); 3. tartomány / nyíl („3,5→19,3%” → „3,5%” | „→ 19,3%”, a mértékegység a
+    szám mellett is marad)."""
+    import re
+    cur, moved = value, ""
+
+    def push(piece: str) -> None:
+        nonlocal moved
+        moved = piece + (" " + moved if moved else "")
+    m = re.match(r"^(.*\S)\s+(vs\.?|v\.|versus)\s+(\S.*)$", cur, re.I)
+    if m and not fits(cur):
+        cur = m.group(1)
+        push(f"{m.group(2)} {m.group(3)}")
+    m = re.match(r"^(.*\d\S*)\s+([^\W\d_]\S*)$", cur)
+    if m and not fits(cur):
+        cur = m.group(1)
+        push(m.group(2))
+    m = re.match(rf"^(.*?\d[^\s{_RANGE_MARKS}]*?)\s*([{_RANGE_MARKS}])\s*(\S.*)$", cur)
+    if m and not fits(cur):
+        head, mark, tail = m.groups()
+        unit = re.search(r"(?:%|‰|°[CF]?)$", tail)
+        if unit and not re.search(r"(?:%|‰|°[CF]?)$", head):
+            head += unit.group(0)
+        cur = head
+        push(f"{mark}{tail}" if mark in "–—" else f"{mark} {tail}")
+    return cur, moved
+
+
+def fit_stats(stats: list[dict[str, Any]], font: Optional[str], w_pt: float,
+              top: int = STAT_MAX) -> tuple[int, list[str], list[str], list[str]]:
+    """→ (a dia egységes számmérete — top-tól lefelé —, a számok, a címkék, megjegyzések a check-be). Egy szám sem
+    törik két sorba."""
+    import re
+    vals = [str(st.get("value", "")).replace(WJ, "").strip() for st in stats]
+    labels = [str(st.get("label", "") or "") for st in stats]
+    notes = []
+    for k, v in enumerate(vals):
+        if _fits(font, STAT_MIN, w_pt)(v):
+            continue
+        nv, moved = shorten_stat(v, _fits(font, STAT_MIN, w_pt))
+        if moved:
+            vals[k] = nv
+            glue = " · " if re.search(r"\d", moved) and labels[k] else " "
+            labels[k] = (moved + glue + labels[k]).strip()
+            notes.append(f"“{v}” did not fit its card on one line even at {STAT_MIN} pt — the figure is “{nv}”, "
+                         f"“{moved}” went into the label")
+    for size in range(top, STAT_FLOOR - 1, -2):
+        if all(map(_fits(font, size, w_pt), vals)):
+            break
+    if size < STAT_MIN:
+        notes.append(f"the figures are {size} pt (below {STAT_MIN} pt) so that “"
+                     + "”, “".join(v for v in vals if not _fits(font, STAT_MIN, w_pt)(v)) + "” stays on one line")
+    return size, vals, labels, notes
+
+
+def _stats(slide, s, t, notes: Optional[list[str]] = None, number: int = 0):
     _heading(slide, s, t)
     stats = (s.get("stats") or [])[:4]
     if not stats:
         return
     col = (W_IN - 2 * M_IN) / len(stats)
     # a kártya széle csík nélküli (a „single-side border” AI-jel); a szám és a címke a kártya belsejében, 0,25" margóval
-    vals = [str(st.get("value", "")) for st in stats]
     inner = col - 0.75
-    vsize, long = stat_size(vals, t["font_heading"], inner * 72)
+    vsize, vals, labels, moved = fit_stats(stats, t["font_heading"], inner * 72)
+    if moved and notes is not None:
+        fewer = " Fewer cards (3 or fewer give wider ones) or a shorter figure keep it whole." if len(stats) > 3 else \
+            " A shorter figure keeps it whole."
+        notes.append(f"Slide {number}: " + "; ".join(moved) + "." + fewer)
     for n, st in enumerate(stats):
         x = M_IN + n * col
         _rect(slide, x + 0.05, 2.35, col - 0.3, 3.85, t["panel"])
         _text(slide, x + 0.3, 2.6, inner, 1.8, vals[n], size=vsize, font=t["font_heading"],
-              color=t["primary"], bold=True, anchor="bottom", spacing=1.0, keep=vals[n] not in long)
-        _text(slide, x + 0.3, 4.55, inner, 1.5, st.get("label", ""), size=17, font=t["font_body"], color=t["muted"],
+              color=t["primary"], bold=True, anchor="bottom", spacing=1.0)
+        _text(slide, x + 0.3, 4.55, inner, 1.5, labels[n], size=17, font=t["font_body"], color=t["muted"],
               spacing=1.15)
 
 
@@ -940,10 +1105,11 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
     if spec.get("template_file_id"):          # a minta-pptx TELJES sablonként (mesterdiák, elrendezés, háttér, logó)
         from app.tools import pptx_template
         from app.tools.crafts import existing
-        out = await pptx_template.build(spec, existing(spec["template_file_id"]))
+        gated, deck_notes = await gate_stock(spec.get("slides") or [])
+        out = await pptx_template.build({**spec, "slides": gated}, existing(spec["template_file_id"]))
         title = spec.get("title") or ((spec.get("slides") or [{}])[0].get("title")) or "deck"
         write_meta(out["file_id"], operation="pptx_build", label=f"{title[:50]}.pptx", extra={"deck_spec": out.pop("saved_spec")})
-        return {**out, **_chart_check(chart_warn, chart_info)}
+        return {**out, **_chart_check(chart_warn + deck_notes + out.pop("notes", []), chart_info)}
     from pptx import Presentation
     from pptx.util import Inches
     t0 = time.time()
@@ -959,7 +1125,9 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
     if actors:
         spec = {**spec, "actors": actors}
 
-    reqs = await _pick_stock(_requests(slides), slides)
+    slides, deck_notes = await gate_stock(slides)
+    spec = {**spec, "slides": slides}
+    reqs = _requests(slides)
     resolved = await images.resolve_many([(r[1], r[2]) for r in reqs])
     by_slot = {r[0]: img for r, img in zip(reqs, resolved)}
     try:
@@ -989,7 +1157,7 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
             elif lay == "quote":
                 _quote(slide, s, t, img)
             elif lay == "stats":
-                _stats(slide, s, t)
+                _stats(slide, s, t, deck_notes, i + 1)
             elif lay == "chart":
                 _chart(slide, s, t)
             elif lay == "table":
@@ -1026,5 +1194,5 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
                     "credit": x.attribution} for ((i, j), x) in by_slot.items()],
         "ms_elapsed": int((time.time() - t0) * 1000),
         **({"brand": kit.get("name")} if kit and kit.get("name") else {}),
-        **_chart_check(chart_warn, chart_info),
+        **_chart_check(chart_warn + deck_notes, chart_info),
     }

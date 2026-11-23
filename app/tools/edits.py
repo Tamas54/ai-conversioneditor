@@ -868,10 +868,13 @@ def _pptx_find_replace(src: Path, dst: Path, pattern: str, replacement: str, reg
 
     prs = Presentation(str(src))
     rx = re.compile(pattern) if regex else None
-    if not regex and " " in pattern:
-        # a pptx_build a számot és a mértékegységét nem törő szóközzel köti („90 %”) — a sima szóközös minta is
-        # találjon rá (11-23)
-        rx = re.compile(re.escape(pattern).replace(r"\ ", " ").replace(" ", "[  ]"))
+    if not regex and (" " in pattern or any(c in pattern for c in "–—→⇒↔")):
+        # a pptx_build a számot és a mértékegységét nem törő szóközzel köti („90 %”), a tartományt és a nyilat word
+        # joinerrel (U+2060: „1780–1840”) — a sima minta is találjon rájuk (11-23)
+        esc = re.escape(pattern).replace(r"\ ", " ").replace(" ", "[ \u00a0]")
+        for c in "–—→⇒↔":
+            esc = esc.replace(re.escape(c), f"\u2060?{re.escape(c)}\u2060?")
+        rx = re.compile(esc)
         lit = replacement
         replacement = lambda m: lit  # noqa: E731 — szó szerinti csere, a \1 ne legyen visszahivatkozás
     for para in _pptx_iter_paragraphs(prs):
@@ -1006,7 +1009,7 @@ def _pptx_extract_text(src: Path) -> str:
             notes = slide.notes_slide.notes_text_frame.text.strip()
             if notes:
                 chunks.append(f"[notes] {notes}")
-    return "\n\n".join(chunks)
+    return "\n\n".join(chunks).replace("\u2060", "")      # a pptx_build word joinere láthatatlan — a szövegben se legyen
 
 
 # ============================================================

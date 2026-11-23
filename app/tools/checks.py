@@ -331,9 +331,14 @@ def _deck_finding(it: dict[str, Any]) -> str:
 def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any], rendered: Optional[list[dict[str, Any]]] = None,
                note: Optional[str] = None) -> tuple[dict[str, Any], Optional[int]]:
     from app.tools.validate import ERROR
+    omitted = ""
     if rendered is not None:
         _, stats = pptx_problems(out)
-        problems = [_deck_finding(i) for i in rendered]
+        # a hibák előre; ami a 12 után kimarad, legalább azonosítóval, fajtával és diával ott van (11-23: a robotos
+        # pakli 17 figyelmeztetéséből a 11–13. dia „csak szöveg / egyforma elrendezés” jelzése levágódott)
+        ordered = sorted(rendered, key=lambda i: i["severity"] != ERROR)
+        problems = [_deck_finding(i) for i in ordered]
+        omitted = ", ".join(f"{i['id']} {i['kind']} (slide {i.get('slide') or i.get('page')})" for i in ordered[12:])
         errors = any(i["severity"] == ERROR for i in rendered)
     else:
         problems, stats = pptx_problems(out)
@@ -371,8 +376,8 @@ def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any], 
             findings.append(f"“{pat}” still appears in the deck.")
         elif pat and not args.get("regex"):
             verified.append(f"“{pat}” no longer appears in the deck.")
-    findings += problems[:12] + ([f"…and {len(problems) - 12} more — validate_document(file_id) lists them all."]
-                                 if len(problems) > 12 else [])
+    findings += problems[:12] + ([f"…and {len(problems) - 12} more{': ' + omitted if omitted else ''} — "
+                                  "validate_document(file_id) lists them all with their fixes."] if len(problems) > 12 else [])
     if findings:
         # ugyanaz az ítélet, mint a validate_document-é: hiba → failed (javítani kell), figyelmeztetés → needs_check
         return make("failed" if errors else "needs_check", findings + [LOOK], verified), first_changed
