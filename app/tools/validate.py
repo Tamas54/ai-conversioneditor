@@ -1346,8 +1346,23 @@ def _pptx_shapes(path: Path) -> tuple[list[list[dict]], float, float]:
                           "picture": pic, "table": getattr(shp, "has_table", False), "size": size, "grows": grows,
                           "untitled_axes": untitled, "chart": getattr(shp, "has_chart", False),
                           "graphic": _is_graphic(shp), "fill": _solid_fill(shp), "color": color, "bold": bold})
-        slides.append({"items": items, "bg": _slide_bg(s)})
+        slides.append({"items": items, "bg": _slide_bg(s), "name": s._element.cSld.get("name") or "",
+                       "layout": getattr(s.slide_layout, "name", "") or "", "geom": _geom(items, sh)})
     return slides, sw, sh
+
+
+def _geom(items: list[dict], sh: float) -> tuple:
+    """A dia „alakja”: az elemek fajtája és helye fél hüvelykre kerekítve (a lábléc és az oldalszám nélkül) — ha a pakli
+    minden diája egy elrendezésen ül, ebből látszik, hogy két dia ugyanúgy van-e felépítve."""
+    out = []
+    for it in items:
+        b = it["box"]
+        if it["text"].strip() and ((it["size"] or 12) < 12 or b[1] > 0.9 * sh):
+            continue
+        kind = "pic" if it["picture"] else "chart" if it["chart"] else "table" if it["table"] else \
+            "shape" if it["graphic"] else "text"
+        out.append((kind, *(round(v / 36) for v in b)))
+    return tuple(sorted(out))
 
 
 def _run_look(shp) -> tuple[Optional[str], bool]:
@@ -1518,6 +1533,11 @@ def _line_breaks(words: list[tuple], tb: list[float], text: str) -> Optional[tup
 
 def _break_fix(kind: str, n: int, it: dict, a: str, b: str) -> str:
     sel = _cmd("edit.select", on_slide=n, ids=[it["id"]])
+    if kind == "split_number" and (it.get("size") or 0) >= 40:
+        # nagy szám (statisztika-kártya): a kártyán nincs több hely — rövidebb szám, a mértékegység szava a címkébe
+        return (f'Shorten the figure so it fits one line (e.g. “{a} M” or “{a}{chr(0xa0)}{b[:3]}.”, the unit word into the label): '
+                f'pptx_build stats {{"value": "…", "label": "{b} …"}}, or fewer stats on the slide (3 or fewer give wider cards); '
+                f'in place: office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<shorter figure>")}]).')
     if kind == "split_number":
         return (f'Join them with a no-break space (U+00A0): office(app="deck", file_id, commands=[{_cmd("text.set", on_slide=n, id=it["id"], text="<the text with ' + a + chr(0xa0) + b + '>")}]) '
                 f'— or widen the box: commands=[{sel}, {_cmd("shape.setBounds", x=round(it["box"][0], 1), y=round(it["box"][1], 1), w=round((it["box"][2] - it["box"][0]) * 1.15, 1), h=round(it["box"][3] - it["box"][1], 1))}].')
@@ -1609,7 +1629,36 @@ def design_issues(pages: list[dict], sw: float, sh: float) -> list[dict]:
                                         '{"stock": "<search words>"} or {"url": …}), or tell it with stats / chart / table / diagram; '
                                         'in place: office(app="deck", file_id, commands=[…insert a picture or shape…]).'),
                            "_key": (n, "text_only")})
+    issues += _same_layout_runs(pages)
     return issues
+
+
+def _same_layout_runs(pages: list[dict]) -> list[dict]:
+    """Három (vagy több) egymás utáni dia ugyanazzal az elrendezéssel (a pptx-skill mércéje: „don't repeat the same
+    layout”). Az elrendezés: a dia neve (a pptx_build ide írja: bullets, chart…), különben a diaelrendezés neve, ha a
+    pakli többet használ; ha mind egy elrendezésen ül, a dia alakja (_geom). Csak jelzés, javaslattal."""
+    if any(p["name"] for p in pages):
+        sig = [p["name"] or ("geom", p["geom"]) for p in pages]
+    elif len({p["layout"] for p in pages}) > 1:
+        sig = [p["layout"] for p in pages]
+    else:
+        sig = [("geom", p["geom"]) for p in pages]
+    out, i = [], 0
+    while i < len(pages):
+        j = i
+        while j + 1 < len(pages) and sig[j + 1] == sig[i] and pages[i]["items"]:
+            j += 1
+        if j - i + 1 >= 3:
+            label = sig[i] if isinstance(sig[i], str) else "the same arrangement"
+            out.append({**_issue("same_layout", WARNING,
+                                 f"Slides {i + 1}–{j + 1} all use the same layout (“{label}”) — {j - i + 1} in a row "
+                                 f"look monotonous.", None, i + 1,
+                                 fix=f"Vary slide {i + 2}" + (f" (and {i + 4}…)" if j - i + 1 > 3 else "") +
+                                     ': pptx_build — make it image_left / image_right, stats, quote, table, chart or '
+                                     'diagram, or give it an "image"; in PowerPoint: Home ▸ Layout.'),
+                        "_key": (i + 1, "same_layout")})
+        i = j + 1
+    return out
 
 
 def deck_issues(path: Path, layouts: list[Layout]) -> list[dict]:
@@ -2161,7 +2210,8 @@ CHECKED = {
              "scatter charts without axis titles",
              "empty slides", "the editor's slides against PowerPoint's (LibreOffice)",
              "a figure and its unit, or one word, broken across two lines (rendered)", "leftover placeholder text (lorem, TODO, [insert…])",
-             "text-only slides (no picture, chart, table or shape)", "titles ending with a period", "low-contrast text on solid backgrounds"],
+             "text-only slides (no picture, chart, table or shape)", "titles ending with a period", "low-contrast text on solid backgrounds",
+             "three or more slides in a row with the same layout"],
     "pdf": ["empty pages", "text and pictures off the page"],
 }
 

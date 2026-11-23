@@ -71,14 +71,80 @@ async def test_no_accent_rule_under_titles_no_card_edge_stripes_no_cover_bar():
         assert not thin, [(sh.name, sh.width, sh.height) for sh in thin]
 
 
-async def test_stat_values_share_one_size_and_fit_one_line():
+def _stat_boxes(prs, n: int = 0) -> dict[str, object]:
+    """A statisztika-dia szám- és címkedobozai szöveg szerint (a nem törő szóköz sima szóközként)."""
+    return {sh.text_frame.text.replace(NB, " "): sh for sh in prs.slides[n].shapes if sh.has_text_frame and sh.text_frame.text}
+
+
+def _pt(sh) -> float:
+    return sh.text_frame.paragraphs[0].runs[0].font.size.pt
+
+
+async def test_stat_numbers_are_big_and_one_size_per_slide():
+    """A skill mércéje: 60–72 pt-os nagy szám, alatta olvasható címke; egy dián egy méret, a legnagyobb, ami kifér."""
+    from app.tools import pptx_deck
+    prs = await _build([{"layout": "stats", "title": "Három szám",
+                         "stats": [{"value": "162", "label": "robot jut 10 000 dolgozóra"},
+                                   {"value": "12 %", "label": "évi növekedés"}, {"value": "2030", "label": "humanoidok"}]},
+                        {"layout": "stats", "title": "Négy szám",
+                         "stats": [{"value": "4,3 M", "label": "millió ipari robot"}, {"value": "162", "label": "sűrűség"},
+                                   {"value": "12 %", "label": "növekedés"}, {"value": "2030", "label": "humanoid"}]}])
+    for n, vals in ((0, ("162", "12 %", "2030")), (1, ("4,3 M", "162", "12 %", "2030"))):
+        b = _stat_boxes(prs, n)
+        sizes = {_pt(b[v]) for v in vals}
+        assert len(sizes) == 1, sizes
+        size = sizes.pop()
+        assert 60 <= size <= 72, size
+        # tényleg egy sorba fér (a valódi betűmetrikával), és a következő lépcső (size + 2) már nem férne — vagy 72
+        w = b[vals[0]].width / 12700
+        widest = max(pptx_deck.text_width(b[v].text_frame.text, "Cambria", size, bold=True) for v in vals)
+        assert widest <= w and (size == 72 or max(pptx_deck.text_width(b[v].text_frame.text, "Cambria", size + 2, True)
+                                                  for v in vals) > w * 0.97)
+    label = _stat_boxes(prs, 0)["évi növekedés"]
+    assert _pt(label) >= 16 and label.top > _stat_boxes(prs, 0)["12 %"].top      # a címke alatta, olvasható méretben
+
+
+async def test_a_figure_too_long_even_at_44pt_wraps_at_its_space_and_the_rest_stays_44():
     prs = await _build([{"layout": "stats", "title": "A robotizáció számokban",
                          "stats": [{"value": "4,3 millió", "label": "robot"}, {"value": "162", "label": "sűrűség"},
                                    {"value": "12 %", "label": "növekedés"}, {"value": "2030", "label": "humanoid"}]}])
-    values = [sh for sh in prs.slides[0].shapes if sh.has_text_frame and sh.text_frame.text.replace(NB, " ")
-              in ("4,3 millió", "162", "12 %", "2030")]
-    sizes = {sh.text_frame.paragraphs[0].runs[0].font.size.pt for sh in values}
-    assert len(values) == 4 and len(sizes) == 1 and 24 <= sizes.pop() <= 48
+    b = _stat_boxes(prs)
+    assert {_pt(b[v]) for v in ("4,3 millió", "162", "12 %", "2030")} == {44}     # a padló, egy méret
+    assert b["4,3 millió"].text_frame.text == "4,3 millió"                       # törhet a szóköznél (nem betű közepén)
+    assert b["12 %"].text_frame.text == f"12{NB}%"                                # a többi kötve marad
+
+
+def test_a_split_big_figure_gets_a_shorten_fix():
+    from app.tools.validate import _break_fix
+    it = {"id": 7, "box": [50, 200, 210, 330], "size": 44}
+    fix = _break_fix("split_number", 4, it, "4,3", "millió")
+    assert "Shorten" in fix and '"label"' in fix and "text.set" in fix
+    assert "no-break space" in _break_fix("split_number", 4, {**it, "size": 18}, "90", "%")
+
+
+async def test_built_slides_are_named_after_their_layout_and_three_alike_in_a_row_are_flagged(tmp_path):
+    from app.storage import output_path
+    from app.tools import pptx_deck, validate
+    bl = lambda t: {"layout": "bullets", "title": t, "bullets": ["Egy pont", "Két pont"]}  # noqa: E731
+    out = await pptx_deck.build({"title": "Próba", "slides": [
+        bl("Egy"), bl("Kettő"), bl("Három"), {"layout": "quote", "quote": "Idézet."}, bl("Négy"), bl("Öt"),
+        {"layout": "closing"}]})
+    prs = _prs(out["file_id"])
+    assert [s._element.cSld.get("name") for s in prs.slides][:4] == ["bullets", "bullets", "bullets", "quote"]
+    pages, sw, sh = validate._pptx_shapes(output_path(out["file_id"]))
+    runs = [i for i in validate.design_issues(pages, sw, sh) if i["kind"] == "same_layout"]
+    assert [(i["page"], i["severity"]) for i in runs] == [(1, "warning")]       # 1–3 igen, a 5–6 (kettő) nem
+    assert "Slides 1–3" in runs[0]["message"] and "image_left" in runs[0]["fix"]
+
+
+def test_same_layout_by_arrangement_when_every_slide_sits_on_one_layout(tmp_path):
+    from app.tools import validate
+    pic = {"fill": "DDDDDD", "box": (7, 0, 6.3, 7.5)}
+    p = _deck(tmp_path / "d.pptx", [[TITLE, BODY], [TITLE, BODY], [TITLE, BODY], [TITLE, pic, {**BODY, "box": (0.6, 2, 6, 3)}],
+                                    [TITLE, BODY], [TITLE, BODY]])
+    pages, sw, sh = validate._pptx_shapes(p)
+    runs = [i for i in validate.design_issues(pages, sw, sh) if i["kind"] == "same_layout"]
+    assert [i["page"] for i in runs] == [1] and "Slides 1–3" in runs[0]["message"]
 
 
 async def test_single_series_column_has_value_labels_unless_turned_off():

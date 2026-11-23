@@ -326,7 +326,7 @@ def keep_units(text: str) -> str:
 
 
 def _text(slide, x, y, w, h, text, *, size, font, color, bold=False, italic=False, align="left",
-          anchor="top", spacing=1.1, tracking=None):
+          anchor="top", spacing=1.1, tracking=None, keep=True):
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches, Pt
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
@@ -339,7 +339,7 @@ def _text(slide, x, y, w, h, text, *, size, font, color, bold=False, italic=Fals
         p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[align]
         p.line_spacing = spacing
         r = p.add_run()
-        r.text = keep_units(line)
+        r.text = keep_units(line) if keep else line
         f = r.font
         f.size, f.name, f.bold, f.italic, f.color.rgb = Pt(size), font, bold, italic, _rgb(color)
     return tb
@@ -510,22 +510,63 @@ def _quote(slide, s, t, img):
         _text(slide, x0, 5.7, W_IN - x0 - M_IN, 0.6, "— " + s["author"], size=18, font=t["font_body"], color=t["muted"])
 
 
+# Statisztika-kártya (11-23, a pptx-skill mércéje: „large stat callouts, big numbers 60–72 pt with small labels below”):
+# a szám 72 pt-tól lefelé a legnagyobb, ami a dia MINDEN kártyáján egy sorba fér (egy dián egy méret), 44 pt alá nem
+# megy. Ami 44 pt-on sem fér (pl. „4,3 millió” négy kártyán), az a szóköznél két sorba törik — és a renderelt
+# ellenőrzés jelzi (split_number), a javítással: rövidebb szám („4,3 M”, a „millió” a címkébe) vagy kevesebb kártya.
+STAT_MAX, STAT_MIN = 72, 44
+_METRIC = {"cambria": "Caladea", "calibri": "Carlito", "arial": "Liberation Sans", "times new roman": "Liberation Serif",
+           "courier new": "Liberation Mono"}
+
+
+def _pil_font(path: str):
+    from functools import lru_cache
+
+    @lru_cache(maxsize=16)
+    def load(p: str):
+        from PIL import ImageFont
+        return ImageFont.truetype(p, 100)
+    return load(path)
+
+
+def text_width(text: str, font: Optional[str], size: float, bold: bool = False) -> float:
+    """Egysoros szöveg szélessége pontban, a betű valódi metrikájából (Cambria/Calibri → a metrikailag egyező
+    Caladea/Carlito: a szerveren ez rajzol, a PowerPointban ugyanilyen széles); betűfájl nélkül becslés."""
+    from app.tools.design_auto import _font_file
+    fam = _METRIC.get((font or "").lower(), font or "Carlito")
+    path = _font_file(fam, "Bold" if bold else "Regular")
+    if path:
+        return _pil_font(path).getlength(text) * size / 100
+    from app.tools.video import _wrap
+    return _wrap(text.replace("\u00a0", "i"), size, 1e9)[2] * 0.9
+
+
+def stat_size(vals: list[str], font: Optional[str], w_pt: float) -> tuple[int, list[str]]:
+    """→ (a dia egységes számmérete, a 44 pt-on sem férő értékek). Lépés: 2 pt."""
+    fits = lambda v, sz: text_width(keep_units(v), font, sz, bold=True) <= w_pt * 0.97  # noqa: E731
+    for size in range(STAT_MAX, STAT_MIN - 1, -2):
+        if all(fits(v, size) for v in vals):
+            return size, []
+    return STAT_MIN, [v for v in vals if not fits(v, STAT_MIN)]
+
+
 def _stats(slide, s, t):
     _heading(slide, s, t)
     stats = (s.get("stats") or [])[:4]
     if not stats:
         return
     col = (W_IN - 2 * M_IN) / len(stats)
-    # minden kártyán UGYANAZ a számméret (a pptx-skill mércéje: az azonos szerepű elem diáról diára, kártyáról kártyára
-    # egyforma) — a leghosszabb érték egy sorba férjen; a kártya széle csík nélküli (a „single-side border” AI-jel)
+    # a kártya széle csík nélküli (a „single-side border” AI-jel); a szám és a címke a kártya belsejében, 0,25" margóval
     vals = [str(st.get("value", "")) for st in stats]
-    vsize = min(_fit(v, 48, (col - 0.8) * 0.92, 48 * 1.25 / 72) for v in vals)      # 8% tartalék: a becslés nem Cambria
+    inner = col - 0.75
+    vsize, long = stat_size(vals, t["font_heading"], inner * 72)
     for n, st in enumerate(stats):
         x = M_IN + n * col
-        _rect(slide, x + 0.05, 2.55, col - 0.3, 3.6, t["panel"])
-        _text(slide, x + 0.35, 2.9, col - 0.8, 1.5, vals[n], size=vsize, font=t["font_heading"],
-              color=t["primary"], bold=True, anchor="bottom")
-        _text(slide, x + 0.35, 4.55, col - 0.8, 1.4, st.get("label", ""), size=17, font=t["font_body"], color=t["muted"])
+        _rect(slide, x + 0.05, 2.35, col - 0.3, 3.85, t["panel"])
+        _text(slide, x + 0.3, 2.6, inner, 1.8, vals[n], size=vsize, font=t["font_heading"],
+              color=t["primary"], bold=True, anchor="bottom", spacing=1.0, keep=vals[n] not in long)
+        _text(slide, x + 0.3, 4.55, inner, 1.5, st.get("label", ""), size=17, font=t["font_body"], color=t["muted"],
+              spacing=1.15)
 
 
 def _wrap_categories(cats: list[Any], kind) -> list[str]:
@@ -930,6 +971,9 @@ async def build(spec: dict[str, Any]) -> dict[str, Any]:
             slide = prs.slides.add_slide(blank)
             lay = s["layout"]
             img = by_slot.get((i, -1))
+            # a dia neve az elrendezése (<p:cSld name>) — az üres mintán minden dia egy elrendezésen ül, így a gépi
+            # ellenőrzés ebből látja, ha három egymás utáni dia ugyanúgy néz ki
+            slide._element.cSld.set("name", lay + ("+image" if img or lay == "gallery" else ""))
             bg = slide.background.fill
             bg.solid(); bg.fore_color.rgb = _rgb(t["bg"])
             if lay == "cover":
