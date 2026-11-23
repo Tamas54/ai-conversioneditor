@@ -377,7 +377,8 @@ def check_pptx(out: Path, src: Optional[Path], tool: str, args: dict[str, Any], 
         # ugyanaz az ítélet, mint a validate_document-é: hiba → failed (javítani kell), figyelmeztetés → needs_check
         return make("failed" if errors else "needs_check", findings + [LOOK], verified), first_changed
     if src is None or first_changed:
-        return make("ok", [], verified + ["No slide has text overflowing, text drawn over other text, anything off the slide, or empty placeholders."]), first_changed
+        return make("ok", [], verified + ["No slide has text overflowing, text drawn over other text, anything off the slide, empty placeholders, leftover placeholder text, "
+                                         "a figure split from its unit, low-contrast text or text-only content."]), first_changed
     return make("needs_check", [LOOK], verified), first_changed
 
 

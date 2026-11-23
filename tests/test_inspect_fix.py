@@ -118,7 +118,7 @@ async def test_deck_check_names_the_shape_and_the_fix_works(put_file, tmp_path):
     m = re.search(r'commands=\[(\{"command": "text.set".*?\}\})\]', made["findings"][0])
     cmd = json.loads(m.group(1))
     assert cmd["params"]["id"] == issue["shape_id"] and cmd["params"]["on_slide"] == 1
-    cmd["params"]["text"] = "Rövid zárómondat."
+    cmd["params"]["text"] = "Rövid zárómondat"           # (felül, a legnagyobb betűvel = cím: pont nélkül — 11-23)
     args = {"app": "deck", "file_id": fid, "commands": [cmd]}
     res = await crafts.office_run("deck", file_id=fid, commands=[cmd])
     after, _ = await checks.run("office", args, res)

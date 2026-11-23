@@ -868,6 +868,12 @@ def _pptx_find_replace(src: Path, dst: Path, pattern: str, replacement: str, reg
 
     prs = Presentation(str(src))
     rx = re.compile(pattern) if regex else None
+    if not regex and " " in pattern:
+        # a pptx_build a számot és a mértékegységét nem törő szóközzel köti („90 %”) — a sima szóközös minta is
+        # találjon rá (11-23)
+        rx = re.compile(re.escape(pattern).replace(r"\ ", " ").replace(" ", "[  ]"))
+        lit = replacement
+        replacement = lambda m: lit  # noqa: E731 — szó szerinti csere, a \1 ne legyen visszahivatkozás
     for para in _pptx_iter_paragraphs(prs):
         if not para.runs:
             continue
