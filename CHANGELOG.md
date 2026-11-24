@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-09 — Footnotes stay put in the simple edit tools, and the model is told how to make real ones
+
+A legal study written by an AI editor in a sibling app came back with "[1]" marks and a list of notes at the end. The
+Studio's engine can make real footnotes, but checking it for the same gap found three paths that lost them:
+
+- **`find_replace` and `replace_heading` keep the footnote marks.** They wrote the text with python-docx's `run.text`,
+  which clears the run, and put the paragraph's whole text into its first run, so one replaced word took every footnote
+  mark of its paragraph with it. Now the new text goes into the run where the hit starts. The other runs lose only
+  their share of the hit. A run with a footnote's or endnote's mark, a picture, a field or a page break stays where it was.
+- **`docx_track_replace_paragraph`** (internal agent) no longer puts a footnote's mark into the tracked deletion. The
+  mark used to vanish with an Accept. Now the mark stays, after the new text.
+- **`docx_accept_all_revisions` / `docx_reject_all_revisions`** go through the review engine (`review_ops.decide`).
+  They now cover changes inside footnotes, endnotes, headers and footers. The notes of deleted text go, and the rest
+  are put in the order of their marks.
+- **The model is told how to make a footnote:**
+  - `references.footnote {"text"}` at the caret is named in the wordcraft tool, the agent's `wordcraft_commands`
+    and the server instructions.
+  - For a long text, Markdown `[^1]` / `^[note]` converted md→docx. Inline `^[note]` now goes through pandoc too.
+  - Never "[1]" with a list at the end.
+
 ## 2026-11-07 — A portrait on a social card stays sharp, every text shows, and the cut-out no longer waits on an empty AI account
 
 Making a website's link image (1200×630) from a 312×464 portrait: the social template blew the photo up 3.9× to fill

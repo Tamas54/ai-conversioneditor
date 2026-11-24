@@ -57,6 +57,45 @@ def _new_output_for(src: Path) -> tuple[str, Path]:
 # ============================================================
 
 
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_TEXTISH = {_W + "t", _W + "tab", _W + "cr", _W + "noBreakHyphen", _W + "ptab"}
+
+
+def _set_run_text(run, text: str) -> None:
+    """The run's text replaced, the rest of it kept: a footnote's or endnote's mark, a picture, a field char, a page
+    break. python-docx's run.text setter clears everything but the formatting — a replaced word took the footnote
+    marks of its paragraph with it (11-09)."""
+    el = run._element
+    kept = [c for c in el if c.tag != _W + "rPr" and c.tag not in _TEXTISH
+            and not (c.tag == _W + "br" and c.get(_W + "type") in (None, "textWrapping"))]
+    for c in kept:
+        el.remove(c)
+    run.text = text
+    for c in kept:
+        el.append(c)
+
+
+def _splice_runs(runs, start: int, end: int, new: str) -> None:
+    """[start, end) of the runs' joined text replaced by `new`, run by run: the new text goes into the first run the
+    span touches, the others lose only their share of it — a run between them (a footnote mark) stays where it was."""
+    pos, placed = 0, False
+    for r in runs:
+        t = r.text
+        a, b = pos, pos + len(t)
+        pos = b
+        if not t or b < start or a > end or (b == start and start != end) or (a == end and start != end):
+            continue
+        lo, hi = max(start, a) - a, min(end, b) - a
+        if placed and lo == hi:
+            continue
+        _set_run_text(r, t[:lo] + ("" if placed else new) + t[hi:])
+        placed = True
+        if start == end:
+            return
+    if not placed and runs and start == end == pos:
+        _set_run_text(runs[-1], runs[-1].text + new)
+
+
 def _docx_find_replace(src: Path, dst: Path, pattern: str, replacement: str, regex: bool) -> int:
     """Returns the number of paragraphs in which a replacement was made.
     Note: pattern matching is paragraph-bounded — a pattern spanning two
@@ -72,18 +111,20 @@ def _docx_find_replace(src: Path, dst: Path, pattern: str, replacement: str, reg
         nonlocal count
         if not paragraph.runs:
             return
-        full = "".join(r.text for r in paragraph.runs)
+        runs = paragraph.runs
+        full = "".join(r.text for r in runs)
         if rx:
-            new, n = rx.subn(replacement, full)
+            hits = [(m.start(), m.end(), m.expand(replacement)) for m in rx.finditer(full)]
         else:
-            n = full.count(pattern)
-            new = full.replace(pattern, replacement) if n else full
-        if n == 0 or new == full:
+            hits, i = [], full.find(pattern) if pattern else -1
+            while i >= 0:
+                hits.append((i, i + len(pattern), replacement))
+                i = full.find(pattern, i + len(pattern))
+        if not hits or all(full[a:b] == t for a, b, t in hits):
             return
-        count += n
-        paragraph.runs[0].text = new
-        for r in paragraph.runs[1:]:
-            r.text = ""
+        count += len(hits)
+        for a, b, t in reversed(hits):          # from the end: the offsets before a hit stay valid
+            _splice_runs(runs, a, b, t)
 
     for p in doc.paragraphs:
         replace_in_runs(p)
@@ -169,10 +210,10 @@ def _docx_replace_heading(src: Path, dst: Path, old_title: str, new_title: str):
     for p in doc.paragraphs:
         style = (p.style.name or "") if p.style else ""
         if style.startswith("Heading") and p.text.strip() == old_title.strip():
-            for r in p.runs:
-                r.text = ""
-            if p.runs:
-                p.runs[0].text = new_title
+            runs = p.runs
+            full = "".join(r.text for r in runs)
+            if full.strip():                         # the title's text replaced, a note's mark on it kept
+                _splice_runs(runs, 0, len(full), new_title)
             else:
                 p.add_run(new_title)
             doc.save(str(dst))
